@@ -13,11 +13,13 @@ pub struct PreProcessorConfig {
     pub(crate) do_pad: Option<bool>,
     pub(crate) do_rescale: Option<bool>,
     pub(crate) do_resize: Option<bool>,
+    pub(crate) do_center_crop: Option<bool>,
     pub(crate) image_mean: Option<[f64; 3]>,
     pub(crate) image_std: Option<[f64; 3]>,
     pub(crate) rescale_factor: Option<f64>,
     pub(crate) resampling: Option<usize>,
     pub(crate) size: Option<HashMap<String, u32>>,
+    pub(crate) crop_size: Option<HashMap<String, u32>>,
     pub(crate) num_img_tokens: Option<usize>,
     pub(crate) num_crops: Option<usize>,
 }

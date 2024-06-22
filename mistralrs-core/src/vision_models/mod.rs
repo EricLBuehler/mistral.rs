@@ -4,7 +4,7 @@ use candle_core::Tensor;
 
 pub(crate) mod clip;
 pub(crate) mod image_processor;
-pub(crate) mod llava_inputs_processor;
+pub(crate) mod llava_next_inputs_processor;
 pub(crate) mod llava_next;
 pub(crate) mod phi3;
 pub(crate) mod phi3_inputs_processor;

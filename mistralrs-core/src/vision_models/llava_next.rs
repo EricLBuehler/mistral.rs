@@ -2,6 +2,7 @@
 use candle_core::quantized::QMatMul;
 use candle_core::{bail, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, seq, Activation, Module, Sequential, VarBuilder};
+use itertools::Itertools;
 use serde::Deserialize;
 
 use crate::device_map::DeviceMapper;
@@ -14,7 +15,7 @@ use crate::serde_default_fn;
 use crate::models::llama::Config as LLaMAConfig;
 use crate::models::llama::Llama;
 use crate::vision_models::clip::ClipConfig;
-use crate::vision_models::llava_inputs_processor::get_anyres_image_grid_shape;
+use crate::vision_models::llava_next_inputs_processor::get_anyres_image_grid_shape;
 
 use super::clip::{Activation as ClipActivation, ClipVisionTransformer};
 
@@ -194,12 +195,13 @@ impl ClipVisionTower {
 }
 
 pub struct Model {
-    pub clip_vision_tower: ClipVisionTower,
-    pub image_newline: Tensor,
-    pub mm_projector: MMProjector,
-    pub llama: Llama,
+    clip_vision_tower: ClipVisionTower,
+    image_newline: Tensor,
+    mm_projector: MMProjector,
+    llama: Llama,
     config: Config,
     device: Device,
+    seqlen_offset: usize, // store the seqlen_offset. We use this to generate seqlen_offsets/seqlen_offsets_kernel/context_lens. It is a different approach from phi3v and other implementations in this repo, but I haven't seen any replacement for this because in LLaVA we can only get input length after image is embed. This is a workaround.
 }
 
 impl Model {
@@ -235,6 +237,7 @@ impl Model {
             llama,
             config: config.clone(),
             device,
+            seqlen_offset: 0,
         })
     }
 
@@ -267,8 +270,8 @@ impl Model {
 
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
-        input_ids: &Tensor,
-        images: &[Tensor],
+        input_ids: &Tensor, //[1,seq_len]
+        images: &Tensor, //[sample_per_image*image_len,chanel,width,height] for LLaVANext, we fix aspect_ratio_setting to 'anyres'(this is akin to python Transformer). Hence sampler_per_image is 5
         image_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
         // can be modified if nonzero(already implemented) and other index select ops are implemented
@@ -292,18 +295,12 @@ impl Model {
             return self.llama.embed(input_ids);
         }
 
-        let mut x = Tensor::cat(images, 0)?;
-        x = self.encode_images(&x)?;
-        let split_sizes = images
-            .iter()
-            .map(|x| x.shape().dims()[0])
-            .collect::<Vec<usize>>();
-        let mut index_pos = 0;
+        let x = self.encode_images(&images)?;
+        let image_nums = images.shape().dims()[0] / 5;
         let mut image_features = Vec::new();
         // can be replaced by split
-        for split_size in split_sizes.iter() {
-            image_features.push(x.i(index_pos..index_pos + (*split_size))?);
-            index_pos += *split_size;
+        for image_index in 0..image_nums {
+            image_features.push(x.i(image_index * 5..(image_index + 1) * 5)?);
         }
         drop(x);
         let mut new_image_features = Vec::new();
@@ -367,15 +364,10 @@ impl Model {
             let end = image_indices[i + 1] as usize;
             input_embed_no_ims.push(cur_input_embeds.i((start..end, ..))?)
         }
-
-        let mut cur_new_input_embeds = Vec::new();
-        for (i, image_feature) in image_features.iter().enumerate() {
-            cur_new_input_embeds.push(input_embed_no_ims[i].clone());
-            cur_new_input_embeds.push(image_feature.clone());
-        }
-        cur_new_input_embeds.push(input_embed_no_ims[image_features.len()].clone());
-        drop(image_features);
-        drop(input_embed_no_ims);
+        let cur_new_input_embeds: Vec<&Tensor> = input_embed_no_ims
+            .iter()
+            .interleave(&image_features)
+            .collect::<Vec<_>>();
         let mut new_input_embeds = Tensor::cat(&cur_new_input_embeds, 0)?;
         let (new_input_embeds_length, _) = new_input_embeds.shape().dims2()?;
         if new_input_embeds_length > self.config.text_config.max_length {
@@ -393,10 +385,10 @@ impl Model {
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(u32, u32)>>,
     ) -> Result<Tensor> {
-        if let Some(ref pixel_values) = pixel_values {
+        if let Some(ref pixel_values) = pixel_values { // we assume(and as it should be) only first request contains image
             let input_embed = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
-                &[pixel_values.clone()],
+                pixel_values,
                 &image_sizes.unwrap(),
             )?;
             self.llama.forward_input_embed(
