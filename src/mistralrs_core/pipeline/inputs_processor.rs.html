@@ -320,6 +320,8 @@
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
 <a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -368,6 +370,8 @@
     <span class="kw">use crate</span>::{layers::set_use_matmul_via_f16, sequence::Sequence};
 
     <span class="kw">use super</span>::{InputsProcessor, InputsProcessorType};
+
+    <span class="kw">const </span>VIA_F16_TOK_THRESHOLD: usize = <span class="number">512</span>;
 
     <span class="kw">pub struct </span>InputMetadata {
         <span class="kw">pub </span>input: Tensor,
@@ -430,8 +434,8 @@
         }
         <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
-        <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 32
-        </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; <span class="number">32 </span>{
+        <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 512
+        </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; VIA_F16_TOK_THRESHOLD {
             set_use_matmul_via_f16(<span class="bool-val">true</span>);
         } <span class="kw">else </span>{
             set_use_matmul_via_f16(<span class="bool-val">false</span>);

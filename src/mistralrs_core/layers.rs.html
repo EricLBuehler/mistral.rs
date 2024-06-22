@@ -1149,7 +1149,7 @@
         </span>} <span class="kw">else </span>{
             xs.clone()
         };
-        <span class="kw">let </span>forward_fn = <span class="kw">if </span>get_use_matmul_via_f16() {
+        <span class="kw">let </span>forward_fn = <span class="kw">if </span>!get_use_matmul_via_f16() {
             QMatMul::forward
         } <span class="kw">else </span>{
             QMatMul::forward_via_f16
