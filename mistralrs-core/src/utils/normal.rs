@@ -78,24 +78,24 @@ fn get_dtypes() -> Vec<DType> {
         .expect("Failed to run `nvidia-smi` but CUDA is selected.")
         .stdout;
     let out = String::from_utf8(raw_out).expect("`nvidia-smi` did not return valid utf8");
-    let cc = out
-        .splitn(2, '\n')
-        .nth(1)
-        .unwrap()
-        .trim()
-        .parse::<f32>()
+    // This reduce-min will always return at least one value so unwrap is OK.
+    let min_cc = out
+        .split('\n')
+        .skip(1)
+        .map(|cc| cc.trim().parse::<f32>().unwrap())
+        .reduce(|a, b| if a < b { a } else { b })
         .unwrap();
-    info!("Detected CUDA compute capability {cc}");
+    info!("Detected minimum CUDA compute capability {min_cc}");
     // 7.5 -> 750
-    let cc = (cc * 100.) as usize;
+    let min_cc = (min_cc * 100.) as usize;
 
     let mut dtypes = Vec::new();
-    if cc >= MIN_BF16_CC {
+    if min_cc >= MIN_BF16_CC {
         dtypes.push(DType::BF16);
     } else {
         info!("Skipping BF16 because CC < 8.0");
     }
-    if cc >= MIN_F16_CC {
+    if min_cc >= MIN_F16_CC {
         dtypes.push(DType::F16);
     } else {
         info!("Skipping F16 because CC < 5.3");
