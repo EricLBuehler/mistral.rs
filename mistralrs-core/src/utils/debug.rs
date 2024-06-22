@@ -33,7 +33,7 @@ pub(crate) trait DeviceRepr {
 impl DeviceRepr for Device {
     fn device_pretty_repr(&self) -> String {
         match self.location() {
-            DeviceLocation::Cpu => format!("cpu"),
+            DeviceLocation::Cpu => "cpu".to_string(),
             DeviceLocation::Cuda { gpu_id } => format!("cuda[{gpu_id}]"),
             DeviceLocation::Metal { gpu_id } => format!("metal[{gpu_id}]"),
         }
