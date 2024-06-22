@@ -529,7 +529,7 @@ impl Module for QLinear {
         } else {
             xs.clone()
         };
-        let forward_fn = if get_use_matmul_via_f16() {
+        let forward_fn = if !get_use_matmul_via_f16() {
             QMatMul::forward
         } else {
             QMatMul::forward_via_f16
