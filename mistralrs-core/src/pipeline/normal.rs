@@ -30,7 +30,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -448,7 +448,19 @@ impl Pipeline for NormalPipeline {
     }
 }
 
-// TODO
-impl AnyMoePipelineMixin for NormalPipeline {}
+impl AnyMoePipelineMixin for NormalPipeline {
+    fn done_training(&mut self) {
+        self.model.done_training();
+    }
+    fn layer_vars(&self) -> Vec<Vec<Var>> {
+        self.model.get_vars()
+    }
+    fn base_model_trainable_params(&self) -> usize {
+        self.model.trainable_params()
+    }
+    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
+        self.model.get_cached_gating_outputs()
+    }
+}
 
 impl AnyMoeTrainerMixin for NormalPipeline {}

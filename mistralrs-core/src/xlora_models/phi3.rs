@@ -3,6 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
@@ -735,5 +736,23 @@ impl ScalingsMaker for Model {
             no_kv_cache,
             is_scaling_pass,
         )
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        todo!()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        todo!()
+    }
+    fn create_anymoe_layers(
+        mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        todo!()
     }
 }

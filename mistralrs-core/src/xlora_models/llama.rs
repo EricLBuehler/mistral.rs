@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::IsqModel,
@@ -792,5 +793,23 @@ impl ScalingsMaker for XLoraLlama {
             no_kv_cache,
             is_scaling_pass,
         )
+    }
+}
+
+impl AnyMoeBaseModelMixin for XLoraLlama {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        todo!()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        todo!()
+    }
+    fn create_anymoe_layers(
+        mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        todo!()
     }
 }

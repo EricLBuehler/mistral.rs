@@ -5,6 +5,7 @@ use candle_nn::{linear, linear_no_bias, Activation, RotaryEmbedding, VarBuilder}
 use std::sync::Arc;
 
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
@@ -425,5 +426,23 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        todo!()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        todo!()
+    }
+    fn create_anymoe_layers(
+        mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        todo!()
     }
 }

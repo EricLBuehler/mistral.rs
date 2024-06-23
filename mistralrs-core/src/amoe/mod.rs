@@ -1,19 +1,26 @@
+use std::{
+    cell::Cell,
+    sync::{Arc, RwLock},
+};
+
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
 use serde::{Deserialize, Serialize};
 
 pub struct AnyMoeTrainingResult {
-    steps: usize,
-    loss: f64,
+    pub steps: usize,
+    /// One for each gating layer
+    pub final_loss: Vec<f32>,
 }
+
+pub struct AnyMoeTrainingInputs(pub Vec<(String, usize)>);
 
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoeBaseModelMixin {
-    fn get_vars(&self) -> Vec<Var> {
+    fn get_vars(&self) -> Vec<Vec<Var>> {
         self.get_mlps()
             .iter()
             .map(|mlp| mlp.get_vars())
-            .flatten()
             .collect::<Vec<_>>()
     }
     fn done_training(&mut self) {
@@ -29,6 +36,12 @@ pub trait AnyMoeBaseModelMixin {
             .map(|mlp| mlp.trainable_params())
             .sum()
     }
+    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
+        self.get_mlps()
+            .iter()
+            .map(|mlp| mlp.get_cached_gating_output())
+            .collect::<Vec<_>>()
+    }
 
     fn create_anymoe_layers(
         self,
@@ -43,18 +56,21 @@ pub trait AnyMoeBaseModelMixin {
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>>;
 }
 
-pub trait MlpLayer: Send + Sync + TrainableLayer {
+pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
 }
 
-pub trait TrainableLayer {
+pub trait AnyMoeTrainableLayer {
     fn get_vars(&self) -> Vec<Var> {
         vec![]
     }
     fn done_training(&mut self) {}
     fn trainable_params(&self) -> usize {
         0
+    }
+    fn get_cached_gating_output(&self) -> Tensor {
+        panic!("Gating output is not applicable to this layer.")
     }
 }
 
@@ -83,6 +99,7 @@ pub struct MoeMlp {
     gate: MoeGate,
     training: bool,
     vars: Vec<Var>,
+    gating_output: Arc<RwLock<Option<Tensor>>>,
 }
 
 impl MoeMlp {
@@ -110,11 +127,12 @@ impl MoeMlp {
             },
             training: true,
             vars,
+            gating_output: Arc::new(RwLock::new(None)),
         })
     }
 }
 
-impl TrainableLayer for MoeMlp {
+impl AnyMoeTrainableLayer for MoeMlp {
     fn done_training(&mut self) {
         self.training = false;
     }
@@ -124,6 +142,9 @@ impl TrainableLayer for MoeMlp {
     fn get_vars(&self) -> Vec<Var> {
         self.vars.clone()
     }
+    fn get_cached_gating_output(&self) -> Tensor {
+        self.gating_output.read().unwrap().clone().unwrap()
+    }
 }
 
 impl MlpLayer for MoeMlp {
@@ -131,8 +152,17 @@ impl MlpLayer for MoeMlp {
         // ^ [b, s, h]
         let gate = self.gate.forward_t(xs, self.training)?;
         // ^ [b, s, n_e]
-        let gate_expanded = gate.permute((2, 0, 1))?.unsqueeze(0)?;
-        // ^ [b, s, n_e] -> [n_e, b, s, 1]
+        // Mean across the sequence dimension
+        let gate = gate.mean(1)?;
+        // ^ [b, n_e]
+
+        *self.gating_output.write().unwrap() = Some(gate.clone());
+
+        let gate_expanded = gate
+            .permute((1, 0))?
+            .unsqueeze(D::Minus1)?
+            .unsqueeze(D::Minus1)?;
+        // ^ [b, n_e] -> [n_e, b, 1, 1]
         let mut expert_outputs = Vec::new();
         for expert in &self.experts {
             expert_outputs.push(expert.forward(xs)?);

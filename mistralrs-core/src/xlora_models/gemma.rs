@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
     layers::ScaledDotProductAttention,
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
@@ -844,5 +845,23 @@ impl ScalingsMaker for XLoraModel {
             no_kv_cache,
             is_scaling_pass,
         )
+    }
+}
+
+impl AnyMoeBaseModelMixin for XLoraModel {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        todo!()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        todo!()
+    }
+    fn create_anymoe_layers(
+        mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        todo!()
     }
 }

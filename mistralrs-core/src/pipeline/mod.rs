@@ -15,7 +15,7 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::AnyMoeTrainingResult;
+use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -480,7 +480,7 @@ pub trait AnyMoeTrainerMixin {
         unreachable!()
     }
     // TODO: load the other experts?
-    fn train(&mut self) -> candle_core::Result<AnyMoeTrainingResult> {
+    fn train(&mut self, inputs: AnyMoeTrainingInputs) -> candle_core::Result<AnyMoeTrainingResult> {
         unreachable!()
     }
 }
@@ -495,13 +495,18 @@ pub trait MetadataMixin {
 
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoePipelineMixin {
-    fn get_vars(&self) -> Vec<Var> {
+    /// Get vars for each gating layer
+    fn layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
     fn done_training(&mut self) {
         unreachable!()
     }
-    fn trainable_params(&self) -> usize {
+    fn base_model_trainable_params(&self) -> usize {
+        unreachable!()
+    }
+    /// Per-layer cached outputs.
+    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
         unreachable!()
     }
 }
@@ -626,7 +631,7 @@ pub trait Pipeline:
     fn category(&self) -> ModelCategory;
 }
 
-pub trait NormalModel: IsqModel {
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn forward(
         &mut self,
         input_ids: &Tensor,
