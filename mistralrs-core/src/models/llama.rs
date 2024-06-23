@@ -195,6 +195,9 @@ impl Block {
         kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let residual = x;
+        let max_value = x.max(0)?.max(0)?.max(0)?;
+        let min_value = x.min(0)?.min(0)?.min(0)?;
+        println!("before rms_1 max_value: {} min_value: {}",max_value,min_value);
         let x = self.rms_1.forward(x)?;
         println!("after rms_1 x: {}",x);
         let x = (self.attn.forward(
