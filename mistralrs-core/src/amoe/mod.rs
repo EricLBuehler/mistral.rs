@@ -1,7 +1,4 @@
-use std::{
-    cell::Cell,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};

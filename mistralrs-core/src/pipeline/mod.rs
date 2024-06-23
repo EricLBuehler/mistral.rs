@@ -480,7 +480,10 @@ pub trait AnyMoeTrainerMixin {
         unreachable!()
     }
     // TODO: load the other experts?
-    fn train(&mut self, inputs: AnyMoeTrainingInputs) -> candle_core::Result<AnyMoeTrainingResult> {
+    fn train(
+        &mut self,
+        _inputs: AnyMoeTrainingInputs,
+    ) -> candle_core::Result<AnyMoeTrainingResult> {
         unreachable!()
     }
 }
