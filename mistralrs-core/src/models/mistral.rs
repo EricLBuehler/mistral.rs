@@ -300,6 +300,9 @@ impl Model {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb_m = vb_m.set_dtype(mapper.get_min_dtype()?);
+        let vb_lm_head = vb_lm_head.set_dtype(mapper.get_min_dtype()?);
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,

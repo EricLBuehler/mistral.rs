@@ -238,7 +238,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
         let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
+
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);

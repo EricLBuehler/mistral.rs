@@ -15,7 +15,7 @@ use crate::{
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response, DEBUG,
 };
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -254,7 +254,6 @@ impl Engine {
     }
 
     fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
-        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
         let vocab_size = tokenizer.get_vocab_size(true);
 
@@ -264,7 +263,11 @@ impl Engine {
                 for (k, v) in bias {
                     logits_bias[k as usize] = v;
                 }
-                Ok(Some(Tensor::from_vec(logits_bias, vocab_size, &device)?))
+                Ok(Some(Tensor::from_vec(
+                    logits_bias,
+                    vocab_size,
+                    &Device::Cpu,
+                )?))
             }
             None => Ok(None),
         }

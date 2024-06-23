@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image?".to_string()),
+                    Either::Left("<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.".to_string()),
                 ),
             ])],
         },

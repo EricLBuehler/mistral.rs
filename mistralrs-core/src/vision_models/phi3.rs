@@ -756,10 +756,12 @@ impl Model {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let vb_m = vb.pp("model");
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -838,11 +840,6 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
-        let position_ids = position_ids
-            .iter()
-            .map(|p| *p + past_key_values_length)
-            .collect::<Vec<_>>();
 
         for (i, layer) in self.layers.iter_mut().enumerate() {
             xs = self.mapper.map(xs, i)?;
@@ -853,7 +850,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                &position_ids,
+                position_ids,
                 &mut cache[i],
             )?
         }
