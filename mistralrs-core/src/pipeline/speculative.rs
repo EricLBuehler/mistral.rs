@@ -22,8 +22,9 @@ use crate::{
 
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, AnyMoeTrainerMixin, CacheInstruction,
+    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
+    ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -574,3 +575,8 @@ impl Pipeline for SpeculativePipeline {
         self.category
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for SpeculativePipeline {}
+
+impl AnyMoeTrainerMixin for SpeculativePipeline {}

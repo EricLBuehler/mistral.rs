@@ -9,8 +9,8 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, AnyMoeTrainerMixin, CacheManagerMixin,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -447,3 +447,8 @@ impl Pipeline for NormalPipeline {
         ModelCategory::Text
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for NormalPipeline {}
+
+impl AnyMoeTrainerMixin for NormalPipeline {}

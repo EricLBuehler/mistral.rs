@@ -6,7 +6,7 @@ use candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
 use std::sync::Arc;
 
 use crate::{
-    amoe::MlpLayer,
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer, MoeMlp, TrainableLayer},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
@@ -52,6 +52,8 @@ impl MLP {
         })
     }
 }
+
+impl TrainableLayer for MLP {}
 
 impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -478,5 +480,37 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        let mut mlps = Vec::new();
+        for layer in &self.layers {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        let mut mlps = Vec::new();
+        for layer in &mut self.layers {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
+    }
+    fn create_anymoe_layers(
+        mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let mut new_layers = Vec::new();
+        for mut layer in self.layers {
+            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp], config.clone(), dtype, dev)?);
+            new_layers.push(layer);
+        }
+        self.layers = new_layers;
+        Ok(self)
     }
 }

@@ -7,22 +7,58 @@ pub struct AnyMoeTrainingResult {
     loss: f64,
 }
 
-pub trait MlpLayer: Send + Sync {
+/// Implemented by the base model of an AnyMoe.
+pub trait AnyMoeBaseModelMixin {
+    fn get_vars(&self) -> Vec<Var> {
+        self.get_mlps()
+            .iter()
+            .map(|mlp| mlp.get_vars())
+            .flatten()
+            .collect::<Vec<_>>()
+    }
+    fn done_training(&mut self) {
+        let _ = self
+            .get_mlps_mut()
+            .iter_mut()
+            .map(|mlp| mlp.done_training())
+            .collect::<Vec<_>>();
+    }
+    fn trainable_params(&self) -> usize {
+        self.get_mlps()
+            .iter()
+            .map(|mlp| mlp.trainable_params())
+            .sum()
+    }
+
+    fn create_anymoe_layers(
+        self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self>
+    where
+        Self: Sized;
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer>;
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>>;
+}
+
+pub trait MlpLayer: Send + Sync + TrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
 }
 
 pub trait TrainableLayer {
-    fn get_vars(&self) -> Vec<Var>;
-    fn done_training(&mut self);
-    fn trainable_params(&self) -> usize;
+    fn get_vars(&self) -> Vec<Var> {
+        vec![]
+    }
+    fn done_training(&mut self) {}
+    fn trainable_params(&self) -> usize {
+        0
+    }
 }
 
-pub trait AnyMoeModel {
-    fn inject_moe(&mut self, config: AnyMoeConfig, dtype: DType, device: &Device) -> Result<()>;
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AnyMoeConfig {
     hidden_size: usize,
 }

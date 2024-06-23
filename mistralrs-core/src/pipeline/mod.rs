@@ -47,7 +47,7 @@ pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 pub use vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 
 use crate::{
     sequence::Sequence,
@@ -474,11 +474,15 @@ pub trait AdapterActivationMixin {
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
-pub trait AnyMoeMixin {
+/// A pipeline which can be trained.
+pub trait AnyMoeTrainerMixin {
     fn trainable_params(&self) -> usize {
         unreachable!()
     }
-    fn train(&mut self) -> Result<AnyMoeTrainingResult>;
+    // TODO: load the other experts?
+    fn train(&mut self) -> candle_core::Result<AnyMoeTrainingResult> {
+        unreachable!()
+    }
 }
 
 pub trait MetadataMixin {
@@ -487,6 +491,19 @@ pub trait MetadataMixin {
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> &GeneralMetadata;
+}
+
+/// Implemented by the base model of an AnyMoe.
+pub trait AnyMoePipelineMixin {
+    fn get_vars(&self) -> Vec<Var> {
+        unreachable!()
+    }
+    fn done_training(&mut self) {
+        unreachable!()
+    }
+    fn trainable_params(&self) -> usize {
+        unreachable!()
+    }
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -504,6 +521,8 @@ pub trait Pipeline:
     + CacheManagerMixin
     + AdapterActivationMixin
     + MetadataMixin
+    + AnyMoePipelineMixin
+    + AnyMoeTrainerMixin
 {
     fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 
