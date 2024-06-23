@@ -429,11 +429,11 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(
             cfg.vocab_size,

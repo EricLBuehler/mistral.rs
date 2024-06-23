@@ -756,11 +756,11 @@ impl Model {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
