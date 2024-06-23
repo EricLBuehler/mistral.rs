@@ -17,17 +17,17 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             repeat_last_n: 64,
         },
-        None,
+        Some("chat_templates/llava.json".to_string()),
         None,
         Some("/root/autodl-tmp/cache/huggingface/hub/models--llava-hf--llava-v1.6-vicuna-7b-hf/snapshots/0524afe4453163103dcefe78eb0a58b3f6424eac".to_string()),
     )
     .build(VisionLoaderType::LLaVANext);
     // Load, into a Pipeline
-    
+
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        &ModelDType::Auto,
+        &ModelDType::F16, // how can we load from config?
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),
@@ -52,6 +52,14 @@ fn main() -> anyhow::Result<()> {
                 ),
             ])],
         },
+
+        /*
+        messages: RequestMessage::Completion {
+            text: "Hello! My name is ".to_string(),
+            echo_prompt: false,
+            best_of: 1,
+        },
+        */
         sampling_params: SamplingParams::default(),
         response: tx,
         return_logprobs: false,
@@ -62,11 +70,15 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
-
     let response = rx.blocking_recv().unwrap();
     match response {
         Response::Done(c) => println!("Text: {}", c.choices[0].message.content),
-        _ => unreachable!(),
+        Response::InternalError(e) => println!("Internal error: {:?}", e),
+        Response::ValidationError(e) => println!("Validation error: {:?}", e),
+        Response::ModelError(s, r) => println!("Model error: {:?} {:?}", s, r),
+        Response::Chunk(_) => println!("Chunk"),
+        Response::CompletionModelError(_, _) => println!("Completion model error"),
+        Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
     }
     Ok(())
 }

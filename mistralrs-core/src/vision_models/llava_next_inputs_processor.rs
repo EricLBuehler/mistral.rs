@@ -12,7 +12,9 @@ use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
 use crate::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
-use crate::pipeline::{text_models_inputs_processor, InputsProcessor, InputsProcessorType};
+use crate::pipeline::{
+    text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+};
 use crate::sequence::Sequence;
 use crate::vision_models::image_processor::PreprocessedImages;
 use crate::vision_models::llava_next::Config;
@@ -134,6 +136,18 @@ pub struct LLaVANextProcessor {
     inputs_processor: Arc<LLaVANextInputProcessor>,
 }
 
+impl Processor for LLaVANextProcessor {
+    fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
+        self.inputs_processor.clone()
+    }
+    fn get_special_tokens(&self) -> &[&'static str] {
+        &[]
+    }
+    fn template_action(&self) -> MessagesAction {
+        MessagesAction::FlattenOnlyText
+    }
+}
+
 impl LLaVANextProcessor {
     pub fn new(config: &str) -> Self {
         let model_config = serde_json::from_str::<crate::vision_models::llava_next::Config>(config)
@@ -153,7 +167,7 @@ pub struct LLaVANextInputProcessor {
     model_config: crate::vision_models::llava_next::Config,
 }
 
-// Copy from phi3_inputs_processor. different is (1) calculate of num_image_token (2) process_anyres_image
+// Copy from phi3_inputs_processor. different is (1) calculate of num_image_token (2) process_anyres_image (3)image_ids_pad
 impl InputsProcessor for LLaVANextInputProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -236,7 +250,11 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 )?
                 .downcast::<text_models_inputs_processor::ModelInputs>()
                 .expect("Downcast failed.");
-
+            println!("input_ids: {}", input_ids);
+            println!("seqlen_offsets: {:?}", seqlen_offsets);
+            println!("seqlen_offsets_kernel: {}", seqlen_offsets_kernel);
+            println!("context_lens: {:?}", context_lens);
+            println!("position_ids: {:?}", position_ids);
             return Ok(Box::new(ModelInputs {
                 input_ids,
                 seqlen_offsets,
@@ -244,7 +262,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 context_lens,
                 position_ids,
                 pixel_values: None,
-                model_specific_args: Box::new(LLaVANextVisionSpecificArgs { image_sizes: None }),
+                model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
+                    image_sizes: None,
+                    num_image_token: None,
+                }),
             }));
         };
 
@@ -305,17 +326,13 @@ impl InputsProcessor for LLaVANextInputProcessor {
             if unique_image_ids.len() != n_images {
                 anyhow::bail!("Total images must be the same as the number of image tags.");
             }
-
-            // Use the TryInto + unwrap_or to handle case when id==0
-            let image_ids_pad = image_ids
-                .iter()
-                .map(|id| {
-                    [-(*id as i64)].repeat(
-                        num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
-                            .unwrap_or(num_img_tokens.len() - 1)],
-                    )
-                })
-                .collect::<Vec<_>>();
+            //only start position is -id, other positions are 0. This is for targeting image positions.
+            let mut image_ids_pad = Vec::new();
+            for image_id in image_ids.iter() {
+                let mut image_id_pad = vec![0; num_img_tokens[*image_id as usize - 1]];
+                image_id_pad[0] = -(*image_id as i64);
+                image_ids_pad.push(image_id_pad);
+            }
 
             let mut input_ids: Vec<i64> = Vec::new();
             for item in prompt_chunks
@@ -360,12 +377,21 @@ impl InputsProcessor for LLaVANextInputProcessor {
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(LLaVANextVisionSpecificArgs { image_sizes }),
+            model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
+                image_sizes,
+                num_image_token: Some(self.get_num_image_tokens()),
+            }),
         }))
     }
 }
 
 impl LLaVANextInputProcessor {
+    fn get_num_image_tokens(&self) -> usize {
+        let patch_size = self.model_config.vision_config.patch_size;
+        let image_size = self.model_config.vision_config.image_size;
+        let patch_per_side = image_size / patch_size;
+        patch_per_side * patch_per_side + (patch_per_side * 2) * (patch_per_side * 2 + 1)
+    }
     fn resize(&self, image: &DynamicImage, size: u32, filter: FilterType) -> DynamicImage {
         let (width, height) = image.dimensions();
         if width == size && height == size {
@@ -448,8 +474,25 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         ) {
             patches.push(patch);
         }
+        let dtype = match self.model_config.torch_dtype.as_str() {
+            "float16" => DType::F16,
+            "bfloat16" => DType::BF16,
+            _ => candle_core::bail!("unsupported dtype"),
+        };
         let process_one_image = |image: &DynamicImage| -> Result<Tensor> {
-            let mut pixel_value = self.to_tensor(&image, &device)?;
+            let mut image = if config.do_resize.unwrap_or(true) {
+                self.resize(image, image_size as u32, filter)
+            } else {
+                image.clone()
+            };
+            image = if config.do_center_crop.unwrap_or(true) {
+                let crop_width = *config.crop_size.as_ref().unwrap().get("width").unwrap() as u32;
+                let crop_height = *config.crop_size.as_ref().unwrap().get("height").unwrap() as u32;
+                self.center_crop(&image, (crop_width, crop_height))
+            } else {
+                image
+            };
+            let mut pixel_value = self.to_tensor(&image, &Device::Cpu)?;
             if config.do_rescale.unwrap_or(true) {
                 let rescale_factor = config.rescale_factor.unwrap();
                 pixel_value = self.rescale(&pixel_value, rescale_factor)?;
@@ -468,7 +511,10 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
                     .map(|x| *x as f32)
                     .collect::<Vec<f32>>();
                 pixel_value = self.normalize(&pixel_value, &image_mean, &image_std)?;
-                pixel_value = self.to_channel_dimension_format(&pixel_value)?;
+                pixel_value = self
+                    .to_channel_dimension_format(&pixel_value)?
+                    .to_dtype(dtype)?
+                    .to_device(device)?;
             }
             Ok(pixel_value)
         };
@@ -478,15 +524,11 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             .collect::<Result<Vec<Tensor>>>()?;
         let pixel_values = Tensor::stack(&pixel_values, 0)?;
 
-        let patch_size = self.model_config.vision_config.patch_size;
-        let patch_per_side = image_size / patch_size;
-        let num_img_tokens =
-            patch_per_side * patch_per_side + (patch_per_side * 2) * (patch_per_side * 2 + 1);
         Ok(super::image_processor::PreprocessedImages {
             pixel_values,
             pixel_attention_mask: None,
             image_sizes: Some((image_size, image_size)),
-            num_img_tokens: Some(vec![num_img_tokens]),
+            num_img_tokens: Some(vec![self.get_num_image_tokens()]),
         })
     }
 }

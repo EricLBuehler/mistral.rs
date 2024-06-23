@@ -53,11 +53,11 @@ pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
-    Idefics2Loader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader,
-    SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionModelLoader, VisionSpecificConfig,
+    Idefics2Loader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;

@@ -196,6 +196,7 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
+        println!("after rms_1 x: {}",x);
         let x = (self.attn.forward(
             &x,
             attention_mask,
@@ -267,6 +268,10 @@ impl Llama {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let mut x = input_embed.clone();
+        println!("input x: {}",x);
+        let max_value = x.max(0)?.max(0)?.max(0)?;
+        let min_value = x.min(0)?.min(0)?.min(0)?;
+        println!("input max_value: {} min_value: {}",max_value,min_value);
         let mut cache = self.kv_cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias_with_embed_tensor(
             &x,
@@ -274,6 +279,7 @@ impl Llama {
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
+        println!("mask: {:?}",mask);
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
@@ -285,13 +291,18 @@ impl Llama {
                 &mut cache,
             )?;
         }
+        println!("block x: {}",x);
         x = x.to_device(&self.device)?;
         x = self.ln_f.forward(&x)?;
+        println!("ln_f x: {}",x);
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
         let logits = MatMul.qmatmul(&x, &self.lm_head)?;
-        extract_logits(&logits, context_lens)
+        println!("unextracted logits: {}",logits);
+        let result = extract_logits(&logits, context_lens)?; //need to reset to original, this is only for debug
+        println!("extracted logits: {}",result);
+        Ok(result)
     }
 
     pub fn forward(

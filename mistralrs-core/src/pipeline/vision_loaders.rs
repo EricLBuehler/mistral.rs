@@ -12,6 +12,8 @@ use serde::Deserialize;
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
+use crate::vision_models::llava_next::{Config as LLaVANextConfig, Model as LLaVANext};
+use crate::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -153,18 +155,29 @@ pub struct LLaVANextLoader;
 impl VisionModelLoader for LLaVANextLoader {
     fn load(
         &self,
-        _config: &str,
-        _use_flash_attn: bool,
-        _vb: VarBuilder,
-        _normal_loading_metadata: NormalLoadingMetadata,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        todo!()
+        println!("load LLaVANext");
+        let mut config: LLaVANextConfig = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(LLaVANext::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+        )?))
     }
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, _config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        todo!()
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        println!("get_config_repr LLaVANext");
+        let mut config: LLaVANextConfig = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
     }
     fn get_processor(
         &self,
@@ -172,6 +185,7 @@ impl VisionModelLoader for LLaVANextLoader {
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
-        todo!()
+        println!("get_processor LLaVANext");
+        Arc::new(LLaVANextProcessor::new(model_config))
     }
 }

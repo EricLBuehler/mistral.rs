@@ -1,11 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::quantized::QMatMul;
-use candle_core::{bail, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, seq, Activation, Module, Sequential, VarBuilder};
+use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{linear, seq, Activation, Linear, Module, Sequential, VarBuilder};
 use itertools::Itertools;
 use serde::Deserialize;
 
 use crate::device_map::DeviceMapper;
+use crate::ops::NonZeroOp;
 use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::pipeline::NormalModel;
@@ -19,18 +20,12 @@ use crate::vision_models::llava_next_inputs_processor::get_anyres_image_grid_sha
 
 use super::clip::{Activation as ClipActivation, ClipVisionTransformer};
 
-const DEFAULT_PROJECTOR_HIDDEN_SIZE: usize = 1024;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub architectures: Vec<String>,
-    pub ignore_index: isize,
     pub image_grid_pinpoints: Vec<(u32, u32)>,
-    pub image_token_index: isize,
-    pub model_type: String,
     pub projector_hidden_act: String,
     pub text_config: LLaVATextConfig,
     pub torch_dtype: String,
-    pub use_image_newline_parameter: bool,
     pub vision_config: LLaVAVisionConfig,
     pub vision_feature_layer: isize,
     pub vision_feature_select_strategy: String,
@@ -121,37 +116,43 @@ impl Config {
 }
 
 pub struct MMProjector {
-    pub modules: Sequential,
+    linear_1: Linear,
+    activation: Activation,
+    linear_2: Linear,
 }
 
 impl MMProjector {
     pub fn new(vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let mut modules = seq().add(linear(
-            DEFAULT_PROJECTOR_HIDDEN_SIZE,
+        let linear_1 = linear(
+            config.vision_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_1"),
-        )?);
-        match config.projector_hidden_act.as_str() {
-            "gelu" => {
-                modules = modules.add(Activation::Gelu);
-            }
+        )?;
+        let activation = match config.projector_hidden_act.as_str() {
+            "gelu" => Activation::Gelu,
             _ => {
                 bail!(
                     "Unsupporg projector hidden act: {}",
                     config.projector_hidden_act
                 );
             }
-        }
-        modules = modules.add(linear(
+        };
+        let linear_2 = linear(
             config.text_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_2"),
-        )?);
-        Ok(Self { modules })
+        )?;
+        Ok(Self {
+            linear_1,
+            activation,
+            linear_2,
+        })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.modules.forward(x)
+        x.apply(&self.linear_1)?
+            .apply(&self.activation)?
+            .apply(&self.linear_2)
     }
 }
 
@@ -269,109 +270,87 @@ impl Model {
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
         input_ids: &Tensor, //[1,seq_len]
-        images: &Tensor, //[sample_per_image*image_len,chanel,width,height] for LLaVANext, we fix aspect_ratio_setting to 'anyres'(this is akin to python Transformer). Hence sampler_per_image is 5
+        images: &Tensor, //[sample_per_image*image_num,chanel,width,height] for LLaVANext, we fix aspect_ratio_setting to 'anyres', (this is akin to python Transformer). Hence sampler_per_image is 5
+        num_image_token: usize,
         image_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
-        // can be modified if nonzero(already implemented) and other index select ops are implemented
-        let input_ids_vec = input_ids.squeeze(0)?.to_vec1::<i64>()?;
-        let mut image_indices = vec![0_i64];
-        image_indices.extend(
-            input_ids_vec
-                .iter()
-                .enumerate()
-                .filter_map(|(i, x)| {
-                    if *x == self.config.image_token_index as i64 {
-                        Some(i as i64)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<i64>>(),
-        );
-        if image_indices.len() == 1 {
-            //no image, only [0],
-            return self.llama.embed(input_ids);
-        }
-
-        let x = self.encode_images(&images)?;
+        let image_indexes = input_ids
+            .squeeze(0)?
+            .lt(0i64)?
+            .nonzero()?
+            .squeeze(1)?
+            .to_vec1::<u32>()?;
+        let image_ids = image_indexes
+            .iter()
+            .map(|x| Ok(-(input_ids.i((0, *x as usize))?.to_scalar::<i64>()?)))
+            .collect::<Result<Vec<i64>>>()?;
+        let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
+        result = self.llama.embed(&result)?; //[seq_len,hidden_size]
+        let image_features = self.encode_images(images)?; //[sample_per_image*image_num,hidden_size]
         let image_nums = images.shape().dims()[0] / 5;
-        let mut image_features = Vec::new();
-        // can be replaced by split
-        for image_index in 0..image_nums {
-            image_features.push(x.i(image_index * 5..(image_index + 1) * 5)?);
+        let mut image_features_vec = Vec::new();
+        for i in 0..image_nums {
+            image_features_vec.push(image_features.i(i * 5..(i + 1) * 5)?);
         }
-        drop(x);
-        let mut new_image_features = Vec::new();
-        for (image_idx, image_feature) in image_features.iter().enumerate() {
-            let base_image_feature = image_feature.get(0).unwrap();
-            let patch_image_feature = image_feature.i(1..).unwrap();
-            let height = self.clip_vision_tower.num_patches_per_side();
-            let width = height;
-            assert_eq!(height * width, base_image_feature.dims()[0]);
-            let image_size = image_sizes[image_idx];
-            let (num_patch_width, num_patch_height) = get_anyres_image_grid_shape(
-                image_size,
-                &self.config.image_grid_pinpoints,
-                self.clip_vision_tower.config.image_size as u32,
-            );
-            let mut new_image_feature = patch_image_feature.reshape((
-                num_patch_height as usize,
-                num_patch_width as usize,
-                height,
-                width,
-                (),
-            ))?;
-            new_image_feature = new_image_feature
-                .permute((4, 0, 2, 1, 3))?
-                .flatten(1, 2)?
-                .flatten(2, 3)?;
-            new_image_feature = self.unpad_image(&new_image_feature, &image_size)?;
-            let new_image_feature_dims = new_image_feature.dims();
-            let image_new_line = self
-                .image_newline
-                .reshape((self.config.text_config.hidden_size, 1, 1))?
-                .broadcast_as((new_image_feature_dims[0], new_image_feature_dims[1], 1))?;
-            new_image_feature = Tensor::cat(&[new_image_feature, image_new_line], 2)?
-                .flatten(1, 2)?
-                .transpose(0, 1)?;
-            new_image_feature = Tensor::cat(&[base_image_feature, new_image_feature], 0)?;
-            new_image_features.push(new_image_feature);
-        }
-        image_features = new_image_features; //moved
-
-        let input_ids_noim = input_ids_vec
+        let image_features_vec = image_features_vec
             .iter()
-            .filter_map(|x| {
-                if *x != self.config.image_token_index as i64 {
-                    Some(*x)
-                } else {
-                    None
-                }
+            .enumerate()
+            .map(|(image_idx, image_feature)| {
+                let base_image_feature = image_feature.get(0).unwrap();
+                let patch_image_feature = image_feature.i(1..).unwrap();
+                let height = self.clip_vision_tower.num_patches_per_side();
+                let width = height;
+                assert_eq!(height * width, base_image_feature.dims()[0]);
+                let image_size = image_sizes[image_idx];
+                let (num_patch_width, num_patch_height) = get_anyres_image_grid_shape(
+                    image_size,
+                    &self.config.image_grid_pinpoints,
+                    self.clip_vision_tower.config.image_size as u32,
+                );
+                let mut new_image_feature = patch_image_feature.reshape((
+                    num_patch_height as usize,
+                    num_patch_width as usize,
+                    height,
+                    width,
+                    (),
+                ))?;
+                new_image_feature = new_image_feature
+                    .permute((4, 0, 2, 1, 3))?
+                    .flatten(1, 2)?
+                    .flatten(2, 3)?;
+                new_image_feature = self.unpad_image(&new_image_feature, &image_size)?;
+                let new_image_feature_dims = new_image_feature.dims();
+                let image_new_line = self
+                    .image_newline
+                    .reshape((self.config.text_config.hidden_size, 1, 1))?
+                    .broadcast_as((new_image_feature_dims[0], new_image_feature_dims[1], 1))?;
+                new_image_feature = Tensor::cat(&[new_image_feature, image_new_line], 2)?
+                    .flatten(1, 2)?
+                    .transpose(0, 1)?;
+                new_image_feature =
+                    Tensor::cat(&[base_image_feature, new_image_feature], 0)?.unsqueeze(0)?;
+                Ok(new_image_feature)
             })
-            .collect::<Vec<i64>>();
+            .collect::<Result<Vec<Tensor>>>()?;
 
-        let input_ids_noim_len = input_ids_noim.len();
-        image_indices.push((input_ids_noim_len) as i64);
-
-        let mut cur_input_embeds =
-            Tensor::from_vec(input_ids_noim, input_ids_noim_len, &self.device)?;
-        cur_input_embeds = self.llama.embed(&cur_input_embeds)?;
-        let mut input_embed_no_ims = Vec::new();
-        for i in 0..image_indices.len() - 1 {
-            let start = (image_indices[i]) as usize;
-            let end = image_indices[i + 1] as usize;
-            input_embed_no_ims.push(cur_input_embeds.i((start..end, ..))?)
+        let hidden_size = image_features_vec[0].shape().dims()[2];
+        println!("result.shape: {:?}", result.shape());
+        println!(
+            "image_features_vec[0].shape: {:?}",
+            image_features_vec[0].shape()
+        );
+        for (i, image_index) in image_indexes.iter().enumerate() {
+            let image_id = image_ids[i];
+            result = result.slice_assign(
+                &[
+                    &(0usize..1usize),
+                    &(*image_index as usize..*image_index as usize + num_image_token),
+                    &(0..hidden_size),
+                ],
+                &image_features_vec[(image_id - 1) as usize],
+            )?;
         }
-        let cur_new_input_embeds: Vec<&Tensor> = input_embed_no_ims
-            .iter()
-            .interleave(&image_features)
-            .collect::<Vec<_>>();
-        let mut new_input_embeds = Tensor::cat(&cur_new_input_embeds, 0)?;
-        let (new_input_embeds_length, _) = new_input_embeds.shape().dims2()?;
-        if new_input_embeds_length > self.config.text_config.max_length {
-            new_input_embeds = new_input_embeds.i((..self.config.text_config.max_length, ..))?;
-        }
-        new_input_embeds.unsqueeze(0)
+        Ok(result)
     }
 
     pub fn forward(
@@ -379,21 +358,20 @@ impl Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_sizes: Option<Vec<(u32, u32)>>,
+        num_image_token: Option<usize>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
             let input_embeds = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 pixel_values,
+                num_image_token.unwrap(),
                 &image_sizes.unwrap(),
             )?;
-            let seqlen_offsets = [0];
-            let (_, input_embeds_len, _) = input_embeds.dims3()?;
-            let start_offsets_kernel =
-                Tensor::from_iter((0..input_embeds_len).map(|x| x as i64), &self.device)?
-                    .unsqueeze(0)?;
-            let context_lens = vec![(input_embeds_len - 1, 1)];
-            self.position = input_embeds_len; // this is for next round.
+            println!("input_embeds.shape: {:?}", input_embeds.shape());
             self.llama.forward_input_embed(
                 &input_embeds,
                 &seqlen_offsets,
@@ -401,15 +379,6 @@ impl Model {
                 context_lens,
             )
         } else {
-            let (_, input_len) = input_ids.shape().dims2()?;
-            let seqlen_offsets = [self.position];
-            let start_offsets_kernel = Tensor::from_iter(
-                (self.position..self.position + input_len).map(|x| x as i64),
-                &self.device,
-            )?
-            .unsqueeze(0)?;
-            let context_lens = vec![(input_len - 1, 1)];
-            self.position += input_len;
             self.llama.forward(
                 input_ids,
                 &seqlen_offsets,
@@ -422,6 +391,7 @@ impl Model {
 
 pub(crate) struct LLaVANextVisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
+    pub num_image_token: Option<usize>,
 }
 
 impl IsqModel for Model {
@@ -436,23 +406,38 @@ impl VisionModel for Model {
         &mut self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        _seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
-        _context_lens: Vec<(usize, usize)>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
     ) -> candle_core::Result<Tensor> {
-        let LLaVANextVisionSpecificArgs { image_sizes } = *model_specific_args
+        let LLaVANextVisionSpecificArgs {
+            image_sizes,
+            num_image_token,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
-        let image_sizes = Some(
-            image_sizes
-                .unwrap()
-                .iter()
-                .map(|(w, h)| (*w as u32, *h as u32))
-                .collect(),
-        );
-        self.forward(input_ids, pixel_values, image_sizes)
+        let image_sizes = if image_sizes.is_some() {
+            Some(
+                image_sizes
+                    .unwrap()
+                    .iter()
+                    .map(|(w, h)| (*w as u32, *h as u32))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        self.forward(
+            input_ids,
+            pixel_values,
+            image_sizes,
+            num_image_token,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
     }
 
     fn device(&self) -> &Device {

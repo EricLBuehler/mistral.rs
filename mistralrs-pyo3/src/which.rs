@@ -32,6 +32,7 @@ impl From<Architecture> for NormalLoaderType {
 pub enum VisionArchitecture {
     Phi3V,
     Idefics2,
+    LLaVANext,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -39,6 +40,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
         match value {
             VisionArchitecture::Phi3V => VisionLoaderType::Phi3V,
             VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
+            VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
         }
     }
 }
