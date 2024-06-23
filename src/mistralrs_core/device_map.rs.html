@@ -152,22 +152,108 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
-<span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use crate</span>::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>tracing::info;
 
 <span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
+</span><span class="kw">pub struct </span>DeviceLayerMapMetadata {
+    <span class="kw">pub </span>ordinal: usize,
+    <span class="kw">pub </span>layers: usize,
+}
+
+<span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
 </span><span class="doccomment">/// Metadata to initialize the device mapper.
 </span><span class="kw">pub struct </span>DeviceMapMetadata {
-    device_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;DeviceLayerMapMetadata&gt;&gt;,
     host_layers: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>DeviceMapMetadata {
-    <span class="kw">pub fn </span>from_num_device_layers(device_layers: usize) -&gt; <span class="self">Self </span>{
+    <span class="attr">#[deprecated(note = <span class="string">"This will be replaced by a more general API to handle multi-GPU."</span>)]
+    </span><span class="kw">pub fn </span>from_num_device_layers(device_layers: usize) -&gt; <span class="self">Self </span>{
+        <span class="comment">// TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
+        </span><span class="self">Self </span>{
+            device_layers: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[DeviceLayerMapMetadata {
+                ordinal: <span class="number">0</span>,
+                layers: device_layers,
+            }]),
+            host_layers: <span class="prelude-val">None</span>,
+        }
+    }
+    <span class="comment">// TODO(EricLBuehler): For version 0.2.0, replace `from_num_device_layers` with this.
+    </span><span class="kw">pub fn </span>from_num_device_layers_multi_gpu(device_layers: Vec&lt;DeviceLayerMapMetadata&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             device_layers: <span class="prelude-val">Some</span>(device_layers),
             host_layers: <span class="prelude-val">None</span>,
@@ -190,8 +276,12 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt; {
         <span class="comment">// How many device layers
         // Clamp to max of model layers
-        </span><span class="kw">let </span>n_device_layers = <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.device_layers {
-            n.clamp(<span class="number">0</span>, model_layers)
+        </span><span class="kw">let </span>n_device_layers = <span class="kw">if let </span><span class="prelude-val">Some</span>(layers) = <span class="kw-2">&amp;</span><span class="self">self</span>.device_layers {
+            layers
+                .iter()
+                .map(|metadata| metadata.layers)
+                .sum::&lt;usize&gt;()
+                .clamp(<span class="number">0</span>, model_layers)
         } <span class="kw">else </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(Box::new(DummyDeviceMapper {
                 nm_device: device.clone(),
@@ -203,13 +293,40 @@
             </span>.host_layers
             .unwrap_or(model_layers.saturating_sub(n_device_layers));
         <span class="kw">if </span>n_device_layers + n_host_layers != model_layers {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected the number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})"</span>);
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})"</span>);
         }
         <span class="macro">info!</span>(<span class="string">"Model has {model_layers} repeating layers."</span>);
-        <span class="macro">info!</span>(<span class="string">"Using {n_device_layers} repeating layers on GPU and {n_host_layers} repeating layers on host."</span>);
-        <span class="kw">let </span><span class="kw-2">mut </span>combined = <span class="macro">vec!</span>[device.clone(); n_device_layers];
+
+        <span class="comment">// Handle multi-GPU mapping here
+        </span><span class="kw">let </span><span class="kw-2">mut </span>combined = Vec::with_capacity(model_layers);
+        <span class="kw">if </span><span class="self">self
+            </span>.device_layers
+            .as_ref()
+            .is_some_and(|layers| layers.len() == <span class="number">1</span>)
+        {
+            combined.extend(<span class="macro">vec!</span>[device.clone(); n_device_layers]);
+        } <span class="kw">else </span>{
+            <span class="kw">for </span>DeviceLayerMapMetadata { ordinal, layers } <span class="kw">in </span><span class="self">self</span>.device_layers.as_ref().unwrap() {
+                <span class="kw">let </span>dev = <span class="kw">match </span>device {
+                    Device::Cpu =&gt; Device::Cpu,
+                    Device::Cuda(<span class="kw">_</span>) =&gt; Device::cuda_if_available(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
+                    Device::Metal(<span class="kw">_</span>) =&gt; Device::new_metal(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
+                };
+                combined.extend(<span class="macro">vec!</span>[dev; <span class="kw-2">*</span>layers]);
+            }
+        }
+
         <span class="comment">// Always put the CPU layers at the end so that we reduce dtoh and htod copies
         </span>combined.extend(<span class="macro">vec!</span>[Device::Cpu; n_host_layers]);
+
+        <span class="comment">// Sanity
+        </span><span class="macro">assert_eq!</span>(combined.len(), model_layers);
+
+        <span class="macro">info!</span>(<span class="string">"Loading model according to the following repeating layer mappings:"</span>);
+        <span class="kw">for </span>(i, dev) <span class="kw">in </span>combined.iter().enumerate() {
+            <span class="macro">info!</span>(<span class="string">"Layer {i}: {}"</span>, dev.device_pretty_repr());
+        }
+
         <span class="prelude-val">Ok</span>(Box::new(LayerDeviceMapper {
             mappings: combined,
             nm_device: device.clone(),
@@ -218,9 +335,12 @@
 }
 
 <span class="kw">pub trait </span>DeviceMapper: Debug {
-    <span class="doccomment">/// Map during runtime
+    <span class="comment">// === DURING RUNTIME ===
+    </span><span class="doccomment">/// Map during runtime
     </span><span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, input: Tensor, layer: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
-    <span class="doccomment">/// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
+
+    <span class="comment">// === DURING LOADING TIME ===
+    </span><span class="doccomment">/// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>set_device&lt;<span class="lifetime">'a</span>&gt;(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         layer: usize,
@@ -232,6 +352,10 @@
     <span class="doccomment">/// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
+
+    <span class="comment">// TODO(EricLBuehler): when 0.2.0, replace this with param in `into_mapper`.
+    // === IMMEDIATELY AFTER INIT ===
+    </span><span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
 }
 
 <span class="attr">#[derive(Debug)]
@@ -269,6 +393,11 @@
             varbuilder.set_device(<span class="self">self</span>.nm_device.clone())
         }
     }
+    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        ModelDType::Auto
+            .try_into_dtype_all(<span class="kw-2">&amp;</span><span class="self">self</span>.mappings)
+            .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
+    }
 }
 
 <span class="attr">#[derive(Debug)]
@@ -304,6 +433,11 @@
         } <span class="kw">else </span>{
             varbuilder.set_device(<span class="self">self</span>.nm_device.clone())
         }
+    }
+    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        ModelDType::Auto
+            .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
+            .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
     }
 }
 </code></pre></div></section></main></body></html>

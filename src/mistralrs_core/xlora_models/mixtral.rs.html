@@ -957,6 +957,8 @@
 <a href="#957" id="957">957</a>
 <a href="#958" id="958">958</a>
 <a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1537,10 +1539,12 @@
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>vb = vb.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
+        <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
+
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,

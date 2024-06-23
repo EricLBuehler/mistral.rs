@@ -646,6 +646,11 @@
 <a href="#646" id="646">646</a>
 <a href="#647" id="647">647</a>
 <a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -667,6 +672,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -972,7 +978,11 @@
         }
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
-            <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
+            <span class="macro">info!</span>(
+                <span class="string">"Loading model `{}` on {}."</span>,
+                <span class="self">self</span>.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;

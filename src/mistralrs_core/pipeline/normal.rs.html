@@ -442,6 +442,11 @@
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
@@ -464,6 +469,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -659,7 +665,11 @@
         <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
-            <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
+            <span class="macro">info!</span>(
+                <span class="string">"Loading model `{}` on {}."</span>,
+                <span class="self">self</span>.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         <span class="macro">info!</span>(

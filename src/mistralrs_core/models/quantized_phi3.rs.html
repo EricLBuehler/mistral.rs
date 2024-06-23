@@ -337,6 +337,8 @@
 <a href="#337" id="337">337</a>
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -577,7 +579,9 @@
         <span class="kw">let </span>output_norm = rms_norm(ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
         <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
+
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
+
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);

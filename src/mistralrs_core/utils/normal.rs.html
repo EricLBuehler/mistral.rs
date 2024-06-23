@@ -140,6 +140,62 @@
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -192,10 +248,18 @@
 <span class="doccomment">/// Type which can be converted to a DType
 </span><span class="kw">pub trait </span>TryIntoDType {
     <span class="kw">fn </span>try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
+    <span class="kw">fn </span>try_into_dtype_all(<span class="kw-2">&amp;</span><span class="self">self</span>, devices: <span class="kw-2">&amp;</span>[Device]) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
 }
 
 <span class="kw">impl </span>TryIntoDType <span class="kw">for </span>DType {
     <span class="kw">fn </span>try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        <span class="macro">info!</span>(<span class="string">"DType selected is {self:?}."</span>);
+        <span class="kw">if </span>!<span class="macro">matches!</span>(<span class="self">self</span>, DType::BF16 | DType::F32 | DType::F64 | DType::F16) {
+            <span class="macro">anyhow::bail!</span>(<span class="string">"DType must be one of BF16, F16, F32, F64"</span>);
+        }
+        <span class="prelude-val">Ok</span>(<span class="kw-2">*</span><span class="self">self</span>)
+    }
+    <span class="kw">fn </span>try_into_dtype_all(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: <span class="kw-2">&amp;</span>[Device]) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
         <span class="macro">info!</span>(<span class="string">"DType selected is {self:?}."</span>);
         <span class="kw">if </span>!<span class="macro">matches!</span>(<span class="self">self</span>, DType::BF16 | DType::F32 | DType::F64 | DType::F16) {
             <span class="macro">anyhow::bail!</span>(<span class="string">"DType must be one of BF16, F16, F32, F64"</span>);
@@ -220,24 +284,25 @@
         .expect(<span class="string">"Failed to run `nvidia-smi` but CUDA is selected."</span>)
         .stdout;
     <span class="kw">let </span>out = String::from_utf8(raw_out).expect(<span class="string">"`nvidia-smi` did not return valid utf8"</span>);
-    <span class="kw">let </span>cc = out
-        .splitn(<span class="number">2</span>, <span class="string">'\n'</span>)
-        .nth(<span class="number">1</span>)
-        .unwrap()
-        .trim()
-        .parse::&lt;f32&gt;()
+    <span class="comment">// This reduce-min will always return at least one value so unwrap is OK.
+    </span><span class="kw">let </span>min_cc = out
+        .split(<span class="string">'\n'</span>)
+        .skip(<span class="number">1</span>)
+        .filter(|cc| !cc.trim().is_empty())
+        .map(|cc| cc.trim().parse::&lt;f32&gt;().unwrap())
+        .reduce(|a, b| <span class="kw">if </span>a &lt; b { a } <span class="kw">else </span>{ b })
         .unwrap();
-    <span class="macro">info!</span>(<span class="string">"Detected CUDA compute capability {cc}"</span>);
+    <span class="macro">info!</span>(<span class="string">"Detected minimum CUDA compute capability {min_cc}"</span>);
     <span class="comment">// 7.5 -&gt; 750
-    </span><span class="kw">let </span>cc = (cc * <span class="number">100.</span>) <span class="kw">as </span>usize;
+    </span><span class="kw">let </span>min_cc = (min_cc * <span class="number">100.</span>) <span class="kw">as </span>usize;
 
     <span class="kw">let </span><span class="kw-2">mut </span>dtypes = Vec::new();
-    <span class="kw">if </span>cc &gt;= MIN_BF16_CC {
+    <span class="kw">if </span>min_cc &gt;= MIN_BF16_CC {
         dtypes.push(DType::BF16);
     } <span class="kw">else </span>{
         <span class="macro">info!</span>(<span class="string">"Skipping BF16 because CC &lt; 8.0"</span>);
     }
-    <span class="kw">if </span>cc &gt;= MIN_F16_CC {
+    <span class="kw">if </span>min_cc &gt;= MIN_F16_CC {
         dtypes.push(DType::F16);
     } <span class="kw">else </span>{
         <span class="macro">info!</span>(<span class="string">"Skipping F16 because CC &lt; 5.3"</span>);
@@ -245,9 +310,13 @@
     dtypes
 }
 
+<span class="kw">fn </span>get_dtypes_non_cuda() -&gt; Vec&lt;DType&gt; {
+    <span class="macro">vec!</span>[DType::BF16, DType::F16]
+}
+
 <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
 </span><span class="kw">fn </span>get_dtypes() -&gt; Vec&lt;DType&gt; {
-    <span class="macro">vec!</span>[DType::BF16, DType::F16]
+    get_dtypes_non_cuda()
 }
 
 <span class="kw">fn </span>determine_auto_dtype(device: <span class="kw-2">&amp;</span>Device) -&gt; candle_core::Result&lt;DType&gt; {
@@ -270,10 +339,53 @@
     <span class="prelude-val">Ok</span>(DType::F32)
 }
 
+<span class="kw">fn </span>determine_auto_dtype_all(devices: <span class="kw-2">&amp;</span>[Device]) -&gt; candle_core::Result&lt;DType&gt; {
+    <span class="kw">let </span>dev_dtypes = get_dtypes();
+    <span class="kw">for </span>dtype <span class="kw">in </span>get_dtypes_non_cuda()
+        .iter()
+        .filter(|x| dev_dtypes.contains(x))
+    {
+        <span class="kw">let </span><span class="kw-2">mut </span>results = Vec::new();
+        <span class="kw">for </span>device <span class="kw">in </span>devices {
+            <span class="comment">// Try a matmul
+            </span><span class="kw">let </span>x = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), <span class="kw-2">*</span>dtype, device)<span class="question-mark">?</span>;
+            results.push(x.matmul(<span class="kw-2">&amp;</span>x));
+        }
+        <span class="kw">if </span>results.iter().all(|x| x.is_ok()) {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype);
+        } <span class="kw">else </span>{
+            <span class="kw">for </span>result <span class="kw">in </span>results {
+                <span class="kw">match </span>result {
+                    <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (),
+                    <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span>e {
+                        <span class="comment">// For CUDA
+                        </span>candle_core::Error::UnsupportedDTypeForOp(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                        <span class="comment">// Accelerate backend doesn't support f16/bf16
+                        // Metal backend doesn't support f16
+                        </span>candle_core::Error::Msg(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                        other =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(other),
+                    },
+                }
+            }
+        }
+    }
+    <span class="prelude-val">Ok</span>(DType::F32)
+}
+
 <span class="kw">impl </span>TryIntoDType <span class="kw">for </span>ModelDType {
     <span class="kw">fn </span>try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
         <span class="kw">let </span>dtype = <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Auto =&gt; <span class="prelude-val">Ok</span>(determine_auto_dtype(device).map_err(anyhow::Error::msg)<span class="question-mark">?</span>),
+            <span class="self">Self</span>::BF16 =&gt; <span class="prelude-val">Ok</span>(DType::BF16),
+            <span class="self">Self</span>::F16 =&gt; <span class="prelude-val">Ok</span>(DType::F16),
+            <span class="self">Self</span>::F32 =&gt; <span class="prelude-val">Ok</span>(DType::F32),
+        };
+        <span class="macro">info!</span>(<span class="string">"DType selected is {:?}."</span>, dtype.as_ref().unwrap());
+        dtype
+    }
+    <span class="kw">fn </span>try_into_dtype_all(<span class="kw-2">&amp;</span><span class="self">self</span>, devices: <span class="kw-2">&amp;</span>[Device]) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        <span class="kw">let </span>dtype = <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Auto =&gt; <span class="prelude-val">Ok</span>(determine_auto_dtype_all(devices).map_err(anyhow::Error::msg)<span class="question-mark">?</span>),
             <span class="self">Self</span>::BF16 =&gt; <span class="prelude-val">Ok</span>(DType::BF16),
             <span class="self">Self</span>::F16 =&gt; <span class="prelude-val">Ok</span>(DType::F16),
             <span class="self">Self</span>::F32 =&gt; <span class="prelude-val">Ok</span>(DType::F32),

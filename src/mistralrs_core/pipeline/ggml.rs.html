@@ -499,6 +499,11 @@
 <a href="#499" id="499">499</a>
 <a href="#500" id="500">500</a>
 <a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -517,6 +522,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -742,7 +748,11 @@
         <span class="kw">if </span>!mapper.is_dummy() {
             <span class="macro">warn!</span>(<span class="string">"GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model."</span>);
         }
-        <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
+        <span class="macro">info!</span>(
+            <span class="string">"Loading model `{}` on {}."</span>,
+            <span class="self">self</span>.get_id(),
+            device.device_pretty_repr()
+        );
 
         <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
         <span class="kw">let </span>model = ggml_file::Content::read(<span class="kw-2">&amp;mut </span>file, device)

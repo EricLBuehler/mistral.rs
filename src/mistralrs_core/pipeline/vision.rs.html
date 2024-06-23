@@ -345,6 +345,11 @@
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
@@ -359,6 +364,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
@@ -495,7 +501,11 @@
 
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
-            <span class="macro">info!</span>(<span class="string">"Loading model `{}` on {device:?}..."</span>, <span class="self">self</span>.get_id());
+            <span class="macro">info!</span>(
+                <span class="string">"Loading model `{}` on {}."</span>,
+                <span class="self">self</span>.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         <span class="macro">info!</span>(

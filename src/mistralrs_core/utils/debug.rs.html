@@ -24,7 +24,23 @@
 <a href="#24" id="24">24</a>
 <a href="#25" id="25">25</a>
 <a href="#26" id="26">26</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>tracing::level_filters::LevelFilter;
+<a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+<a href="#36" id="36">36</a>
+<a href="#37" id="37">37</a>
+<a href="#38" id="38">38</a>
+<a href="#39" id="39">39</a>
+<a href="#40" id="40">40</a>
+<a href="#41" id="41">41</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, DeviceLocation};
+<span class="kw">use </span>tracing::level_filters::LevelFilter;
 <span class="kw">use </span>tracing_subscriber::EnvFilter;
 
 <span class="kw">use </span><span class="kw">crate</span>::DEBUG;
@@ -49,5 +65,19 @@
             .from_env_lossy();
         tracing_subscriber::fmt().with_env_filter(filter).init();
     });
+}
+
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>DeviceRepr {
+    <span class="kw">fn </span>device_pretty_repr(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
+}
+
+<span class="kw">impl </span>DeviceRepr <span class="kw">for </span>Device {
+    <span class="kw">fn </span>device_pretty_repr(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+        <span class="kw">match </span><span class="self">self</span>.location() {
+            DeviceLocation::Cpu =&gt; <span class="string">"cpu"</span>.to_string(),
+            DeviceLocation::Cuda { gpu_id } =&gt; <span class="macro">format!</span>(<span class="string">"cuda[{gpu_id}]"</span>),
+            DeviceLocation::Metal { gpu_id } =&gt; <span class="macro">format!</span>(<span class="string">"metal[{gpu_id}]"</span>),
+        }
+    }
 }
 </code></pre></div></section></main></body></html>

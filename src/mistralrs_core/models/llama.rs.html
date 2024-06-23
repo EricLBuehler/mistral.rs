@@ -414,6 +414,8 @@
 <a href="#414" id="414">414</a>
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -642,12 +644,12 @@
         <span class="kw">let </span>rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), loading_isq),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), loading_isq),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             rms_1,
@@ -714,6 +716,8 @@
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>vb = vb.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
+
         <span class="kw">let </span>wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,

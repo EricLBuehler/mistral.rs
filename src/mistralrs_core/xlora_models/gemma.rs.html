@@ -844,6 +844,8 @@
 <a href="#844" id="844">844</a>
 <a href="#845" id="845">845</a>
 <a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1319,10 +1321,12 @@
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>vb = vb.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
+        <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
+
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
