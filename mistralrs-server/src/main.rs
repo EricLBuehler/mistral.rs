@@ -8,9 +8,9 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceMapMetadata, Loader,
-    LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request, SchedulerMethod,
-    TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
+    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request,
+    SchedulerMethod, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -107,9 +107,11 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// Number of device layers to load and run on the device. All others will be on the CPU.
-    #[arg(short, long)]
-    num_device_layers: Option<usize>,
+    /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
+    /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
+    /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
+    #[arg(short, long, value_parser, value_delimiter = ';')]
+    num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     #[arg(long = "isq", value_parser = parse_isq)]
@@ -275,15 +277,51 @@ async fn main() -> Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
+
+    // Parse device mapper
+    let mapper = if let Some(device_layers) = args.num_device_layers {
+        if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+            let layers = device_layers[0].parse::<usize>().unwrap();
+            DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                ordinal: 0,
+                layers,
+            }])
+        } else {
+            let mut mapping = Vec::new();
+            for layer in device_layers {
+                let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                if split.len() < 2 {
+                    panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                }
+                let ord = split[0]
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                let num = split[1]
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                    if *ordinal == ord {
+                        panic!("Duplicate ordinal {ord}");
+                    }
+                }
+                mapping.push(DeviceLayerMapMetadata {
+                    ordinal: ord,
+                    layers: num,
+                });
+            }
+            DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+        }
+    } else {
+        DeviceMapMetadata::dummy()
+    };
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
         &dtype,
         &device,
         false,
-        args.num_device_layers
-            .map(DeviceMapMetadata::from_num_device_layers)
-            .unwrap_or(DeviceMapMetadata::dummy()),
+        mapper,
         args.in_situ_quant,
     )?;
     info!("Model loaded.");
