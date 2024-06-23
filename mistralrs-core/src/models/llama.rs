@@ -226,12 +226,12 @@ impl Block {
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), loading_isq),
         )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), loading_isq),
         )?;
         Ok(Self {
             rms_1,
@@ -298,6 +298,8 @@ impl Llama {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,

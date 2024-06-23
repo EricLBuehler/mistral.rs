@@ -29,12 +29,12 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image_1|>\nWhat is shown in this image?
+<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
 ```
-The image shows a snow-covered mountain with a clear sky above and trees at the base. There appears to be a trail or path leading up the mountain, and some structures can be seen on the peak.
+The image captures a breathtaking view of a snow-covered mountain peak under a cloudy sky. The mountain, blanketed in pristine white snow, stands majestically against the backdrop of the sky. A winding road snakes its way up the side of the mountain, disappearing into the distance and adding a sense of scale to the scene. The road is flanked by trees on both sides, their branches heavy with snow. The perspective of the image is from a low angle, looking up at the mountain and giving it an imposing presence. Despite its grandeur, there's a sense of tranquility that pervades the scene - a testament to nature's quiet beauty.
 ```
 
 ---
@@ -66,12 +66,12 @@ completion = openai.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image_1|>\nWhat is shown in this image?",
+                    "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
     ],
-    max_tokens=32,
+    max_tokens=256,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
@@ -141,7 +141,7 @@ fn main() -> anyhow::Result<()> {
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image?".to_string()),
+                    Either::Left("<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.".to_string()),
                 ),
             ])],
         },
@@ -199,7 +199,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image_1|>\nWhat is shown in this image?",
+                        "text": "<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }

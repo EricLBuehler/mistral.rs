@@ -20,6 +20,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
@@ -215,7 +216,11 @@ impl Loader for NormalLoader {
         let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!("Loading model `{}` on {device:?}...", self.get_id());
+            info!(
+                "Loading model `{}` on {}.",
+                self.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         info!(

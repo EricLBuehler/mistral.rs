@@ -16,6 +16,7 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -241,7 +242,11 @@ impl Loader for GGMLLoader {
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
-        info!("Loading model `{}` on {device:?}...", self.get_id());
+        info!(
+            "Loading model `{}` on {}.",
+            self.get_id(),
+            device.device_pretty_repr()
+        );
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)

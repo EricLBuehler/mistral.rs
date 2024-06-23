@@ -554,10 +554,12 @@ impl XLoraLlama {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let dtype = vb.dtype();
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let dtype = vb.dtype();
+
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,

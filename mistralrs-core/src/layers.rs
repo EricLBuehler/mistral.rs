@@ -96,8 +96,8 @@ impl FromStr for ScaledRopeType {
 
 #[derive(Debug, Clone)]
 struct ScaledRopeParams {
-    short_factor: Vec<f32>,
-    long_factor: Vec<f32>,
+    short_factor: Vec<f64>,
+    long_factor: Vec<f64>,
     scaling_type: ScaledRopeType,
 }
 
@@ -136,22 +136,22 @@ impl PhiRotaryEmbedding {
             };
 
             // Calculate inv freqs for short, long
-            let inv_freq_long: Vec<_> = (0..dim)
+            let inv_freq_long = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / (scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    1f64 / (scaled_params.long_factor[k]
+                        * cfg.rope_theta.powf(i as f64 / dim as f64))
                 })
-                .collect();
-            let inv_freq_short: Vec<_> = (0..dim)
+                .collect::<Vec<_>>();
+            let inv_freq_short = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / (scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    1f64 / (scaled_params.short_factor[k]
+                        * cfg.rope_theta.powf(i as f64 / dim as f64))
                 })
-                .collect();
+                .collect::<Vec<_>>();
             let inv_freq_len = inv_freq_long.len();
 
             let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
@@ -159,13 +159,15 @@ impl PhiRotaryEmbedding {
                 .reshape((max_seq_len, 1))?;
 
             // Calculate sin,cos for long
-            let inv_freq_long = Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?;
+            let inv_freq_long =
+                Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
             let freqs_long = t.matmul(&inv_freq_long)?;
             let long_sin = freqs_long.sin()?.mul(scaling_factor)?.to_dtype(dtype)?;
             let long_cos = freqs_long.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
 
             // Calculate sin,cos for short
-            let inv_freq_short = Tensor::from_vec(inv_freq_short, (1, inv_freq_len), dev)?;
+            let inv_freq_short =
+                Tensor::from_vec(inv_freq_short, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
             let freqs_short = t.matmul(&inv_freq_short)?;
             let short_sin = freqs_short.sin()?.mul(scaling_factor)?.to_dtype(dtype)?;
             let short_cos = freqs_short.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
