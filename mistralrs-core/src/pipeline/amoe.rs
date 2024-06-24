@@ -96,8 +96,94 @@ impl AnyMoePipeline {
     pub fn new(target: Arc<tokio::sync::Mutex<dyn Pipeline>>, config: AnyMoeConfig) -> Self {
         Self { target, config }
     }
+}
 
-    fn train(&mut self, inputs: AnyMoeTrainingInputs) -> candle_core::Result<AnyMoeTrainingResult> {
+impl AdapterActivationMixin for AnyMoePipeline {
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
+        get_mut_arcmutex!(self.target).activate_adapters(adapters)
+    }
+}
+
+impl CacheManagerMixin for AnyMoePipeline {
+    fn cache(&self) -> &super::Cache {
+        unreachable!()
+    }
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).clone_in_cache(seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
+    }
+}
+
+impl IsqPipelineMixin for AnyMoePipeline {
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+        get_mut_arcmutex!(self.target).re_isq_model(dtype)
+    }
+}
+
+impl PreProcessingMixin for AnyMoePipeline {
+    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
+        get_mut_arcmutex!(self.target).get_chat_template()
+    }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        get_mut_arcmutex!(self.target).get_input_processor_config()
+    }
+    fn get_processor(&self) -> Arc<dyn super::Processor> {
+        get_mut_arcmutex!(self.target).get_processor()
+    }
+}
+
+impl MetadataMixin for AnyMoePipeline {
+    fn device(&self) -> Device {
+        get_mut_arcmutex!(self.target).device()
+    }
+    fn get_metadata(&self) -> Arc<super::GeneralMetadata> {
+        get_mut_arcmutex!(self.target).get_metadata()
+    }
+    fn name(&self) -> String {
+        get_mut_arcmutex!(self.target).name()
+    }
+    fn reset_non_granular_state(&self) {
+        get_mut_arcmutex!(self.target).reset_non_granular_state()
+    }
+    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
+        get_mut_arcmutex!(self.target).tokenizer()
+    }
+}
+
+#[async_trait::async_trait]
+impl Pipeline for AnyMoePipeline {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        get_mut_arcmutex!(self.target).forward_inputs(inputs)
+    }
+
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await
+    }
+
+    fn category(&self) -> ModelCategory {
+        get_mut_arcmutex!(self.target).category()
+    }
+}
+
+impl AnyMoePipelineMixin for AnyMoePipeline {
+    fn pre_train(
+        &self,
+        inputs: AnyMoeTrainingInputs,
+    ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
         let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
         let device = get_mut_arcmutex!(self.target).device();
         let inputs_processor = get_mut_arcmutex!(self.target)
@@ -223,90 +309,6 @@ impl AnyMoePipeline {
         })
     }
 }
-
-impl AdapterActivationMixin for AnyMoePipeline {
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
-        get_mut_arcmutex!(self.target).activate_adapters(adapters)
-    }
-}
-
-impl CacheManagerMixin for AnyMoePipeline {
-    fn cache(&self) -> &super::Cache {
-        unreachable!()
-    }
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).clone_in_cache(seqs, modify_draft_cache)
-    }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
-    }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
-    }
-}
-
-impl IsqPipelineMixin for AnyMoePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
-        get_mut_arcmutex!(self.target).re_isq_model(dtype)
-    }
-}
-
-impl PreProcessingMixin for AnyMoePipeline {
-    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
-        get_mut_arcmutex!(self.target).get_chat_template()
-    }
-    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
-        get_mut_arcmutex!(self.target).get_input_processor_config()
-    }
-    fn get_processor(&self) -> Arc<dyn super::Processor> {
-        get_mut_arcmutex!(self.target).get_processor()
-    }
-}
-
-impl MetadataMixin for AnyMoePipeline {
-    fn device(&self) -> Device {
-        get_mut_arcmutex!(self.target).device()
-    }
-    fn get_metadata(&self) -> Arc<super::GeneralMetadata> {
-        get_mut_arcmutex!(self.target).get_metadata()
-    }
-    fn name(&self) -> String {
-        get_mut_arcmutex!(self.target).name()
-    }
-    fn reset_non_granular_state(&self) {
-        get_mut_arcmutex!(self.target).reset_non_granular_state()
-    }
-    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
-        get_mut_arcmutex!(self.target).tokenizer()
-    }
-}
-
-#[async_trait::async_trait]
-impl Pipeline for AnyMoePipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
-        get_mut_arcmutex!(self.target).forward_inputs(inputs)
-    }
-
-    async fn sample(
-        &self,
-        seqs: &mut [&mut Sequence],
-        logits: Tensor,
-        prefix_cacher: &mut PrefixCacheManager,
-        disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
-        get_mut_arcmutex!(self.target)
-            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
-            .await
-    }
-
-    fn category(&self) -> ModelCategory {
-        get_mut_arcmutex!(self.target).category()
-    }
-}
-
-// TODO
-impl AnyMoePipelineMixin for AnyMoePipeline {}
 
 /// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
 /// has no information other than the input tokens (and maybe images).

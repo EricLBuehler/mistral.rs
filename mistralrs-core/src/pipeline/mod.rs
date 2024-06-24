@@ -15,7 +15,7 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::AnyMoeBaseModelMixin;
+use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -501,6 +501,13 @@ pub trait AnyMoePipelineMixin {
     }
     /// Per-layer cached outputs.
     fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
+        unreachable!()
+    }
+    /// Pre-train the gating layers
+    fn pre_train(
+        &self,
+        _inputs: AnyMoeTrainingInputs,
+    ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
         unreachable!()
     }
 }
