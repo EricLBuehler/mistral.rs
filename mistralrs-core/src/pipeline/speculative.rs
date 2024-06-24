@@ -134,7 +134,6 @@ pub struct SpeculativePipeline {
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
     metadata: GeneralMetadata,
-    latest_logit_cache: Option<Tensor>,
     category: ModelCategory,
 }
 
@@ -178,7 +177,6 @@ impl SpeculativePipeline {
             draft,
             gamma: config.gamma,
             metadata,
-            latest_logit_cache: None,
             category,
         })
     }
@@ -201,29 +199,28 @@ impl IsqPipelineMixin for SpeculativePipeline {
 }
 
 impl CacheManagerMixin for SpeculativePipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(
-            &mut *get_mut_arcmutex!(self.draft),
+            &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(
-            &mut *get_mut_arcmutex!(self.draft),
+            &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target), false);
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.draft), modify_draft_cache);
+        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.target), false);
         if reset_non_granular {
             self.reset_non_granular_state()
         }
-        self.latest_logit_cache = None;
     }
     fn cache(&self) -> &Cache {
         unreachable!()
