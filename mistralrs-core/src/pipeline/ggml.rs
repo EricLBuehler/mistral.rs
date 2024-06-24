@@ -459,7 +459,7 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -471,13 +471,13 @@ impl Pipeline for GGMLPipeline {
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
+            Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraLlama(ref mut model) => model.forward(
+            Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,

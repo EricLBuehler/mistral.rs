@@ -263,7 +263,7 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<Tensor> {
+    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<Tensor> {
         unreachable!()
     }
     async fn sample(

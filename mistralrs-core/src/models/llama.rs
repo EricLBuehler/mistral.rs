@@ -255,7 +255,7 @@ pub struct Llama {
 
 impl Llama {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -374,7 +374,7 @@ impl IsqModel for Llama {
 
 impl NormalModel for Llama {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -389,7 +389,7 @@ impl NormalModel for Llama {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],

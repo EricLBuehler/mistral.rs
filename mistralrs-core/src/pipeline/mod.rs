@@ -496,7 +496,7 @@ pub trait Pipeline:
     + AdapterActivationMixin
     + MetadataMixin
 {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -600,7 +600,7 @@ pub trait Pipeline:
 
 pub trait NormalModel: IsqModel {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -609,7 +609,7 @@ pub trait NormalModel: IsqModel {
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -637,7 +637,7 @@ pub trait VisionModel: IsqModel {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],

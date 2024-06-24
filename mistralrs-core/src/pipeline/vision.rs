@@ -314,7 +314,7 @@ impl MetadataMixin for VisionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<Tensor> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<Tensor> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
