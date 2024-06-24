@@ -397,13 +397,13 @@ impl IsqPipelineMixin for GGMLPipeline {
 }
 
 impl CacheManagerMixin for GGMLPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -459,7 +459,7 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -471,13 +471,13 @@ impl Pipeline for GGMLPipeline {
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
+            Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraLlama(ref mut model) => model.forward(
+            Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,

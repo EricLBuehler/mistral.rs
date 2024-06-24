@@ -130,7 +130,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -253,7 +253,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -347,7 +347,7 @@ impl Model {
     }
 
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -361,7 +361,7 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -400,7 +400,7 @@ impl IsqModel for Model {
 
 impl NormalModel for Model {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -415,7 +415,7 @@ impl NormalModel for Model {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
