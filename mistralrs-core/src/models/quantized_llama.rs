@@ -126,6 +126,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[deny(clippy::shadow_same, clippy::shadow_reuse, clippy::shadow_unrelated)]
     fn forward_attn(
         &mut self,
         x: &Tensor,
@@ -136,13 +137,13 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = MatMul.qmatmul(x, &self.attention_wq)?;
-        let k = MatMul.qmatmul(x, &self.attention_wk)?;
-        let v = MatMul.qmatmul(x, &self.attention_wv)?;
+        let mut q = MatMul.qmatmul(x, &self.attention_wq)?;
+        let mut k = MatMul.qmatmul(x, &self.attention_wk)?;
+        let mut v = MatMul.qmatmul(x, &self.attention_wv)?;
 
-        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
+        q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
+        k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
+        v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -159,12 +160,14 @@ impl LayerWeights {
                 .transpose(1, 2)?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let (k_, v_) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        k = k_;
+        v = v_;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
+        k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+        v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let y = ScaledDotProductAttention.run_attention(
+        let mut y = ScaledDotProductAttention.run_attention(
             &q,
             &k,
             &v,
@@ -176,9 +179,8 @@ impl LayerWeights {
             seq_len,
         )?;
 
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = MatMul.qmatmul(&y, &self.attention_wo)?;
-        Ok(y)
+        y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        MatMul.qmatmul(&y, &self.attention_wo)
     }
 }
 
@@ -483,17 +485,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
 }
 
 impl ModelWeights {
+    #[deny(clippy::shadow_same, clippy::shadow_reuse, clippy::shadow_unrelated)]
     pub fn forward(
         &mut self,
-        x: &Tensor,
+        input_ids: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        let mut layer_in = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
-            x,
+            input_ids,
             &cache,
             DType::F32,
             self.layers[0].n_head,
@@ -502,9 +505,9 @@ impl ModelWeights {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
-            let x = layer_in;
-            let residual = &x;
-            let x = layer.attention_norm.forward(&x)?;
+            let mut x = layer_in;
+            let mut residual = x.clone();
+            x = layer.attention_norm.forward(&x)?;
             let attn = layer.forward_attn(
                 &x,
                 mask.as_ref()
@@ -514,16 +517,16 @@ impl ModelWeights {
                 start_offsets_kernel.clone(),
                 &mut cache[i],
             )?;
-            let x = (attn + residual)?;
+            x = (attn + residual)?;
 
             // MLP
-            let residual = &x;
-            let x = layer.ffn_norm.forward(&x)?;
-            let x = layer.mlp_or_moe.forward(&x)?;
-            let x = (x + residual)?;
+            residual = x.clone();
+            x = layer.ffn_norm.forward(&x)?;
+            x = layer.mlp_or_moe.forward(&x)?;
+            x = (x + residual)?;
             layer_in = x;
         }
-        let layer_in = layer_in.to_device(&self.device)?;
+        layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         extract_logits(
             &MatMul.qmatmul(&x.contiguous()?, &self.output)?,
