@@ -9,8 +9,8 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, AnyMoeTrainerMixin, CacheManagerMixin,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -50,7 +50,7 @@ pub struct NormalPipeline {
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -308,7 +308,7 @@ impl Loader for NormalLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -317,7 +317,7 @@ impl Loader for NormalLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+            }),
         })))
     }
 
@@ -393,8 +393,8 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
@@ -462,5 +462,3 @@ impl AnyMoePipelineMixin for NormalPipeline {
         self.model.get_cached_gating_outputs()
     }
 }
-
-impl AnyMoeTrainerMixin for NormalPipeline {}

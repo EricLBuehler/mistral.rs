@@ -1,10 +1,10 @@
 use super::cache_manager::DefaultCacheManager;
 use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin,
-    AnyMoeTrainerMixin, Cache, CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
+    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
+    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
+    VisionModelLoader, XLoraPaths,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -42,7 +42,7 @@ pub struct VisionPipeline {
     tok_trie: Arc<TokTrie>,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
 }
@@ -227,7 +227,7 @@ impl Loader for VisionLoader {
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -236,7 +236,7 @@ impl Loader for VisionLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
-            },
+            }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
         })))
@@ -300,8 +300,8 @@ impl MetadataMixin for VisionPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
     fn name(&self) -> String {
         self.model_id.clone()
@@ -353,5 +353,3 @@ impl Pipeline for VisionPipeline {
 
 // TODO
 impl AnyMoePipelineMixin for VisionPipeline {}
-
-impl AnyMoeTrainerMixin for VisionPipeline {}

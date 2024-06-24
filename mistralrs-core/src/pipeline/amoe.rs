@@ -1,59 +1,102 @@
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
-use candle_core::{DType, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 use rand::{seq::SliceRandom, thread_rng};
+use rand_isaac::Isaac64Rng;
 
 use crate::{
-    amoe::{AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    amoe::{AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
+    prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
-    Pipeline, Response,
+    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, Pipeline, Response,
+    TokenSource, TryIntoDType,
 };
 
-use super::{AnyMoePipelineMixin, AnyMoeTrainerMixin};
+use super::{
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, PreProcessingMixin,
+};
+
+/// A loader for a speculative pipeline using 2 [`Loader`]s.
+pub struct AnyMoeLoader {
+    pub target: Box<dyn Loader>,
+    pub config: AnyMoeConfig,
+}
 
 pub struct AnyMoePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    config: AnyMoeConfig,
 }
 
-// TODO
-impl AnyMoePipelineMixin for AnyMoePipeline {}
+impl Loader for AnyMoeLoader {
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let target = self.target.load_model_from_hf(
+            revision.clone(),
+            token_source.clone(),
+            dtype,
+            device,
+            silent,
+            mapper.clone(),
+            in_situ_quant,
+        )?;
+        Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
+            target,
+            self.config.clone(),
+        ))))
+    }
 
-/// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
-/// has no information other than the input tokens (and maybe images).
-fn new_dummy_seq(
-    tokens: Vec<u32>,
-    dummy_sender: tokio::sync::mpsc::Sender<Response>,
-    dummy_sampler: Sampler,
-    dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
-) -> Sequence {
-    Sequence::new_waiting(
-        tokens,
-        0,
-        0,
-        0, // Don't allocate any cache
-        dummy_sender,
-        dummy_sampler,
-        vec![],
-        vec![],
-        None,
-        false,
-        false,
-        dummy_group,
-        0,
-        0,
-        SequenceRecognizer::None,
-        None,
-        None,
-        None,
-        None, // TODO support images
-    )
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapMetadata,
+        in_situ_quant: Option<GgmlDType>,
+    ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let target = self.target.load_model_from_path(
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper.clone(),
+            in_situ_quant,
+        )?;
+        Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
+            target,
+            self.config.clone(),
+        ))))
+    }
+    fn get_id(&self) -> String {
+        format!("AnyMoE: tgt = `{}`", self.target.get_id(),)
+    }
+    fn get_kind(&self) -> ModelKind {
+        ModelKind::AnyMoe {
+            target: Box::new(self.target.get_kind()),
+        }
+    }
 }
 
-impl AnyMoeTrainerMixin for AnyMoePipeline {
+impl AnyMoePipeline {
+    pub fn new(target: Arc<tokio::sync::Mutex<dyn Pipeline>>, config: AnyMoeConfig) -> Self {
+        Self { target, config }
+    }
+
     fn train(&mut self, inputs: AnyMoeTrainingInputs) -> candle_core::Result<AnyMoeTrainingResult> {
         let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
         let device = get_mut_arcmutex!(self.target).device();
@@ -66,9 +109,12 @@ impl AnyMoeTrainerMixin for AnyMoePipeline {
             .get_input_processor_config()
             .clone();
 
-        let lr = 1e-3;
-        let num_epochs = 100;
-        let batch_size = 4;
+        let AnyMoeConfig {
+            hidden_size: _,
+            lr,
+            epochs,
+            batch_size,
+        } = self.config;
         let mut steps = 0;
 
         let mut optimizers = layer_vars
@@ -87,7 +133,7 @@ impl AnyMoeTrainerMixin for AnyMoePipeline {
             })
             .collect::<candle_core::Result<Vec<_>>>()?;
 
-        let bar = ProgressBar::new(num_epochs as u64);
+        let bar = ProgressBar::new(epochs as u64);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template("[{elapsed_precise}] [{bar:40.green}] {pos}/{len} ({eta})")
@@ -110,7 +156,7 @@ impl AnyMoeTrainerMixin for AnyMoePipeline {
 
         let mut latest_loss = vec![Tensor::new(0.0f32, &device)?; optimizers.len()];
 
-        for _ in (0..num_epochs).progress_with(bar) {
+        for _ in (0..epochs).progress_with(bar) {
             samples.as_mut_slice().shuffle(&mut rng);
             for batch in samples.chunks(batch_size).into_iter() {
                 steps += 1;
@@ -176,7 +222,119 @@ impl AnyMoeTrainerMixin for AnyMoePipeline {
                 .collect::<candle_core::Result<Vec<_>>>()?,
         })
     }
-    fn trainable_params(&self) -> usize {
-        get_mut_arcmutex!(self.target).base_model_trainable_params()
+}
+
+impl AdapterActivationMixin for AnyMoePipeline {
+    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
+        get_mut_arcmutex!(self.target).activate_adapters(adapters)
     }
+}
+
+impl CacheManagerMixin for AnyMoePipeline {
+    fn cache(&self) -> &super::Cache {
+        unreachable!()
+    }
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).clone_in_cache(seqs, modify_draft_cache)
+    }
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
+    }
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
+    }
+}
+
+impl IsqPipelineMixin for AnyMoePipeline {
+    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+        get_mut_arcmutex!(self.target).re_isq_model(dtype)
+    }
+}
+
+impl PreProcessingMixin for AnyMoePipeline {
+    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
+        get_mut_arcmutex!(self.target).get_chat_template()
+    }
+    fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
+        get_mut_arcmutex!(self.target).get_input_processor_config()
+    }
+    fn get_processor(&self) -> Arc<dyn super::Processor> {
+        get_mut_arcmutex!(self.target).get_processor()
+    }
+}
+
+impl MetadataMixin for AnyMoePipeline {
+    fn device(&self) -> Device {
+        get_mut_arcmutex!(self.target).device()
+    }
+    fn get_metadata(&self) -> Arc<super::GeneralMetadata> {
+        get_mut_arcmutex!(self.target).get_metadata()
+    }
+    fn name(&self) -> String {
+        get_mut_arcmutex!(self.target).name()
+    }
+    fn reset_non_granular_state(&self) {
+        get_mut_arcmutex!(self.target).reset_non_granular_state()
+    }
+    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
+        get_mut_arcmutex!(self.target).tokenizer()
+    }
+}
+
+#[async_trait::async_trait]
+impl Pipeline for AnyMoePipeline {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        get_mut_arcmutex!(self.target).forward_inputs(inputs)
+    }
+
+    async fn sample(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: Tensor,
+        prefix_cacher: &mut PrefixCacheManager,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await
+    }
+
+    fn category(&self) -> ModelCategory {
+        get_mut_arcmutex!(self.target).category()
+    }
+}
+
+// TODO
+impl AnyMoePipelineMixin for AnyMoePipeline {}
+
+/// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
+/// has no information other than the input tokens (and maybe images).
+fn new_dummy_seq(
+    tokens: Vec<u32>,
+    dummy_sender: tokio::sync::mpsc::Sender<Response>,
+    dummy_sampler: Sampler,
+    dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
+) -> Sequence {
+    Sequence::new_waiting(
+        tokens,
+        0,
+        0,
+        0, // Don't allocate any cache
+        dummy_sender,
+        dummy_sampler,
+        vec![],
+        vec![],
+        None,
+        false,
+        false,
+        dummy_group,
+        0,
+        0,
+        SequenceRecognizer::None,
+        None,
+        None,
+        None,
+        None, // TODO support images
+    )
 }

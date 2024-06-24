@@ -15,7 +15,7 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::amoe::AnyMoeBaseModelMixin;
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -274,6 +274,9 @@ pub enum ModelKind {
         target: Box<ModelKind>,
         draft: Box<ModelKind>,
     },
+
+    #[strum(to_string = "anymoe: target: `{target}`")]
+    AnyMoe { target: Box<ModelKind> },
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -331,6 +334,7 @@ impl ModelKind {
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
+            AnyMoe { target } => target.quantized_kind(),
         }
     }
 
@@ -355,6 +359,7 @@ impl ModelKind {
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }
+            AnyMoe { target } => target.adapted_kind(),
         }
     }
 }
@@ -474,26 +479,12 @@ pub trait AdapterActivationMixin {
     fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
-/// A pipeline which can be trained.
-pub trait AnyMoeTrainerMixin {
-    fn trainable_params(&self) -> usize {
-        unreachable!()
-    }
-    // TODO: load the other experts?
-    fn train(
-        &mut self,
-        _inputs: AnyMoeTrainingInputs,
-    ) -> candle_core::Result<AnyMoeTrainingResult> {
-        unreachable!()
-    }
-}
-
 pub trait MetadataMixin {
     fn device(&self) -> Device;
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
-    fn get_metadata(&self) -> &GeneralMetadata;
+    fn get_metadata(&self) -> Arc<GeneralMetadata>;
 }
 
 /// Implemented by the base model of an AnyMoe.
@@ -530,7 +521,6 @@ pub trait Pipeline:
     + AdapterActivationMixin
     + MetadataMixin
     + AnyMoePipelineMixin
-    + AnyMoeTrainerMixin
 {
     fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 

@@ -22,9 +22,9 @@ use crate::{
 
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, AnyMoePipelineMixin, AnyMoeTrainerMixin, CacheInstruction,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheInstruction, CacheManager, CacheManagerMixin,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -134,7 +134,7 @@ pub struct SpeculativePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
     latest_logit_cache: Option<Tensor>,
     category: ModelCategory,
 }
@@ -260,8 +260,8 @@ impl MetadataMixin for SpeculativePipeline {
         get_mut_arcmutex!(self.target).reset_non_granular_state();
         get_mut_arcmutex!(self.draft).reset_non_granular_state();
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
@@ -578,5 +578,3 @@ impl Pipeline for SpeculativePipeline {
 
 // TODO
 impl AnyMoePipelineMixin for SpeculativePipeline {}
-
-impl AnyMoeTrainerMixin for SpeculativePipeline {}

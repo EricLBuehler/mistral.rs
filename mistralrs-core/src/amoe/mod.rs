@@ -71,9 +71,12 @@ pub trait AnyMoeTrainableLayer {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct AnyMoeConfig {
-    hidden_size: usize,
+    pub hidden_size: usize,
+    pub lr: f64,
+    pub epochs: usize,
+    pub batch_size: usize,
 }
 
 pub struct MoeGate {
