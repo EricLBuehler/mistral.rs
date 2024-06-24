@@ -99,9 +99,13 @@ struct Args {
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
 
-    /// Enter interactive mode instead of serving a chat server.
+    /// Enter interactive mode instead of serving a chat server. Exclusive to `--vi` (vision interactive mode).
     #[clap(long, short, action)]
     interactive_mode: bool,
+
+    /// Enter vision interactive mode instead of serving a chat server. Exclusive to `--interactive-mode/-i`.
+    #[clap(long = "vi", action)]
+    vision_interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
@@ -336,8 +340,13 @@ async fn main() -> Result<()> {
     .with_prefix_cache_n(args.prefix_cache_n)
     .build();
 
-    if args.interactive_mode {
-        interactive_mode(mistralrs).await;
+    if args.interactive_mode && args.vision_interactive_mode {
+        anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
+    } else if args.interactive_mode {
+        interactive_mode(mistralrs, false).await;
+        return Ok(());
+    } else if args.vision_interactive_mode {
+        interactive_mode(mistralrs, true).await;
         return Ok(());
     }
 
