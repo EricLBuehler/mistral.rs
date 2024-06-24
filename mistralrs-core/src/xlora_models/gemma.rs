@@ -255,7 +255,7 @@ impl Attention {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -414,7 +414,7 @@ impl DecoderLayer {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -566,7 +566,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -596,7 +596,7 @@ impl XLoraModel {
             self.layers[0].self_attn.num_heads,
         )?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -621,7 +621,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -739,7 +739,7 @@ impl IsqModel for XLoraModel {
 
 impl NormalModel for XLoraModel {
     fn forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
@@ -749,7 +749,7 @@ impl NormalModel for XLoraModel {
         unreachable!()
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -826,7 +826,7 @@ impl ScalingsMaker for XLoraModel {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,

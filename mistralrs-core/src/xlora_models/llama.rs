@@ -415,7 +415,7 @@ pub struct XLoraLlama {
 impl XLoraLlama {
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -467,7 +467,7 @@ impl XLoraLlama {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -687,7 +687,7 @@ impl IsqModel for XLoraLlama {
 
 impl NormalModel for XLoraLlama {
     fn forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
@@ -697,7 +697,7 @@ impl NormalModel for XLoraLlama {
         unreachable!()
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -774,7 +774,7 @@ impl ScalingsMaker for XLoraLlama {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,

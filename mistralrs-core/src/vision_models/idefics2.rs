@@ -936,7 +936,7 @@ impl Idefics2 {
     }
 
     fn forward_inner(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
@@ -1058,7 +1058,7 @@ impl IsqModel for Idefics2 {
 
 impl VisionModel for Idefics2 {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],

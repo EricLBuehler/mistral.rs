@@ -111,7 +111,7 @@ impl LayerWeights {
 
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -370,7 +370,7 @@ impl ModelWeights {
     }
 
     pub fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         scalings: Option<Tensor>,
@@ -400,7 +400,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
             }
@@ -441,7 +441,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -526,7 +526,7 @@ impl ScalingsMaker for ModelWeights {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,

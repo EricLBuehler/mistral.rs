@@ -151,10 +151,10 @@ class Which(Enum):
         repeat_last_n: int = 64
     @dataclass
     class VisionPlain:
+        arch: VisionArchitecture
         model_id: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
-        arch: VisionArchitecture
 
 class Runner:
     def __init__(
