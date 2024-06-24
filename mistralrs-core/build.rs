@@ -1,3 +1,6 @@
+#[cfg(feature = "cuda")]
+const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
 fn main() {
     #[cfg(feature = "cuda")]
     {
@@ -8,7 +11,7 @@ fn main() {
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
-        let builder = bindgen_cuda::Builder::default()
+        let mut builder = bindgen_cuda::Builder::default()
             .kernel_paths(lib_files)
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
@@ -21,6 +24,13 @@ fn main() {
             .arg("--expt-extended-lambda")
             .arg("--use_fast_math")
             .arg("--verbose");
+
+        // https://github.com/EricLBuehler/mistral.rs/issues/286
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            builder = builder.arg("--compiler-options");
+            builder = builder.arg(cuda_nvcc_flags_env);
+        }
+
         let out_file = build_dir.join("libmistralcuda.a");
         builder.build_lib(out_file);
         println!("cargo:rustc-link-search={}", build_dir.display());
