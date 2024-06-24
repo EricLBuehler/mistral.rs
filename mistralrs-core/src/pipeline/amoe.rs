@@ -234,13 +234,13 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn cache(&self) -> &super::Cache {
         unreachable!()
     }
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         get_mut_arcmutex!(self.target).clone_in_cache(seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
     }
 }
@@ -283,7 +283,7 @@ impl MetadataMixin for AnyMoePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)
     }
 
