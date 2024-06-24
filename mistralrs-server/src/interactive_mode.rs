@@ -102,9 +102,9 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
                         Ok(http_resp) => http_resp.bytes().await.unwrap().to_vec(),
                         Err(e) => panic!("{e}"),
                     }
-                } else if let Ok(mut f) = File::open(&url) {
+                } else if let Ok(mut f) = File::open(url) {
                     // Read from local file
-                    let metadata = fs::metadata(&url).unwrap();
+                    let metadata = fs::metadata(url).unwrap();
                     let mut buffer = vec![0; metadata.len() as usize];
                     f.read_exact(&mut buffer).unwrap();
                     buffer
