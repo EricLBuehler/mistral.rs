@@ -127,7 +127,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
@@ -484,7 +484,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -498,7 +498,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }

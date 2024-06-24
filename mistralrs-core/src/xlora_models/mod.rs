@@ -39,7 +39,7 @@ trait ScalingsMaker {
     fn dtype(&self) -> DType;
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -53,7 +53,7 @@ trait ScalingsMaker {
 
     #[allow(clippy::too_many_arguments)]
     fn get_scalings(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
