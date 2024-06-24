@@ -425,7 +425,7 @@
                     </span>seq.set_state(SequenceState::Error);
                 }
 
-                <span class="kw">let </span><span class="kw-2">mut </span>p = <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>);
+                <span class="kw">let </span>p = <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$pipeline</span>);
                 <span class="comment">// Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.

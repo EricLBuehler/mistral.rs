@@ -1412,7 +1412,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -1530,7 +1530,7 @@
 
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>XLoraModel {
     <span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         _input_ids: <span class="kw-2">&amp;</span>Tensor,
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _start_offsets_kernel: Tensor,
@@ -1540,7 +1540,7 @@
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>xlora_forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -1617,7 +1617,7 @@
         <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
     }
     <span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,

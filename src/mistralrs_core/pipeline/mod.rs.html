@@ -1363,14 +1363,14 @@
 <span class="kw">pub trait </span>CacheManagerMixin {
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
+    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
     <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
+    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
     <span class="doccomment">/// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool);
+    </span><span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool);
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
 }
 
@@ -1403,7 +1403,7 @@
     + AdapterActivationMixin
     + MetadataMixin
 {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">async fn </span>step(
@@ -1507,7 +1507,7 @@
 
 <span class="kw">pub trait </span>NormalModel: IsqModel {
     <span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
@@ -1516,7 +1516,7 @@
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>xlora_forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -1544,7 +1544,7 @@
     <span class="comment">// pixel_values and pixel_attention_mask only specified for prompt seqs
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],

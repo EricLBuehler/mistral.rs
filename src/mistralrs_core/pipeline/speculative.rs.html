@@ -571,9 +571,6 @@
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
-<a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -710,7 +707,6 @@
     draft: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     gamma: usize,
     metadata: GeneralMetadata,
-    latest_logit_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     category: ModelCategory,
 }
 
@@ -754,7 +750,6 @@
             draft,
             gamma: config.gamma,
             metadata,
-            latest_logit_cache: <span class="prelude-val">None</span>,
             category,
         })
     }
@@ -777,29 +772,28 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(
-            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
+            <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_in_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+        DefaultCacheManager.clone_in_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(
-            <span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
+            <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_out_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+        DefaultCacheManager.clone_out_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;mut *</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), <span class="bool-val">false</span>);
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), modify_draft_cache);
+        DefaultCacheManager.set_none_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), <span class="bool-val">false</span>);
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
         }
-        <span class="self">self</span>.latest_logit_cache = <span class="prelude-val">None</span>;
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
         <span class="macro">unreachable!</span>()
@@ -842,7 +836,7 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">async fn </span>sample(

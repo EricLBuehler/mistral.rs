@@ -408,7 +408,7 @@
     }
 
     <span class="kw">fn </span>forward_attn(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -644,7 +644,7 @@
 }
 
 <span class="kw">impl </span>ModelWeights {
-    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;mut </span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor, seqlen_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor, seqlen_offsets: <span class="kw-2">&amp;</span>[usize]) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
@@ -655,7 +655,7 @@
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 xs = mapper.map(xs, i)<span class="question-mark">?</span>;
             }

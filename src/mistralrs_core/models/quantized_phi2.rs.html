@@ -361,7 +361,7 @@
     }
 
     <span class="kw">fn </span>forward_attn(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -571,7 +571,7 @@
 
 <span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
@@ -584,7 +584,7 @@
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
             <span class="kw">let </span>xs_norm = xs.apply(<span class="kw-2">&amp;</span>layer.attn_norm)<span class="question-mark">?</span>;

@@ -2030,7 +2030,7 @@
     }
 
     <span class="kw">fn </span>forward_inner(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -2152,7 +2152,7 @@
 
 <span class="kw">impl </span>VisionModel <span class="kw">for </span>Idefics2 {
     <span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],

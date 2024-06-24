@@ -1108,7 +1108,7 @@
 <span class="kw">impl </span>LayerWeights {
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward_attn(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -1664,7 +1664,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>inner_forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
@@ -1693,7 +1693,7 @@
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;
             }
@@ -1736,7 +1736,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
@@ -1831,7 +1831,7 @@
         <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
     }
     <span class="kw">fn </span>forward(
-        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,

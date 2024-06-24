@@ -903,13 +903,13 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>GGMLPipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
+    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
@@ -965,7 +965,7 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>GGMLPipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
@@ -977,13 +977,13 @@
             position_ids: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
         </span>} = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model {
-            Model::Llama(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+            Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraLlama(<span class="kw-2">ref mut </span>model) =&gt; model.forward(
+            Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
