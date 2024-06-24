@@ -11,7 +11,7 @@ fn main() {
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
-        let builder = bindgen_cuda::Builder::default()
+        let mut builder = bindgen_cuda::Builder::default()
             .kernel_paths(lib_files)
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
