@@ -1,3 +1,4 @@
+use candle_core::cuda::cudarc::cublas::sys::cublasHandle_t;
 use half::f16;
 use std::ffi::c_void;
 
@@ -7,7 +8,7 @@ extern "C" {
     /// - `temp_dq` is of shape `(b_q_weight.shape()[0]*32/bit, b_q_weight.shape()[1])`
     /// - `temp_dq` may be preallocated, the init values are unimportant.
     pub(crate) fn gemm_half_q_half_cuda(
-        gemm_handle: *const c_void,
+        gemm_handle: *const cublasHandle_t,
         a: *const f16,
         b_q_weight: *const u32,
         b_gptq_qzeros: *const u32,
@@ -21,5 +22,5 @@ extern "C" {
         groups: i32,
         use_exllama: bool,
         bit: i32,
-    ) -> u32;
+    );
 }
