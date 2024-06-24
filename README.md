@@ -210,6 +210,8 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
+- Install the [Python package here](mistralrs-pyo3/README.md).
+
 1) Install required packages
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
     - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
@@ -272,9 +274,9 @@ Please submit more benchmarks via raising an issue!
     cp ./target/release/mistralrs-server ./mistralrs_server
     ```
 
-7) Installing Python support
-
-    You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
+7) Use our APIs and integrations 
+    
+    [APIs and integrations list](#apis-and-integrations)
 
 ## Getting models
 
