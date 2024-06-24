@@ -1,3 +1,6 @@
+#[cfg(feature = "cuda")]
+const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
 fn main() {
     #[cfg(feature = "cuda")]
     {
@@ -21,6 +24,13 @@ fn main() {
             .arg("--expt-extended-lambda")
             .arg("--use_fast_math")
             .arg("--verbose");
+
+        // https://github.com/EricLBuehler/mistral.rs/issues/286
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            builder = builder.arg("--compiler-options");
+            builder = builder.arg(cuda_nvcc_flags_env);
+        }
+
         let out_file = build_dir.join("libmistralcuda.a");
         builder.build_lib(out_file);
         println!("cargo:rustc-link-search={}", build_dir.display());
