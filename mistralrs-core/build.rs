@@ -36,6 +36,19 @@ fn main() {
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralcuda");
         println!("cargo:rustc-link-lib=dylib=cudart");
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+
+        let target = std::env::var("TARGET").unwrap();
+        if target.contains("msvc") {
+            // nothing to link to
+        } else if target.contains("apple")
+            || target.contains("freebsd")
+            || target.contains("openbsd")
+        {
+            println!("cargo:rustc-link-lib=dylib=c++");
+        } else if target.contains("android") {
+            println!("cargo:rustc-link-lib=dylib=c++_shared");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
     }
 }
