@@ -2217,7 +2217,6 @@ dependencies = [
  "either",
  "futures",
  "galil-seiferas",
- "half",
  "hf-hub",
  "image",
  "indexmap",
@@ -2271,6 +2270,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "mistralrs-quant"
+version = "0.1.21"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "half",
 ]
 
 [[package]]

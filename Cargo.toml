@@ -6,6 +6,7 @@ members = [
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
+    "mistralrs-quant",
 ]
 resolver = "2"
 

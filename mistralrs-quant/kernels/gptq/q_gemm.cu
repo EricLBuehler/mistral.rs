@@ -1481,7 +1481,8 @@ void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gptq_qzeros,
                                            width, groups, out);
 }
 
-void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
+// NOTE(EricLBuehler): gemm_half_q_half_cuda is the primary entrypoint.
+extern "C" void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
                            const uint32_t* b_q_weight,
                            const uint32_t* b_gptq_qzeros,
                            const half* b_gptq_scales, const int* b_g_idx,
@@ -1761,29 +1762,3 @@ __global__ void make_sequential_8bit_kernel(const uint32_t* __restrict__ w,
   }
   w_new2[w_new2_row * w2_stride + w2_column] = dst;
 }
-
-torch::Tensor gptq_gemm(torch::Tensor a, torch::Tensor b_q_weight,
-                        torch::Tensor b_gptq_qzeros,
-                        torch::Tensor b_gptq_scales, torch::Tensor b_g_idx,
-                        bool use_exllama, int64_t bit) {
-  const at::cuda::OptionalCUDAGuard device_guard(device_of(a));
-  auto options = torch::TensorOptions().dtype(a.dtype()).device(a.device());
-  at::Tensor c = torch::empty({a.size(0), b_q_weight.size(1)}, options);
-  at::Tensor temp_dq = torch::empty(
-      {b_q_weight.size(0) * 32 / bit, b_q_weight.size(1)}, options);
-
-  gemm_half_q_half_cuda(
-      at::cuda::getCurrentCUDABlasHandle(), (const half*)a.data_ptr(),
-      (const uint32_t*)b_q_weight.data_ptr(),
-      (const uint32_t*)b_gptq_qzeros.data_ptr(),
-      (const half*)b_gptq_scales.data_ptr(),
-      b_g_idx.device().is_meta() ? NULL : (const int*)b_g_idx.data_ptr(),
-      (half*)c.data_ptr(), (half*)temp_dq.data_ptr(),
-      c.size(0),              // m
-      c.size(1),              // n
-      a.size(1),              // k
-      b_gptq_qzeros.size(0),  // group number
-      use_exllama, bit);
-  return c;
-}
-
