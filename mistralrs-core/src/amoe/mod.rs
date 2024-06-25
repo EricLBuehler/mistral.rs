@@ -17,7 +17,7 @@ pub struct AnyMoeTrainingResult {
     pub final_loss: Vec<f32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct AnyMoeTrainingInputRow {
     pub prompt: String,
     pub expert: usize,

@@ -240,6 +240,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             })
             .collect::<candle_core::Result<Vec<_>>>()?;
 
+        dbg!(&optimizers);
+
         let bar = ProgressBar::new(epochs as u64);
         bar.set_style(
             ProgressStyle::default_bar()
@@ -250,6 +252,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         let mut rng = thread_rng();
         let mut samples = inputs.0;
+        dbg!(&samples);
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
@@ -351,7 +354,7 @@ fn new_dummy_seq(
         tokens,
         0,
         0,
-        0, // Don't allocate any cache
+        1,
         dummy_sender,
         dummy_sampler,
         vec![],
