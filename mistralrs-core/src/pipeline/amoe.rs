@@ -267,7 +267,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         // Clear KV cache in prep for training
         get_mut_arcmutex!(self.target).set_none_cache(true, true);
 
-        let mut latest_loss = vec![Tensor::new(0.0f32, &device)?; optimizers.len()];
+        let mut latest_loss = vec![0.0; optimizers.len()];
 
         TrainingBlock::enter(|| {
             for _ in (0..epochs).progress_with(bar) {
@@ -333,7 +333,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     {
                         let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
                         optimizer.backward_step(&loss)?;
-                        latest_loss[layer] = loss.to_dtype(DType::F32)?;
+                        latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
                     }
                 }
             }
@@ -342,10 +342,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         Ok(AnyMoeTrainingResult {
             steps,
-            final_loss: latest_loss
-                .into_iter()
-                .map(|loss| loss.to_scalar::<f32>())
-                .collect::<candle_core::Result<Vec<_>>>()?,
+            final_loss: latest_loss,
         })
     }
 }
