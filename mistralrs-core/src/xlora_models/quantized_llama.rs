@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -490,7 +491,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
-        for layer_idx in 0..block_count {
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
