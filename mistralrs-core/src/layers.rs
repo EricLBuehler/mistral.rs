@@ -310,7 +310,10 @@ impl MatMul {
 
     /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        assert!(!is_training());
+        assert!(
+            !is_training()
+                || (matches!(matmul, QMatMul::Tensor(_) | QMatMul::TensorF16(_)) && is_training())
+        );
         if get_use_matmul_via_f16() {
             matmul.forward_via_f16(x)
         } else {
