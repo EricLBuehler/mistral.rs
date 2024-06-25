@@ -1,6 +1,5 @@
 use candle_core::cuda::cudarc::cublas::sys::cublasHandle_t;
 use half::f16;
-use std::ffi::c_void;
 
 #[allow(dead_code)]
 extern "C" {

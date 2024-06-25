@@ -1,12 +1,10 @@
-use std::ffi::c_void;
-
 use candle_core::{
     cuda::{
         cudarc::{cublas::sys::cublasHandle_t, driver::DevicePtr},
         CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op, CudaDevice, CudaStorage, CustomOp3, Device, Result, Shape, Storage, Tensor,
-    WithDType,
+    from_storage_no_op, CudaDevice, CudaStorage, Device, Result, Shape, Storage, Tensor, WithDType,
+    D,
 };
 use cudarc::driver::CudaSlice;
 use ffi::gemm_half_q_half_cuda;
@@ -59,13 +57,23 @@ impl GptQMatMul {
         use_exllama: bool,
         gemm_handle: *const cublasHandle_t,
     ) -> Result<Tensor> {
-        let a_ptr = get_cuda_slice::<f16>(a);
+        // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
+        let out_shape = Shape::from_dims(
+            &[
+                &a.dims()[..a.dims().len() - 1],
+                &[self.q_weight.dim(D::Minus1)?],
+            ]
+            .concat(),
+        );
+        let a = a.reshape(((), a.dim(D::Minus1)?))?;
+
+        let a_ptr = get_cuda_slice::<f16>(&a);
         let b_q_weight = get_cuda_slice::<u32>(&self.q_weight);
         let b_gptq_qzeros = get_cuda_slice::<u32>(&self.gptq_qzeros);
         let b_q_scales = get_cuda_slice::<f16>(&self.q_weight);
         let b_g_idx = get_cuda_slice::<i64>(&self.g_idx) as *const i32;
 
-        let dev = get_cuda_device(a);
+        let dev = get_cuda_device(&a);
 
         let c_shape = Shape::from_dims(&[a.dims()[0] * self.q_weight.dims()[1]]);
         let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
@@ -102,6 +110,8 @@ impl GptQMatMul {
             device: dev.clone(),
         };
         let storage = Storage::Cuda(storage);
-        Ok(from_storage_no_op(storage, c_shape, false))
+        let res = from_storage_no_op(storage, c_shape, false);
+
+        res.reshape(out_shape)
     }
 }

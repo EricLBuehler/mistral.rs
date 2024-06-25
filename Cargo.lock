@@ -2274,11 +2274,12 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "candle-core",
  "candle-nn",
  "half",
+ "serde",
 ]
 
 [[package]]
