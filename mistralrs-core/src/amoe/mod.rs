@@ -79,6 +79,17 @@ pub struct AnyMoeConfig {
     pub batch_size: usize,
 }
 
+impl AnyMoeConfig {
+    pub fn default(hidden_size: usize) -> Self {
+        Self {
+            hidden_size,
+            lr: 1e-3,
+            epochs: 100,
+            batch_size: 4,
+        }
+    }
+}
+
 pub struct MoeGate {
     lin: Linear,
 }
