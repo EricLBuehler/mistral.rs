@@ -2,8 +2,8 @@
 model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
-[anymoe_config]
-dataset_csv = "tester.csv"
+[anymoe]
+dataset_csv = "test.csv"
 
-[anymoe_config.config]
+[anymoe.config]
 hidden_size = 4096

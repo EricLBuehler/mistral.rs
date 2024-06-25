@@ -160,15 +160,15 @@ impl MoeMlp {
         let vb = VarBuilder::from_varmap(&var_map, dtype, dev);
         let vb = vb.pp("moe_gate");
 
+        let lin = linear(config.hidden_size, n_experts, vb)?;
+
         let vars = var_map.all_vars();
         if vars.is_empty() {
-            candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layer?");
+            candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
         }
         Ok(Self {
             experts,
-            gate: MoeGate {
-                lin: linear(config.hidden_size, n_experts, vb)?,
-            },
+            gate: MoeGate { lin },
             training: true,
             vars,
             gating_output: Arc::new(RwLock::new(None)),
