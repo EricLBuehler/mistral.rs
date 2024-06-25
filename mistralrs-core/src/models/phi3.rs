@@ -15,6 +15,7 @@ use crate::{
     pipeline::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
     },
+    utils::progress::NiceProgressBar,
 };
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
@@ -306,7 +307,7 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),

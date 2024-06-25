@@ -8,6 +8,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -284,7 +285,7 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 head_dim,

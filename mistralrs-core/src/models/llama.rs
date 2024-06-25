@@ -11,6 +11,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,7 +317,8 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            .into_iter()
             .map(|i| {
                 let rotary_emb = Arc::new(
                     RotaryEmbedding::new(
