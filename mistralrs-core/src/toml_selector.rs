@@ -249,7 +249,7 @@ pub struct TomlSelector {
     speculative: Option<SpeculativeTomlModelSelected>,
 
     /// AnyMoE config
-    anymoe_config: Option<AnyMoeTomlModelSelected>,
+    anymoe: Option<AnyMoeTomlModelSelected>,
 }
 
 #[derive(Clone)]
@@ -531,7 +531,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
         let loader = if let Some(AnyMoeTomlModelSelected {
             config,
             dataset_csv,
-        }) = selector.anymoe_config
+        }) = selector.anymoe
         {
             Box::new(AnyMoeLoader {
                 target: loader,
