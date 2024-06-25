@@ -9,6 +9,7 @@ use rand_isaac::Isaac64Rng;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
+    layers::{set_training, TrainingBlock},
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
@@ -242,63 +243,68 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         let mut latest_loss = vec![Tensor::new(0.0f32, &device)?; optimizers.len()];
 
-        for _ in (0..epochs).progress_with(bar) {
-            samples.as_mut_slice().shuffle(&mut rng);
-            for batch in samples.chunks(batch_size).into_iter() {
-                steps += 1;
+        TrainingBlock::train(|| {
+            for _ in (0..epochs).progress_with(bar) {
+                samples.as_mut_slice().shuffle(&mut rng);
+                for batch in samples.chunks(batch_size).into_iter() {
+                    steps += 1;
 
-                // === PREPARE INPUTS ==
-                let mut seqs = Vec::new();
-                for (prompt, _) in batch {
-                    let tokens = tokenizer
-                        .encode(prompt.clone(), true)
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?
-                        .get_ids()
-                        .to_vec();
-                    seqs.push(new_dummy_seq(
-                        tokens,
-                        dummy_sender.clone(),
-                        dummy_sampler.clone(),
-                        dummy_group.clone(),
-                    ));
-                }
-                let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
-                let inputs = inputs_processor
-                    .process_inputs(
-                        tokenizer.clone(),
-                        &mut input_seqs,
-                        true, // Always a prompt
-                        metadata.is_xlora,
+                    // === PREPARE INPUTS ==
+                    let mut seqs = Vec::new();
+                    for (prompt, _) in batch {
+                        let tokens = tokenizer
+                            .encode(prompt.clone(), true)
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?
+                            .get_ids()
+                            .to_vec();
+                        seqs.push(new_dummy_seq(
+                            tokens,
+                            dummy_sender.clone(),
+                            dummy_sampler.clone(),
+                            dummy_group.clone(),
+                        ));
+                    }
+                    let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
+                    let inputs = inputs_processor
+                        .process_inputs(
+                            tokenizer.clone(),
+                            &mut input_seqs,
+                            true, // Always a prompt
+                            metadata.is_xlora,
+                            &device,
+                            metadata.has_no_kv_cache,
+                            None,
+                            input_processor_cfg.clone(),
+                        )
+                        .unwrap();
+
+                    // === PREPARE AND RUN MODEL ==
+
+                    // Run the model, ignoring the logits
+                    let _ = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
+
+                    // Clear the KV cache
+                    get_mut_arcmutex!(self.target).set_none_cache(true, true);
+
+                    // === BACKWARD STEP ==
+                    let labels = Tensor::from_vec(
+                        batch.iter().map(|(_, x)| *x as u32).collect::<Vec<_>>(),
+                        (batch.len(),),
                         &device,
-                        metadata.has_no_kv_cache,
-                        None,
-                        input_processor_cfg.clone(),
-                    )
-                    .unwrap();
+                    )?;
 
-                // === PREPARE AND RUN MODEL ==
-
-                // Run the model, ignoring the logits
-                let _ = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
-
-                // Clear the KV cache
-                get_mut_arcmutex!(self.target).set_none_cache(true, true);
-
-                // === BACKWARD STEP ==
-                let labels = Tensor::from_vec(
-                    batch.iter().map(|(_, x)| *x as u32).collect::<Vec<_>>(),
-                    (batch.len(),),
-                    &device,
-                )?;
-
-                let cached = get_mut_arcmutex!(self.target).get_cached_gating_outputs();
-                for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
-                    let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
-                    optimizer.backward_step(&loss)?;
-                    latest_loss[layer] = loss.to_dtype(DType::F32)?;
+                    let cached = get_mut_arcmutex!(self.target).get_cached_gating_outputs();
+                    for (layer, (optimizer, output)) in
+                        optimizers.iter_mut().zip(cached).enumerate()
+                    {
+                        let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
+                        optimizer.backward_step(&loss)?;
+                        latest_loss[layer] = loss.to_dtype(DType::F32)?;
+                    }
                 }
             }
-        }
+            Ok(())
+        })?;
 
         Ok(AnyMoeTrainingResult {
             steps,
