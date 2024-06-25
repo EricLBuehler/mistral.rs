@@ -6,6 +6,7 @@ use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -448,7 +449,7 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             // Alternative rope scalings are not supported.
             let rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,

@@ -4,6 +4,7 @@ use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::IsqModel,
+    utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
@@ -577,36 +578,38 @@ impl XLoraLlama {
         )?;
         let mut count = 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let mut blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| {
-                let rotary_emb = Arc::new(
-                    RotaryEmbedding::new(
-                        cfg.rope_theta,
-                        head_dim,
-                        cfg.max_position_embeddings,
-                        mapper
-                            .device_for(i, false)
-                            .unwrap_or(&normal_loading_metadata.real_device),
-                        is_gptx,
-                        vb.dtype(),
+        let mut blocks: Vec<_> =
+            NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+                .into_iter()
+                .map(|i| {
+                    let rotary_emb = Arc::new(
+                        RotaryEmbedding::new(
+                            cfg.rope_theta,
+                            head_dim,
+                            cfg.max_position_embeddings,
+                            mapper
+                                .device_for(i, false)
+                                .unwrap_or(&normal_loading_metadata.real_device),
+                            is_gptx,
+                            vb.dtype(),
+                        )
+                        .expect("Failed to create RoPE"),
+                    );
+                    Block::load(
+                        vb.pp(&format!("model.layers.{i}")),
+                        cfg,
+                        lora_config,
+                        &mut count,
+                        &xlora_ordering,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        rotary_emb,
+                        preload_adapters,
                     )
-                    .expect("Failed to create RoPE"),
-                );
-                Block::load(
-                    vb.pp(&format!("model.layers.{i}")),
-                    cfg,
-                    lora_config,
-                    &mut count,
-                    &xlora_ordering,
-                    &*mapper,
-                    i,
-                    normal_loading_metadata.loading_isq,
-                    rotary_emb,
-                    preload_adapters,
-                )
-                .expect("Failed to load block.")
-            })
-            .collect();
+                    .expect("Failed to load block.")
+                })
+                .collect();
         if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
