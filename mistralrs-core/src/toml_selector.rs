@@ -17,6 +17,10 @@ fn default_one() -> usize {
     1
 }
 
+fn default_dtype() -> ModelDType {
+    ModelDType::Auto
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TomlModelSelected {
@@ -29,6 +33,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -51,6 +56,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -69,6 +75,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -211,6 +218,7 @@ pub enum TomlModelSelected {
         arch: VisionLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 }
