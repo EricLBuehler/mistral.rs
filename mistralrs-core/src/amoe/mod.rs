@@ -4,6 +4,8 @@ use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
 use serde::{Deserialize, Serialize};
 
+use crate::serde_default_fn;
+
 pub struct AnyMoeTrainingResult {
     pub steps: usize,
     /// One for each gating layer
@@ -71,11 +73,18 @@ pub trait AnyMoeTrainableLayer {
     }
 }
 
+serde_default_fn!(f64, default_lr, 1e-3);
+serde_default_fn!(usize, default_epochs, 100);
+serde_default_fn!(usize, default_bs, 4);
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct AnyMoeConfig {
     pub hidden_size: usize,
+    #[serde(default = "default_lr")]
     pub lr: f64,
+    #[serde(default = "default_epochs")]
     pub epochs: usize,
+    #[serde(default = "default_bs")]
     pub batch_size: usize,
 }
 

@@ -3,9 +3,10 @@ use std::fs::File;
 use serde::Deserialize;
 
 use crate::{
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -237,6 +238,9 @@ pub struct TomlSelector {
 
     /// Speculative model selector
     speculative: Option<SpeculativeTomlModelSelected>,
+
+    /// AnyMoE config
+    anymoe_config: Option<AnyMoeConfig>,
 }
 
 #[derive(Clone)]
@@ -511,6 +515,14 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
                 config: SpeculativeConfig {
                     gamma: speculative.gamma,
                 },
+            })
+        } else {
+            loader
+        };
+        let loader = if let Some(anymoe_config) = selector.anymoe_config {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config: anymoe_config,
             })
         } else {
             loader

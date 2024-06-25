@@ -20,6 +20,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
 use crate::{DeviceMapMetadata, TryIntoDType};
+pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;

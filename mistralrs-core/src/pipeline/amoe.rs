@@ -9,7 +9,7 @@ use rand_isaac::Isaac64Rng;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
-    layers::{set_training, TrainingBlock},
+    layers::TrainingBlock,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
@@ -22,7 +22,6 @@ use super::{
     MetadataMixin, PreProcessingMixin,
 };
 
-/// A loader for a speculative pipeline using 2 [`Loader`]s.
 pub struct AnyMoeLoader {
     pub target: Box<dyn Loader>,
     pub config: AnyMoeConfig,
