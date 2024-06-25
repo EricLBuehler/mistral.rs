@@ -416,6 +416,8 @@
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -429,6 +431,7 @@
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 <span class="attr">#[derive(Debug, Clone, Deserialize)]
@@ -734,7 +737,8 @@
             mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..cfg.num_hidden_layers)
+        <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = NiceProgressBar(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
+            .into_iter()
             .map(|i| {
                 <span class="kw">let </span>rotary_emb = Arc::new(
                     RotaryEmbedding::new(

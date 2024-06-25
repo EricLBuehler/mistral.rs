@@ -442,6 +442,7 @@
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -459,6 +460,7 @@
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 <span class="comment">// https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
@@ -750,7 +752,7 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
-        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>) {
             <span class="comment">// Alternative rope scalings are not supported.
             </span><span class="kw">let </span>rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,

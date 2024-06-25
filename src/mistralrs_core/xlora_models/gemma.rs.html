@@ -846,6 +846,7 @@
 <a href="#846" id="846">846</a>
 <a href="#847" id="847">847</a>
 <a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -854,6 +855,7 @@
     layers::ScaledDotProductAttention,
     lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
@@ -1335,7 +1337,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta <span class="kw">as </span>f32,
                 cfg.head_dim,

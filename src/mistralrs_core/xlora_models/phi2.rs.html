@@ -785,6 +785,7 @@
 <a href="#785" id="785">785</a>
 <a href="#786" id="786">786</a>
 <a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -793,6 +794,7 @@
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 <span class="doccomment">/// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -1235,7 +1237,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>) {
             <span class="comment">// Alternative rope scalings are not supported.
             </span><span class="kw">let </span>rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,
