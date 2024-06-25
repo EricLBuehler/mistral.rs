@@ -1,3 +1,6 @@
+#[cfg(feature = "cuda")]
+const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
 fn main() {
     #[cfg(feature = "cuda")]
     {
@@ -8,7 +11,7 @@ fn main() {
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
-        let builder = bindgen_cuda::Builder::default()
+        let mut builder = bindgen_cuda::Builder::default()
             .kernel_paths(lib_files)
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
@@ -21,11 +24,31 @@ fn main() {
             .arg("--expt-extended-lambda")
             .arg("--use_fast_math")
             .arg("--verbose");
+
+        // https://github.com/EricLBuehler/mistral.rs/issues/286
+        if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+            builder = builder.arg("--compiler-options");
+            builder = builder.arg(cuda_nvcc_flags_env);
+        }
+
         let out_file = build_dir.join("libmistralgptq.a");
         builder.build_lib(out_file);
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralgptq");
         println!("cargo:rustc-link-lib=dylib=cudart");
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+
+        let target = std::env::var("TARGET").unwrap();
+        if target.contains("msvc") {
+            // nothing to link to
+        } else if target.contains("apple")
+            || target.contains("freebsd")
+            || target.contains("openbsd")
+        {
+            println!("cargo:rustc-link-lib=dylib=c++");
+        } else if target.contains("android") {
+            println!("cargo:rustc-link-lib=dylib=c++_shared");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
     }
 }
