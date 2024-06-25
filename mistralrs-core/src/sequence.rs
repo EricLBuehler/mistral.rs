@@ -259,8 +259,10 @@ impl Sequence {
         &self.tokens
     }
 
+    /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens = toks;
+        self.prompt_len = self.tokens.len();
     }
 
     pub fn completion_bytes(&self) -> &[u8] {

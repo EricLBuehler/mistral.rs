@@ -49,7 +49,7 @@ completion = openai.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image, and what is the relevance for materials design? Include a discussion of multi-agent AI.",
+                    "text": "What is shown in this image?",
                 },
             ],
         },

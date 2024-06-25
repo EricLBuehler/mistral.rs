@@ -11,6 +11,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -226,12 +227,12 @@ impl Block {
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), loading_isq),
         )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), loading_isq),
         )?;
         Ok(Self {
             rms_1,
@@ -255,7 +256,7 @@ pub struct Llama {
 
 impl Llama {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -298,6 +299,8 @@ impl Llama {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -314,7 +317,8 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            .into_iter()
             .map(|i| {
                 let rotary_emb = Arc::new(
                     RotaryEmbedding::new(
@@ -372,7 +376,7 @@ impl IsqModel for Llama {
 
 impl NormalModel for Llama {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -387,7 +391,7 @@ impl NormalModel for Llama {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],

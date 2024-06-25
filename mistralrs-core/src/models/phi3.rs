@@ -15,6 +15,7 @@ use crate::{
     pipeline::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
     },
+    utils::progress::NiceProgressBar,
 };
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
@@ -91,7 +92,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -254,7 +255,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -293,10 +294,12 @@ impl Model {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let vb_m = vb.pp("model");
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -304,7 +307,7 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),
@@ -346,7 +349,7 @@ impl Model {
     }
 
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
@@ -361,13 +364,8 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        let past_key_values_length = CausalMasker.calculate_past_kv_len(&cache)?;
-        let position_ids = position_ids
-            .iter()
-            .map(|p| *p + past_key_values_length)
-            .collect::<Vec<_>>();
 
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -376,7 +374,7 @@ impl Model {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                &position_ids,
+                position_ids,
                 &mut cache[i],
             )?
         }
@@ -405,7 +403,7 @@ impl IsqModel for Model {
 
 impl NormalModel for Model {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
@@ -415,7 +413,7 @@ impl NormalModel for Model {
         self.forward(input_ids, seqlen_offsets, &position_ids, context_lens)
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],

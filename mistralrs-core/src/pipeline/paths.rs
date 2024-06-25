@@ -13,11 +13,9 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
-    api_dir_list, api_get_file, lora::LoraConfig, utils::tokens::get_token,
-    xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
+    api_dir_list, api_get_file, lora::LoraConfig, pipeline::chat_template::ChatTemplate,
+    utils::tokens::get_token, xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
 };
-
-use super::chat_template::ChatTemplate;
 
 pub(crate) struct XLoraPaths {
     pub adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -324,7 +322,7 @@ pub(crate) fn get_chat_template(
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
     };
 
-    let template: ChatTemplate = match chat_template_ovrd {
+    let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
@@ -335,6 +333,16 @@ pub(crate) fn get_chat_template(
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
 
+    let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
+        .get_processor_config()
+        .as_ref()
+        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+    if let Some(processor_conf) = processor_conf {
+        if processor_conf.chat_template.is_some() {
+            template.chat_template = processor_conf.chat_template;
+        }
+    }
+
     #[derive(Debug, serde::Deserialize)]
     struct SpecifiedTemplate {
         chat_template: String,
@@ -342,6 +350,10 @@ pub(crate) fn get_chat_template(
         eos_token: Option<String>,
         unk_token: Option<String>,
     }
+
+    if template.chat_template.is_some() {
+        return template;
+    };
 
     match &template.chat_template {
         Some(_) => template,

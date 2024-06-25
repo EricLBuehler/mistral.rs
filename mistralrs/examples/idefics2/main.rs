@@ -19,9 +19,9 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("microsoft/Phi-3-vision-128k-instruct".to_string()),
+        Some("HuggingFaceM4/idefics2-8b-chatty".to_string()),
     )
-    .build(VisionLoaderType::Phi3V);
+    .build(VisionLoaderType::Idefics2);
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

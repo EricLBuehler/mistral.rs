@@ -32,12 +32,14 @@ impl From<Architecture> for NormalLoaderType {
 #[derive(Clone, Dir, Dict, Str, Repr, Getattr)]
 pub enum VisionArchitecture {
     Phi3V,
+    Idefics2,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
     fn from(value: VisionArchitecture) -> Self {
         match value {
             VisionArchitecture::Phi3V => VisionLoaderType::Phi3V,
+            VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
         }
     }
 }

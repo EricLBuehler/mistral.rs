@@ -18,12 +18,12 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, Request as _Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, ChatCompletionResponse, CompletionResponse, Constraint,
+    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -338,6 +338,7 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
+    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -360,7 +361,7 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<usize>,
+        num_device_layers: Option<Either<usize, Vec<String>>>,
         in_situ_quant: Option<String>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
@@ -410,6 +411,50 @@ impl Runner {
         } else {
             None
         };
+
+        let mapper = match num_device_layers {
+            Some(Either::Right(device_layers)) => {
+                if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+                    let layers = device_layers[0].parse::<usize>().unwrap();
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ])
+                } else {
+                    let mut mapping = Vec::new();
+                    for layer in device_layers {
+                        let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                        if split.len() < 2 {
+                            panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                        }
+                        let ord = split[0]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                        let num = split[1]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                        for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                            if *ordinal == ord {
+                                panic!("Duplicate ordinal {ord}");
+                            }
+                        }
+                        mapping.push(DeviceLayerMapMetadata {
+                            ordinal: ord,
+                            layers: num,
+                        });
+                    }
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                }
+            }
+            Some(Either::Left(n_device_layers)) => {
+                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
+                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                    ordinal: 0,
+                    layers: n_device_layers,
+                }])
+            }
+            None => DeviceMapMetadata::dummy(),
+        };
+
         let pipeline = loader
             .load_model_from_hf(
                 None,
@@ -418,9 +463,7 @@ impl Runner {
                 &ModelDType::Auto,
                 &device,
                 true, // Silent for jupyter
-                num_device_layers
-                    .map(DeviceMapMetadata::from_num_device_layers)
-                    .unwrap_or(DeviceMapMetadata::dummy()),
+                mapper,
                 isq,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;

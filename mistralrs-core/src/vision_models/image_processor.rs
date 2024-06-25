@@ -9,9 +9,9 @@ use super::preprocessor_config::PreProcessorConfig;
 
 #[allow(dead_code)]
 pub(crate) struct PreprocessedImages {
-    /// Without batch size, safe to concat in dim0
+    /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) pixel_values: Tensor,
-    /// Without batch size, safe to concat in dim0
+    /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) pixel_attention_mask: Option<Tensor>,
     pub(crate) image_sizes: Option<(usize, usize)>,
     pub(crate) num_img_tokens: Option<Vec<usize>>,

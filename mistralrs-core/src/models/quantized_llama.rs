@@ -10,6 +10,7 @@ use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductA
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
@@ -127,7 +128,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
@@ -211,7 +212,7 @@ impl ModelConfig::FromGGML for ModelWeights {
         let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in 0..ct.hparams.n_layer {
+        for layer_idx in NiceProgressBar(0..ct.hparams.n_layer, "Loading repeating layers") {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
@@ -345,8 +346,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -482,7 +485,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -496,7 +499,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }

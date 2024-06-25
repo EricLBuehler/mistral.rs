@@ -5,6 +5,7 @@ use crate::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAt
 use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
@@ -67,7 +68,7 @@ impl LayerWeights {
     }
 
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -238,8 +239,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
         let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up = QMatMul::from_qtensor(ct.tensor(
@@ -301,7 +304,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
@@ -312,7 +315,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
             }

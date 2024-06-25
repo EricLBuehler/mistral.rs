@@ -170,7 +170,7 @@ macro_rules! handle_pipeline_forward_error {
                     seq.set_state(SequenceState::Error);
                 }
 
-                let mut p = get_mut_arcmutex!($pipeline);
+                let p = get_mut_arcmutex!($pipeline);
                 // Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.

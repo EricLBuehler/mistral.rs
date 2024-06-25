@@ -53,14 +53,18 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
     ```
 
-- Other models: [see supported models](#supported-models) and [how to run them](#run-with-the-cli)
+- Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
+
+Mistal.rs supports several model categories:
+- text
+- vision (see [the docs](docs/VISION_MODELS.md))
 
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
 - Continuous batching.
 - Prefix caching.
-- Device mapping: load and run some layers on the device and the rest on the CPU.
+- [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
 **Accelerator support**:
 - Apple silicon support with the Metal framework.
@@ -87,16 +91,21 @@ This is a demo of interactive mode with streaming running Mistral GGUF:
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415
 
 
-**Supported models:**
-- Mistral 7B (v0.1 and v0.2)
-- Gemma
-- Llama, including Llama 3
-- Mixtral 8x7B
-- Phi 2
-- Phi 3
-- Qwen 2
+## Support matrix
 
-Please see [this section](#supported-models) for details on quantization and LoRA support.
+> Note: See [supported models](#supported-models) for more information
+
+|Model|Supports quantization|Supports adapters|Supports device mapping|
+|--|--|--|--|
+|Mistral v0.1/v0.2/v0.3|✅|✅|✅|
+|Gemma|✅|✅|✅|
+|Llama 2/3|✅|✅|✅|
+|Mixtral|✅|✅|✅|
+|Phi 2|✅|✅|✅|
+|Phi 3|✅|✅|✅|
+|Qwen 2|✅| |✅|
+|Phi 3 Vision|✅| |✅|
+|Idefics 2|✅| |✅|
 
 ## APIs and Integrations
 
@@ -201,6 +210,8 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
+- Install the [Python package here](mistralrs-pyo3/README.md).
+
 1) Install required packages
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
     - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
@@ -263,9 +274,9 @@ Please submit more benchmarks via raising an issue!
     cp ./target/release/mistralrs-server ./mistralrs_server
     ```
 
-7) Installing Python support
-
-    You can install Python support by following the guide [here](mistralrs-pyo3/README.md).
+7) Use our APIs and integrations 
+    
+    [APIs and integrations list](#apis-and-integrations)
 
 ## Getting models
 
@@ -365,6 +376,7 @@ Additionally, for models without quantization, the model architecture should be 
 > Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
 
 - `phi3v`
+- `idefics2`
 
 **Interactive mode:**
 
@@ -430,29 +442,26 @@ Example:
 
 ## Supported models
 
-Mistal.rs supports several model categories:
-- text
-- vision (see [the docs](docs/VISION_MODELS.md))
-
 **Quantization support**
-|Model|GGUF|GGML|
-|--|--|--|
-|Mistral 7B |✅| |
-|Gemma| | |
-|Llama|✅|✅|
-|Mixtral 8x7B|✅| |
-|Phi 2|✅| |
-|Phi 3|✅| |
-|Qwen 2| | |
-|Phi 3 Vision| | |
+|Model|GGUF|GGML|ISQ|
+|--|--|--|--|
+|Mistral 7B |✅| |✅|
+|Gemma| | |✅|
+|Llama|✅|✅|✅|
+|Mixtral 8x7B|✅| |✅|
+|Phi 2|✅| |✅|
+|Phi 3|✅| |✅|
+|Qwen 2| | |✅|
+|Phi 3 Vision| | |✅|
+|Idefics 2| | |✅|
 
 **Device mapping support**
-|Model|Supported|
+|Model category|Supported|
 |--|--|
 |Plain|✅|
 |GGUF|✅|
 |GGML| |
-|Vision Plain| |
+|Vision Plain|✅|
 
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
@@ -465,6 +474,7 @@ Mistal.rs supports several model categories:
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
+|Idefics 2| | | |
 
 ### Using derivative model
 

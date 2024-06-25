@@ -1,5 +1,5 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{Phi3VLoader, VisionLoaderType};
+use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -12,6 +12,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -94,6 +95,7 @@ impl VisionLoaderBuilder {
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
+            VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -147,7 +149,11 @@ impl Loader for VisionLoader {
 
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!("Loading model `{}` on {device:?}...", self.get_id());
+            info!(
+                "Loading model `{}` on {}.",
+                self.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         info!(
@@ -267,13 +273,13 @@ impl IsqPipelineMixin for VisionPipeline {
 }
 
 impl CacheManagerMixin for VisionPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -308,7 +314,7 @@ impl MetadataMixin for VisionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<Tensor> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<Tensor> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,

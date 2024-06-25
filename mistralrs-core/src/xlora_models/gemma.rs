@@ -6,6 +6,7 @@ use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
@@ -254,7 +255,7 @@ impl Attention {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -413,7 +414,7 @@ impl DecoderLayer {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -473,10 +474,12 @@ impl XLoraModel {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let vb_m = vb.pp("model");
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -485,7 +488,7 @@ impl XLoraModel {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 cfg.head_dim,
@@ -563,7 +566,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -593,7 +596,7 @@ impl XLoraModel {
             self.layers[0].self_attn.num_heads,
         )?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -618,7 +621,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -736,7 +739,7 @@ impl IsqModel for XLoraModel {
 
 impl NormalModel for XLoraModel {
     fn forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
@@ -746,7 +749,7 @@ impl NormalModel for XLoraModel {
         unreachable!()
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -823,7 +826,7 @@ impl ScalingsMaker for XLoraModel {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
