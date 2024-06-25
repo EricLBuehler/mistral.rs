@@ -2,6 +2,8 @@ use std::{any::Any, sync::Arc};
 
 use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
+use either::Either;
+use indexmap::IndexMap;
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -199,6 +201,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
         let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
         let device = get_mut_arcmutex!(self.target).device();
+        let processor = get_mut_arcmutex!(self.target).get_processor();
         let inputs_processor = get_mut_arcmutex!(self.target)
             .get_processor()
             .inputs_processor();
@@ -275,11 +278,16 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     // === PREPARE INPUTS ==
                     let mut seqs = Vec::new();
                     for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
-                        let tokens = tokenizer
-                            .encode(prompt.clone(), true)
-                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?
-                            .get_ids()
-                            .to_vec();
+                        let tokens = processor
+                            .process(
+                                &*get_mut_arcmutex!(self.target),
+                                vec![IndexMap::from([
+                                    ("role".to_string(), Either::Left("user".to_string())),
+                                    ("content".to_string(), Either::Left(prompt.clone())),
+                                ])],
+                                true,
+                            )
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                         seqs.push(new_dummy_seq(
                             tokens,
                             dummy_sender.clone(),
