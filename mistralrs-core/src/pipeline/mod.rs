@@ -503,7 +503,7 @@ pub trait AnyMoePipelineMixin {
         unreachable!()
     }
     /// Per-layer cached outputs.
-    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
+    fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         unreachable!()
     }
     /// Inject the MoE layers

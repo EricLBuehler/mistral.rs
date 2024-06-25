@@ -59,10 +59,10 @@ pub trait AnyMoeBaseModelMixin {
             .map(|mlp| mlp.trainable_params())
             .sum()
     }
-    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
-        self.get_mlps()
-            .iter()
-            .map(|mlp| mlp.get_cached_gating_output())
+    fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        self.get_mlps_mut()
+            .iter_mut()
+            .map(|mlp| mlp.take_cached_gating_output())
             .collect::<Vec<_>>()
     }
 
@@ -91,7 +91,7 @@ pub trait AnyMoeTrainableLayer {
     fn trainable_params(&self) -> usize {
         0
     }
-    fn get_cached_gating_output(&self) -> Tensor {
+    fn take_cached_gating_output(&mut self) -> Tensor {
         panic!("Gating output is not applicable to this layer.")
     }
 }
@@ -186,8 +186,8 @@ impl AnyMoeTrainableLayer for MoeMlp {
     fn get_vars(&self) -> Vec<Var> {
         self.vars.clone()
     }
-    fn get_cached_gating_output(&self) -> Tensor {
-        self.gating_output.read().unwrap().clone().unwrap()
+    fn take_cached_gating_output(&mut self) -> Tensor {
+        self.gating_output.read().unwrap().clone().take().unwrap()
     }
 }
 

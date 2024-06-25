@@ -327,7 +327,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         &device,
                     )?;
 
-                    let cached = get_mut_arcmutex!(self.target).get_cached_gating_outputs();
+                    let cached = get_mut_arcmutex!(self.target).take_cached_gating_outputs();
                     for (layer, (optimizer, output)) in
                         optimizers.iter_mut().zip(cached).enumerate()
                     {

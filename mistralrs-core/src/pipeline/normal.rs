@@ -459,8 +459,8 @@ impl AnyMoePipelineMixin for NormalPipeline {
     fn base_model_trainable_params(&self) -> usize {
         self.model.trainable_params()
     }
-    fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
-        self.model.get_cached_gating_outputs()
+    fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        self.model.take_cached_gating_outputs()
     }
     fn create_anymoe_layers(
         &mut self,
