@@ -225,6 +225,15 @@ pub struct SpeculativeTomlModelSelected {
 }
 
 #[derive(Deserialize)]
+pub struct AnyMoeTomlModelSelected {
+    /// Config
+    config: AnyMoeConfig,
+
+    /// Base model
+    dataset_csv: String,
+}
+
+#[derive(Deserialize)]
 pub struct TomlSelector {
     /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
     tokenizer_json: Option<String>,
@@ -240,7 +249,7 @@ pub struct TomlSelector {
     speculative: Option<SpeculativeTomlModelSelected>,
 
     /// AnyMoE config
-    anymoe_config: Option<AnyMoeConfig>,
+    anymoe_config: Option<AnyMoeTomlModelSelected>,
 }
 
 #[derive(Clone)]
@@ -519,10 +528,15 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
         } else {
             loader
         };
-        let loader = if let Some(anymoe_config) = selector.anymoe_config {
+        let loader = if let Some(AnyMoeTomlModelSelected {
+            config,
+            dataset_csv,
+        }) = selector.anymoe_config
+        {
             Box::new(AnyMoeLoader {
                 target: loader,
-                config: anymoe_config,
+                config,
+                path: dataset_csv,
             })
         } else {
             loader

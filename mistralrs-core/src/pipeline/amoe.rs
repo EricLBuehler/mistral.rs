@@ -5,6 +5,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
+use tracing::info;
 
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
@@ -25,6 +26,7 @@ use super::{
 pub struct AnyMoeLoader {
     pub target: Box<dyn Loader>,
     pub config: AnyMoeConfig,
+    pub path: String,
 }
 
 pub struct AnyMoePipeline {
@@ -56,7 +58,8 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-        ))))
+            self.path.clone(),
+        )?)))
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -80,7 +83,8 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-        ))))
+            self.path.clone(),
+        )?)))
     }
     fn get_id(&self) -> String {
         format!("AnyMoE: tgt = `{}`", self.target.get_id(),)
@@ -93,8 +97,17 @@ impl Loader for AnyMoeLoader {
 }
 
 impl AnyMoePipeline {
-    pub fn new(target: Arc<tokio::sync::Mutex<dyn Pipeline>>, config: AnyMoeConfig) -> Self {
-        Self { target, config }
+    pub fn new(
+        target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        config: AnyMoeConfig,
+        path: String,
+    ) -> anyhow::Result<Self> {
+        let this = Self { target, config };
+        let inputs = AnyMoeTrainingInputs::from_csv(path)?;
+        info!("Beginning training on {} inputs.", inputs.0.len());
+        let AnyMoeTrainingResult { steps, final_loss } = this.pre_train(inputs)?;
+        info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
+        Ok(this)
     }
 }
 
@@ -250,7 +263,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         let mut latest_loss = vec![Tensor::new(0.0f32, &device)?; optimizers.len()];
 
-        TrainingBlock::train(|| {
+        TrainingBlock::enter(|| {
             for _ in (0..epochs).progress_with(bar) {
                 samples.as_mut_slice().shuffle(&mut rng);
                 for batch in samples.chunks(batch_size).into_iter() {

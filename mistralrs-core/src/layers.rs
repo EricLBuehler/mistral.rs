@@ -38,7 +38,7 @@ pub struct TrainingBlock<T: FnOnce() -> Result<Output>, Output> {
 }
 
 impl<T: FnOnce() -> Result<Output>, Output> TrainingBlock<T, Output> {
-    pub fn train(call: T) -> Result<Output> {
+    pub fn enter(call: T) -> Result<Output> {
         set_training(true);
         let res = call();
         set_training(false);
