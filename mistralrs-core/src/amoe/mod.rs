@@ -1,7 +1,12 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    fs::File,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
+use csv::Reader;
 use serde::{Deserialize, Serialize};
 
 use crate::serde_default_fn;
@@ -12,7 +17,26 @@ pub struct AnyMoeTrainingResult {
     pub final_loss: Vec<f32>,
 }
 
-pub struct AnyMoeTrainingInputs(pub Vec<(String, usize)>);
+#[derive(Deserialize)]
+pub struct AnyMoeTrainingInputRow {
+    pub prompt: String,
+    pub expert: usize,
+}
+
+pub struct AnyMoeTrainingInputs(pub Vec<AnyMoeTrainingInputRow>);
+
+impl AnyMoeTrainingInputs {
+    pub fn from_csv<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
+        let file = File::open(file)?;
+        let mut reader = Reader::from_reader(file);
+        let mut rows = Vec::new();
+        for result in reader.deserialize() {
+            let row: AnyMoeTrainingInputRow = result?;
+            rows.push(row);
+        }
+        Ok(Self(rows))
+    }
+}
 
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoeBaseModelMixin {

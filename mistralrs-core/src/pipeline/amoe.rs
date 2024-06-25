@@ -7,7 +7,7 @@ use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
-    amoe::{AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     layers::TrainingBlock,
     prefix_cacher::PrefixCacheManager,
@@ -258,7 +258,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                     // === PREPARE INPUTS ==
                     let mut seqs = Vec::new();
-                    for (prompt, _) in batch {
+                    for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
                         let tokens = tokenizer
                             .encode(prompt.clone(), true)
                             .map_err(|e| candle_core::Error::Msg(e.to_string()))?
@@ -295,7 +295,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                     // === BACKWARD STEP ==
                     let labels = Tensor::from_vec(
-                        batch.iter().map(|(_, x)| *x as u32).collect::<Vec<_>>(),
+                        batch
+                            .iter()
+                            .map(|AnyMoeTrainingInputRow { prompt: _, expert }| *expert as u32)
+                            .collect::<Vec<_>>(),
                         (batch.len(),),
                         &device,
                     )?;
