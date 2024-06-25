@@ -804,12 +804,12 @@ impl AnyMoeBaseModelMixin for XLoraLlama {
         todo!()
     }
     fn create_anymoe_layers(
-        mut self,
+        &mut self,
         additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         todo!()
     }
 }

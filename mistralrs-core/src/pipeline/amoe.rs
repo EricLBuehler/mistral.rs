@@ -195,6 +195,14 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             .get_input_processor_config()
             .clone();
 
+        // Inject the AnyMoE layers
+        get_mut_arcmutex!(self.target).create_anymoe_layers(
+            vec![],
+            self.config.clone(),
+            metadata.activation_dtype,
+            &device,
+        )?;
+
         let AnyMoeConfig {
             hidden_size: _,
             lr,

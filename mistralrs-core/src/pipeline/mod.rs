@@ -15,13 +15,14 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
 use crate::{DeviceMapMetadata, TryIntoDType};
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;
+use candle_nn::VarBuilder;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
@@ -48,7 +49,7 @@ pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 pub use vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 
 use crate::{
     sequence::Sequence,
@@ -432,6 +433,7 @@ pub struct GeneralMetadata {
     pub kind: ModelKind,
     // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
+    pub activation_dtype: DType,
 }
 
 pub enum AdapterInstruction {
@@ -502,6 +504,16 @@ pub trait AnyMoePipelineMixin {
     }
     /// Per-layer cached outputs.
     fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
+        unreachable!()
+    }
+    /// Inject the MoE layers
+    fn create_anymoe_layers(
+        &mut self,
+        _additional_vbs: Vec<VarBuilder>,
+        _config: AnyMoeConfig,
+        _dtype: DType,
+        _dev: &Device,
+    ) -> candle_core::Result<()> {
         unreachable!()
     }
     /// Pre-train the gating layers

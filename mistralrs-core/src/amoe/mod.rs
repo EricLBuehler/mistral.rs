@@ -43,14 +43,12 @@ pub trait AnyMoeBaseModelMixin {
     }
 
     fn create_anymoe_layers(
-        self,
+        &mut self,
         additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-    ) -> Result<Self>
-    where
-        Self: Sized;
+    ) -> Result<()>;
     fn get_mlps(&self) -> Vec<&dyn MlpLayer>;
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>>;
 }
@@ -58,6 +56,7 @@ pub trait AnyMoeBaseModelMixin {
 pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
+    fn clone(&self) -> Box<dyn MlpLayer>;
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -99,6 +98,7 @@ impl AnyMoeConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct MoeGate {
     lin: Linear,
 }
@@ -203,5 +203,19 @@ impl MlpLayer for MoeMlp {
             accum.extend(expert.get_isq_tensors());
         }
         accum
+    }
+
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        let mut experts = Vec::new();
+        for e in &self.experts {
+            experts.push((*e).clone());
+        }
+        Box::new(Self {
+            experts,
+            gate: self.gate.clone(),
+            training: self.training.clone(),
+            vars: self.vars.clone(),
+            gating_output: self.gating_output.clone(),
+        })
     }
 }

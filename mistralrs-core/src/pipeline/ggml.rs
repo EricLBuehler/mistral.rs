@@ -29,7 +29,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -340,6 +340,7 @@ impl Loader for GGMLLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
+                activation_dtype: DType::F32,
             }),
         })))
     }

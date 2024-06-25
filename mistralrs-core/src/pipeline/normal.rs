@@ -317,6 +317,7 @@ impl Loader for NormalLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
+                activation_dtype: dtype,
             }),
         })))
     }
@@ -460,5 +461,15 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
     fn get_cached_gating_outputs(&self) -> Vec<Tensor> {
         self.model.get_cached_gating_outputs()
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<candle_nn::VarBuilder>,
+        config: crate::amoe::AnyMoeConfig,
+        dtype: candle_core::DType,
+        dev: &Device,
+    ) -> candle_core::Result<()> {
+        self.model
+            .create_anymoe_layers(additional_vbs, config, dtype, dev)
     }
 }

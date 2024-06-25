@@ -39,7 +39,7 @@ use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
 };
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
@@ -488,6 +488,7 @@ impl Loader for GGUFLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
+                activation_dtype: DType::F32,
             }),
         })))
     }

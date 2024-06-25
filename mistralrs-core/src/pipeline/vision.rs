@@ -236,6 +236,7 @@ impl Loader for VisionLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
+                activation_dtype: dtype,
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),

@@ -75,6 +75,9 @@ impl MlpLayer for MLP {
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
         vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
     }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(&(*self)))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -501,18 +504,20 @@ impl AnyMoeBaseModelMixin for Model {
         mlps
     }
     fn create_anymoe_layers(
-        mut self,
+        &mut self,
         additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-    ) -> Result<Self> {
-        let mut new_layers = Vec::new();
-        for mut layer in self.layers {
-            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp], config.clone(), dtype, dev)?);
-            new_layers.push(layer);
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            layer.mlp = Box::new(MoeMlp::new(
+                vec![layer.mlp.clone()],
+                config.clone(),
+                dtype,
+                dev,
+            )?);
         }
-        self.layers = new_layers;
-        Ok(self)
+        Ok(())
     }
 }
