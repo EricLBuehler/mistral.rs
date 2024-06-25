@@ -2217,6 +2217,7 @@ dependencies = [
  "either",
  "futures",
  "galil-seiferas",
+ "half",
  "hf-hub",
  "image",
  "indexmap",

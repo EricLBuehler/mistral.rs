@@ -14,7 +14,7 @@ homepage.workspace = true
 [dependencies]
 candle-core.workspace = true
 candle-nn.workspace = true
-half = "2.4.0"
+half.workspace = true
 serde.workspace = true
 
 [features]
