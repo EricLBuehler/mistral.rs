@@ -42,18 +42,18 @@ fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
+        
         messages: RequestMessage::VisionChat {
             images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
             messages: vec![IndexMap::from([
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image?".to_string()),
+                    Either::Left("<|image_1|>what is this image show?".to_string()),
                 ),
             ])],
         },
-
-        /*
+        /* 
         messages: RequestMessage::Completion {
             text: "Hello! My name is ".to_string(),
             echo_prompt: false,

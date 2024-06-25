@@ -290,13 +290,27 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .split(&detokenized)
                 .map(|span| &detokenized[span.range()])
                 .collect::<Vec<_>>();
+            /*
             let prompt_chunks = tokenizer
                 .encode_batch(splits, true)
                 .map_err(anyhow::Error::msg)?
                 .into_iter()
                 .map(|enc| enc.get_ids().to_vec())
                 .collect::<Vec<_>>();
-
+            */
+            let prompt_chunks = splits
+                .iter()
+                .map(|s| {
+                    tokenizer
+                        .encode(*s, true)
+                        .unwrap()
+                        .get_ids()
+                        .to_vec()
+                        .iter()
+                        .map(|x| *x as i64)
+                        .collect()
+                })
+                .collect::<Vec<Vec<_>>>();
             let image_tags = self.image_tag_splitter.find_iter(&detokenized);
             let image_ids = image_tags
                 .into_iter()
@@ -333,7 +347,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 image_id_pad[0] = -(*image_id as i64);
                 image_ids_pad.push(image_id_pad);
             }
-
             let mut input_ids: Vec<i64> = Vec::new();
             for item in prompt_chunks
                 .iter()
@@ -365,7 +378,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
         } else {
             get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
         };
-        println!("input_ids: {}", input);
+        println!("input_ids: {:?}", input.squeeze(0)?.to_vec1::<i64>()?);
         println!("seqlen_offsets: {:?}", positions);
         println!("seqlen_offsets_kernel: {}", positions_kernel);
         println!("context_lens: {:?}", context_lens);

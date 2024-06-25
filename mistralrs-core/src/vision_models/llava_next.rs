@@ -332,20 +332,17 @@ impl Model {
                 Ok(new_image_feature)
             })
             .collect::<Result<Vec<Tensor>>>()?;
-
-        let hidden_size = image_features_vec[0].shape().dims()[2];
-        println!("result.shape: {:?}", result.shape());
-        println!(
-            "image_features_vec[0].shape: {:?}",
-            image_features_vec[0].shape()
-        );
         for (i, image_index) in image_indexes.iter().enumerate() {
             let image_id = image_ids[i];
+            println!(
+                "image_index: {}, num_Image_token: {}",
+                image_index, num_image_token
+            );
             result = result.slice_assign(
                 &[
                     &(0usize..1usize),
                     &(*image_index as usize..*image_index as usize + num_image_token),
-                    &(0..hidden_size),
+                    &(..),
                 ],
                 &image_features_vec[(image_id - 1) as usize],
             )?;
