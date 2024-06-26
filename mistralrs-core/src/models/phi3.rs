@@ -460,10 +460,18 @@ impl NormalModel for Model {
 
 impl AnyMoeBaseModelMixin for Model {
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        todo!()
+        let mut mlps = Vec::new();
+        for layer in &self.layers {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
     }
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        todo!()
+        let mut mlps = Vec::new();
+        for layer in &mut self.layers {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
     }
     fn create_anymoe_layers(
         &mut self,

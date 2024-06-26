@@ -436,10 +436,18 @@ impl NormalModel for Llama {
 
 impl AnyMoeBaseModelMixin for Llama {
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        todo!()
+        let mut mlps = Vec::new();
+        for layer in &self.blocks {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
     }
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        todo!()
+        let mut mlps = Vec::new();
+        for layer in &mut self.blocks {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
     }
     fn create_anymoe_layers(
         &mut self,
