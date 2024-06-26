@@ -7,7 +7,7 @@ use candle_nn::{linear_no_bias, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     layers::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
@@ -195,7 +195,9 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
+impl AnyMoeTrainableLayer for Mlp {}
+
+impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -212,12 +214,17 @@ impl Module for Mlp {
         }
         Ok(res)
     }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![&mut self.gate_up_proj, &mut self.down_proj]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(&(*self)))
+    }
 }
 
-#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Mlp,
+    mlp: Box<dyn MlpLayer>,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -249,7 +256,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp,
+            mlp: Box::new(mlp),
             input_layernorm,
             post_attention_layernorm,
         })
@@ -270,12 +277,13 @@ impl DecoderLayer {
                 .forward(&xs, attention_mask, seqlen_offsets, position_ids, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }
 
-#[derive(Debug)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
@@ -397,8 +405,14 @@ impl IsqModel for Model {
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -458,6 +472,14 @@ impl AnyMoeBaseModelMixin for Model {
         dtype: DType,
         dev: &Device,
     ) -> Result<()> {
-        todo!()
+        for layer in &mut self.layers {
+            layer.mlp = Box::new(MoeMlp::new(
+                vec![layer.mlp.clone()],
+                config.clone(),
+                dtype,
+                dev,
+            )?);
+        }
+        Ok(())
     }
 }

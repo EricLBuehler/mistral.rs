@@ -12,7 +12,7 @@ use candle_nn::{
 use serde::Deserialize;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
@@ -70,7 +70,9 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
+impl AnyMoeTrainableLayer for MLP {}
+
+impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -82,6 +84,12 @@ impl Module for MLP {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![self.fc1.inner(), self.fc2.inner()]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(&(*self)))
     }
 }
 
@@ -220,10 +228,9 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
+    mlp: Box<dyn MlpLayer>,
     input_layernorm: LayerNorm,
 }
 
@@ -249,7 +256,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp,
+            mlp: Box::new(mlp),
             input_layernorm,
         })
     }
@@ -395,8 +402,14 @@ impl IsqModel for Model {
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.dense.inner(), Some(i)));
-            tensors.push((layer.mlp.fc1.inner(), Some(i)));
-            tensors.push((layer.mlp.fc2.inner(), Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -461,6 +474,14 @@ impl AnyMoeBaseModelMixin for Model {
         dtype: DType,
         dev: &Device,
     ) -> Result<()> {
-        todo!()
+        for layer in &mut self.layers {
+            layer.mlp = Box::new(MoeMlp::new(
+                vec![layer.mlp.clone()],
+                config.clone(),
+                dtype,
+                dev,
+            )?);
+        }
+        Ok(())
     }
 }

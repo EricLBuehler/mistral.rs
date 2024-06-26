@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
@@ -149,21 +149,6 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
-        }
-        let x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
-            * MatMul.qmatmul(&x, &self.c_fc2)?)?;
-        let mut res = MatMul.qmatmul(&x, &self.c_proj)?;
-        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
-    }
-
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
@@ -178,12 +163,36 @@ impl Mlp {
     }
 }
 
-#[derive(Debug, Clone)]
+impl AnyMoeTrainableLayer for Mlp {}
+
+impl MlpLayer for Mlp {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
+            * MatMul.qmatmul(&x, &self.c_fc2)?)?;
+        let mut res = MatMul.qmatmul(&x, &self.c_proj)?;
+        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(&(*self)))
+    }
+}
+
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: Box<dyn MlpLayer>,
 }
 
 impl Block {
@@ -239,12 +248,11 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            mlp,
+            mlp: Box::new(mlp),
         })
     }
 }
 
-#[derive(Debug)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -368,9 +376,14 @@ impl IsqModel for Llama {
             tensors.push((&mut layer.attn.k_proj, Some(i)));
             tensors.push((&mut layer.attn.v_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
-            tensors.push((&mut layer.mlp.c_proj, Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -435,6 +448,14 @@ impl AnyMoeBaseModelMixin for Llama {
         dtype: DType,
         dev: &Device,
     ) -> Result<()> {
-        todo!()
+        for layer in &mut self.blocks {
+            layer.mlp = Box::new(MoeMlp::new(
+                vec![layer.mlp.clone()],
+                config.clone(),
+                dtype,
+                dev,
+            )?);
+        }
+        Ok(())
     }
 }
