@@ -502,6 +502,9 @@ pub trait AnyMoePipelineMixin {
     fn base_model_trainable_params(&self) -> usize {
         unreachable!()
     }
+    fn amoe_supported(&self) -> bool {
+        false
+    }
     /// Per-layer cached outputs.
     fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         unreachable!()

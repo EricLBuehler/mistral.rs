@@ -199,6 +199,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         &self,
         inputs: AnyMoeTrainingInputs,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
+        if !get_mut_arcmutex!(self.target).amoe_supported() {
+            candle_core::bail!("AnyMoE is not supported for this model.");
+        }
+
         let device = get_mut_arcmutex!(self.target).device();
         let processor = get_mut_arcmutex!(self.target).get_processor();
         let inputs_processor = get_mut_arcmutex!(self.target)

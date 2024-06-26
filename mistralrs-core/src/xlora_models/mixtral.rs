@@ -964,20 +964,4 @@ impl ScalingsMaker for XLoraModel {
     }
 }
 
-impl AnyMoeBaseModelMixin for XLoraModel {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        todo!()
-    }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        todo!()
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<VarBuilder>,
-        config: AnyMoeConfig,
-        dtype: DType,
-        dev: &Device,
-    ) -> Result<()> {
-        todo!()
-    }
-}
+impl AnyMoeBaseModelMixin for XLoraModel {}

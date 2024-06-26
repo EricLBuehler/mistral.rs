@@ -490,4 +490,7 @@ impl AnyMoeBaseModelMixin for Model {
         }
         Ok(())
     }
+    fn amoe_supported(&self) -> bool {
+        true
+    }
 }

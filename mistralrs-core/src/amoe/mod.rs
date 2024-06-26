@@ -68,13 +68,22 @@ pub trait AnyMoeBaseModelMixin {
 
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
-        config: AnyMoeConfig,
-        dtype: DType,
-        dev: &Device,
-    ) -> Result<()>;
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer>;
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>>;
+        _additional_vbs: Vec<VarBuilder>,
+        _config: AnyMoeConfig,
+        _dtype: DType,
+        _dev: &Device,
+    ) -> Result<()> {
+        candle_core::bail!("Model does not support AnyMoE layers");
+    }
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        panic!("Model does not support AnyMoE layers");
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        panic!("Model does not support AnyMoE layers");
+    }
+    fn amoe_supported(&self) -> bool {
+        false
+    }
 }
 
 pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {

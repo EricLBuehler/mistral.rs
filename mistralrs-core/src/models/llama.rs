@@ -466,4 +466,7 @@ impl AnyMoeBaseModelMixin for Llama {
         }
         Ok(())
     }
+    fn amoe_supported(&self) -> bool {
+        true
+    }
 }

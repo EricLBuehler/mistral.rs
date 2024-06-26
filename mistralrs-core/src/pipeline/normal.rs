@@ -472,4 +472,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         self.model
             .create_anymoe_layers(additional_vbs, config, dtype, dev)
     }
+    fn amoe_supported(&self) -> bool {
+        self.model.amoe_supported()
+    }
 }
