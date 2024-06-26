@@ -249,7 +249,7 @@ impl MlpLayer for MoeMlp {
         Box::new(Self {
             experts,
             gate: self.gate.clone(),
-            training: self.training.clone(),
+            training: self.training,
             vars: self.vars.clone(),
             gating_output: self.gating_output.clone(),
         })

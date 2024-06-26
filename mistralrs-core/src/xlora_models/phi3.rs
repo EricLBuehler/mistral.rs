@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},

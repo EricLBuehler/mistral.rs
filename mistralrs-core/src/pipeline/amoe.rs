@@ -59,7 +59,7 @@ impl Loader for AnyMoeLoader {
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
-            self.config.clone(),
+            self.config,
             self.path.clone(),
         )?)))
     }
@@ -84,7 +84,7 @@ impl Loader for AnyMoeLoader {
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
-            self.config.clone(),
+            self.config,
             self.path.clone(),
         )?)))
     }
@@ -106,7 +106,7 @@ impl AnyMoePipeline {
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
-        info!("Beginning training on {} inputs.", inputs.0.len());
+        info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
         let AnyMoeTrainingResult { steps, final_loss } = this.pre_train(inputs)?;
         info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
         Ok(this)
@@ -217,7 +217,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         // Inject the AnyMoE layers
         get_mut_arcmutex!(self.target).create_anymoe_layers(
             vec![],
-            self.config.clone(),
+            self.config,
             metadata.activation_dtype,
             &device,
         )?;
@@ -230,6 +230,12 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             batch_size,
         } = self.config;
         let mut steps = 0;
+
+        info!(
+            "{} gating layers, {} trainable parameters, {lr} lr, {epochs} epochs, {batch_size} batch size",
+            layer_vars.len(),
+            get_mut_arcmutex!(self.target).base_model_trainable_params()
+        );
 
         let mut optimizers = layer_vars
             .into_iter()
@@ -265,7 +271,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         TrainingBlock::enter(|| {
             for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
                 samples.as_mut_slice().shuffle(&mut rng);
-                for batch in samples.chunks(batch_size).into_iter() {
+                for batch in samples.chunks(batch_size) {
                     steps += 1;
 
                     // === PREPARE INPUTS ==
@@ -311,6 +317,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     get_mut_arcmutex!(self.target).set_none_cache(true, true);
 
                     // === BACKWARD STEP ==
+                    #[allow(clippy::cast_possible_truncation)]
                     let labels = Tensor::from_vec(
                         batch
                             .iter()

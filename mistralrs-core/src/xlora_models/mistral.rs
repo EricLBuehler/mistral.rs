@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},

@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, MlpLayer},
+    amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},

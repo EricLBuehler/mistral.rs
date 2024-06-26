@@ -184,7 +184,7 @@ impl MlpLayer for Mlp {
         vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
-        Box::new(Clone::clone(&(*self)))
+        Box::new(Clone::clone(self))
     }
 }
 
@@ -451,18 +451,13 @@ impl AnyMoeBaseModelMixin for Llama {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        _additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
     ) -> Result<()> {
         for layer in &mut self.blocks {
-            layer.mlp = Box::new(MoeMlp::new(
-                vec![layer.mlp.clone()],
-                config.clone(),
-                dtype,
-                dev,
-            )?);
+            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);
         }
         Ok(())
     }
