@@ -122,7 +122,7 @@ impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<T
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
-                    "{}: [{{elapsed_precise}}] [{{bar:40.cyan/{color}}}] {{pos}}/{{len}} ({{eta}})",
+                    "{}: [{{elapsed_precise}}] [{{bar:40.{color}/{color}}}] {{pos}}/{{len}} ({{eta}})",
                     self.1
                 ))
                 .unwrap()
