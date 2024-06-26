@@ -580,7 +580,7 @@ impl XLoraLlama {
         let mut count = 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> =
-            NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
                     let rotary_emb = Arc::new(

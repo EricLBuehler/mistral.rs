@@ -4,7 +4,6 @@ use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use indexmap::IndexMap;
-use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -16,6 +15,7 @@ use crate::{
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, Pipeline, Response,
     TokenSource, TryIntoDType,
 };
@@ -243,14 +243,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             })
             .collect::<candle_core::Result<Vec<_>>>()?;
 
-        let bar = ProgressBar::new(epochs as u64);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.green}] {pos}/{len} ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-
         let mut rng = thread_rng();
         let mut samples = inputs.0;
 
@@ -267,7 +259,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut latest_loss = vec![0.0; optimizers.len()];
 
         TrainingBlock::enter(|| {
-            for _ in (0..epochs).progress_with(bar) {
+            for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
                 samples.as_mut_slice().shuffle(&mut rng);
                 for batch in samples.chunks(batch_size).into_iter() {
                     steps += 1;

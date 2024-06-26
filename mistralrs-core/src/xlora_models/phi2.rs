@@ -450,7 +450,9 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             // Alternative rope scalings are not supported.
             let rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,

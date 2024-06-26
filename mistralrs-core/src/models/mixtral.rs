@@ -400,7 +400,9 @@ impl Model {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 head_dim,

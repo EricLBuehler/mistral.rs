@@ -104,18 +104,25 @@ impl Parellelize {
 }
 
 /// Nice progress bar with over an iterator and a message.
-pub struct NiceProgressBar<T: ExactSizeIterator>(pub T, pub &'static str);
+/// COLOR is one of r,g,b
+pub struct NiceProgressBar<T: ExactSizeIterator, const COLOR: char = 'b'>(pub T, pub &'static str);
 
-impl<T: ExactSizeIterator> IntoIterator for NiceProgressBar<T> {
+impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<T, COLOR> {
     type IntoIter = ProgressBarIter<T>;
     type Item = T::Item;
 
     fn into_iter(self) -> Self::IntoIter {
+        let color = match COLOR {
+            'b' => "blue",
+            'g' => "green",
+            'r' => "red",
+            other => panic!("Color char `{other}` not supported"),
+        };
         let bar = ProgressBar::new(self.0.len() as u64);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
-                    "{}: [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} ({{eta}})",
+                    "{}: [{{elapsed_precise}}] [{{bar:40.cyan/{color}}}] {{pos}}/{{len}} ({{eta}})",
                     self.1
                 ))
                 .unwrap()

@@ -318,33 +318,34 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
-            .into_iter()
-            .map(|i| {
-                let rotary_emb = Arc::new(
-                    RotaryEmbedding::new(
-                        cfg.rope_theta,
-                        head_dim,
-                        cfg.max_position_embeddings,
-                        mapper
-                            .device_for(i, false)
-                            .unwrap_or(&normal_loading_metadata.real_device),
-                        is_gptx,
-                        vb.dtype(),
+        let blocks: Vec<_> =
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+                .into_iter()
+                .map(|i| {
+                    let rotary_emb = Arc::new(
+                        RotaryEmbedding::new(
+                            cfg.rope_theta,
+                            head_dim,
+                            cfg.max_position_embeddings,
+                            mapper
+                                .device_for(i, false)
+                                .unwrap_or(&normal_loading_metadata.real_device),
+                            is_gptx,
+                            vb.dtype(),
+                        )
+                        .expect("Failed to create RoPE"),
+                    );
+                    Block::load(
+                        vb.pp(&format!("model.layers.{i}")),
+                        cfg,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        rotary_emb,
                     )
-                    .expect("Failed to create RoPE"),
-                );
-                Block::load(
-                    vb.pp(&format!("model.layers.{i}")),
-                    cfg,
-                    &*mapper,
-                    i,
-                    normal_loading_metadata.loading_isq,
-                    rotary_emb,
-                )
-                .expect("Failed to load block.")
-            })
-            .collect();
+                    .expect("Failed to load block.")
+                })
+                .collect();
 
         Ok(Self {
             wte,
