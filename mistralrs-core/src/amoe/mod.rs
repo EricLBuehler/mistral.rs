@@ -197,10 +197,13 @@ impl MlpLayer for MoeMlp {
         let gate = self.gate.forward_t(xs, self.training)?;
         // ^ [b, s, n_e]
         // Mean across the sequence dimension
-        let gate = gate.mean(1)?;
+        let mut gate = gate.mean(1)?;
         // ^ [b, n_e]
 
         *self.gating_output.write().unwrap() = Some(gate.clone());
+
+        // Detach to not track grads for the entire model
+        gate = gate.detach();
 
         let gate_expanded = gate
             .permute((1, 0))?

@@ -199,7 +199,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         &self,
         inputs: AnyMoeTrainingInputs,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
-        let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
         let device = get_mut_arcmutex!(self.target).device();
         let processor = get_mut_arcmutex!(self.target).get_processor();
         let inputs_processor = get_mut_arcmutex!(self.target)
@@ -218,6 +217,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             metadata.activation_dtype,
             &device,
         )?;
+        let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
 
         let AnyMoeConfig {
             hidden_size: _,
@@ -332,7 +332,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         optimizers.iter_mut().zip(cached).enumerate()
                     {
                         let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
-                        optimizer.backward_step(&loss)?;
+                        let gradstore = loss.backward()?;
+                        optimizer.step(&gradstore)?;
                         latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
                     }
                 }
