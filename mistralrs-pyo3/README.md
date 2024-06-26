@@ -114,7 +114,7 @@ All installations will install the `mistralrs` package. The suffix on the packag
     ```bash
     maturin develop -r --features mkl
     ```
-
+    
 Please find [API docs here](API.md) and the type stubs [here](mistralrs.pyi), which are another great form of documentation.
 
 We also provide [a cookbook here](../examples/python/cookbook.ipynb)!

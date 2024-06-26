@@ -21,6 +21,7 @@ use crate::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
     serde_default_fn,
+    utils::progress::NiceProgressBar,
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
 };
 
@@ -775,7 +776,7 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),

@@ -5,6 +5,7 @@ use crate::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAt
 use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
@@ -241,7 +242,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
-        for layer_idx in 0..block_count {
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up = QMatMul::from_qtensor(ct.tensor(
