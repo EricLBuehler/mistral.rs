@@ -4,6 +4,9 @@ arch = "mistral"
 
 [anymoe]
 dataset_csv = "test.csv"
+prefix = "model.layers"
+mlp = "mlp"
+model_ids = ["mistralai/Mistral-7B-Instruct-v0.1"]
 
 [anymoe.config]
 hidden_size = 4096
