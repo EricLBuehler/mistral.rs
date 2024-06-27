@@ -21,6 +21,10 @@ fn default_dtype() -> ModelDType {
     ModelDType::Auto
 }
 
+fn default_empty_vec_usize() -> Vec<usize> {
+    Vec::new()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TomlModelSelected {
@@ -250,6 +254,7 @@ pub struct AnyMoeTomlModelSelected {
     model_ids: Vec<String>,
 
     /// Layer ids (zero indexed) of layers to apply AnyMoE to, if empty will use all
+    #[serde(default = "default_empty_vec_usize")]
     layers: Vec<usize>,
 }
 
