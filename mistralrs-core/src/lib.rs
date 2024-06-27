@@ -49,7 +49,7 @@ mod utils;
 mod vision_models;
 mod xlora_models;
 
-pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
+pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,

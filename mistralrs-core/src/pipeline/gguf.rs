@@ -19,6 +19,7 @@ use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -324,7 +325,11 @@ impl Loader for GGUFLoader {
         }
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!("Loading model `{}` on {device:?}...", self.get_id());
+            info!(
+                "Loading model `{}` on {}.",
+                self.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -517,13 +522,13 @@ impl IsqPipelineMixin for GGUFPipeline {
 }
 
 impl CacheManagerMixin for GGUFPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -588,7 +593,7 @@ impl MetadataMixin for GGUFPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -600,14 +605,14 @@ impl Pipeline for GGUFPipeline {
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
+            Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::Phi2(ref mut model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
-            Model::XLoraLlama(ref mut model) => model.forward(
+            Model::Phi2(ref model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
+            Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -618,8 +623,8 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Phi3(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraPhi3(ref mut model) => model.forward(
+            Model::Phi3(ref model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,

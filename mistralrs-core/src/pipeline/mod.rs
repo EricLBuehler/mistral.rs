@@ -458,14 +458,14 @@ pub trait IsqPipelineMixin {
 pub trait CacheManagerMixin {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
     fn cache(&self) -> &Cache;
 }
 
@@ -498,7 +498,7 @@ pub trait Pipeline:
     + AdapterActivationMixin
     + MetadataMixin
 {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -602,7 +602,7 @@ pub trait Pipeline:
 
 pub trait NormalModel: IsqModel {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -611,7 +611,7 @@ pub trait NormalModel: IsqModel {
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -639,7 +639,7 @@ pub trait VisionModel: IsqModel {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],

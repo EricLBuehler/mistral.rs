@@ -1,6 +1,7 @@
 use std::thread::JoinHandle;
 
 use either::Either;
+use indicatif::{ProgressBar, ProgressBarIter, ProgressIterator, ProgressStyle};
 use tqdm::Iter;
 
 // Optionally display a progress bar via the `tqdm` crate:
@@ -99,5 +100,27 @@ impl Parellelize {
         T: Send + 'static,
     {
         Either::Right(NonThreadingHandle { f })
+    }
+}
+
+/// Nice progress bar with over an iterator and a message.
+pub struct NiceProgressBar<T: ExactSizeIterator>(pub T, pub &'static str);
+
+impl<T: ExactSizeIterator> IntoIterator for NiceProgressBar<T> {
+    type IntoIter = ProgressBarIter<T>;
+    type Item = T::Item;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let bar = ProgressBar::new(self.0.len() as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template(&format!(
+                    "{}: [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} ({{eta}})",
+                    self.1
+                ))
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        self.0.progress_with(bar)
     }
 }

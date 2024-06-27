@@ -11,6 +11,7 @@ use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -58,7 +59,7 @@ impl LayerWeights {
     }
 
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -225,8 +226,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
         )?;
         let output = QLinear::new(&ct, reader, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
@@ -266,7 +269,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
@@ -279,7 +282,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let residual = &xs;
             let xs_norm = xs.apply(&layer.attn_norm)?;

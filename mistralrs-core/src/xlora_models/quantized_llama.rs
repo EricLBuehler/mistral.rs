@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -181,7 +182,7 @@ struct LayerWeights {
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: &Option<Tensor>,
         start_offsets: &[usize],
@@ -487,8 +488,10 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -735,7 +738,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -764,7 +767,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
@@ -807,7 +810,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -902,7 +905,7 @@ impl ScalingsMaker for ModelWeights {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
