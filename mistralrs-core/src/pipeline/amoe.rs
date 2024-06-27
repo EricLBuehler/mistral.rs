@@ -29,6 +29,9 @@ pub struct AnyMoeLoader {
     pub target: Box<dyn Loader>,
     pub config: AnyMoeConfig,
     pub path: String,
+    pub prefix: String,
+    pub mlp: String,
+    pub model_ids: Vec<String>,
 }
 
 pub struct AnyMoePipeline {
@@ -61,6 +64,11 @@ impl Loader for AnyMoeLoader {
             target,
             self.config,
             self.path.clone(),
+            self.prefix.clone(),
+            self.mlp.clone(),
+            self.model_ids.clone(),
+            token_source,
+            revision,
         )?)))
     }
 
@@ -86,6 +94,11 @@ impl Loader for AnyMoeLoader {
             target,
             self.config,
             self.path.clone(),
+            self.prefix.clone(),
+            self.mlp.clone(),
+            self.model_ids.clone(),
+            TokenSource::None,
+            None,
         )?)))
     }
     fn get_id(&self) -> String {
@@ -99,15 +112,22 @@ impl Loader for AnyMoeLoader {
 }
 
 impl AnyMoePipeline {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: AnyMoeConfig,
         path: String,
+        prefix: String,
+        mlp: String,
+        model_ids: Vec<String>,
+        token: TokenSource,
+        revision: Option<String>,
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
         info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
-        let AnyMoeTrainingResult { steps, final_loss } = this.pre_train(inputs)?;
+        let AnyMoeTrainingResult { steps, final_loss } =
+            this.pre_train(inputs, (prefix, mlp), model_ids, token, revision)?;
         info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
         Ok(this)
     }
@@ -198,12 +218,19 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
     fn pre_train(
         &self,
         inputs: AnyMoeTrainingInputs,
+        (prefix, mlp): (String, String),
+        model_ids: Vec<String>,
+        token: TokenSource,
+        revision: Option<String>,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
         if !get_mut_arcmutex!(self.target).amoe_supported() {
             candle_core::bail!("AnyMoE is not supported for this model.");
         }
 
         let device = get_mut_arcmutex!(self.target).device();
+        let dtype = get_mut_arcmutex!(self.target)
+            .get_metadata()
+            .activation_dtype;
         let processor = get_mut_arcmutex!(self.target).get_processor();
         let inputs_processor = get_mut_arcmutex!(self.target)
             .get_processor()
@@ -216,10 +243,13 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Inject the AnyMoE layers
         get_mut_arcmutex!(self.target).create_anymoe_layers(
-            vec![],
+            get_mut_arcmutex!(self.target)
+                .load_additional_vbs(model_ids, &token, revision, dtype, &device, &mlp)
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?,
             self.config,
             metadata.activation_dtype,
             &device,
+            (prefix, mlp),
         )?;
         let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
 

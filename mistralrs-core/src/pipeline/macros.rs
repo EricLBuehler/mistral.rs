@@ -337,6 +337,7 @@ macro_rules! normal_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load(
@@ -362,6 +363,7 @@ macro_rules! vision_normal_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load(
@@ -398,6 +400,7 @@ macro_rules! xlora_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load_xlora(
@@ -437,6 +440,7 @@ macro_rules! lora_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load_xlora(

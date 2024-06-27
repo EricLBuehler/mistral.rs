@@ -239,6 +239,15 @@ pub struct AnyMoeTomlModelSelected {
 
     /// Base model
     dataset_csv: String,
+
+    /// Prefix of the mlp key (the part before the layer number: "a.b.c" in "a.b.c.0.mlp")
+    prefix: String,
+
+    /// Name of the mlp key (the part before the layer number: "mlp" in "a.b.c.0.mlp")
+    mlp: String,
+
+    /// Epert model ids
+    model_ids: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -539,12 +548,18 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
         let loader = if let Some(AnyMoeTomlModelSelected {
             config,
             dataset_csv,
+            prefix,
+            mlp,
+            model_ids,
         }) = selector.anymoe
         {
             Box::new(AnyMoeLoader {
                 target: loader,
                 config,
                 path: dataset_csv,
+                prefix,
+                mlp,
+                model_ids,
             })
         } else {
             loader

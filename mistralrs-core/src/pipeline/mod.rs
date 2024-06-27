@@ -516,6 +516,7 @@ pub trait AnyMoePipelineMixin {
         _config: AnyMoeConfig,
         _dtype: DType,
         _dev: &Device,
+        (_prefix, _mlp): (String, String),
     ) -> candle_core::Result<()> {
         unreachable!()
     }
@@ -523,7 +524,22 @@ pub trait AnyMoePipelineMixin {
     fn pre_train(
         &self,
         _inputs: AnyMoeTrainingInputs,
+        (_prefix, _mlp): (String, String),
+        _model_ids: Vec<String>,
+        _token: TokenSource,
+        _revision: Option<String>,
     ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
+        unreachable!()
+    }
+    fn load_additional_vbs(
+        &self,
+        _model_ids: Vec<String>,
+        _token: &TokenSource,
+        _revision: Option<String>,
+        _dtype: DType,
+        _dev: &Device,
+        _match_regex: &str,
+    ) -> anyhow::Result<Vec<VarBuilder>> {
         unreachable!()
     }
 }

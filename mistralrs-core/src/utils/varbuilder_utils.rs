@@ -17,12 +17,14 @@ use super::progress::{Joinable, NonThreadingHandle, Parellelize};
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
+/// Only include keys for which predicate evaluates to true
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
     dtype: DType,
     device: &Device,
     silent: bool,
+    predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<
@@ -37,16 +39,18 @@ pub(crate) fn from_mmaped_safetensors<'a>(
 
     for path in paths {
         let device = device.clone();
+        let predicate = predicate.clone();
         handles.push(Parellelize::spawn(Box::new(move || {
             let loader = Common::new();
-            loader.load_tensors_from_path(&path, &device, dtype, silent)
+            loader.load_tensors_from_path(&path, &device, dtype, silent, predicate)
         })));
     }
     for (i, path) in xlora_paths.into_iter().enumerate() {
         let device = device.clone();
+        let predicate = predicate.clone();
         handles.push(Parellelize::spawn(Box::new(move || {
             let loader = XLora::new(i + 1);
-            loader.load_tensors_from_path(&path, &device, dtype, silent)
+            loader.load_tensors_from_path(&path, &device, dtype, silent, predicate)
         })));
     }
 
@@ -70,7 +74,8 @@ pub(crate) fn load_preload_adapters<'a>(
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
             let loader = Common::new();
-            let loaded_tensors = loader.load_tensors_from_path(path, device, dtype, silent)?;
+            let loaded_tensors =
+                loader.load_tensors_from_path(path, device, dtype, silent, |_| true)?;
 
             map.insert(
                 name.clone(),
@@ -94,11 +99,16 @@ trait LoadTensors {
         device: &Device,
         dtype: DType,
         is_silent: bool,
+        predicate: impl Fn(String) -> bool,
     ) -> Result<HashMap<String, Tensor>> {
         let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
-        let names_only = tensors.tensors().into_iter().map(|(name, _)| name);
+        let names_only = tensors
+            .tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .filter(|x| predicate(x.to_string()));
         let iter = self.get_name_key_pairs(names_only);
 
         // Take the filtered list of tensors to load, store with derived lookup key:

@@ -455,6 +455,7 @@ impl AnyMoeBaseModelMixin for Llama {
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
+        (_prefix, _mlp): (String, String),
     ) -> Result<()> {
         for layer in &mut self.blocks {
             layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);

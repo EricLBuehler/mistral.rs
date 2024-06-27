@@ -25,17 +25,19 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
+use candle_nn::VarBuilder;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
+use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -468,11 +470,52 @@ impl AnyMoePipelineMixin for NormalPipeline {
         config: crate::amoe::AnyMoeConfig,
         dtype: candle_core::DType,
         dev: &Device,
+        (prefix, mlp): (String, String),
     ) -> candle_core::Result<()> {
         self.model
-            .create_anymoe_layers(additional_vbs, config, dtype, dev)
+            .create_anymoe_layers(additional_vbs, config, dtype, dev, (prefix, mlp))
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
+    }
+    fn load_additional_vbs(
+        &self,
+        model_ids: Vec<String>,
+        token: &TokenSource,
+        revision: Option<String>,
+        dtype: DType,
+        dev: &Device,
+        match_regex: &str,
+    ) -> anyhow::Result<Vec<VarBuilder>> {
+        let mut vbs = Vec::new();
+        // Precompile regex here
+        let regex = Regex::new(match_regex)?;
+        for model_id in model_ids {
+            let model_id_str = &model_id;
+            let model_id = Path::new(&model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(false)
+                .with_token(get_token(token)?)
+                .build()?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+
+            let regex = regex.clone();
+            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, false, move |key| {
+                regex.is_match(&key)
+            })?;
+            vbs.push(vb);
+        }
+        Ok(vbs)
     }
 }

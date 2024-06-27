@@ -72,6 +72,7 @@ pub trait AnyMoeBaseModelMixin {
         _config: AnyMoeConfig,
         _dtype: DType,
         _dev: &Device,
+        (_prefix, _mlp): (String, String),
     ) -> Result<()> {
         candle_core::bail!("Model does not support AnyMoE layers");
     }
