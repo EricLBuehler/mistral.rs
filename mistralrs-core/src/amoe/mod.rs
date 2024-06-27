@@ -43,6 +43,7 @@ pub trait AnyMoeBaseModelMixin {
     fn get_vars(&self) -> Vec<Vec<Var>> {
         self.get_mlps()
             .iter()
+            .filter(|mlp| mlp.is_moe_layer())
             .map(|mlp| mlp.get_vars())
             .collect::<Vec<_>>()
     }
@@ -50,18 +51,21 @@ pub trait AnyMoeBaseModelMixin {
         let _ = self
             .get_mlps_mut()
             .iter_mut()
+            .filter(|mlp| mlp.is_moe_layer())
             .map(|mlp| mlp.done_training())
             .collect::<Vec<_>>();
     }
     fn trainable_params(&self) -> usize {
         self.get_mlps()
             .iter()
+            .filter(|mlp| mlp.is_moe_layer())
             .map(|mlp| mlp.trainable_params())
             .sum()
     }
     fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         self.get_mlps_mut()
             .iter_mut()
+            .filter(|mlp| mlp.is_moe_layer())
             .map(|mlp| mlp.take_cached_gating_output())
             .collect::<Vec<_>>()
     }
@@ -93,6 +97,9 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
     fn clone(&self) -> Box<dyn MlpLayer>;
     fn get_params(&self) -> &[usize];
+    fn is_moe_layer(&self) -> bool {
+        false
+    }
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -260,5 +267,9 @@ impl MlpLayer for MoeMlp {
 
     fn get_params(&self) -> &[usize] {
         self.experts[0].get_params()
+    }
+
+    fn is_moe_layer(&self) -> bool {
+        true
     }
 }
