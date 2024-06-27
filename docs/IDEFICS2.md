@@ -64,7 +64,7 @@ completion = openai.chat.completions.create(
             ],
         },
     ],
-    max_tokens=32,
+    max_tokens=256,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
@@ -133,7 +133,7 @@ fn main() -> anyhow::Result<()> {
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image?".to_string()),
+                    Either::Left("What is shown in this image?".to_string()),
                 ),
             ])],
         },

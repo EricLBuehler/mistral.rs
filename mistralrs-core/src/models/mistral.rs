@@ -9,6 +9,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,7 +114,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -238,7 +239,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -296,6 +297,9 @@ impl Model {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb_m = vb_m.set_dtype(mapper.get_min_dtype()?);
+        let vb_lm_head = vb_lm_head.set_dtype(mapper.get_min_dtype()?);
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -304,7 +308,7 @@ impl Model {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 head_dim,
@@ -353,7 +357,7 @@ impl Model {
     }
 
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -369,7 +373,7 @@ impl Model {
     }
 
     pub fn forward_embeds(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
         seqlen_offsets: &[usize],
@@ -385,7 +389,7 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -426,7 +430,7 @@ impl IsqModel for Model {
 
 impl NormalModel for Model {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -441,7 +445,7 @@ impl NormalModel for Model {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
