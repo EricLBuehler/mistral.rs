@@ -16,14 +16,10 @@ use crate::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
 use crate::sequence::Sequence;
-use crate::vision_models::image_processor::PreprocessedImages;
-use crate::vision_models::llava_next::Config;
+use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
 use crate::vision_models::llava_next::LLaVANextVisionSpecificArgs;
-use crate::vision_models::ModelInputs;
-
-use super::image_processor::ImagePreProcessor;
 use crate::vision_models::preprocessor_config::{PreProcessorConfig, ToFilter};
-use mistralrs_vision::Normalize;
+use crate::vision_models::{preprocessor_config, ModelInputs};
 
 pub fn get_anyres_image_grid_shape(
     image_size: (u32, u32),
@@ -444,9 +440,9 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
     fn preprocess(
         &self,
         images: Vec<image::DynamicImage>,
-        config: &super::preprocessor_config::PreProcessorConfig,
+        config: &preprocessor_config::PreProcessorConfig,
         device: &candle_core::Device,
-    ) -> candle_core::Result<super::image_processor::PreprocessedImages> {
+    ) -> candle_core::Result<image_processor::PreprocessedImages> {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
@@ -520,7 +516,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             .collect::<Result<Vec<Tensor>>>()?;
         let pixel_values = Tensor::stack(&pixel_values, 0)?;
 
-        Ok(super::image_processor::PreprocessedImages {
+        Ok(image_processor::PreprocessedImages {
             pixel_values,
             pixel_attention_mask: None,
             image_sizes: Some((image_size, image_size)),

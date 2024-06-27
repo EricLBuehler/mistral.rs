@@ -1,24 +1,21 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::quantized::QMatMul;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, seq, Activation, Linear, Module, Sequential, VarBuilder};
-use itertools::Itertools;
+use candle_nn::{linear, Activation, Linear, VarBuilder};
 use serde::Deserialize;
 
 use crate::device_map::DeviceMapper;
 use crate::ops::NonZeroOp;
 use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
-use crate::pipeline::NormalModel;
 use crate::pipeline::VisionModel;
 use crate::serde_default_fn;
 
 use crate::models::llama::Config as LLaMAConfig;
-use crate::models::llama::Llama;
-use crate::vision_models::clip::ClipConfig;
+use crate::vision_models::clip::{Activation as ClipActivation, ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava_next_inputs_processor::get_anyres_image_grid_shape;
 
-use super::clip::{Activation as ClipActivation, ClipVisionTransformer};
+use super::llava_llm::{self, LLaVALLM};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -38,7 +35,6 @@ serde_default_fn!(bool, default_use_flash_attn, false);
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LLaVATextConfig {
-    pub architectures: Vec<String>,
     #[serde(default = "default_hidden_size")]
     pub hidden_size: usize,
     #[serde(default = "default_intermediate_size")]
@@ -53,18 +49,12 @@ pub struct LLaVATextConfig {
     pub num_hidden_layers: usize,
     #[serde(default = "default_num_key_value_heads")]
     pub num_key_value_heads: usize,
-    pub pad_token_id: usize,
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
-    pub torch_dtype: String,
-    #[serde(default = "default_use_cache")]
-    pub use_cache: bool,
-    pub vocab_size: usize,
 }
 
 serde_default_fn!(usize, default_num_hidden_layers, 32);
-serde_default_fn!(bool, default_use_cache, true);
 serde_default_fn!(usize, default_hidden_size, 4096);
 serde_default_fn!(usize, default_intermediate_size, 11008);
 serde_default_fn!(usize, default_max_length, 4096);
@@ -77,12 +67,9 @@ pub struct LLaVAVisionConfig {
     pub hidden_size: usize,
     pub image_size: usize,
     pub intermediate_size: usize,
-    pub model_type: String,
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
     pub patch_size: usize,
-    pub projection_dim: usize,
-    pub vocab_size: usize,
 }
 
 impl Config {
@@ -199,7 +186,7 @@ pub struct Model {
     clip_vision_tower: ClipVisionTower,
     image_newline: Tensor,
     mm_projector: MMProjector,
-    llama: Llama,
+    llm: Box<dyn LLaVALLM>,
     config: Config,
     device: Device,
 }
@@ -212,7 +199,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
-        let llama_config = config.to_llama_config();
+
         let clip_config = config.to_clip_config();
         let mm_projector = MMProjector::new(&vb, config)?;
         let clip_vision_tower = ClipVisionTower::new(
@@ -224,17 +211,27 @@ impl Model {
         let image_newline = vb
             .get(&[config.text_config.hidden_size], "image_newline")?
             .to_device(&device)?;
-        let llama = Llama::new(
-            &llama_config,
-            vb.pp("language_model"),
-            is_gptx,
-            normal_loading_metadata,
-        )?;
+
+        let llm = match config.text_config.model_type.as_str() {
+            "llama" => {
+                let llama_config = config.to_llama_config();
+                let llama = llava_llm::llama::Llama::new(
+                    &llama_config,
+                    vb.pp("language_model"),
+                    is_gptx,
+                    normal_loading_metadata,
+                )?;
+                Box::new(llama)
+            }
+            _ => {
+                bail!("Unsupported model type: {}", config.text_config.model_type);
+            }
+        };
         Ok(Self {
             clip_vision_tower,
             image_newline,
             mm_projector,
-            llama,
+            llm,
             config: config.clone(),
             device,
         })
@@ -285,7 +282,7 @@ impl Model {
             .map(|x| Ok(-(input_ids.i((0, *x as usize))?.to_scalar::<i64>()?)))
             .collect::<Result<Vec<i64>>>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
-        result = self.llama.embed(&result)?; //[seq_len,hidden_size]
+        result = self.llm.embed(&result)?; //[seq_len,hidden_size]
         let image_features = self.encode_images(images)?; //[sample_per_image*image_num,hidden_size]
         let image_nums = images.shape().dims()[0] / 5;
         let mut image_features_vec = Vec::new();
@@ -343,11 +340,16 @@ impl Model {
                 &image_features_vec[(image_id - 1) as usize],
             )?;
         }
+        //truncate
+        let (_, seq_len) = input_ids.shape().dims2()?;
+        if seq_len > self.config.text_config.max_length {
+            result = result.i((.., ..self.config.text_config.max_length, ..))?
+        }
         Ok(result)
     }
 
-    pub fn forward(
-        &mut self,
+    pub fn forward_inputs(
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_sizes: Option<Vec<(u32, u32)>>,
@@ -355,6 +357,7 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -364,18 +367,19 @@ impl Model {
                 num_image_token.unwrap(),
                 &image_sizes.unwrap(),
             )?;
-            self.llama.forward_input_embed(
+            self.llm.forward_input_embed(
                 &input_embeds,
                 &seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
             )
         } else {
-            self.llama.forward(
+            self.llm.forward(
                 input_ids,
                 &seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
+                position_ids,
             )
         }
     }
@@ -389,19 +393,19 @@ pub(crate) struct LLaVANextVisionSpecificArgs {
 impl IsqModel for Model {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         // I don't really get this part
-        self.llama.get_tensors()
+        self.llm.get_tensors()
     }
 }
 
 impl VisionModel for Model {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
+        position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
     ) -> candle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
@@ -421,7 +425,7 @@ impl VisionModel for Model {
         } else {
             None
         };
-        self.forward(
+        self.forward_inputs(
             input_ids,
             pixel_values,
             image_sizes,
@@ -429,6 +433,7 @@ impl VisionModel for Model {
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            position_ids,
         )
     }
 
@@ -437,11 +442,11 @@ impl VisionModel for Model {
     }
 
     fn cache(&self) -> &crate::pipeline::Cache {
-        self.llama.cache()
+        self.llm.cache()
     }
 
     fn max_seq_len(&self) -> usize {
-        self.llama.max_seq_len()
+        self.config.text_config.max_length
     }
 
     fn has_conv2d(&self) -> bool {
