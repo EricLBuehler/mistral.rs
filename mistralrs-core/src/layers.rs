@@ -510,8 +510,20 @@ impl QLinear {
         }
     }
 
+    pub fn from_old_and_qmatmul(inner: QMatMul, old: &Self) -> Self {
+        Self {
+            inner,
+            bias: old.bias.clone(),
+            dtype: old.dtype,
+        }
+    }
+
     pub fn inner(&mut self) -> &mut QMatMul {
         &mut self.inner
+    }
+
+    pub fn inner_ref(&self) -> &QMatMul {
+        &self.inner
     }
 
     pub fn is_quant(&self) -> bool {

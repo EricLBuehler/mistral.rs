@@ -14,6 +14,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
@@ -474,6 +475,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         dev: &Device,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
@@ -520,7 +522,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         }
 
         self.model
-            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers)
+            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers, expert_type)
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()

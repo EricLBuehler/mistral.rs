@@ -8,14 +8,19 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    merge_delta,
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -190,6 +195,19 @@ impl MlpLayer for Mlp {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    // c_fc1, c_fc2, c_proj
+    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+        let new_c_fc1 = merge_delta!(self.c_fc1, deltas[0]);
+        let new_c_fc2 = merge_delta!(self.c_fc2, deltas[1]);
+        let new_c_proj = merge_delta!(self.c_proj, deltas[2]);
+
+        Ok(Box::new(Self {
+            c_fc1: new_c_fc1,
+            c_fc2: new_c_fc2,
+            c_proj: new_c_proj,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -456,15 +474,82 @@ impl AnyMoeBaseModelMixin for Llama {
     }
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-        (_prefix, _mlp): (String, String),
-        _layers: Vec<usize>,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
     ) -> Result<()> {
-        for layer in &mut self.blocks {
-            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.blocks.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.blocks[layer].mlp.get_params()[1];
+                let hidden_size = self.blocks[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(Mlp::load(
+                            vb.pp(layer).pp(&mlp),
+                            &Config {
+                                intermediate_size: self.blocks[layer].mlp.get_params()[1],
+                                hidden_size: self.blocks[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let c_fc1_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "c_fc1"
+                        );
+                        let c_fc2_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "c_fc2"
+                        );
+                        let c_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "c_proj"
+                        );
+
+                        row.push(self.blocks[layer].mlp.new_added_delta(vec![
+                            c_fc1_delta,
+                            c_fc2_delta,
+                            c_proj_delta,
+                        ])?);
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.blocks[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.blocks[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
         }
         Ok(())
     }

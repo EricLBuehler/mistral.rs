@@ -1,42 +1,14 @@
-use std::{
-    fs::File,
-    path::Path,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
-use csv::Reader;
 use serde::{Deserialize, Serialize};
 
+mod inputs;
+mod macros;
+pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+
 use crate::serde_default_fn;
-
-pub struct AnyMoeTrainingResult {
-    pub steps: usize,
-    /// One for each gating layer
-    pub final_loss: Vec<f32>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct AnyMoeTrainingInputRow {
-    pub prompt: String,
-    pub expert: usize,
-}
-
-pub struct AnyMoeTrainingInputs(pub Vec<AnyMoeTrainingInputRow>);
-
-impl AnyMoeTrainingInputs {
-    pub fn from_csv<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
-        let file = File::open(file)?;
-        let mut reader = Reader::from_reader(file);
-        let mut rows = Vec::new();
-        for result in reader.deserialize() {
-            let row: AnyMoeTrainingInputRow = result?;
-            rows.push(row);
-        }
-        Ok(Self(rows))
-    }
-}
 
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoeBaseModelMixin {
@@ -70,6 +42,7 @@ pub trait AnyMoeBaseModelMixin {
             .collect::<Vec<_>>()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_anymoe_layers(
         &mut self,
         _additional_vbs: Vec<VarBuilder>,
@@ -78,6 +51,7 @@ pub trait AnyMoeBaseModelMixin {
         _dev: &Device,
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
+        _expert_type: AnyMoeExpertType,
     ) -> Result<()> {
         candle_core::bail!("Model does not support AnyMoE layers");
     }
@@ -96,10 +70,16 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
     fn clone(&self) -> Box<dyn MlpLayer>;
+    /// WARNING: The deltas are not a struct but are instead assumed to
+    /// be correctly ordered! for that model and it's implementation details
     fn get_params(&self) -> &[usize];
     fn is_moe_layer(&self) -> bool {
         false
     }
+    /// This is for LoRA experts and completes the merging process.
+    /// WARNING: The deltas are not a struct but are instead assumed to
+    /// be correctly ordered! for that model and it's implementation details
+    fn new_added_delta(&self, _deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>>;
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -120,6 +100,12 @@ serde_default_fn!(usize, default_epochs, 100);
 serde_default_fn!(usize, default_bs, 4);
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
+pub enum AnyMoeExpertType {
+    FineTuned,
+    LoraAdapter { rank: usize, alpha: f64 },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct AnyMoeConfig {
     pub hidden_size: usize,
     #[serde(default = "default_lr")]
@@ -128,17 +114,7 @@ pub struct AnyMoeConfig {
     pub epochs: usize,
     #[serde(default = "default_bs")]
     pub batch_size: usize,
-}
-
-impl AnyMoeConfig {
-    pub fn default(hidden_size: usize) -> Self {
-        Self {
-            hidden_size,
-            lr: 1e-3,
-            epochs: 100,
-            batch_size: 4,
-        }
-    }
+    pub expert_type: AnyMoeExpertType,
 }
 
 #[derive(Clone)]
@@ -286,5 +262,9 @@ impl MlpLayer for MoeMlp {
 
     fn is_moe_layer(&self) -> bool {
         true
+    }
+
+    fn new_added_delta(&self, _deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+        unreachable!()
     }
 }

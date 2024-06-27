@@ -239,6 +239,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let metadata = target.get_metadata().clone();
         let input_processor_cfg = target.get_input_processor_config().clone();
 
+        let AnyMoeConfig {
+            hidden_size: _,
+            lr,
+            epochs,
+            batch_size,
+            expert_type,
+        } = self.config;
+        let mut steps = 0;
+
         // Inject the AnyMoE layers
         target.amoe_create_layers(
             model_ids,
@@ -250,19 +259,12 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             &device,
             (prefix, mlp),
             layers,
+            expert_type,
         )?;
         let layer_vars = target.amoe_layer_vars();
 
-        let AnyMoeConfig {
-            hidden_size: _,
-            lr,
-            epochs,
-            batch_size,
-        } = self.config;
-        let mut steps = 0;
-
         info!(
-            "{} gating layers, {} trainable parameters, {lr} lr, {epochs} epochs, {batch_size} batch size",
+            "{} gating layers, {} trainable parameters, lr = {lr}, {epochs} epochs, batch size = {batch_size}",
             layer_vars.len(),
             target.amoe_base_model_trainable_params()
         );

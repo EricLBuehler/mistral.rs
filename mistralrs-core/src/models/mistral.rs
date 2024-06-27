@@ -6,11 +6,16 @@ use candle_nn::{linear_no_bias, Activation, VarBuilder};
 use std::sync::Arc;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{
         repeat_kv, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, ScaledDotProductAttention,
     },
+    merge_delta,
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
@@ -83,6 +88,20 @@ impl MlpLayer for MLP {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    // gate, up, down
+    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+        let new_gate = merge_delta!(self.gate_proj, deltas[0]);
+        let new_up = merge_delta!(self.up_proj, deltas[1]);
+        let new_down = merge_delta!(self.down_proj, deltas[2]);
+
+        Ok(Box::new(Self {
+            gate_proj: new_gate,
+            up_proj: new_up,
+            down_proj: new_down,
+            act_fn: self.act_fn,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -519,6 +538,7 @@ impl AnyMoeBaseModelMixin for Model {
         dev: &Device,
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
@@ -533,14 +553,55 @@ impl AnyMoeBaseModelMixin for Model {
                 if !layers.contains(&layer) {
                     continue;
                 }
-                row.push(Box::new(MLP::new(
-                    &Config {
-                        intermediate_size: self.layers[layer].mlp.get_params()[1],
-                        hidden_size: self.layers[layer].mlp.get_params()[0],
-                        ..Default::default()
-                    },
-                    vb.pp(layer).pp(&mlp),
-                )?));
+
+                let intermediate_size = self.layers[layer].mlp.get_params()[1];
+                let hidden_size = self.layers[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(MLP::new(
+                            &Config {
+                                intermediate_size: self.layers[layer].mlp.get_params()[1],
+                                hidden_size: self.layers[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                            vb.pp(layer).pp(&mlp),
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let gate_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "gate_proj"
+                        );
+                        let up_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "up_proj"
+                        );
+                        let down_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "down_proj"
+                        );
+
+                        row.push(self.layers[layer].mlp.new_added_delta(vec![
+                            gate_proj_delta,
+                            up_proj_delta,
+                            down_proj_delta,
+                        ])?);
+                    }
+                }
             }
         }
         for (layer, expert) in layers.into_iter().zip(experts) {

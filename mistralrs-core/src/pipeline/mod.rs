@@ -15,7 +15,10 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::amoe::{
+    AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
+    AnyMoeTrainingResult,
+};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -521,6 +524,7 @@ pub trait AnyMoePipelineMixin {
         _dev: &Device,
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
+        _expert_type: AnyMoeExpertType,
     ) -> candle_core::Result<()> {
         unreachable!()
     }

@@ -12,15 +12,20 @@ use candle_nn::{
 use serde::Deserialize;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
+    merge_delta,
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -95,6 +100,18 @@ impl MlpLayer for MLP {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    // fc1, fc2
+    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+        let new_fc1 = merge_delta!(self.fc1.inner_ref(), deltas[0]);
+        let new_fc2 = merge_delta!(self.fc2.inner_ref(), deltas[1]);
+
+        Ok(Box::new(Self {
+            fc1: QLinear::from_old_and_qmatmul(new_fc1, &self.fc1),
+            fc2: QLinear::from_old_and_qmatmul(new_fc2, &self.fc2),
+            act: self.act,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -482,15 +499,74 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-        (_prefix, _mlp): (String, String),
-        _layers: Vec<usize>,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
     ) -> Result<()> {
-        for layer in &mut self.layers {
-            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.layers[layer].mlp.get_params()[1];
+                let hidden_size = self.layers[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(MLP::new(
+                            &Config {
+                                intermediate_size: self.layers[layer].mlp.get_params()[1],
+                                hidden_size: self.layers[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                            vb.pp(layer).pp(&mlp),
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let fc1_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "fc1"
+                        );
+                        let fc2_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "fc2"
+                        );
+
+                        row.push(
+                            self.layers[layer]
+                                .mlp
+                                .new_added_delta(vec![fc1_delta, fc2_delta])?,
+                        );
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.layers[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
         }
         Ok(())
     }

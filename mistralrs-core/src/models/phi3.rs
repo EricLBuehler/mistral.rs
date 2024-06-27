@@ -7,12 +7,17 @@ use candle_nn::{linear_no_bias, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{
         repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
         ScaledDotProductAttention,
     },
+    merge_delta,
     pipeline::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
     },
@@ -20,7 +25,7 @@ use crate::{
 };
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_act: candle_nn::Activation,
@@ -224,6 +229,19 @@ impl MlpLayer for Mlp {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    // gate_up, down
+    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+        let new_gate_up = merge_delta!(self.gate_up_proj, deltas[0]);
+        let new_down = merge_delta!(self.down_proj, deltas[1]);
+
+        Ok(Box::new(Self {
+            gate_up_proj: new_gate_up,
+            down_proj: new_down,
+            act_fn: self.act_fn,
+            i_size: self.i_size,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -480,15 +498,74 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-        (_prefix, _mlp): (String, String),
-        _layers: Vec<usize>,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
     ) -> Result<()> {
-        for layer in &mut self.layers {
-            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.layers[layer].mlp.get_params()[1];
+                let hidden_size = self.layers[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(Mlp::new(
+                            &Config {
+                                intermediate_size: self.layers[layer].mlp.get_params()[1],
+                                hidden_size: self.layers[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                            vb.pp(layer).pp(&mlp),
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let gate_up_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "gate_up_proj"
+                        );
+                        let down_proj_delta = get_delta_from_lora_ab!(
+                            vb_mlp,
+                            rank,
+                            alpha,
+                            hidden_size,
+                            intermediate_size,
+                            "down_proj"
+                        );
+
+                        row.push(
+                            self.layers[layer]
+                                .mlp
+                                .new_added_delta(vec![gate_up_proj_delta, down_proj_delta])?,
+                        );
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.layers[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
         }
         Ok(())
     }
