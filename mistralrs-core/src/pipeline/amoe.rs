@@ -297,6 +297,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.set_none_cache(true, true);
 
         let mut latest_loss = vec![0.0; optimizers.len()];
+        let mut all_losses = Vec::new();
 
         for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
             samples.as_mut_slice().shuffle(&mut rng);
@@ -363,9 +364,11 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     optimizer.step(&gradstore)?;
                     latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
                 }
+                all_losses.push(latest_loss.clone());
             }
         }
 
+        target.done_training();
         assert_eq!(target.base_model_trainable_params(), 0);
 
         Ok(AnyMoeTrainingResult {
