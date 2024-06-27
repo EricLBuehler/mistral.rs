@@ -508,7 +508,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                     // Assumes N.MLP
                     let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
                     let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx..last_layer_idx]
+                    let layer_n = key[first_layer_idx+1..last_layer_idx]
                         .parse::<usize>()
                         .unwrap();
                     layers_clone.contains(&layer_n)
