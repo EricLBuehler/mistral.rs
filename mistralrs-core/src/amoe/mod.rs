@@ -206,7 +206,14 @@ impl AnyMoeTrainableLayer for MoeMlp {
         }
     }
     fn trainable_params(&self) -> usize {
-        self.gate.lin.weight().elem_count() + self.gate.lin.bias().unwrap().elem_count()
+        let mut sum = 0;
+        if self.gate.lin.weight().is_variable() {
+            sum += self.gate.lin.weight().elem_count();
+        }
+        if self.gate.lin.bias().as_ref().unwrap().is_variable() {
+            sum += self.gate.lin.bias().unwrap().elem_count();
+        }
+        sum
     }
     fn get_vars(&self) -> Vec<Var> {
         self.vars.clone()
