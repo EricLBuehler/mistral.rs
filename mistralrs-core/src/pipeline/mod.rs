@@ -492,25 +492,25 @@ pub trait MetadataMixin {
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoePipelineMixin {
     /// Get vars for each gating layer
-    fn layer_vars(&self) -> Vec<Vec<Var>> {
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn done_training(&mut self) {
+    fn amoe_done_training(&mut self) {
         unreachable!()
     }
-    fn base_model_trainable_params(&self) -> usize {
+    fn amoe_base_model_trainable_params(&self) -> usize {
         unreachable!()
     }
     fn amoe_supported(&self) -> bool {
         false
     }
     /// Per-layer cached outputs.
-    fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         unreachable!()
     }
     /// Inject the MoE layers
     #[allow(clippy::too_many_arguments)]
-    fn create_anymoe_layers(
+    fn amoe_create_layers(
         &mut self,
         _model_ids: Vec<String>,
         _token: &TokenSource,
@@ -525,7 +525,7 @@ pub trait AnyMoePipelineMixin {
         unreachable!()
     }
     /// Pre-train the gating layers
-    fn pre_train(
+    fn amoe_pre_train(
         &self,
         _inputs: AnyMoeTrainingInputs,
         (_prefix, _mlp): (String, String),

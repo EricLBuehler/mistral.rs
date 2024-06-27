@@ -451,19 +451,19 @@ impl Pipeline for NormalPipeline {
 }
 
 impl AnyMoePipelineMixin for NormalPipeline {
-    fn done_training(&mut self) {
+    fn amoe_done_training(&mut self) {
         self.model.done_training();
     }
-    fn layer_vars(&self) -> Vec<Vec<Var>> {
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         self.model.get_vars()
     }
-    fn base_model_trainable_params(&self) -> usize {
+    fn amoe_base_model_trainable_params(&self) -> usize {
         self.model.trainable_params()
     }
-    fn take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         self.model.take_cached_gating_outputs()
     }
-    fn create_anymoe_layers(
+    fn amoe_create_layers(
         &mut self,
         model_ids: Vec<String>,
         token: &TokenSource,

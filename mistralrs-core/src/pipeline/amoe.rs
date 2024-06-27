@@ -130,7 +130,7 @@ impl AnyMoePipeline {
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
         info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
         let AnyMoeTrainingResult { steps, final_loss } =
-            this.pre_train(inputs, (prefix, mlp), model_ids, token, revision, layers)?;
+            this.amoe_pre_train(inputs, (prefix, mlp), model_ids, token, revision, layers)?;
         info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
         Ok(this)
     }
@@ -218,7 +218,7 @@ impl Pipeline for AnyMoePipeline {
 }
 
 impl AnyMoePipelineMixin for AnyMoePipeline {
-    fn pre_train(
+    fn amoe_pre_train(
         &self,
         inputs: AnyMoeTrainingInputs,
         (prefix, mlp): (String, String),
@@ -240,7 +240,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let input_processor_cfg = target.get_input_processor_config().clone();
 
         // Inject the AnyMoE layers
-        target.create_anymoe_layers(
+        target.amoe_create_layers(
             model_ids,
             &token,
             revision,
@@ -251,7 +251,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             (prefix, mlp),
             layers,
         )?;
-        let layer_vars = target.layer_vars();
+        let layer_vars = target.amoe_layer_vars();
 
         let AnyMoeConfig {
             hidden_size: _,
@@ -264,7 +264,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         info!(
             "{} gating layers, {} trainable parameters, {lr} lr, {epochs} epochs, {batch_size} batch size",
             layer_vars.len(),
-            target.base_model_trainable_params()
+            target.amoe_base_model_trainable_params()
         );
 
         let mut optimizers = layer_vars
@@ -357,7 +357,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     &device,
                 )?;
 
-                let cached = target.take_cached_gating_outputs();
+                let cached = target.amoe_take_cached_gating_outputs();
                 for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
                     let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
                     let gradstore = loss.backward()?;
@@ -368,8 +368,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             }
         }
 
-        target.done_training();
-        assert_eq!(target.base_model_trainable_params(), 0);
+        target.amoe_done_training();
+        assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
         Ok(AnyMoeTrainingResult {
             steps,
