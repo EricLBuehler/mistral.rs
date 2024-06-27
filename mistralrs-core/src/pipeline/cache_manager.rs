@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use candle_core::{Tensor, D};
 
-use crate::{get_mut_arcmutex, layers::is_training, sequence::Sequence};
+use crate::{get_mut_arcmutex, sequence::Sequence};
 
 use super::{CacheManagerMixin, MetadataMixin};
 
@@ -82,7 +82,7 @@ impl Cache {
         let (k, v) = match &*cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                if !slow_cat && !is_training() {
+                if !slow_cat {
                     let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
                     let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
                     (k, v)
@@ -137,7 +137,7 @@ impl Cache {
                         }
                     }
                 }
-                let (k, v) = if !slow_cat && !is_training() {
+                let (k, v) = if !slow_cat {
                     let k = candle_nn::ops::kvconcat(&prev_k, &k, 2)?;
                     let v = candle_nn::ops::kvconcat(&prev_v, &v, 2)?;
                     (k, v)

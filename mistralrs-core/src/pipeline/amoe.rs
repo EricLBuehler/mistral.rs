@@ -11,7 +11,6 @@ use tracing::info;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
-    layers::TrainingBlock,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
@@ -299,78 +298,75 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         let mut latest_loss = vec![0.0; optimizers.len()];
 
-        TrainingBlock::enter(|| {
-            for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
-                samples.as_mut_slice().shuffle(&mut rng);
-                for batch in samples.chunks(batch_size) {
-                    steps += 1;
+        for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
+            samples.as_mut_slice().shuffle(&mut rng);
+            for batch in samples.chunks(batch_size) {
+                steps += 1;
 
-                    // === PREPARE INPUTS ==
-                    let mut seqs = Vec::new();
-                    for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
-                        let tokens = processor
-                            .process(
-                                &*target,
-                                vec![IndexMap::from([
-                                    ("role".to_string(), Either::Left("user".to_string())),
-                                    ("content".to_string(), Either::Left(prompt.clone())),
-                                ])],
-                                true,
-                            )
-                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-                        seqs.push(new_dummy_seq(
-                            tokens,
-                            dummy_sender.clone(),
-                            dummy_sampler.clone(),
-                            dummy_group.clone(),
-                        ));
-                    }
-                    let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
-                    let inputs = inputs_processor
-                        .process_inputs(
-                            tokenizer.clone(),
-                            &mut input_seqs,
-                            true, // Always a prompt
-                            metadata.is_xlora,
-                            &device,
-                            metadata.has_no_kv_cache,
-                            None,
-                            input_processor_cfg.clone(),
+                // === PREPARE INPUTS ==
+                let mut seqs = Vec::new();
+                for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
+                    let tokens = processor
+                        .process(
+                            &*target,
+                            vec![IndexMap::from([
+                                ("role".to_string(), Either::Left("user".to_string())),
+                                ("content".to_string(), Either::Left(prompt.clone())),
+                            ])],
+                            true,
                         )
-                        .unwrap();
-
-                    // === PREPARE AND RUN MODEL ==
-
-                    // Run the model, ignoring the logits
-                    let _ = target.forward_inputs(inputs)?;
-
-                    // Clear the KV cache
-                    target.set_none_cache(true, true);
-
-                    // === BACKWARD STEP ==
-                    #[allow(clippy::cast_possible_truncation)]
-                    let labels = Tensor::from_vec(
-                        batch
-                            .iter()
-                            .map(|AnyMoeTrainingInputRow { prompt: _, expert }| *expert as u32)
-                            .collect::<Vec<_>>(),
-                        (batch.len(),),
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    seqs.push(new_dummy_seq(
+                        tokens,
+                        dummy_sender.clone(),
+                        dummy_sampler.clone(),
+                        dummy_group.clone(),
+                    ));
+                }
+                let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
+                let inputs = inputs_processor
+                    .process_inputs(
+                        tokenizer.clone(),
+                        &mut input_seqs,
+                        true, // Always a prompt
+                        metadata.is_xlora,
                         &device,
-                    )?;
+                        metadata.has_no_kv_cache,
+                        None,
+                        input_processor_cfg.clone(),
+                    )
+                    .unwrap();
 
-                    let cached = target.take_cached_gating_outputs();
-                    for (layer, (optimizer, output)) in
-                        optimizers.iter_mut().zip(cached).enumerate()
-                    {
-                        let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
-                        let gradstore = loss.backward()?;
-                        optimizer.step(&gradstore)?;
-                        latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-                    }
+                // === PREPARE AND RUN MODEL ==
+
+                // Run the model, ignoring the logits
+                let _ = target.forward_inputs(inputs)?;
+
+                // Clear the KV cache
+                target.set_none_cache(true, true);
+
+                // === BACKWARD STEP ==
+                #[allow(clippy::cast_possible_truncation)]
+                let labels = Tensor::from_vec(
+                    batch
+                        .iter()
+                        .map(|AnyMoeTrainingInputRow { prompt: _, expert }| *expert as u32)
+                        .collect::<Vec<_>>(),
+                    (batch.len(),),
+                    &device,
+                )?;
+
+                let cached = target.take_cached_gating_outputs();
+                for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
+                    let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
+                    let gradstore = loss.backward()?;
+                    optimizer.step(&gradstore)?;
+                    latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
                 }
             }
-            Ok(())
-        })?;
+        }
+
+        assert_eq!(target.base_model_trainable_params(), 0);
 
         Ok(AnyMoeTrainingResult {
             steps,

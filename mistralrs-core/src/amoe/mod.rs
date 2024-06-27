@@ -198,6 +198,12 @@ impl MoeMlp {
 impl AnyMoeTrainableLayer for MoeMlp {
     fn done_training(&mut self) {
         self.training = false;
+        self.gate = MoeGate {
+            lin: Linear::new(
+                self.gate.lin.weight().detach(),
+                self.gate.lin.bias().map(|b| b.detach()),
+            ),
+        }
     }
     fn trainable_params(&self) -> usize {
         self.gate.lin.weight().elem_count() + self.gate.lin.bias().unwrap().elem_count()
@@ -219,7 +225,9 @@ impl MlpLayer for MoeMlp {
         let mut gate = gate.mean(1)?;
         // ^ [b, n_e]
 
-        *self.gating_output.write().unwrap() = Some(gate.clone());
+        if self.training {
+            *self.gating_output.write().unwrap() = Some(gate.clone());
+        }
 
         // Detach to not track grads for the entire model
         gate = gate.detach();

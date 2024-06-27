@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashMap,
-    marker::PhantomData,
     ops::Mul,
     str::FromStr,
     sync::{
@@ -19,32 +18,7 @@ use candle_nn::{Linear, Module, VarBuilder};
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
-
 use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
-
-/// If true, currently in training mode and backprop is needed.
-pub(crate) static TRAINING: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn is_training() -> bool {
-    TRAINING.load(Ordering::Relaxed)
-}
-pub(crate) fn set_training(v: bool) {
-    TRAINING.store(v, Ordering::Relaxed);
-}
-
-/// A training block which begins and ends training mode automatically.
-pub struct TrainingBlock<T: FnOnce() -> Result<Output>, Output> {
-    _ghost: PhantomData<(T, Output)>,
-}
-
-impl<T: FnOnce() -> Result<Output>, Output> TrainingBlock<T, Output> {
-    pub fn enter(call: T) -> Result<Output> {
-        set_training(true);
-        let res = call();
-        set_training(false);
-        res
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -66,9 +40,6 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        if is_training() {
-            return candle_nn::ops::rms_norm_slow(x, &self.weight, self.eps as f32);
-        }
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
@@ -89,9 +60,6 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        if is_training() {
-            return candle_nn::ops::rms_norm_slow(x, &self.weight, self.eps as f32);
-        }
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
@@ -310,10 +278,6 @@ impl MatMul {
 
     /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        assert!(
-            !is_training()
-                || (matches!(matmul, QMatMul::Tensor(_) | QMatMul::TensorF16(_)) && is_training())
-        );
         if get_use_matmul_via_f16() {
             matmul.forward_via_f16(x)
         } else {
@@ -340,11 +304,7 @@ fn naive_sdpa(
         Some(m) => att.broadcast_add(m)?,
         None => att,
     };
-    let att = if is_training() {
-        candle_nn::ops::softmax(&att, D::Minus1)?
-    } else {
-        candle_nn::ops::softmax_last_dim(&att)?
-    };
+    let att = candle_nn::ops::softmax_last_dim(&att)?;
     // Convert to contiguous as matmul doesn't support strided vs for now.
     MatMul.matmul(&att, &v.contiguous()?)
 }
@@ -371,7 +331,7 @@ impl ScaledDotProductAttention {
         b_sz: usize,
         seq_len: usize,
     ) -> Result<Tensor> {
-        if use_flash_attn && !is_training() {
+        if use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -381,7 +341,7 @@ impl ScaledDotProductAttention {
         }
 
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            if !get_use_matmul_via_f16() && !is_training() {
+            if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]
                 {
                     // cuBLASLt batch matmul implementation requires inputs to be dims3
@@ -472,21 +432,17 @@ impl Module for FusedBiasLinear {
         let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
 
         if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            if !is_training() {
-                cublaslt
-                    .batch_matmul(
-                        x,
-                        &w,
-                        Some(&b.t()?.contiguous()?),
-                        None,
-                        Some(1.0),
-                        None,
-                        None,
-                    )?
-                    .t()
-            } else {
-                x.matmul(&w.t()?)? + b
-            }
+            cublaslt
+                .batch_matmul(
+                    x,
+                    &w,
+                    Some(&b.t()?.contiguous()?),
+                    None,
+                    Some(1.0),
+                    None,
+                    None,
+                )?
+                .t()
         } else {
             x.matmul(&w.t()?)? + b
         }
@@ -569,7 +525,6 @@ impl QLinear {
 
 impl Module for QLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        assert!(!is_training());
         let xs = if self.is_quant() {
             xs.to_dtype(DType::F32)?
         } else {
@@ -640,9 +595,6 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         b_sz: usize,
     ) -> Result<()> {
-        if is_training() {
-            return self.0.forward_slow(positions, q, k, b_sz);
-        }
         self.0.forward(positions, positions_kernel, q, k, b_sz)
     }
 }
