@@ -254,12 +254,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         } else {
             get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
         };
-        println!("input_ids: {}", input);
-        println!("seqlen_offsets: {:?}", positions);
-        println!("seqlen_offsets_kernel: {}", positions_kernel);
-        println!("context_lens: {:?}", context_lens);
-        println!("position_ids: {:?}", position_ids);
-        todo!();
+
         Ok(Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,

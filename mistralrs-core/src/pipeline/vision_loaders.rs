@@ -23,7 +23,7 @@ pub trait VisionModelLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,   
+        use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
@@ -160,7 +160,6 @@ impl VisionModelLoader for LLaVANextLoader {
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        println!("load LLaVANext");
         let mut config: LLaVANextConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
         Ok(Box::new(LLaVANext::new(
@@ -174,7 +173,6 @@ impl VisionModelLoader for LLaVANextLoader {
         false
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        println!("get_config_repr LLaVANext");
         let mut config: LLaVANextConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
         Ok(Box::new(config))
@@ -185,7 +183,6 @@ impl VisionModelLoader for LLaVANextLoader {
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
-        println!("get_processor LLaVANext");
         Arc::new(LLaVANextProcessor::new(model_config))
     }
 }

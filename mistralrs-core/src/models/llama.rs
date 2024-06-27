@@ -40,17 +40,9 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
     max_seq_len: usize,
-    cos: Tensor, // for debugging
-    sin: Tensor, // for debugging
 }
 
 impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
-        let cos = self.cos.narrow(0, index_pos, seq_len)?;
-        let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(x, &cos, &sin)
-    }
     fn forward(
         &self,
         x: &Tensor,
@@ -75,22 +67,16 @@ impl CausalSelfAttention {
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
-        println!("before reshape q.shape {:?}", q.shape()); 
+
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
         let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
-        println!("before rotary_emb q.shape {:?}", q.shape()); 
-        //self.rotary_emb
-        //    .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-        q = q.transpose(0,1)?.reshape((b_sz,self.num_attention_heads,seq_len,self.head_dim))?;
-        k = k.transpose(0,1)?.reshape((b_sz,self.num_key_value_heads,seq_len,self.head_dim))?;
-        q = self.apply_rotary_emb(&q, seqlen_offsets[0])?;//[1,32,2975,128]
-        k = self.apply_rotary_emb(&k, seqlen_offsets[0])?;
-        q = q.transpose(1,2)?.reshape((b_sz*seq_len,self.num_attention_heads,self.head_dim))?;
-        k = k.transpose(1,2)?.reshape((b_sz*seq_len,self.num_key_value_heads,self.head_dim))?;
-        println!("after rotary_emb q.shape {:?}", q.shape()); //[2975,32,128]
+
+        self.rotary_emb
+            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
+
         if q.rank() == 3 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -101,7 +87,6 @@ impl CausalSelfAttention {
                 .transpose(1, 2)?
                 .contiguous()?;
         }
-        
 
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
@@ -132,13 +117,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(
-        vb: VarBuilder,
-        cfg: &Config,
-        rope: Arc<RotaryEmbedding>,
-        cos: &Tensor,
-        sin: &Tensor,
-    ) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -157,8 +136,6 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
-            cos: cos.clone(),
-            sin: sin.clone(),
         })
     }
 }
@@ -208,13 +185,6 @@ struct Block {
     mlp: Mlp,
 }
 
-use half::f16;
-fn get_max_min_value(x: &Tensor) -> Result<(f16, f16)> {
-    let max_value = x.max(0)?.max(0)?.max(0)?.to_scalar::<f16>()?;
-    let min_value = x.min(0)?.min(0)?.min(0)?.to_scalar::<f16>()?;
-    Ok((max_value, min_value))
-}
-
 impl Block {
     fn forward(
         &self,
@@ -226,17 +196,7 @@ impl Block {
         kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {
         let residual = x;
-        let (max_value, min_value) = get_max_min_value(x)?;
-        println!(
-            "before rms_1 max_value: {} min_value: {}",
-            max_value, min_value
-        );
         let x = self.rms_1.forward(x)?;
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "after rms_1 max_value: {} min_value: {}",
-            max_value, min_value
-        );
         let x = (self.attn.forward(
             &x,
             attention_mask,
@@ -245,33 +205,8 @@ impl Block {
             block_idx,
             kv_cache,
         )? + residual)?;
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "after attn max_value: {} min_value: {}",
-            max_value, min_value
-        );
         let residual = &x;
-        // for debugging
-        let x = self.rms_2.forward(&x)?;
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "after rms_2 max_value: {} min_value: {}",
-            max_value, min_value
-        );
-        let x = self.mlp.forward(&x)?;
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "after mlp max_value: {} min_value: {}",
-            max_value, min_value
-        );
-        let x = (x + residual)?;
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "after residual max_value: {} min_value: {}",
-            max_value, min_value
-        );
-        // debugging ends
-        //let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 
@@ -282,15 +217,11 @@ impl Block {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
-        cos: &Tensor,
-        sin: &Tensor,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
             rope,
-            cos,
-            sin,
         )?;
         let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
         let rms_1 = RmsNorm::new(
@@ -321,58 +252,9 @@ pub struct Llama {
     pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    // for debugging
-    cos: Tensor,
-    sin: Tensor,
 }
 
 impl Llama {
-    // required by LLaVA
-    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        self.wte.forward(x)
-    }
-    // required by LLaVA
-    pub fn forward_input_embed(
-        &self,
-        input_embed: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-    ) -> Result<Tensor> {
-        let mut x = input_embed.clone();
-        let (max_value, min_value) = get_max_min_value(&x)?;
-        println!(
-            "input_embed max_value: {} min_value: {}",
-            max_value, min_value
-        );
-        let mut cache = self.kv_cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias_with_embed_tensor(
-            &x,
-            &cache,
-            x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = self.mapper.map(x, block_idx)?;
-            x = block.forward(
-                &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                block_idx,
-                &mut cache,
-            )?;
-        }
-        x = x.to_device(&self.device)?;
-        x = self.ln_f.forward(&x)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
-        }
-        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
-        let result = extract_logits(&logits, context_lens)?; //need to reset to original, this is only for debug
-        Ok(result)
-    }
-
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -414,24 +296,6 @@ impl Llama {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        //this is for debugging
-        let n_elem = cfg.hidden_size / cfg.num_attention_heads;
-        let theta: Vec<_> = (0..n_elem)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / n_elem as f32))
-            .collect();
-        let device = normal_loading_metadata.real_device.clone();
-        let theta = Tensor::new(theta.as_slice(), &device)?;
-        let idx_theta = Tensor::arange(0, cfg.max_position_embeddings as u32, &device)?
-            .to_dtype(DType::F32)?
-            .reshape((cfg.max_position_embeddings, 1))?
-            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        // This is different from the paper, see:
-        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
-        let cos = idx_theta.cos()?.to_dtype(vb.dtype())?;
-        let sin = idx_theta.sin()?.to_dtype(vb.dtype())?;
-        // debug end
-
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -476,8 +340,6 @@ impl Llama {
                     i,
                     normal_loading_metadata.loading_isq,
                     rotary_emb,
-                    &cos,
-                    &sin,
                 )
                 .expect("Failed to load block.")
             })
@@ -491,8 +353,6 @@ impl Llama {
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,
-            cos, // for debugging
-            sin, // for debugging
         })
     }
 }

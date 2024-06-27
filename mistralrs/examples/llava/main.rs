@@ -42,7 +42,6 @@ fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
-        
         messages: RequestMessage::VisionChat {
             images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
             messages: vec![IndexMap::from([
@@ -53,7 +52,7 @@ fn main() -> anyhow::Result<()> {
                 ),
             ])],
         },
-        /* 
+        /*
         messages: RequestMessage::Completion {
             text: "Hello! My name is ".to_string(),
             echo_prompt: false,

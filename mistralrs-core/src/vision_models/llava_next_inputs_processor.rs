@@ -287,7 +287,8 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .collect::<Vec<_>>();
             let prompt_chunks = splits
                 .iter()
-                .map(|s| { // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
+                .map(|s| {
+                    // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
                         .encode(*s, true)
                         .unwrap()

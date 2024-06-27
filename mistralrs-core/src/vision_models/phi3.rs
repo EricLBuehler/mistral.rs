@@ -833,7 +833,6 @@ impl Model {
         } else {
             self.embed_tokens.forward(input_ids)?
         };
-        println!("input xs: {}",xs);
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
@@ -856,7 +855,6 @@ impl Model {
                 &mut cache[i],
             )?
         }
-        println!("block xs: {}",xs);
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {

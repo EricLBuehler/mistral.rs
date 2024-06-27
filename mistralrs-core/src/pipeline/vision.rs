@@ -156,7 +156,7 @@ impl Loader for VisionLoader {
                 device.device_pretty_repr()
             );
         }
-        
+
         info!(
             "Model config: {:?}",
             self.inner

@@ -334,10 +334,6 @@ impl Model {
             .collect::<Result<Vec<Tensor>>>()?;
         for (i, image_index) in image_indexes.iter().enumerate() {
             let image_id = image_ids[i];
-            println!(
-                "image_index: {}, num_Image_token: {}",
-                image_index, num_image_token
-            );
             result = result.slice_assign(
                 &[
                     &(0usize..1usize),
@@ -368,7 +364,6 @@ impl Model {
                 num_image_token.unwrap(),
                 &image_sizes.unwrap(),
             )?;
-            println!("input_embeds.shape: {:?}", input_embeds.shape());
             self.llama.forward_input_embed(
                 &input_embeds,
                 &seqlen_offsets,
