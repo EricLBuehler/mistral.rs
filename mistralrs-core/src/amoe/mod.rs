@@ -101,7 +101,9 @@ serde_default_fn!(usize, default_bs, 4);
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub enum AnyMoeExpertType {
+    #[serde(rename = "fine_tuned")]
     FineTuned,
+    #[serde(rename = "lora_adapter")]
     LoraAdapter { rank: usize, alpha: f64 },
 }
 
