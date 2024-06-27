@@ -508,10 +508,10 @@ impl AnyMoePipelineMixin for NormalPipeline {
                     // Assumes N.MLP
                     let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
                     let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx+1..last_layer_idx]
+                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
                         .parse::<usize>()
                         .unwrap();
-                    layers_clone.contains(&layer_n)
+                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
                 } else {
                     false
                 }
@@ -520,7 +520,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         }
 
         self.model
-            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp))
+            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers)
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()

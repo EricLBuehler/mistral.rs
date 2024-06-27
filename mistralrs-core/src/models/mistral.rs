@@ -518,14 +518,21 @@ impl AnyMoeBaseModelMixin for Model {
         dtype: DType,
         dev: &Device,
         (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        for _ in 0..self.layers.len() {
+        if layers.is_empty() {
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
             experts.push(Vec::new());
         }
         for vb in additional_vbs {
             let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate().take(self.layers.len()) {
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
                 row.push(Box::new(MLP::new(
                     &Config {
                         intermediate_size: self.layers[layer].mlp.get_params()[1],
@@ -536,10 +543,10 @@ impl AnyMoeBaseModelMixin for Model {
                 )?));
             }
         }
-        for (layer, experts) in self.layers.iter_mut().zip(experts) {
-            let mut experts_all = vec![layer.mlp.clone()];
-            experts_all.extend(experts);
-            layer.mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.layers[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
         }
         Ok(())
     }
