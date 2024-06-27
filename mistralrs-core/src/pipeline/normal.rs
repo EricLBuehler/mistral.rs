@@ -473,6 +473,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         dtype: candle_core::DType,
         dev: &Device,
         (prefix, mlp): (String, String),
+        layers: Vec<usize>,
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
@@ -499,8 +500,21 @@ impl AnyMoePipelineMixin for NormalPipeline {
             }
 
             let regex = regex.clone();
+            let match_regex_clone = match_regex.to_string();
+            let layers_clone = layers.clone();
             let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, false, move |key| {
-                regex.is_match(&key)
+                if regex.is_match(&key) {
+                    // Idx of the last char of the layer id, +1
+                    // Assumes N.MLP
+                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                    let layer_n = key[first_layer_idx..last_layer_idx]
+                        .parse::<usize>()
+                        .unwrap();
+                    layers_clone.contains(&layer_n)
+                } else {
+                    false
+                }
             })?;
             vbs.push(vb);
         }

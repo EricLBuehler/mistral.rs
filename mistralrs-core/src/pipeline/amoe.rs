@@ -32,6 +32,7 @@ pub struct AnyMoeLoader {
     pub prefix: String,
     pub mlp: String,
     pub model_ids: Vec<String>,
+    pub layers: Vec<usize>,
 }
 
 pub struct AnyMoePipeline {
@@ -69,6 +70,7 @@ impl Loader for AnyMoeLoader {
             self.model_ids.clone(),
             token_source,
             revision,
+            self.layers.clone(),
         )?)))
     }
 
@@ -99,6 +101,7 @@ impl Loader for AnyMoeLoader {
             self.model_ids.clone(),
             TokenSource::None,
             None,
+            self.layers.clone(),
         )?)))
     }
     fn get_id(&self) -> String {
@@ -122,12 +125,13 @@ impl AnyMoePipeline {
         model_ids: Vec<String>,
         token: TokenSource,
         revision: Option<String>,
+        layers: Vec<usize>,
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
         info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
         let AnyMoeTrainingResult { steps, final_loss } =
-            this.pre_train(inputs, (prefix, mlp), model_ids, token, revision)?;
+            this.pre_train(inputs, (prefix, mlp), model_ids, token, revision, layers)?;
         info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
         Ok(this)
     }
@@ -222,6 +226,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         model_ids: Vec<String>,
         token: TokenSource,
         revision: Option<String>,
+        layers: Vec<usize>,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
         let mut target = get_mut_arcmutex!(self.target);
         if !target.amoe_supported() {
@@ -245,6 +250,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             metadata.activation_dtype,
             &device,
             (prefix, mlp),
+            layers,
         )?;
         let layer_vars = target.layer_vars();
 

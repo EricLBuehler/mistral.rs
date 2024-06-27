@@ -246,8 +246,11 @@ pub struct AnyMoeTomlModelSelected {
     /// Name of the mlp key (the part before the layer number: "mlp" in "a.b.c.0.mlp")
     mlp: String,
 
-    /// Epert model ids
+    /// Expert model ids
     model_ids: Vec<String>,
+
+    /// Layer ids (zero indexed) of layers to apply AnyMoE to, if empty will use all
+    layers: Vec<usize>,
 }
 
 #[derive(Deserialize)]
@@ -551,6 +554,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             prefix,
             mlp,
             model_ids,
+            layers,
         }) = selector.anymoe
         {
             Box::new(AnyMoeLoader {
@@ -560,6 +564,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
                 prefix,
                 mlp,
                 model_ids,
+                layers,
             })
         } else {
             loader

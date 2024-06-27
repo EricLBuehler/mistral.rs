@@ -509,6 +509,7 @@ pub trait AnyMoePipelineMixin {
         unreachable!()
     }
     /// Inject the MoE layers
+    #[allow(clippy::too_many_arguments)]
     fn create_anymoe_layers(
         &mut self,
         _model_ids: Vec<String>,
@@ -519,6 +520,7 @@ pub trait AnyMoePipelineMixin {
         _dtype: DType,
         _dev: &Device,
         (_prefix, _mlp): (String, String),
+        _layers: Vec<usize>,
     ) -> candle_core::Result<()> {
         unreachable!()
     }
@@ -530,6 +532,7 @@ pub trait AnyMoePipelineMixin {
         _model_ids: Vec<String>,
         _token: TokenSource,
         _revision: Option<String>,
+        _layers: Vec<usize>,
     ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
         unreachable!()
     }
