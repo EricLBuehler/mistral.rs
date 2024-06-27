@@ -223,35 +223,30 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         token: TokenSource,
         revision: Option<String>,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
-        if !get_mut_arcmutex!(self.target).amoe_supported() {
+        let mut target = get_mut_arcmutex!(self.target);
+        if !target.amoe_supported() {
             candle_core::bail!("AnyMoE is not supported for this model.");
         }
 
-        let device = get_mut_arcmutex!(self.target).device();
-        let dtype = get_mut_arcmutex!(self.target)
-            .get_metadata()
-            .activation_dtype;
-        let processor = get_mut_arcmutex!(self.target).get_processor();
-        let inputs_processor = get_mut_arcmutex!(self.target)
-            .get_processor()
-            .inputs_processor();
-        let tokenizer = get_mut_arcmutex!(self.target).tokenizer();
-        let metadata = get_mut_arcmutex!(self.target).get_metadata().clone();
-        let input_processor_cfg = get_mut_arcmutex!(self.target)
-            .get_input_processor_config()
-            .clone();
+        let device = target.device();
+        let processor = target.get_processor();
+        let inputs_processor = target.get_processor().inputs_processor();
+        let tokenizer = target.tokenizer();
+        let metadata = target.get_metadata().clone();
+        let input_processor_cfg = target.get_input_processor_config().clone();
 
         // Inject the AnyMoE layers
-        get_mut_arcmutex!(self.target).create_anymoe_layers(
-            get_mut_arcmutex!(self.target)
-                .load_additional_vbs(model_ids, &token, revision, dtype, &device, &mlp)
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?,
+        target.create_anymoe_layers(
+            model_ids,
+            &token,
+            revision,
+            &mlp.clone(),
             self.config,
             metadata.activation_dtype,
             &device,
             (prefix, mlp),
         )?;
-        let layer_vars = get_mut_arcmutex!(self.target).layer_vars();
+        let layer_vars = target.layer_vars();
 
         let AnyMoeConfig {
             hidden_size: _,
@@ -264,7 +259,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         info!(
             "{} gating layers, {} trainable parameters, {lr} lr, {epochs} epochs, {batch_size} batch size",
             layer_vars.len(),
-            get_mut_arcmutex!(self.target).base_model_trainable_params()
+            target.base_model_trainable_params()
         );
 
         let mut optimizers = layer_vars
@@ -294,7 +289,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         )));
 
         // Clear KV cache in prep for training
-        get_mut_arcmutex!(self.target).set_none_cache(true, true);
+        target.set_none_cache(true, true);
 
         let mut latest_loss = vec![0.0; optimizers.len()];
 
@@ -309,7 +304,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
                         let tokens = processor
                             .process(
-                                &*get_mut_arcmutex!(self.target),
+                                &*target,
                                 vec![IndexMap::from([
                                     ("role".to_string(), Either::Left("user".to_string())),
                                     ("content".to_string(), Either::Left(prompt.clone())),
@@ -341,10 +336,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     // === PREPARE AND RUN MODEL ==
 
                     // Run the model, ignoring the logits
-                    let _ = get_mut_arcmutex!(self.target).forward_inputs(inputs)?;
+                    let _ = target.forward_inputs(inputs)?;
 
                     // Clear the KV cache
-                    get_mut_arcmutex!(self.target).set_none_cache(true, true);
+                    target.set_none_cache(true, true);
 
                     // === BACKWARD STEP ==
                     #[allow(clippy::cast_possible_truncation)]
@@ -357,7 +352,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         &device,
                     )?;
 
-                    let cached = get_mut_arcmutex!(self.target).take_cached_gating_outputs();
+                    let cached = target.take_cached_gating_outputs();
                     for (layer, (optimizer, output)) in
                         optimizers.iter_mut().zip(cached).enumerate()
                     {

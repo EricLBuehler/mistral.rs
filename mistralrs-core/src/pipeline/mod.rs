@@ -22,7 +22,6 @@ use crate::lora::{LoraConfig, Ordering};
 use crate::{DeviceMapMetadata, TryIntoDType};
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;
-use candle_nn::VarBuilder;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
@@ -512,7 +511,10 @@ pub trait AnyMoePipelineMixin {
     /// Inject the MoE layers
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        _model_ids: Vec<String>,
+        _token: &TokenSource,
+        _revision: Option<String>,
+        _match_regex: &str,
         _config: AnyMoeConfig,
         _dtype: DType,
         _dev: &Device,
@@ -529,17 +531,6 @@ pub trait AnyMoePipelineMixin {
         _token: TokenSource,
         _revision: Option<String>,
     ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
-        unreachable!()
-    }
-    fn load_additional_vbs(
-        &self,
-        _model_ids: Vec<String>,
-        _token: &TokenSource,
-        _revision: Option<String>,
-        _dtype: DType,
-        _dev: &Device,
-        _match_regex: &str,
-    ) -> anyhow::Result<Vec<VarBuilder>> {
         unreachable!()
     }
 }

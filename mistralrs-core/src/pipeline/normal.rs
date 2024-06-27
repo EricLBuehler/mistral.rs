@@ -30,8 +30,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{DType, Device, Tensor, Var};
-use candle_nn::VarBuilder;
+use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -466,38 +465,27 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<candle_nn::VarBuilder>,
+        model_ids: Vec<String>,
+        token: &TokenSource,
+        revision: Option<String>,
+        match_regex: &str,
         config: crate::amoe::AnyMoeConfig,
         dtype: candle_core::DType,
         dev: &Device,
         (prefix, mlp): (String, String),
     ) -> candle_core::Result<()> {
-        self.model
-            .create_anymoe_layers(additional_vbs, config, dtype, dev, (prefix, mlp))
-    }
-    fn amoe_supported(&self) -> bool {
-        self.model.amoe_supported()
-    }
-    fn load_additional_vbs(
-        &self,
-        model_ids: Vec<String>,
-        token: &TokenSource,
-        revision: Option<String>,
-        dtype: DType,
-        dev: &Device,
-        match_regex: &str,
-    ) -> anyhow::Result<Vec<VarBuilder>> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex)?;
+        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(false)
-                .with_token(get_token(token)?)
-                .build()?;
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -516,6 +504,11 @@ impl AnyMoePipelineMixin for NormalPipeline {
             })?;
             vbs.push(vb);
         }
-        Ok(vbs)
+
+        self.model
+            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp))
+    }
+    fn amoe_supported(&self) -> bool {
+        self.model.amoe_supported()
     }
 }
