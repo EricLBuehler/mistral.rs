@@ -15,7 +15,7 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -38,6 +38,7 @@ struct MLP {
     up_proj: QMatMul,
     down_proj: QMatMul,
     act_fn: Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -52,6 +53,7 @@ impl MLP {
             up_proj: QMatMul::Tensor(up_proj.weight().clone()),
             down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
+            params: vec![hidden_sz, intermediate_sz],
         })
     }
 }
@@ -78,6 +80,9 @@ impl MlpLayer for MLP {
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
     }
 }
 
@@ -508,14 +513,33 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
-        (_prefix, _mlp): (String, String),
+        (prefix, mlp): (String, String),
     ) -> Result<()> {
-        for layer in &mut self.layers {
-            layer.mlp = Box::new(MoeMlp::new(vec![layer.mlp.clone()], config, dtype, dev)?);
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        for _ in 0..self.layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate().take(self.layers.len()) {
+                row.push(Box::new(MLP::new(
+                    &Config {
+                        intermediate_size: self.layers[layer].mlp.get_params()[1],
+                        hidden_size: self.layers[layer].mlp.get_params()[0],
+                        ..Default::default()
+                    },
+                    vb.pp(layer).pp(&mlp),
+                )?));
+            }
+        }
+        for (layer, experts) in self.layers.iter_mut().zip(experts) {
+            let mut experts_all = vec![layer.mlp.clone()];
+            experts_all.extend(experts);
+            layer.mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
         }
         Ok(())
     }

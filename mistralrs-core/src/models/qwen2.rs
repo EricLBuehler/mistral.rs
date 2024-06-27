@@ -38,6 +38,7 @@ struct MLP {
     up_proj: QMatMul,
     down_proj: QMatMul,
     act_fn: Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -52,6 +53,7 @@ impl MLP {
             up_proj: QMatMul::Tensor(up_proj.weight().clone()),
             down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
+            params: vec![hidden_sz, intermediate_sz],
         })
     }
 }
@@ -78,6 +80,9 @@ impl MlpLayer for MLP {
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
     }
 }
 

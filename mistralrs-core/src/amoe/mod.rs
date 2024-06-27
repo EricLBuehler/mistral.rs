@@ -91,6 +91,7 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
     fn clone(&self) -> Box<dyn MlpLayer>;
+    fn get_params(&self) -> &[usize];
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -254,5 +255,9 @@ impl MlpLayer for MoeMlp {
             vars: self.vars.clone(),
             gating_output: self.gating_output.clone(),
         })
+    }
+
+    fn get_params(&self) -> &[usize] {
+        self.experts[0].get_params()
     }
 }

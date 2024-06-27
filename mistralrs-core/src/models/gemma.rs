@@ -87,6 +87,7 @@ struct MLP {
     up_proj: QLinear,
     down_proj: QLinear,
     act_fn: candle_nn::Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -101,6 +102,7 @@ impl MLP {
             up_proj: QLinear::from_linear(up_proj),
             down_proj: QLinear::from_linear(down_proj),
             act_fn: cfg.hidden_act()?,
+            params: vec![hidden_sz, intermediate_sz],
         })
     }
 }
@@ -131,6 +133,9 @@ impl MlpLayer for MLP {
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
     }
 }
 

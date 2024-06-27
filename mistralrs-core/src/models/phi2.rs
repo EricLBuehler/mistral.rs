@@ -54,6 +54,7 @@ struct MLP {
     fc1: QLinear,
     fc2: QLinear,
     act: Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -66,6 +67,7 @@ impl MLP {
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
+            params: vec![cfg.hidden_size, cfg.intermediate_size],
         })
     }
 }
@@ -90,6 +92,9 @@ impl MlpLayer for MLP {
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
     }
 }
 

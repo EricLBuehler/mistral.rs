@@ -146,6 +146,7 @@ struct Mlp {
     c_fc1: QMatMul,
     c_fc2: QMatMul,
     c_proj: QMatMul,
+    params: Vec<usize>,
 }
 
 impl Mlp {
@@ -159,6 +160,7 @@ impl Mlp {
             c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
             c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
             c_proj: QMatMul::Tensor(c_proj.weight().clone()),
+            params: vec![h_size, i_size],
         })
     }
 }
@@ -185,6 +187,9 @@ impl MlpLayer for Mlp {
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
     }
 }
 
