@@ -74,20 +74,20 @@ impl CausalSelfAttention {
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
-        println!("before reshape q.shape {:?}", q.shape()); //[1,2975,4096]
+        println!("before reshape q.shape {:?}", q.shape()); 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
         let v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
-        println!("before rotary_emb q.shape {:?}", q.shape()); //[2975,32,128]
+        println!("before rotary_emb q.shape {:?}", q.shape()); 
         //self.rotary_emb
         //    .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-        q = q.transpose(0,1)?.reshape((b_sz,self.num_attention_heads,seq_len,self.head_dim))?;//[1,32,2975,128]
+        q = q.transpose(0,1)?.reshape((b_sz,self.num_attention_heads,seq_len,self.head_dim))?;
         k = k.transpose(0,1)?.reshape((b_sz,self.num_key_value_heads,seq_len,self.head_dim))?;
         q = self.apply_rotary_emb(&q, seqlen_offsets[0])?;//[1,32,2975,128]
         k = self.apply_rotary_emb(&k, seqlen_offsets[0])?;
-        q = q.transpose(1,2)?.reshape((b_sz*seq_len,self.num_attention_heads,self.head_dim))?;//[2975,32,128]
+        q = q.transpose(1,2)?.reshape((b_sz*seq_len,self.num_attention_heads,self.head_dim))?;
         k = k.transpose(1,2)?.reshape((b_sz*seq_len,self.num_key_value_heads,self.head_dim))?;
         println!("after rotary_emb q.shape {:?}", q.shape()); //[2975,32,128]
         if q.rank() == 3 {

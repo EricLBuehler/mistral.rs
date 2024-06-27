@@ -250,11 +250,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 )?
                 .downcast::<text_models_inputs_processor::ModelInputs>()
                 .expect("Downcast failed.");
-            println!("input_ids: {}", input_ids);
-            println!("seqlen_offsets: {:?}", seqlen_offsets);
-            println!("seqlen_offsets_kernel: {}", seqlen_offsets_kernel);
-            println!("context_lens: {:?}", context_lens);
-            println!("position_ids: {:?}", position_ids);
             return Ok(Box::new(ModelInputs {
                 input_ids,
                 seqlen_offsets,
@@ -290,17 +285,9 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .split(&detokenized)
                 .map(|span| &detokenized[span.range()])
                 .collect::<Vec<_>>();
-            /*
-            let prompt_chunks = tokenizer
-                .encode_batch(splits, true)
-                .map_err(anyhow::Error::msg)?
-                .into_iter()
-                .map(|enc| enc.get_ids().to_vec())
-                .collect::<Vec<_>>();
-            */
             let prompt_chunks = splits
                 .iter()
-                .map(|s| {
+                .map(|s| { // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
                         .encode(*s, true)
                         .unwrap()
@@ -378,11 +365,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
         } else {
             get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
         };
-        println!("input_ids: {:?}", input.squeeze(0)?.to_vec1::<i64>()?);
-        println!("seqlen_offsets: {:?}", positions);
-        println!("seqlen_offsets_kernel: {}", positions_kernel);
-        println!("context_lens: {:?}", context_lens);
-        println!("position_ids: {:?}", position_ids);
         Ok(Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,

@@ -23,7 +23,7 @@ pub trait VisionModelLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
+        use_flash_attn: bool,   
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
