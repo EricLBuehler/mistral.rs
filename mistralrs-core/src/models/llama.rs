@@ -516,24 +516,21 @@ impl AnyMoeBaseModelMixin for Llama {
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (hidden_size, intermediate_size),
                             "c_fc1"
                         );
                         let c_fc2_delta = get_delta_from_lora_ab!(
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (hidden_size, intermediate_size),
                             "c_fc2"
                         );
                         let c_proj_delta = get_delta_from_lora_ab!(
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (intermediate_size, hidden_size),
                             "c_proj"
                         );
 

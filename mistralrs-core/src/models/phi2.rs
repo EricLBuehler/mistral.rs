@@ -541,16 +541,14 @@ impl AnyMoeBaseModelMixin for Model {
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (hidden_size, intermediate_size),
                             "fc1"
                         );
                         let fc2_delta = get_delta_from_lora_ab!(
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (intermediate_size, hidden_size),
                             "fc2"
                         );
 

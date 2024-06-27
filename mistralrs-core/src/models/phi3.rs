@@ -540,16 +540,14 @@ impl AnyMoeBaseModelMixin for Model {
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (hidden_size, 2 * intermediate_size),
                             "gate_up_proj"
                         );
                         let down_proj_delta = get_delta_from_lora_ab!(
                             vb_mlp,
                             rank,
                             alpha,
-                            hidden_size,
-                            intermediate_size,
+                            (hidden_size, intermediate_size),
                             "down_proj"
                         );
 
