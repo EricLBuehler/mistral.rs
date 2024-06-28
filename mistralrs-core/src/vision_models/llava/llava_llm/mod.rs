@@ -1,12 +1,14 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::pipeline::{IsqModel, NormalModel};
 
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
-    fn embed(&self, x: &Tensor) -> Result<Tensor>;
+    fn embed(&self, input_ids: &Tensor) -> Result<Tensor>;
     fn forward_input_embed(
         &self,
-        input_embed: &Tensor,
+        input_ids: &Tensor, // only for masking
+        input_embed: Tensor, // we don't want to clone, so we pass it in
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -45,3 +47,7 @@ impl OrdinaryRoPE {
     }
 }
 pub(crate) mod llama;
+pub(crate) mod mistral;
+
+pub use llama::Llama;
+pub use mistral::Model as Mistral;

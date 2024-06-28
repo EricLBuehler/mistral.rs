@@ -30,6 +30,15 @@ pub fn get_anyres_image_grid_shape(
     (width / patch_size, height / patch_size)
 }
 
+pub fn get_num_samples(
+    image_size: (u32, u32),
+    grid_pinpoints: &[(u32, u32)],
+    crop_size: (u32, u32),
+) -> u32 {
+    let (width, height) = select_best_resolution(image_size, grid_pinpoints);
+    width / crop_size.0 * height / crop_size.1 + 1
+}
+
 pub fn select_best_resolution(
     original_size: (u32, u32),
     possible_resolutions: &[(u32, u32)],
@@ -61,6 +70,24 @@ pub fn select_best_resolution(
         }
     }
     best_fit
+}
+
+fn calculate_unpad(size: (u32, u32), original_size: (u32, u32)) -> (u32, u32) {
+    let (original_width, original_height) = original_size;
+    let (current_width, current_height) = size;
+    let original_aspect_ratio = (original_width as f32) / (original_height as f32);
+    let current_aspect_ratio = (current_width as f32) / (current_height as f32);
+    if original_aspect_ratio > current_aspect_ratio {
+        let scale_factor = (current_width as f32) / (original_width as f32);
+        let new_height = (original_height as f32 * scale_factor).floor() as u32;
+        let padding = (current_height - new_height) / 2;
+        (current_width, current_height - 2 * padding) // as it is in unpad_image
+    } else {
+        let scale_factor = (current_height as f32) / (original_height as f32);
+        let new_width = (original_width as f32 * scale_factor).floor() as u32;
+        let padding = (current_width - new_width) / 2;
+        (current_width - 2 * padding, current_height)
+    }
 }
 
 fn resize_and_pad_image(image: &DynamicImage, target_resolution: (u32, u32)) -> DynamicImage {
@@ -100,16 +127,16 @@ fn resize_and_pad_image(image: &DynamicImage, target_resolution: (u32, u32)) -> 
     new_image
 }
 
-fn divide_to_patches(image: &DynamicImage, crop_size: (u32, u32)) -> Vec<DynamicImage> {
+fn divide_to_samples(image: &DynamicImage, crop_size: (u32, u32)) -> Vec<DynamicImage> {
     let (width, height) = image.dimensions();
-    let mut patches = Vec::new();
+    let mut samples = Vec::new();
     for y in (0..height).step_by(crop_size.1 as usize) {
         for x in (0..width).step_by(crop_size.0 as usize) {
             let patch = image.crop_imm(x, y, crop_size.0, crop_size.1);
-            patches.push(patch);
+            samples.push(patch);
         }
     }
-    patches
+    samples
 }
 
 pub fn calculate_middle(image_size: (u32, u32), center_size: (u32, u32)) -> (u32, u32) {
@@ -190,7 +217,11 @@ impl InputsProcessor for LLaVANextInputProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, image_sizes, num_img_tokens, n_images) = if is_prompt
+        let crop_size = (
+            *config.crop_size.as_ref().unwrap().get("width").unwrap(),
+            *config.crop_size.as_ref().unwrap().get("height").unwrap(),
+        );
+        let (pixel_values, image_sizes, num_img_tokens, num_image_samples, n_images) = if is_prompt
             && input_seqs
                 .iter()
                 .map(|seq| seq.images().is_some())
@@ -199,6 +230,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
+            let mut num_image_samples_accum = Vec::new();
             let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
@@ -211,16 +243,29 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
-                } = self.preprocess(imgs, config, device)?;
+                } = self.preprocess(imgs.clone(), config, device)?;
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
+                let num_img_samples = imgs
+                    .iter()
+                    .map(|img| {
+                        let original_size = img.dimensions();
+                        get_num_samples(
+                            original_size,
+                            &self.model_config.image_grid_pinpoints,
+                            crop_size,
+                        ) as usize
+                    })
+                    .collect::<Vec<_>>();
+                num_image_samples_accum.push(num_img_samples);
             }
             (
                 Some(Tensor::cat(&pixel_values_accum, 0)?),
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
+                Some(num_image_samples_accum),
                 n_images,
             )
         } else {
@@ -255,10 +300,25 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 pixel_values: None,
                 model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
                     image_sizes: None,
-                    num_image_token: None,
+                    num_image_tokens: None,
+                    num_image_samples: None,
                 }),
             }));
         };
+
+        let num_image_tokens_flat = num_img_tokens
+            .clone()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        let num_image_samples = num_image_samples
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
 
         let mut toks = Vec::new();
         let detokenized = tokenizer
@@ -334,7 +394,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             let mut input_ids: Vec<i64> = Vec::new();
             for item in prompt_chunks
                 .iter()
-                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                .map(|x| x.to_vec())
                 .interleave(image_ids_pad)
             {
                 input_ids.extend(item);
@@ -371,18 +431,24 @@ impl InputsProcessor for LLaVANextInputProcessor {
             pixel_values,
             model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
                 image_sizes,
-                num_image_token: Some(self.get_num_image_tokens()),
+                num_image_tokens: Some(num_image_tokens_flat),
+                num_image_samples: Some(num_image_samples),
             }),
         }))
     }
 }
 
 impl LLaVANextInputProcessor {
-    fn get_num_image_tokens(&self) -> usize {
-        let patch_size = self.model_config.vision_config.patch_size;
-        let image_size = self.model_config.vision_config.image_size;
-        let patch_per_side = image_size / patch_size;
-        patch_per_side * patch_per_side + (patch_per_side * 2) * (patch_per_side * 2 + 1)
+    fn get_num_image_tokens(
+        &self,
+        image_size: (u32, u32),
+        grid_pinpoints: &[(u32, u32)],
+        patch_size: u32,
+    ) -> usize {
+        let anyres_grid_shape = get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size);
+        let patch_per_side = self.model_config.vision_config.image_size / patch_size as usize;
+        let unpad_shape = calculate_unpad(anyres_grid_shape, image_size);
+        patch_per_side * patch_per_side + (unpad_shape.0 as usize + 1) * (unpad_shape.1 as usize)
     }
     fn resize(&self, image: &DynamicImage, size: u32, filter: FilterType) -> DynamicImage {
         let (width, height) = image.dimensions();
@@ -456,15 +522,15 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         let filter = config.resampling.to_filter()?;
         let image_original_resize =
             image.resize_exact(image_size as u32, image_size as u32, filter);
-        let mut patches = vec![image_original_resize];
-        for patch in divide_to_patches(
+        let mut samples = vec![image_original_resize];
+        for patch in divide_to_samples(
             &image_padded,
             (
                 *config.crop_size.as_ref().unwrap().get("width").unwrap(),
                 *config.crop_size.as_ref().unwrap().get("height").unwrap(),
             ),
         ) {
-            patches.push(patch);
+            samples.push(patch);
         }
         let dtype = match self.model_config.torch_dtype.as_str() {
             "float16" => DType::F16,
@@ -478,8 +544,8 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
                 image.clone()
             };
             image = if config.do_center_crop.unwrap_or(true) {
-                let crop_width = *config.crop_size.as_ref().unwrap().get("width").unwrap() as u32;
-                let crop_height = *config.crop_size.as_ref().unwrap().get("height").unwrap() as u32;
+                let crop_width = *config.crop_size.as_ref().unwrap().get("width").unwrap();
+                let crop_height = *config.crop_size.as_ref().unwrap().get("height").unwrap();
                 self.center_crop(&image, (crop_width, crop_height))
             } else {
                 image
@@ -510,7 +576,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             }
             Ok(pixel_value)
         };
-        let pixel_values = patches
+        let pixel_values = samples
             .iter()
             .map(process_one_image)
             .collect::<Result<Vec<Tensor>>>()?;
@@ -519,8 +585,12 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         Ok(image_processor::PreprocessedImages {
             pixel_values,
             pixel_attention_mask: None,
-            image_sizes: Some((image_size, image_size)),
-            num_img_tokens: Some(vec![self.get_num_image_tokens()]),
+            image_sizes: Some((original_size.0 as usize, original_size.1 as usize)),
+            num_img_tokens: Some(vec![self.get_num_image_tokens(
+                original_size,
+                &self.model_config.image_grid_pinpoints,
+                self.model_config.vision_config.patch_size as u32,
+            )]),
         })
     }
 }

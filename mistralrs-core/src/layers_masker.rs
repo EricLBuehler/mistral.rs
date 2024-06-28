@@ -76,31 +76,31 @@ impl CausalMasker {
         return Ok(k_cache_1.dims()[2]);
     }
 
-    fn _make_causal_mask_as_attn_bias(
+    pub fn make_causal_mask_as_attn_bias(
         &self,
-        b_sz: usize,
-        tgt_len: usize,
-        device: &Device,
+        input_ids: &Tensor,
         cache: &[Option<(Tensor, Tensor)>],
         dtype: DType,
         n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
         let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let (b_sz, tgt_len) = input_ids.dims2()?;
         if tgt_len == 1 {
             return Ok(None);
         }
 
         let causal_mask = {
-            let mask = self.make_mask(tgt_len, past_kv_len, device)?;
+            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let mask = mask
                 .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
                 .to_dtype(DType::U8)?;
             Some(mask)
         };
 
-        let zero = Tensor::new(0.0f32, device)?;
+        let zero = Tensor::new(0.0f32, input_ids.device())?;
         let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask = mask.broadcast_as((b_sz, n_attn_heads, tgt_len, tgt_len + past_kv_len))?;
+            let mask =
+                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
             let mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
@@ -116,30 +116,6 @@ impl CausalMasker {
             None
         };
         Ok(mask)
-    }
-
-    pub fn make_causal_mask_as_attn_bias(
-        &self,
-        input_ids: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
-        dtype: DType,
-        n_attn_heads: usize,
-    ) -> Result<Option<Tensor>> {
-        let (b_sz, tgt_len) = input_ids.dims2()?;
-        let device = input_ids.device();
-        self._make_causal_mask_as_attn_bias(b_sz, tgt_len, device, cache, dtype, n_attn_heads)
-    }
-
-    pub fn make_causal_mask_as_attn_bias_with_embed_tensor(
-        &self,
-        embed: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
-        dtype: DType,
-        n_attn_heads: usize,
-    ) -> Result<Option<Tensor>> {
-        let (b_sz, tgt_len, _) = embed.dims3()?;
-        let device = embed.device();
-        self._make_causal_mask_as_attn_bias(b_sz, tgt_len, device, cache, dtype, n_attn_heads)
     }
 
     pub fn make_causal_mask_with_sliding_window_as_attn_bias(

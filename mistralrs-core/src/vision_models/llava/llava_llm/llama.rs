@@ -1,5 +1,9 @@
 //LLaMA without fused RoPE
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments
+)]
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
@@ -55,10 +59,12 @@ impl CausalSelfAttention {
         }
         let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let mut k = k
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?.contiguous()?;
+            .transpose(1, 2)?
+            .contiguous()?;
         q = OrdinaryRoPE::forward(&q, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
         k = OrdinaryRoPE::forward(&k, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
         let v = v
@@ -130,7 +136,7 @@ impl Mlp {
         if matches!(self.c_fc1, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
-        let x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
+        x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
             * MatMul.qmatmul(&x, &self.c_fc2)?)?;
         let mut res = MatMul.qmatmul(&x, &self.c_proj)?;
         if matches!(self.c_fc1, QMatMul::QTensor(_)) {
@@ -173,8 +179,8 @@ impl Block {
         rope_parameters: (&Tensor, &Tensor),
     ) -> Result<Tensor> {
         let residual = x;
-        let x = self.rms_1.forward(x)?;
-        let x = (self.attn.forward(
+        let mut x = self.rms_1.forward(x)?;
+        x = (self.attn.forward(
             &x,
             attention_mask,
             seqlen_offsets,
@@ -184,7 +190,7 @@ impl Block {
             rope_parameters,
         )? + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 
@@ -259,8 +265,8 @@ impl Llama {
                 (&self.rope_parameters.0, &self.rope_parameters.1),
             )?;
         }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
@@ -277,7 +283,7 @@ impl Llama {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        //  let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        //  let vb = vb.set_dtype(mapper.get_min_dtype()?); this one is dangerous! copy the entire weights, occupy more GPU memory!
 
         let wte = embedding(
             cfg.vocab_size,
@@ -295,7 +301,7 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        
+
         let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
             .into_iter()
             .map(|i| {
@@ -392,20 +398,21 @@ impl NormalModel for Llama {
 }
 
 impl LLaVALLM for Llama {
-    fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        self.wte.forward(x)
+    fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.wte.forward(input_ids)
     }
     fn forward_input_embed(
         &self,
-        input_embed: &Tensor,
+        input_ids: &Tensor,
+        input_embed: Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mut x = input_embed.clone();
+        let mut x = input_embed;
         let mut cache = self.kv_cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias_with_embed_tensor(
-            &x,
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
             &cache,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
@@ -422,8 +429,8 @@ impl LLaVALLM for Llama {
                 (&self.rope_parameters.0, &self.rope_parameters.1),
             )?;
         }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }

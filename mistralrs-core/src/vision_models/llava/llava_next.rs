@@ -1,4 +1,8 @@
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments
+)]
 use candle_core::quantized::QMatMul;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, Activation, Linear, VarBuilder};
@@ -12,10 +16,11 @@ use crate::pipeline::VisionModel;
 use crate::serde_default_fn;
 
 use crate::models::llama::Config as LLaMAConfig;
+use crate::models::mistral::Config as MistralConfig;
 use crate::vision_models::clip::{Activation as ClipActivation, ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava_next_inputs_processor::get_anyres_image_grid_shape;
 
-use super::llava_llm::{self, LLaVALLM};
+use super::llava_llm::{LLaVALLM, Llama, Mistral};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -26,7 +31,6 @@ pub struct Config {
     pub vision_config: LLaVAVisionConfig,
     pub vision_feature_layer: isize,
     pub vision_feature_select_strategy: String,
-    pub vocab_size: usize,
     #[serde(default = "default_use_flash_attn")]
     pub use_flash_attn: bool,
 }
@@ -52,6 +56,9 @@ pub struct LLaVATextConfig {
     pub rms_norm_eps: f64,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
+    #[serde(default = "default_vocab_size")]
+    pub vocab_size: usize,
+    pub sliding_window: Option<usize>,
 }
 
 serde_default_fn!(usize, default_num_hidden_layers, 32);
@@ -61,6 +68,7 @@ serde_default_fn!(usize, default_max_length, 4096);
 serde_default_fn!(usize, default_num_attention_heads, 32);
 serde_default_fn!(usize, default_num_key_value_heads, 32);
 serde_default_fn!(f32, default_rope_theta, 10000.0);
+serde_default_fn!(usize, default_vocab_size, 32064);
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct LLaVAVisionConfig {
@@ -77,7 +85,7 @@ impl Config {
         LLaMAConfig {
             hidden_size: self.text_config.hidden_size,
             intermediate_size: self.text_config.intermediate_size,
-            vocab_size: self.vocab_size,
+            vocab_size: self.text_config.vocab_size,
             num_hidden_layers: self.text_config.num_hidden_layers,
             num_attention_heads: self.text_config.num_attention_heads,
             num_key_value_heads: self.text_config.num_key_value_heads,
@@ -85,6 +93,23 @@ impl Config {
             rms_norm_eps: self.text_config.rms_norm_eps,
             rope_theta: self.text_config.rope_theta,
             max_position_embeddings: self.text_config.max_position_embeddings,
+        }
+    }
+
+    fn to_mistral_config(&self) -> MistralConfig {
+        MistralConfig {
+            vocab_size: self.text_config.vocab_size,
+            hidden_size: self.text_config.hidden_size,
+            intermediate_size: self.text_config.hidden_size,
+            num_hidden_layers: self.text_config.num_hidden_layers,
+            num_attention_heads: self.text_config.num_attention_heads,
+            num_key_value_heads: self.text_config.num_key_value_heads,
+            hidden_act: Activation::Silu, // as it is in mistralai/Mistral-7B-Instruct-v0.2
+            max_position_embeddings: self.text_config.max_position_embeddings,
+            rms_norm_eps: self.text_config.rms_norm_eps,
+            rope_theta: self.text_config.rope_theta as f64,
+            sliding_window: self.text_config.sliding_window,
+            use_flash_attn: self.use_flash_attn,
         }
     }
 
@@ -212,16 +237,26 @@ impl Model {
             .get(&[config.text_config.hidden_size], "image_newline")?
             .to_device(&device)?;
 
-        let llm = match config.text_config.model_type.as_str() {
+        let llm: Box<dyn LLaVALLM> = match config.text_config.model_type.as_str() {
             "llama" => {
                 let llama_config = config.to_llama_config();
-                let llama = llava_llm::llama::Llama::new(
+                let llama = Llama::new(
                     &llama_config,
                     vb.pp("language_model"),
                     is_gptx,
                     normal_loading_metadata,
                 )?;
                 Box::new(llama)
+            }
+            "mistral" => {
+                let mistral_config = config.to_mistral_config();
+                let mistral = Mistral::new(
+                    &mistral_config,
+                    vb.pp("language_model"),
+                    is_gptx,
+                    normal_loading_metadata,
+                )?;
+                Box::new(mistral)
             }
             _ => {
                 bail!("Unsupported model type: {}", config.text_config.model_type);
@@ -243,9 +278,9 @@ impl Model {
         Ok(image_features)
     }
 
-    fn unpad_image(&self, tensor: &Tensor, original_size: &(u32, u32)) -> Result<Tensor> {
+    fn unpad_image(&self, tensor: &Tensor, original_size: (u32, u32)) -> Result<Tensor> {
         assert_eq!(tensor.dims().len(), 3);
-        let (original_width, original_height) = *original_size;
+        let (original_width, original_height) = original_size;
         let tensor_dims = tensor.dims();
         let current_height = tensor_dims[1];
         let current_width = tensor_dims[2];
@@ -255,7 +290,7 @@ impl Model {
             let scale_factor = (current_width as f32) / (original_width as f32);
             let new_height = (original_height as f32 * scale_factor).floor() as usize;
             let padding = (current_height - new_height) / 2;
-            tensor.i((.., padding..current_width - padding, ..))
+            tensor.i((.., padding..current_height - padding, ..))
         } else {
             let scale_factor = (current_height as f32) / (original_height as f32);
             let new_width = (original_width as f32 * scale_factor).floor() as usize;
@@ -264,11 +299,14 @@ impl Model {
         }
     }
 
+    
+
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
         input_ids: &Tensor, //[1,seq_len]
-        images: &Tensor, //[sample_per_image*image_num,chanel,width,height] for LLaVANext, we fix aspect_ratio_setting to 'anyres', (this is akin to python Transformer). Hence sampler_per_image is 5
-        num_image_token: usize,
+        images: &Tensor,    //[sum of samples of all images,chanel,width,height]
+        num_image_tokens: Vec<usize>,
+        num_image_samples: Vec<usize>,
         image_sizes: &[(u32, u32)],
     ) -> Result<Tensor> {
         let image_indexes = input_ids
@@ -283,11 +321,12 @@ impl Model {
             .collect::<Result<Vec<i64>>>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
-        let image_features = self.encode_images(images)?; //[sample_per_image*image_num,hidden_size]
-        let image_nums = images.shape().dims()[0] / 5;
+        let image_features = self.encode_images(images)?; //[sum of samples of all images,hidden_size]
         let mut image_features_vec = Vec::new();
-        for i in 0..image_nums {
-            image_features_vec.push(image_features.i(i * 5..(i + 1) * 5)?);
+        let mut index = 0;
+        for i in 0..num_image_samples.len() {
+            image_features_vec.push(image_features.i(index..index + num_image_samples[i])?);
+            index += num_image_samples[i];
         }
         let image_features_vec = image_features_vec
             .iter()
@@ -315,7 +354,7 @@ impl Model {
                     .permute((4, 0, 2, 1, 3))?
                     .flatten(1, 2)?
                     .flatten(2, 3)?;
-                new_image_feature = self.unpad_image(&new_image_feature, &image_size)?;
+                new_image_feature = self.unpad_image(&new_image_feature, image_size)?;
                 let new_image_feature_dims = new_image_feature.dims();
                 let image_new_line = self
                     .image_newline
@@ -334,7 +373,8 @@ impl Model {
             result = result.slice_assign(
                 &[
                     &(0usize..1usize),
-                    &(*image_index as usize..*image_index as usize + num_image_token),
+                    &(*image_index as usize
+                        ..*image_index as usize + num_image_tokens[(image_id - 1) as usize]),
                     &(..),
                 ],
                 &image_features_vec[(image_id - 1) as usize],
@@ -353,7 +393,8 @@ impl Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_sizes: Option<Vec<(u32, u32)>>,
-        num_image_token: Option<usize>,
+        num_image_tokens: Option<Vec<usize>>,
+        num_image_samples: Option<Vec<usize>>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -364,19 +405,21 @@ impl Model {
             let input_embeds = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 pixel_values,
-                num_image_token.unwrap(),
+                num_image_tokens.unwrap(),
+                num_image_samples.unwrap(),
                 &image_sizes.unwrap(),
             )?;
             self.llm.forward_input_embed(
-                &input_embeds,
-                &seqlen_offsets,
+                input_ids,
+                input_embeds,
+                seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
             )
         } else {
             self.llm.forward(
                 input_ids,
-                &seqlen_offsets,
+                seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
@@ -386,8 +429,9 @@ impl Model {
 }
 
 pub(crate) struct LLaVANextVisionSpecificArgs {
-    pub image_sizes: Option<Vec<(usize, usize)>>,
-    pub num_image_token: Option<usize>,
+    pub image_sizes: Option<Vec<(usize, usize)>>, // width, height
+    pub num_image_tokens: Option<Vec<usize>>,     // number of image tokens for each image
+    pub num_image_samples: Option<Vec<usize>>,    // number of image samples for each image
 }
 
 impl IsqModel for Model {
@@ -410,26 +454,23 @@ impl VisionModel for Model {
     ) -> candle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,
-            num_image_token,
+            num_image_tokens,
+            num_image_samples,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
-        let image_sizes = if image_sizes.is_some() {
-            Some(
-                image_sizes
-                    .unwrap()
-                    .iter()
-                    .map(|(w, h)| (*w as u32, *h as u32))
-                    .collect(),
-            )
-        } else {
-            None
-        };
+        let image_sizes = image_sizes.map(|image_sizes| {
+            image_sizes
+                .iter()
+                .map(|(w, h)| (*w as u32, *h as u32))
+                .collect::<Vec<_>>()
+        });
         self.forward_inputs(
             input_ids,
             pixel_values,
             image_sizes,
-            num_image_token,
+            num_image_tokens,
+            num_image_samples,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
