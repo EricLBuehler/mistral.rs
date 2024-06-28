@@ -17,143 +17,15 @@ use crate::pipeline::{
 };
 use crate::sequence::Sequence;
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
+use crate::vision_models::llava_next::Config as LLaVANextConfig;
 use crate::vision_models::llava_next::LLaVANextVisionSpecificArgs;
 use crate::vision_models::preprocessor_config::{PreProcessorConfig, ToFilter};
 use crate::vision_models::{preprocessor_config, ModelInputs};
 
-pub fn get_anyres_image_grid_shape(
-    image_size: (u32, u32),
-    grid_pinpoints: &[(u32, u32)],
-    patch_size: u32,
-) -> (u32, u32) {
-    let (width, height) = select_best_resolution(image_size, grid_pinpoints);
-    (width / patch_size, height / patch_size)
-}
-
-pub fn get_num_samples(
-    image_size: (u32, u32),
-    grid_pinpoints: &[(u32, u32)],
-    crop_size: (u32, u32),
-) -> u32 {
-    let (width, height) = select_best_resolution(image_size, grid_pinpoints);
-    width / crop_size.0 * height / crop_size.1 + 1
-}
-
-pub fn select_best_resolution(
-    original_size: (u32, u32),
-    possible_resolutions: &[(u32, u32)],
-) -> (u32, u32) {
-    let (original_width, original_height) = original_size;
-    let mut best_fit = (0, 0);
-    let original_width_f = original_width as f32;
-    let original_height_f = original_height as f32;
-    let mut max_effective_resolution = 0_u32;
-    let mut min_wasted_resolution = u32::MAX;
-    for (width, height) in possible_resolutions {
-        let width_f = *width as f32;
-        let height_f = *height as f32;
-        let scale = (width_f / original_width_f).min(height_f / original_height_f);
-        let (downscaled_width, downscaled_height) = (
-            (original_width_f * scale) as u32,
-            (original_height_f * scale) as u32,
-        );
-        let effective_resolution =
-            std::cmp::min((*width) * (*height), downscaled_width * downscaled_height);
-        let wasted_resolution = (*width) * (*height) - effective_resolution;
-        if effective_resolution > max_effective_resolution
-            || (effective_resolution == max_effective_resolution
-                && wasted_resolution < min_wasted_resolution)
-        {
-            best_fit = (*width, *height);
-            max_effective_resolution = effective_resolution;
-            min_wasted_resolution = wasted_resolution;
-        }
-    }
-    best_fit
-}
-
-fn calculate_unpad(size: (u32, u32), original_size: (u32, u32)) -> (u32, u32) {
-    let (original_width, original_height) = original_size;
-    let (current_width, current_height) = size;
-    let original_aspect_ratio = (original_width as f32) / (original_height as f32);
-    let current_aspect_ratio = (current_width as f32) / (current_height as f32);
-    if original_aspect_ratio > current_aspect_ratio {
-        let scale_factor = (current_width as f32) / (original_width as f32);
-        let new_height = (original_height as f32 * scale_factor).floor() as u32;
-        let padding = (current_height - new_height) / 2;
-        (current_width, current_height - 2 * padding) // as it is in unpad_image
-    } else {
-        let scale_factor = (current_height as f32) / (original_height as f32);
-        let new_width = (original_width as f32 * scale_factor).floor() as u32;
-        let padding = (current_width - new_width) / 2;
-        (current_width - 2 * padding, current_height)
-    }
-}
-
-fn resize_and_pad_image(image: &DynamicImage, target_resolution: (u32, u32)) -> DynamicImage {
-    let (original_width, original_height) = image.dimensions();
-    let original_width_f = original_width as f32;
-    let original_height_f = original_height as f32;
-    let (target_width, target_height) = target_resolution;
-    let target_width_f = target_width as f32;
-    let target_height_f = target_height as f32;
-    let scale_w = target_width_f / original_width_f;
-    let scale_h = target_height_f / original_height_f;
-    let (new_width, new_height) = if scale_w < scale_h {
-        (
-            target_width,
-            min((original_height_f * scale_w).ceil() as u32, target_height),
-        )
-    } else {
-        (
-            min((original_width_f * scale_h).ceil() as u32, target_width),
-            target_height,
-        )
-    };
-    let resized_image = image.resize_exact(
-        new_width,
-        new_height,
-        image::imageops::FilterType::CatmullRom,
-    );
-    let mut new_image = DynamicImage::new_rgb8(target_width, target_height);
-    let (paste_x, paste_y) =
-        calculate_middle((target_width, target_height), (new_width, new_height));
-    overlay(
-        &mut new_image,
-        &resized_image,
-        paste_x.into(),
-        paste_y.into(),
-    );
-    new_image
-}
-
-fn divide_to_samples(image: &DynamicImage, crop_size: (u32, u32)) -> Vec<DynamicImage> {
-    let (width, height) = image.dimensions();
-    let mut samples = Vec::new();
-    for y in (0..height).step_by(crop_size.1 as usize) {
-        for x in (0..width).step_by(crop_size.0 as usize) {
-            let patch = image.crop_imm(x, y, crop_size.0, crop_size.1);
-            samples.push(patch);
-        }
-    }
-    samples
-}
-
-pub fn calculate_middle(image_size: (u32, u32), center_size: (u32, u32)) -> (u32, u32) {
-    let (width, height) = image_size;
-    let (center_width, center_height) = center_size;
-    let left = if width <= center_width {
-        0
-    } else {
-        ((width as f32 - center_width as f32) / 2.0).ceil() as u32
-    };
-    let top = if height <= center_height {
-        0
-    } else {
-        ((height as f32 - center_height as f32) / 2.0).ceil() as u32
-    };
-    (left, top)
-}
+use super::utils::{
+    calculate_middle, calculate_unpad, divide_to_samples, get_anyres_image_grid_shape,
+    get_num_samples, resize_and_pad_image, select_best_resolution,
+};
 
 pub struct LLaVANextProcessor {
     inputs_processor: Arc<LLaVANextInputProcessor>,
@@ -173,13 +45,13 @@ impl Processor for LLaVANextProcessor {
 
 impl LLaVANextProcessor {
     pub fn new(config: &str) -> Self {
-        let model_config = serde_json::from_str::<crate::vision_models::llava_next::Config>(config)
-            .expect("Failed to parse model config.");
+        let model_config =
+            serde_json::from_str::<LLaVANextConfig>(config).expect("Failed to parse model config.");
         let image_tag_splitter =
             Regex::new(r"<\|image_\d+\|>").expect("Failed to compile split regex.");
         let inputs_processor = Arc::new(LLaVANextInputProcessor {
             image_tag_splitter,
-            model_config,
+            model_config: model_config.clone(),
         });
         Self { inputs_processor }
     }
@@ -188,6 +60,20 @@ impl LLaVANextProcessor {
 pub struct LLaVANextInputProcessor {
     image_tag_splitter: Regex,
     model_config: crate::vision_models::llava_next::Config,
+}
+
+impl LLaVANextInputProcessor {
+    fn get_num_image_tokens(
+        &self,
+        image_size: (u32, u32),
+        grid_pinpoints: &[(u32, u32)],
+        patch_size: u32,
+    ) -> usize {
+        let anyres_grid_shape = get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size);
+        let patch_per_side = self.model_config.vision_config.image_size / patch_size as usize;
+        let unpad_shape = calculate_unpad(anyres_grid_shape, image_size);
+        patch_per_side * patch_per_side + (unpad_shape.0 as usize + 1) * (unpad_shape.1 as usize)
+    }
 }
 
 // Copy from phi3_inputs_processor. different is (1) calculate of num_image_token (2) process_anyres_image (3)image_ids_pad
@@ -438,19 +324,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
     }
 }
 
-impl LLaVANextInputProcessor {
-    fn get_num_image_tokens(
-        &self,
-        image_size: (u32, u32),
-        grid_pinpoints: &[(u32, u32)],
-        patch_size: u32,
-    ) -> usize {
-        let anyres_grid_shape = get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size);
-        let patch_per_side = self.model_config.vision_config.image_size / patch_size as usize;
-        let unpad_shape = calculate_unpad(anyres_grid_shape, image_size);
-        patch_per_side * patch_per_side + (unpad_shape.0 as usize + 1) * (unpad_shape.1 as usize)
-    }
-    fn resize(&self, image: &DynamicImage, size: u32, filter: FilterType) -> DynamicImage {
+struct LLaVANextImageProcessor;
+
+impl LLaVANextImageProcessor {
+    fn resize(image: &DynamicImage, size: u32, filter: FilterType) -> DynamicImage {
         let (width, height) = image.dimensions();
         if width == size && height == size {
             image.clone()
@@ -470,30 +347,75 @@ impl LLaVANextInputProcessor {
         }
     }
 
-    fn center_crop(&self, image: &DynamicImage, crop_size: (u32, u32)) -> DynamicImage {
+    fn center_crop(image: &DynamicImage, crop_size: (u32, u32)) -> DynamicImage {
         let (width, height) = image.dimensions();
         let (left, top) = calculate_middle((width, height), crop_size);
         image.crop_imm(left, top, crop_size.0, crop_size.1)
     }
 
-    fn rescale(&self, tensor: &Tensor, rescale_factor: f64) -> Result<Tensor> {
+    fn rescale(tensor: &Tensor, rescale_factor: f64) -> Result<Tensor> {
         tensor.affine(rescale_factor, 0.0)
     }
 
-    fn to_tensor(&self, image: &DynamicImage, device: &Device) -> Result<Tensor> {
+    fn to_tensor(image: &DynamicImage, device: &Device) -> Result<Tensor> {
         let img = image.to_rgb8().into_raw();
         let (width, height) = image.dimensions();
         Tensor::from_vec(img, (height as usize, width as usize, 3), device)?.to_dtype(DType::F32)
     }
 
-    fn normalize(&self, tensor: &Tensor, image_mean: &[f32], image_std: &[f32]) -> Result<Tensor> {
+    fn normalize(tensor: &Tensor, image_mean: &[f32], image_std: &[f32]) -> Result<Tensor> {
         let mean = Tensor::from_slice(image_mean, (3,), &Device::Cpu)?;
         let std = Tensor::from_slice(image_std, (3,), &Device::Cpu)?;
         tensor.broadcast_sub(&mean)?.broadcast_div(&std)
     }
 
-    fn to_channel_dimension_format(&self, tensor: &Tensor) -> Result<Tensor> {
+    fn to_channel_dimension_format(tensor: &Tensor) -> Result<Tensor> {
         tensor.permute((2, 0, 1))
+    }
+    pub fn process_one_image(
+        image: &DynamicImage,
+        preprocessor_config: &PreProcessorConfig,
+        resize_size: u32,
+        filter: FilterType,
+        dtype: DType,
+        device: &Device,
+        image_mean: &[f32],
+        image_std: &[f32],
+    ) -> Result<Tensor> {
+        let mut image = if preprocessor_config.do_resize.unwrap_or(true) {
+            Self::resize(image, resize_size as u32, filter)
+        } else {
+            image.clone()
+        };
+        image = if preprocessor_config.do_center_crop.unwrap_or(true) {
+            let crop_width = *preprocessor_config
+                .crop_size
+                .as_ref()
+                .unwrap()
+                .get("width")
+                .unwrap();
+            let crop_height = *preprocessor_config
+                .crop_size
+                .as_ref()
+                .unwrap()
+                .get("height")
+                .unwrap();
+            Self::center_crop(&image, (crop_width, crop_height))
+        } else {
+            image
+        };
+        let mut pixel_value = Self::to_tensor(&image, &Device::Cpu)?;
+        if preprocessor_config.do_rescale.unwrap_or(true) {
+            let rescale_factor = preprocessor_config.rescale_factor.unwrap();
+            pixel_value = Self::rescale(&pixel_value, rescale_factor)?;
+        }
+        if preprocessor_config.do_normalize.unwrap_or(true) {
+            pixel_value = Self::normalize(&pixel_value, &image_mean, &image_std)?;
+            pixel_value = Self::to_channel_dimension_format(&pixel_value)?
+                .to_dtype(dtype)?
+                .to_device(device)?;
+        }
+        Ok(pixel_value)
     }
 }
 
@@ -502,7 +424,6 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
     const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
     #[allow(clippy::excessive_precision)]
     const DEFAULT_STD: [f64; 3] = [0.26862954, 0.26130258, 0.27577711];
-
     fn preprocess(
         &self,
         images: Vec<image::DynamicImage>,
@@ -512,7 +433,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
-        let image_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;
+        let resized_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;
         let image = images[0].clone();
         let original_size = image.dimensions();
         let best_resolution =
@@ -521,7 +442,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         let image_padded = resize_and_pad_image(&image, best_resolution);
         let filter = config.resampling.to_filter()?;
         let image_original_resize =
-            image.resize_exact(image_size as u32, image_size as u32, filter);
+            image.resize_exact(resized_size as u32, resized_size as u32, filter);
         let mut samples = vec![image_original_resize];
         for patch in divide_to_samples(
             &image_padded,
@@ -537,48 +458,28 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             "bfloat16" => DType::BF16,
             _ => candle_core::bail!("unsupported dtype"),
         };
-        let process_one_image = |image: &DynamicImage| -> Result<Tensor> {
-            let mut image = if config.do_resize.unwrap_or(true) {
-                self.resize(image, image_size as u32, filter)
-            } else {
-                image.clone()
-            };
-            image = if config.do_center_crop.unwrap_or(true) {
-                let crop_width = *config.crop_size.as_ref().unwrap().get("width").unwrap();
-                let crop_height = *config.crop_size.as_ref().unwrap().get("height").unwrap();
-                self.center_crop(&image, (crop_width, crop_height))
-            } else {
-                image
-            };
-            let mut pixel_value = self.to_tensor(&image, &Device::Cpu)?;
-            if config.do_rescale.unwrap_or(true) {
-                let rescale_factor = config.rescale_factor.unwrap();
-                pixel_value = self.rescale(&pixel_value, rescale_factor)?;
-            }
-            if config.do_normalize.unwrap_or(true) {
-                let image_mean = config
-                    .image_mean
-                    .unwrap_or(Self::DEFAULT_MEAN)
-                    .iter()
-                    .map(|x| *x as f32)
-                    .collect::<Vec<f32>>();
-                let image_std = config
-                    .image_std
-                    .unwrap_or(Self::DEFAULT_STD)
-                    .iter()
-                    .map(|x| *x as f32)
-                    .collect::<Vec<f32>>();
-                pixel_value = self.normalize(&pixel_value, &image_mean, &image_std)?;
-                pixel_value = self
-                    .to_channel_dimension_format(&pixel_value)?
-                    .to_dtype(dtype)?
-                    .to_device(device)?;
-            }
-            Ok(pixel_value)
-        };
+        let image_mean = config
+            .image_mean
+            .unwrap_or(Self::DEFAULT_MEAN)
+            .map(|x| x as f32);
+        let image_std = config
+            .image_std
+            .unwrap_or(Self::DEFAULT_STD)
+            .map(|x| x as f32);
         let pixel_values = samples
             .iter()
-            .map(process_one_image)
+            .map(|x| {
+                LLaVANextImageProcessor::process_one_image(
+                    x,
+                    config,
+                    resized_size as u32,
+                    filter,
+                    dtype,
+                    device,
+                    &image_mean,
+                    &image_std,
+                )
+            })
             .collect::<Result<Vec<Tensor>>>()?;
         let pixel_values = Tensor::stack(&pixel_values, 0)?;
 

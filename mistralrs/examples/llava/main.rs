@@ -41,9 +41,11 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
     let (tx, mut rx) = channel(10_000);
+    let img = image::io::Reader::open("./cat.jpg")?.decode()?;
     let request = Request::Normal(NormalRequest {
         messages: RequestMessage::VisionChat {
-            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
+            images: vec![img],
+            //images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
             messages: vec![IndexMap::from([
                 ("role".to_string(), Either::Left("user".to_string())),
                 (

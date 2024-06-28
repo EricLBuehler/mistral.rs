@@ -18,7 +18,7 @@ use crate::serde_default_fn;
 use crate::models::llama::Config as LLaMAConfig;
 use crate::models::mistral::Config as MistralConfig;
 use crate::vision_models::clip::{Activation as ClipActivation, ClipConfig, ClipVisionTransformer};
-use crate::vision_models::llava_next_inputs_processor::get_anyres_image_grid_shape;
+use crate::vision_models::llava::utils::get_anyres_image_grid_shape;
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 
