@@ -372,7 +372,10 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(embed_tokens.embeddings().clone());
+        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+            embed_tokens.embeddings(),
+            normal_loading_metadata.loading_isq,
+        )?);
         Ok(Self {
             embed_tokens,
             layers,

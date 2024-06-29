@@ -12,9 +12,6 @@ use tracing::{info, warn};
 
 use crate::device_map::DeviceMapper;
 
-#[cfg(feature = "cuda")]
-const ISQ_THREAD_COUNT: usize = 4;
-
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
     Skip,
@@ -62,17 +59,16 @@ fn get_quantization_behaviour(tensor: &Tensor, dtype: GgmlDType) -> Quantization
 macro_rules! generate_isq {
     ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr) => {
         if let QMatMul::Tensor(t) = $tensor {
-            let t = t.to_device(&$device).unwrap();
             let quantization_behaviour = get_quantization_behaviour(&t, $dtype);
             *$tensor =  match quantization_behaviour{
                 QuantizationBehaviour::Skip => {
                     let shape = t.shape();
                     warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, GgmlDType::F32).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, GgmlDType::F32, &$device).unwrap()))
                 },
                 QuantizationBehaviour::Quantize(dtype) => {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, dtype, &$device).unwrap()))
                 }
             };
             $device.synchronize().unwrap();
@@ -111,16 +107,12 @@ pub trait IsqModel {
         let t_start = Instant::now();
         #[cfg(not(feature = "metal"))]
         {
-            #[cfg(feature = "cuda")]
-            {
-                let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
-                if isq_low_mem {
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(ISQ_THREAD_COUNT)
-                        .build_global()
-                        .expect("Failed to build global thread pool");
-                }
+            // NOTE(EricLBuehler): On version 0.2.0, remove this
+            let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
+            if isq_low_mem {
+                warn!("ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant");
             }
+
             info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
             use indicatif::ParallelProgressIterator;

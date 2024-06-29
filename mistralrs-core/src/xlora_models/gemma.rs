@@ -558,7 +558,13 @@ impl XLoraModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
+        let lm_head = candle_nn::Linear::new(
+            mapper.cast_nm_device(
+                embed_tokens.embeddings(),
+                normal_loading_metadata.loading_isq,
+            )?,
+            None,
+        );
         Ok(Self {
             embed_tokens,
             layers,
