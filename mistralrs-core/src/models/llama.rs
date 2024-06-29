@@ -76,14 +76,18 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -91,6 +95,14 @@ impl CausalSelfAttention {
             k = k
                 .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
                 .contiguous()?;
         }
 
