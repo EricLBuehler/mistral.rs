@@ -44,8 +44,9 @@ impl Config {
     pub fn hidden_act(&self) -> Result<Activation> {
         match (self.hidden_act, self.hidden_activation) {
             (None, Some(act)) | (Some(act), None) => Ok(act),
-            (Some(_), Some(_)) => {
-                candle_core::bail!("both hidden_act and hidden_activation are set")
+            (Some(act), Some(_)) => {
+                // If both are set just use hidden_act
+                Ok(act)
             }
             (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
         }

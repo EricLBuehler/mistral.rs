@@ -789,6 +789,8 @@ impl NormalModelLoader for Gemma2Loader {
     }
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
-        Ok(Box::new(serde_json::from_str(config)?))
+        Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+            config,
+        )?))
     }
 }
