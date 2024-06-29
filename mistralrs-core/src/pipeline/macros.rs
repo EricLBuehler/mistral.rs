@@ -35,6 +35,8 @@ macro_rules! api_dir_list {
                     .map(|s| {
                         s.unwrap()
                             .path()
+                            .file_name()
+                            .unwrap() // Should never terminate in `..`
                             .to_str()
                             .expect("Could not convert to str")
                             .to_string()
@@ -69,7 +71,7 @@ macro_rules! api_get_file {
             } else if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
-            info!("Loading `{:?}` locally at `{path:?}`", &$file);
+            info!("Loading `{}` locally at `{}`", &$file, path.display());
             path
         })
     };
