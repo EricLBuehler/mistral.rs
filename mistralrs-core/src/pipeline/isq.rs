@@ -107,6 +107,12 @@ pub trait IsqModel {
         let t_start = Instant::now();
         #[cfg(not(feature = "metal"))]
         {
+            // NOTE(EricLBuehler): On version 0.2.0, remove this
+            let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
+            if isq_low_mem {
+                warn!("ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant");
+            }
+
             info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
             use indicatif::ParallelProgressIterator;
