@@ -14,8 +14,10 @@ macro_rules! finish_and_add_tokens_to_seq {
         );
         // Handle streaming requests
         if $seq.get_mut_group().is_streaming && $seq.get_mut_group().is_chat {
+            const STREAMING_RATE_LIMIT: usize = 3;
+
             let token_index = $seq.get_toks().len();
-            let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
+            let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
 
             if rate_limit_allowed {
                 if let Some(delta) =
