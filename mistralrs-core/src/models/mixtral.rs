@@ -108,7 +108,7 @@ impl Attention {
                 .transpose(1, 2)?
         } else {
             // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.num_heads, q_len, self.head_dim))?
+            v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?
         };
 
         self.rotary_emb
