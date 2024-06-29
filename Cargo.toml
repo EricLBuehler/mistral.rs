@@ -21,8 +21,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "6f1f5c7e" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "6f1f5c7e" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "b438cba3f8742519d6f2154209e096c123fc3eb9" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "b438cba3f8742519d6f2154209e096c123fc3eb9" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
