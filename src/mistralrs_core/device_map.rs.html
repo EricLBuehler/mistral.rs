@@ -219,6 +219,22 @@
 <a href="#219" id="219">219</a>
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
@@ -349,6 +365,8 @@
     ) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
     <span class="doccomment">/// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>device_for(<span class="kw-2">&amp;</span><span class="self">self</span>, layer: usize, loading_isq: bool) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Device&gt;;
+    <span class="doccomment">/// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
+    </span><span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
     <span class="doccomment">/// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
@@ -385,6 +403,13 @@
             <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device);
         }
         <span class="self">self</span>.mappings.get(layer)
+    }
+    <span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">if </span>loading_isq {
+            x.to_device(<span class="kw-2">&amp;</span>Device::Cpu)
+        } <span class="kw">else </span>{
+            x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
+        }
     }
     <span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt; {
         <span class="kw">if </span>loading_isq {
@@ -427,6 +452,13 @@
         }
         <span class="prelude-val">None
     </span>}
+    <span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">if </span>loading_isq {
+            x.to_device(<span class="kw-2">&amp;</span>Device::Cpu)
+        } <span class="kw">else </span>{
+            x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
+        }
+    }
     <span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt; {
         <span class="kw">if </span>loading_isq {
             varbuilder.set_device(Device::Cpu)

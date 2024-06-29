@@ -575,6 +575,9 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -1016,7 +1019,10 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = QMatMul::Tensor(embed_tokens.embeddings().clone());
+        <span class="kw">let </span>lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+            embed_tokens.embeddings(),
+            normal_loading_metadata.loading_isq,
+        )<span class="question-mark">?</span>);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,

@@ -143,14 +143,6 @@
 <a href="#143" id="143">143</a>
 <a href="#144" id="144">144</a>
 <a href="#145" id="145">145</a>
-<a href="#146" id="146">146</a>
-<a href="#147" id="147">147</a>
-<a href="#148" id="148">148</a>
-<a href="#149" id="149">149</a>
-<a href="#150" id="150">150</a>
-<a href="#151" id="151">151</a>
-<a href="#152" id="152">152</a>
-<a href="#153" id="153">153</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
@@ -164,9 +156,6 @@
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-
-<span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-</span><span class="kw">const </span>ISQ_THREAD_COUNT: usize = <span class="number">4</span>;
 
 <span class="kw">pub enum </span>QuantizationBehaviour {
     Quantize(GgmlDType),
@@ -215,17 +204,16 @@
 <span class="macro">macro_rules!</span> generate_isq {
     (<span class="macro-nonterminal">$tensor</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$n_quantized</span>:expr) =&gt; {
         <span class="kw">if let </span>QMatMul::Tensor(t) = <span class="macro-nonterminal">$tensor </span>{
-            <span class="kw">let </span>t = t.to_device(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>).unwrap();
             <span class="kw">let </span>quantization_behaviour = get_quantization_behaviour(<span class="kw-2">&amp;</span>t, <span class="macro-nonterminal">$dtype</span>);
             <span class="kw-2">*</span><span class="macro-nonterminal">$tensor </span>=  <span class="kw">match </span>quantization_behaviour{
                 QuantizationBehaviour::Skip =&gt; {
                     <span class="kw">let </span>shape = t.shape();
                     <span class="macro">warn!</span>(<span class="string">"Skipping quantization of tensor with shape {shape:?} as it is not quantizable."</span>);
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(<span class="kw-2">&amp;</span>t, GgmlDType::F32).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(<span class="kw-2">&amp;</span>t, GgmlDType::F32, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>).unwrap()))
                 },
                 QuantizationBehaviour::Quantize(dtype) =&gt; {
                     <span class="macro-nonterminal">$n_quantized</span>.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(<span class="kw-2">&amp;</span>t, dtype).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(<span class="kw-2">&amp;</span>t, dtype, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>).unwrap()))
                 }
             };
             <span class="macro-nonterminal">$device</span>.synchronize().unwrap();
@@ -264,16 +252,12 @@
         <span class="kw">let </span>t_start = Instant::now();
         <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
         </span>{
-            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-            </span>{
-                <span class="kw">let </span>isq_low_mem = std::env::var(<span class="string">"ISQ_LOW_MEMORY"</span>).is_ok();
-                <span class="kw">if </span>isq_low_mem {
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(ISQ_THREAD_COUNT)
-                        .build_global()
-                        .expect(<span class="string">"Failed to build global thread pool"</span>);
-                }
+            <span class="comment">// NOTE(EricLBuehler): On version 0.2.0, remove this
+            </span><span class="kw">let </span>isq_low_mem = std::env::var(<span class="string">"ISQ_LOW_MEMORY"</span>).is_ok();
+            <span class="kw">if </span>isq_low_mem {
+                <span class="macro">warn!</span>(<span class="string">"ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant"</span>);
             }
+
             <span class="macro">info!</span>(<span class="string">"Applying ISQ on {} threads."</span>, rayon::current_num_threads());
 
             <span class="kw">use </span>indicatif::ParallelProgressIterator;
