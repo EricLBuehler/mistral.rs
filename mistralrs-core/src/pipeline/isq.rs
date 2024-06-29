@@ -110,16 +110,6 @@ pub trait IsqModel {
         let t_start = Instant::now();
         #[cfg(not(feature = "metal"))]
         {
-            #[cfg(feature = "cuda")]
-            {
-                let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
-                if isq_low_mem {
-                    rayon::ThreadPoolBuilder::new()
-                        .num_threads(ISQ_THREAD_COUNT)
-                        .build_global()
-                        .expect("Failed to build global thread pool");
-                }
-            }
             info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
             use indicatif::ParallelProgressIterator;

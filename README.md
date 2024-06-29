@@ -77,7 +77,7 @@ Mistal.rs supports several model categories:
 - Grammar support with Regex and Yacc.
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
-    - Provides methods to further reduce memory spikes.
+    - Extremely fast due to working in parallel
 
 **Powerful**:
 - Fast LoRA support with weight merging.
