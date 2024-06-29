@@ -5,11 +5,7 @@ macro_rules! finish_and_add_tokens_to_seq {
         let is_done = $seq.is_done($logprobs.token, $eos_tok, $this.metadata.max_seq_len);
         $seq.add_token(
             $logprobs.clone(),
-            $this
-                .tokenizer()
-                .decode(&[$logprobs.token], false)
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?
-                .into(),
+            $this.get_metadata().tok_trie.decode(&[$logprobs.token]),
             &is_done,
         );
         // Handle streaming requests

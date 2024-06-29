@@ -326,12 +326,6 @@ impl Sequence {
             Some(StopReason::Eos) | Some(StopReason::StopTok(_))
         );
         if !stopped_by_token {
-            // Handle without the leading ' ' here
-            let mut string = String::from_utf8_lossy(&completion_bytes).to_string();
-            if !string.starts_with(' ') {
-                string = format!(" {string}");
-            }
-            let completion_bytes: Vec<u8> = string.into_bytes();
             // Completion bytes is used to check for stop strings, and as the response buffer.
             // We don't need to add stop tokens to the completion bytes to check for stop strings.
             // And by not adding it here, we can avoid having to delete these tokens from the output.
