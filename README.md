@@ -86,10 +86,12 @@ Mistal.rs supports several model categories:
 - Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
 
-This is a demo of interactive mode with streaming running Mistral GGUF:
+This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
 
-https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415
+<!-- Mistral GGUF demo, old API -->
+<!-- https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415 -->
 
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-9006-4ec6ebc6473c
 
 ## Support matrix
 
