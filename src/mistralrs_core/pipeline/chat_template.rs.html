@@ -210,6 +210,7 @@
 <a href="#210" id="210">210</a>
 <a href="#211" id="211">211</a>
 <a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -222,9 +223,10 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::MessageContent;
 
-<span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: [<span class="kw-2">&amp;</span>str; <span class="number">2</span>] = [
-    <span class="string">"&lt;|eot_id|&gt;"</span>, <span class="comment">// Handle Llama3 chat case
-    </span><span class="string">"&lt;|im_end|&gt;"</span>, <span class="comment">// Handle ChatML case
+<span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: [<span class="kw-2">&amp;</span>str; <span class="number">3</span>] = [
+    <span class="string">"&lt;|eot_id|&gt;"</span>,    <span class="comment">// Handle Llama3 chat case
+    </span><span class="string">"&lt;|im_end|&gt;"</span>,    <span class="comment">// Handle ChatML case
+    </span><span class="string">"&lt;end_of_turn&gt;"</span>, <span class="comment">// Handle Gemma2 chat case
 </span>];
 
 <span class="attr">#[allow(dead_code)]

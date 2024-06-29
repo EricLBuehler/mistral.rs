@@ -228,6 +228,8 @@
 <a href="#228" id="228">228</a>
 <a href="#229" id="229">229</a>
 <a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> finish_and_add_tokens_to_seq {
@@ -240,8 +242,10 @@
         );
         <span class="comment">// Handle streaming requests
         </span><span class="kw">if </span><span class="macro-nonterminal">$seq</span>.get_mut_group().is_streaming &amp;&amp; <span class="macro-nonterminal">$seq</span>.get_mut_group().is_chat {
+            <span class="kw">const </span>STREAMING_RATE_LIMIT: usize = <span class="number">3</span>;
+
             <span class="kw">let </span>token_index = <span class="macro-nonterminal">$seq</span>.get_toks().len();
-            <span class="kw">let </span>rate_limit_allowed = is_done.is_some() || token_index % <span class="number">3 </span>== <span class="number">0</span>;
+            <span class="kw">let </span>rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == <span class="number">0</span>;
 
             <span class="kw">if </span>rate_limit_allowed {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) =
