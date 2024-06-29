@@ -86,6 +86,7 @@ impl FromStr for NormalLoaderType {
             "phi2" => Ok(Self::Phi2),
             "phi3" => Ok(Self::Phi3),
             "qwen2" => Ok(Self::Qwen2),
+            "gemma2" => Ok(Self::Gemma2),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
