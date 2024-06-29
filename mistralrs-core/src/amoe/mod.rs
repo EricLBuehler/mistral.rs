@@ -99,7 +99,7 @@ serde_default_fn!(f64, default_lr, 1e-3);
 serde_default_fn!(usize, default_epochs, 100);
 serde_default_fn!(usize, default_bs, 4);
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum AnyMoeExpertType {
     #[serde(rename = "fine_tuned")]
     FineTuned,

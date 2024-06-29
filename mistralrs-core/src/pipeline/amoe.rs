@@ -248,6 +248,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         } = self.config;
         let mut steps = 0;
 
+        info!("Expert type: {expert_type:?}");
+        info!("Expert model ids: {model_ids:?}");
+
         // Inject the AnyMoE layers
         target.amoe_create_layers(
             model_ids,
