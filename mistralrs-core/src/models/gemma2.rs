@@ -390,7 +390,7 @@ pub struct Model {
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
-    pub final_logit_softcapping: Option<f64>,
+    final_logit_softcapping: Option<f64>,
 }
 
 impl Model {
@@ -448,7 +448,7 @@ impl Model {
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
-            max_seq_len: default_max_position_embeddings(),
+            max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
