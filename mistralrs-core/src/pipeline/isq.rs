@@ -12,9 +12,6 @@ use tracing::{info, warn};
 
 use crate::device_map::DeviceMapper;
 
-#[cfg(feature = "cuda")]
-const ISQ_THREAD_COUNT: usize = 4;
-
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
     Skip,

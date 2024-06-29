@@ -169,7 +169,7 @@ impl DeviceMapper for LayerDeviceMapper {
     }
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
         if loading_isq {
-            Ok(x.clone())
+            x.to_device(&Device::Cpu)
         } else {
             x.to_device(&self.nm_device)
         }
