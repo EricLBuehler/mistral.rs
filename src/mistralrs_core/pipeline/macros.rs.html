@@ -460,6 +460,8 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -497,7 +499,9 @@
                     .map(|s| {
                         s.unwrap()
                             .path()
-                            .to_str()
+                            .file_name()
+                            .unwrap() <span class="comment">// Should never terminate in `..`
+                            </span>.to_str()
                             .expect(<span class="string">"Could not convert to str"</span>)
                             .to_string()
                     })
@@ -531,7 +535,7 @@
             } <span class="kw">else if </span>!path.exists() {
                 <span class="macro">panic!</span>(<span class="string">"File \"{}\" not found at model id {:?}"</span>, <span class="macro-nonterminal">$file</span>, <span class="macro-nonterminal">$model_id</span>)
             }
-            <span class="macro">info!</span>(<span class="string">"Loading `{:?}` locally at `{path:?}`"</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$file</span>);
+            <span class="macro">info!</span>(<span class="string">"Loading `{}` locally at `{}`"</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$file</span>, path.display());
             path
         })
     };
