@@ -440,6 +440,14 @@
 <a href="#440" id="440">440</a>
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -561,15 +569,23 @@
             <span class="self">self</span>.num_kv_heads * <span class="self">self</span>.head_dim,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = q
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = k
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>(q, k, v) = <span class="kw">if </span>q_len != <span class="number">1 </span>{
+            <span class="kw">let </span>q = q
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            (q, k, v)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>q = q.reshape((b_sz, <span class="self">self</span>.num_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            (q, k, v)
+        };
 
         <span class="kw">let </span>(q, k) = <span class="self">self
             </span>.rotary_emb

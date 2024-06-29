@@ -443,6 +443,18 @@
 <a href="#443" id="443">443</a>
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Phi model.
@@ -610,9 +622,13 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_size * seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_size * seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="kw">if </span>seq_len != <span class="number">1 </span>{
+            v.reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>v.reshape((b_size, <span class="self">self</span>.num_kv_heads, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+        </span>};
 
         <span class="self">self</span>.rotary_emb.forward(
             seqlen_offsets,
@@ -622,7 +638,7 @@
             b_size,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; seq_len != <span class="number">1 </span>{
             q = q
                 .reshape((b_size, seq_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
@@ -630,6 +646,14 @@
             k = k
                 .reshape((b_size, seq_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>q = q
+                .reshape((b_size, <span class="self">self</span>.num_heads, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            k = k
+                .reshape((b_size, <span class="self">self</span>.num_kv_heads, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 

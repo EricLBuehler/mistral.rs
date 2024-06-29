@@ -532,6 +532,19 @@
 <a href="#532" id="532">532</a>
 <a href="#533" id="533">533</a>
 <a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
@@ -677,21 +690,34 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="kw">if </span>seq_len != <span class="number">1 </span>{
+            v.reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>v.reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+        </span>};
 
         <span class="self">self</span>.rotary
             .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; seq_len != <span class="number">1 </span>{
             q = q
                 .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
             k = k
                 .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>q = q
+                .reshape((b_sz, <span class="self">self</span>.n_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            k = k
+                .reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
         }
 
         <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;

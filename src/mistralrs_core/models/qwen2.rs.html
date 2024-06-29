@@ -428,6 +428,18 @@
 <a href="#428" id="428">428</a>
 <a href="#429" id="429">429</a>
 <a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -567,14 +579,18 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
-            .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = <span class="kw">if </span>q_len != <span class="number">1 </span>{
+            v.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>v.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+        </span>};
 
         <span class="self">self</span>.rotary_emb
             .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>{
+        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; q_len != <span class="number">1 </span>{
             q = q
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
@@ -582,6 +598,14 @@
             k = k
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
+            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            </span>q = q
+                .reshape((b_sz, <span class="self">self</span>.num_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.contiguous()<span class="question-mark">?</span>;
+            k = k
+                .reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
