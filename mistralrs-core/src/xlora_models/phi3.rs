@@ -126,15 +126,23 @@ impl Attention {
             self.num_kv_heads * self.head_dim,
         )?;
 
-        let q = q
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let (q, k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            (q, k, v)
+        };
 
         let (q, k) = self
             .rotary_emb

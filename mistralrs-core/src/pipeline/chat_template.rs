@@ -10,9 +10,10 @@ use tracing::info;
 
 use crate::MessageContent;
 
-const SUPPORTED_ALTERNATE_EOS: [&str; 2] = [
-    "<|eot_id|>", // Handle Llama3 chat case
-    "<|im_end|>", // Handle ChatML case
+const SUPPORTED_ALTERNATE_EOS: [&str; 3] = [
+    "<|eot_id|>",    // Handle Llama3 chat case
+    "<|im_end|>",    // Handle ChatML case
+    "<end_of_turn>", // Handle Gemma2 chat case
 ];
 
 #[allow(dead_code)]
