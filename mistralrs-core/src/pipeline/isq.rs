@@ -62,17 +62,16 @@ fn get_quantization_behaviour(tensor: &Tensor, dtype: GgmlDType) -> Quantization
 macro_rules! generate_isq {
     ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr) => {
         if let QMatMul::Tensor(t) = $tensor {
-            let t = t.to_device(&$device).unwrap();
             let quantization_behaviour = get_quantization_behaviour(&t, $dtype);
             *$tensor =  match quantization_behaviour{
                 QuantizationBehaviour::Skip => {
                     let shape = t.shape();
                     warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, GgmlDType::F32).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, GgmlDType::F32, &$device).unwrap()))
                 },
                 QuantizationBehaviour::Quantize(dtype) => {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    QMatMul::QTensor(Arc::new(QTensor::quantize(&t, dtype).unwrap()))
+                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, dtype, &$device).unwrap()))
                 }
             };
             $device.synchronize().unwrap();
