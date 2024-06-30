@@ -19,7 +19,7 @@ Describe the function and structure of DNA in genetic inheritance,1
 ```
 
 ## Experts
-AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogenous: they must be all fine-tuned or all adapter.
+AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogenous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
 
 ### With fine-tuned experts
 ```toml
