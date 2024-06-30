@@ -219,16 +219,13 @@ impl MlpLayer for MoeMlp {
 
         // Gate with topk 1 to get the highest ranked expert
         let TopKOutput {
-            values: mut gate,
+            values: gate,
             indices,
         } = gate.topk(1)?;
 
         if self.training {
             *self.gating_output.write().unwrap() = Some(gate.clone());
         }
-
-        // Detach to not track grads for the entire model
-        gate = gate.detach();
 
         let mut expert_outputs = Vec::new();
         for expert in &self.experts {
