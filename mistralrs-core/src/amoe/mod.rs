@@ -8,7 +8,10 @@ mod inputs;
 mod macros;
 pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 
-use crate::serde_default_fn;
+use crate::{
+    ops::{TopKLastDimOp, TopKOutput},
+    serde_default_fn,
+};
 
 /// Implemented by the base model of an AnyMoe.
 pub trait AnyMoeBaseModelMixin {
@@ -211,8 +214,14 @@ impl MlpLayer for MoeMlp {
         let gate = self.gate.forward_t(xs, self.training)?;
         // ^ [b, s, n_e]
         // Mean across the sequence dimension
-        let mut gate = gate.mean(1)?;
+        let gate = gate.mean(1)?;
         // ^ [b, n_e]
+
+        // Gate with topk 1 to get the highest ranked expert
+        let TopKOutput {
+            values: mut gate,
+            indices,
+        } = gate.topk(1)?;
 
         if self.training {
             *self.gating_output.write().unwrap() = Some(gate.clone());
@@ -232,7 +241,8 @@ impl MlpLayer for MoeMlp {
         }
         let stacked_outputs = Tensor::stack(&expert_outputs, 0)?;
         // ^ [n_e, b, s, h]
-        let weighted_outputs = stacked_outputs.broadcast_mul(&gate_expanded)?;
+        let weighted_outputs =
+            stacked_outputs.broadcast_mul(&gate_expanded.gather(&indices, D::Minus1)?)?;
         weighted_outputs.sum(0)
     }
 
