@@ -356,6 +356,15 @@
 <a href="#356" id="356">356</a>
 <a href="#357" id="357">357</a>
 <a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -457,9 +466,13 @@
     </span><span class="attr">#[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     </span>token_source: TokenSource,
 
-    <span class="doccomment">/// Enter interactive mode instead of serving a chat server.
+    <span class="doccomment">/// Enter interactive mode instead of serving a chat server. Exclusive to `--vi` (vision interactive mode).
     </span><span class="attr">#[clap(long, short, action)]
     </span>interactive_mode: bool,
+
+    <span class="doccomment">/// Enter vision interactive mode instead of serving a chat server. Exclusive to `--interactive-mode/-i`.
+    </span><span class="attr">#[clap(long = <span class="string">"vi"</span>, action)]
+    </span>vision_interactive_mode: bool,
 
     <span class="doccomment">/// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
@@ -694,8 +707,13 @@
     .with_prefix_cache_n(args.prefix_cache_n)
     .build();
 
-    <span class="kw">if </span>args.interactive_mode {
-        interactive_mode(mistralrs).<span class="kw">await</span>;
+    <span class="kw">if </span>args.interactive_mode &amp;&amp; args.vision_interactive_mode {
+        <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode and vision interactive mode are exclusive."</span>);
+    } <span class="kw">else if </span>args.interactive_mode {
+        interactive_mode(mistralrs, <span class="bool-val">false</span>).<span class="kw">await</span>;
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+    } <span class="kw">else if </span>args.vision_interactive_mode {
+        interactive_mode(mistralrs, <span class="bool-val">true</span>).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
 

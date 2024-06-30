@@ -1429,7 +1429,7 @@
                 <span class="prelude-val">None</span>,
                 <span class="self">self</span>.get_input_processor_config(),
             )
-            .unwrap();
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
 
         <span class="kw">match </span>pre_op {
             CacheInstruction::In(adapter_inst) =&gt; {

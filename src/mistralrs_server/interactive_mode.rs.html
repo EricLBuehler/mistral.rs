@@ -124,7 +124,68 @@
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
 <a href="#126" id="126">126</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
+<span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     Constraint, MessageContent, MistralRs, NormalRequest, Request, RequestMessage, Response,
@@ -132,7 +193,8 @@
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
-    io::{<span class="self">self</span>, Write},
+    fs::{<span class="self">self</span>, File},
+    io::{<span class="self">self</span>, Read, Write},
     sync::{atomic::Ordering, Arc, Mutex},
 };
 <span class="kw">use </span>tokio::sync::mpsc::channel;
@@ -149,9 +211,10 @@
 <span class="kw">static </span>CTRLC_HANDLER: Lazy&lt;Mutex&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>(<span class="kw">dyn </span>Fn() + Sync)&gt;&gt; =
     Lazy::new(|| Mutex::new(<span class="kw-2">&amp;</span>exit_handler));
 
-<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
+<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, vision_chat: bool) {
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
 
     <span class="kw">let </span>sampling_params = SamplingParams {
         temperature: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
@@ -177,28 +240,85 @@
         <span class="comment">// Set the handler to process exit
         </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>exit_handler;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>prompt = String::new();
-        <span class="macro">print!</span>(<span class="string">"&gt; "</span>);
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(<span class="kw-2">&amp;mut </span>prompt)
-            .expect(<span class="string">"Failed to get input"</span>);
-        <span class="kw">if </span>prompt.is_empty() {
-            <span class="kw">return</span>;
-        }
+        <span class="kw">let </span>request_messages = <span class="kw">if </span>!vision_chat {
+            <span class="kw">let </span><span class="kw-2">mut </span>prompt = String::new();
+            <span class="macro">print!</span>(<span class="string">"&gt; "</span>);
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(<span class="kw-2">&amp;mut </span>prompt)
+                .expect(<span class="string">"Failed to get input"</span>);
+            <span class="kw">if </span>prompt.is_empty() {
+                <span class="kw">return</span>;
+            }
 
-        <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
-        </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
+            <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
+            </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
-        user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-        user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(prompt));
-        messages.push(user_message);
+            <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
+            user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+            user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(prompt));
+            messages.push(user_message);
+
+            RequestMessage::Chat(messages.clone())
+        } <span class="kw">else </span>{
+            <span class="kw">let </span><span class="kw-2">mut </span>prompt = String::new();
+            <span class="macro">print!</span>(<span class="string">"Prompt &gt; "</span>);
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(<span class="kw-2">&amp;mut </span>prompt)
+                .expect(<span class="string">"Failed to get input"</span>);
+            <span class="kw">if </span>prompt.is_empty() {
+                <span class="kw">return</span>;
+            }
+
+            <span class="kw">let </span><span class="kw-2">mut </span>image_url = String::new();
+            <span class="macro">print!</span>(<span class="string">"Image URL or path, [ENTER] for no image &gt; "</span>);
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(<span class="kw-2">&amp;mut </span>image_url)
+                .expect(<span class="string">"Failed to get input"</span>);
+            <span class="kw">if </span>image_url.is_empty() {
+                <span class="kw">return</span>;
+            }
+            <span class="kw">if </span>image_url.as_str() != <span class="string">"\n" </span>{
+                <span class="kw">let </span>url = image_url.trim();
+                <span class="kw">let </span>bytes = <span class="kw">if </span>url.contains(<span class="string">"http"</span>) {
+                    <span class="comment">// Read from http
+                    </span><span class="kw">match </span>reqwest::get(url).<span class="kw">await </span>{
+                        <span class="prelude-val">Ok</span>(http_resp) =&gt; http_resp.bytes().<span class="kw">await</span>.unwrap().to_vec(),
+                        <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"{e}"</span>),
+                    }
+                } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>f) = File::open(url) {
+                    <span class="comment">// Read from local file
+                    </span><span class="kw">let </span>metadata = fs::metadata(url).unwrap();
+                    <span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="macro">vec!</span>[<span class="number">0</span>; metadata.len() <span class="kw">as </span>usize];
+                    f.read_exact(<span class="kw-2">&amp;mut </span>buffer).unwrap();
+                    buffer
+                } <span class="kw">else </span>{
+                    <span class="comment">// Decode with base64
+                    </span>general_purpose::STANDARD.decode(url).unwrap()
+                };
+                images.push(image::load_from_memory(<span class="kw-2">&amp;</span>bytes).unwrap());
+            }
+
+            <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running
+            </span><span class="kw-2">*</span>CTRLC_HANDLER.lock().unwrap() = <span class="kw-2">&amp;</span>terminate_handler;
+
+            <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
+            user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
+            user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(prompt));
+            messages.push(user_message);
+
+            RequestMessage::VisionChat {
+                images: images.clone(),
+                messages: messages.clone(),
+            }
+        };
 
         <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
         <span class="kw">let </span>req = Request::Normal(NormalRequest {
             id: mistralrs.next_request_id(),
-            messages: RequestMessage::Chat(messages.clone()),
+            messages: request_messages,
             sampling_params: sampling_params.clone(),
             response: tx,
             return_logprobs: <span class="bool-val">false</span>,
