@@ -423,7 +423,7 @@ checksum = "514de17de45fdb8dc022b1a7975556c53c86f9f0aa5f534b98977b171857c2c9"
 [[package]]
 name = "candle-core"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=b438cba3f8742519d6f2154209e096c123fc3eb9#b438cba3f8742519d6f2154209e096c123fc3eb9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e344"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -450,7 +450,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=b438cba3f8742519d6f2154209e096c123fc3eb9#b438cba3f8742519d6f2154209e096c123fc3eb9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e344"
 dependencies = [
  "anyhow",
  "bindgen_cuda",
@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=b438cba3f8742519d6f2154209e096c123fc3eb9#b438cba3f8742519d6f2154209e096c123fc3eb9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e344"
 dependencies = [
  "bindgen_cuda",
 ]
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=b438cba3f8742519d6f2154209e096c123fc3eb9#b438cba3f8742519d6f2154209e096c123fc3eb9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e344"
 dependencies = [
  "metal",
  "once_cell",
@@ -480,7 +480,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=b438cba3f8742519d6f2154209e096c123fc3eb9#b438cba3f8742519d6f2154209e096c123fc3eb9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e344"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2196,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "accelerate-src",
  "base64 0.22.1",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2303,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "candle-core",
  "image",
