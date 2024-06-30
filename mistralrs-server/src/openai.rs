@@ -124,6 +124,7 @@ pub struct ModelObjects {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
     #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
     pub model: String,
     #[schema(example = "Say this is a test.")]
     pub prompt: String,
