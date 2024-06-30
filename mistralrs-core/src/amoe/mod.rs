@@ -230,20 +230,23 @@ impl MlpLayer for MoeMlp {
         // Detach to not track grads for the entire model
         gate = gate.detach();
 
-        let gate_expanded = gate
-            .permute((1, 0))?
-            .unsqueeze(D::Minus1)?
-            .unsqueeze(D::Minus1)?;
-        // ^ [b, n_e] -> [n_e, b, 1, 1]
         let mut expert_outputs = Vec::new();
         for expert in &self.experts {
             expert_outputs.push(expert.forward(xs)?);
         }
-        let stacked_outputs = Tensor::stack(&expert_outputs, 0)?;
-        // ^ [n_e, b, s, h]
-        let weighted_outputs =
-            stacked_outputs.broadcast_mul(&gate_expanded.gather(&indices, D::Minus1)?)?;
-        weighted_outputs.sum(0)
+        let stacked_outputs = Tensor::stack(&expert_outputs, 1)?;
+        // ^ [b, n_e s, h]
+        let (b, _e, s, h) = stacked_outputs.dims4()?;
+        let indices = indices.reshape((b, 1, 1, 1))?.expand((b, 1, s, h))?;
+        let gathered_outputs = stacked_outputs
+            .contiguous()?
+            .gather(&indices.contiguous()?, 1)?;
+        let gate = gate
+            .unsqueeze(D::Minus1)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_as(gathered_outputs.shape())?;
+        let weighted_outputs = gathered_outputs.broadcast_mul(&gate)?;
+        weighted_outputs.squeeze(1)
     }
 
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
