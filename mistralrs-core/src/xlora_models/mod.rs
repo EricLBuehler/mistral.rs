@@ -1,6 +1,7 @@
 mod classifier;
 mod config;
 mod gemma;
+mod gemma2;
 mod llama;
 mod mistral;
 mod mixtral;
@@ -15,6 +16,7 @@ use crate::lora::Ordering;
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
+pub(crate) use gemma2::Model as XLoraGemma2;
 pub(crate) use llama::XLoraLlama;
 pub(crate) use mistral::XLoraModel as XLoraMistral;
 pub(crate) use mixtral::XLoraModel as XLoraMixtral;

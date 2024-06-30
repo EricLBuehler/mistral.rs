@@ -10,6 +10,7 @@ use either::Either;
 use pyo3::pyclass;
 
 use serde::Deserialize;
+use tracing::warn;
 
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
@@ -70,6 +71,8 @@ pub enum NormalLoaderType {
     Phi3,
     #[serde(rename = "qwen2")]
     Qwen2,
+    #[serde(rename = "gemma2")]
+    Gemma2,
 }
 
 impl FromStr for NormalLoaderType {
@@ -83,6 +86,7 @@ impl FromStr for NormalLoaderType {
             "phi2" => Ok(Self::Phi2),
             "phi3" => Ok(Self::Phi3),
             "qwen2" => Ok(Self::Qwen2),
+            "gemma2" => Ok(Self::Gemma2),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -738,6 +742,67 @@ impl NormalModelLoader for Qwen2Loader {
         Ok(Box::new(Qwen2BasicConfig::deserialize(
             config,
             use_flash_attn,
+        )?))
+    }
+}
+
+// ======================== Gemma2 loader
+
+/// [`NormalLoader`] for a Gemma2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Gemma2Loader;
+
+impl NormalModelLoader for Gemma2Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        if use_flash_attn {
+            warn!("Gemma 2 does not support flash attention.");
+        }
+        Ok(Box::new(models::gemma2::Model::new(
+            &serde_json::from_str(config)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        if use_flash_attn {
+            warn!("Gemma 2 does not support flash attention.");
+        }
+        Ok(Box::new(xlora_models::XLoraGemma2::new(
+            &serde_json::from_str(config)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        // Already will warn about it
+        Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+            config,
         )?))
     }
 }

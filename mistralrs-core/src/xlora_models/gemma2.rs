@@ -2,12 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{
-    layers::ScaledDotProductAttention,
-    lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
-    utils::progress::NiceProgressBar,
-};
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
 use tqdm::Iter;
@@ -15,16 +9,15 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear},
-    models::gemma::Config,
-    pipeline::{extract_logits, Cache, NormalModel},
+    layers::{repeat_kv, CausalMasker, MatMul},
+    lora::{linear_b, LinearLayerLike, LoraConfig},
+    models::gemma2::Config,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
+    Ordering,
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
-
-fn default_max_position_embeddings() -> usize {
-    4096
-}
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
@@ -80,7 +73,7 @@ impl MLP {
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear(
+        let gate_proj = linear_b(
             hidden_sz,
             intermediate_sz,
             false,
@@ -91,7 +84,7 @@ impl MLP {
             ord,
             preload_adapters,
         )?;
-        let up_proj = linear(
+        let up_proj = linear_b(
             hidden_sz,
             intermediate_sz,
             false,
@@ -102,7 +95,7 @@ impl MLP {
             ord,
             preload_adapters,
         )?;
-        let down_proj = linear(
+        let down_proj = linear_b(
             intermediate_sz,
             hidden_sz,
             false,
@@ -172,7 +165,10 @@ struct Attention {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    use_flash_attn: bool,
+    query_pre_attn_scalar: usize,
+    attn_logit_softcapping: Option<f64>,
+    use_sliding_window: bool,
+    sliding_window: Option<usize>,
 }
 
 impl Attention {
@@ -195,7 +191,7 @@ impl Attention {
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = cfg.head_dim;
         let bias = cfg.attention_bias;
-        let q_proj = linear(
+        let q_proj = linear_b(
             hidden_sz,
             num_heads * head_dim,
             bias,
@@ -206,7 +202,7 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
-        let k_proj = linear(
+        let k_proj = linear_b(
             hidden_sz,
             num_kv_heads * head_dim,
             bias,
@@ -217,7 +213,7 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
-        let v_proj = linear(
+        let v_proj = linear_b(
             hidden_sz,
             num_kv_heads * head_dim,
             bias,
@@ -228,7 +224,7 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
-        let o_proj = linear(
+        let o_proj = linear_b(
             num_heads * head_dim,
             hidden_sz,
             bias,
@@ -249,7 +245,14 @@ impl Attention {
             num_kv_groups,
             head_dim,
             rotary_emb,
-            use_flash_attn: cfg.use_flash_attn,
+            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
+            attn_logit_softcapping: cfg.attn_logit_softcapping,
+            use_sliding_window: layer_idx % 2 != 0,
+            sliding_window: if layer_idx % 2 != 0 {
+                Some(cfg.sliding_window)
+            } else {
+                None
+            },
         })
     }
 
@@ -258,6 +261,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -328,32 +332,52 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let mask = if self.use_sliding_window {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
+
+        // self.sliding_window is None if !self.use_sliding_window
+        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
+            kv_cache,
+            k,
+            v,
+            mask,
+            self.sliding_window,
+            false,
+        )?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            attention_mask,
-            self.use_flash_attn,
-            b_sz,
-            q_len,
+        let mut att = MatMul.matmul_affine_div(
+            &q.contiguous()?,
+            &k.t()?.contiguous()?,
+            (self.query_pre_attn_scalar as f64).sqrt(),
         )?;
+
+        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
+            att = (att / attn_logit_softcapping)?;
+            att = att.tanh()?;
+            att = (att * attn_logit_softcapping)?;
+        }
+
+        let att = match mask {
+            Some(m) => att.broadcast_add(&m)?,
+            None => att,
+        };
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = self.o_proj.lora_forward(
-            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let res = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
+        let mut res =
+            self.o_proj
+                .lora_forward(&res, scalings, global_scaling_weight, is_scaling_pass)?;
         if self.q_proj.is_quant() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -367,6 +391,8 @@ struct DecoderLayer {
     mlp: MLP,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    pre_feedforward_layernorm: RmsNorm,
+    post_feedforward_layernorm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -416,11 +442,23 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
+        let pre_feedforward_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
+        )?;
+        let post_feedforward_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
+        )?;
         Ok(Self {
             self_attn,
             mlp,
             input_layernorm,
             post_attention_layernorm,
+            pre_feedforward_layernorm,
+            post_feedforward_layernorm,
         })
     }
 
@@ -429,6 +467,7 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -438,43 +477,52 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            start_offsets_kernel,
-            kv_cache,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(
+                &xs,
+                attention_mask,
+                sliding_attention_mask,
+                seqlen_offsets,
+                start_offsets_kernel,
+                kv_cache,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
+            .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.mlp.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let xs = self
+            .mlp
+            .forward(
+                &xs.apply(&self.pre_feedforward_layernorm)?,
+                scalings,
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
+            .apply(&self.post_feedforward_layernorm)?;
         residual + xs
     }
 }
 
-pub struct XLoraModel {
+pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QLinear,
-    dtype: DType,
+    lm_head: QMatMul,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
-    xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    sliding_window: usize,
+    final_logit_softcapping: Option<f64>,
+    xlora_classifier: Option<XLoraClassifier>,
+    dtype: DType,
 }
 
-impl XLoraModel {
+impl Model {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
@@ -490,8 +538,8 @@ impl XLoraModel {
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
-        let vb_m = vb.pp("model");
 
+        let vb_m = vb.pp("model");
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -558,27 +606,26 @@ impl XLoraModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::Linear::new(
-            mapper.cast_nm_device(
-                embed_tokens.embeddings(),
-                normal_loading_metadata.loading_isq,
-            )?,
-            None,
-        );
+        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+            embed_tokens.embeddings(),
+            normal_loading_metadata.loading_isq,
+        )?);
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             device: normal_loading_metadata.real_device,
-            dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, true),
-            max_seq_len: default_max_position_embeddings(),
+            max_seq_len: cfg.max_position_embeddings,
+            mapper,
+            sliding_window: cfg.sliding_window,
+            final_logit_softcapping: cfg.final_logit_softcapping,
+            dtype: vb.dtype(),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
-            mapper,
         })
     }
 
@@ -593,6 +640,8 @@ impl XLoraModel {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
+        let xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
@@ -606,19 +655,29 @@ impl XLoraModel {
         } else {
             self.cache.lock()
         };
-        let xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             &cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let sliding_attention_mask = CausalMasker
+            .make_causal_mask_with_sliding_window_as_attn_bias(
+                input_ids,
+                &cache,
+                Some(self.sliding_window),
+                xs.dtype(),
+                self.layers[0].self_attn.num_heads,
+            )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
+                sliding_attention_mask
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
@@ -631,10 +690,23 @@ impl XLoraModel {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
-            )?
+            )?;
         }
         let xs = xs.to_device(&self.device)?;
-        xs.apply(&self.norm)
+        let mut xs = xs.apply(&self.norm)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+
+        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+
+        if let Some(final_logit_softcapping) = self.final_logit_softcapping {
+            xs = (xs / final_logit_softcapping)?;
+            xs = xs.tanh()?;
+            xs = (xs * final_logit_softcapping)?;
+        }
+
+        Ok(xs)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -675,7 +747,7 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
+                if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
                 extract_logits(&res.apply(&self.lm_head)?, context_lens)
@@ -692,7 +764,7 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
+                if matches!(self.lm_head, QMatMul::QTensor(_)) {
                     res = res.to_dtype(DType::F32)?;
                 }
                 extract_logits(&res.apply(&self.lm_head)?, context_lens)
@@ -709,7 +781,7 @@ impl XLoraModel {
                     None,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
+            if matches!(self.lm_head, QMatMul::QTensor(_)) {
                 res = res.to_dtype(DType::F32)?;
             }
             extract_logits(&res.apply(&self.lm_head)?, context_lens)
@@ -717,10 +789,10 @@ impl XLoraModel {
     }
 }
 
-impl IsqModel for XLoraModel {
+impl IsqModel for Model {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
@@ -755,7 +827,7 @@ impl IsqModel for XLoraModel {
     }
 }
 
-impl NormalModel for XLoraModel {
+impl NormalModel for Model {
     fn forward(
         &self,
         _input_ids: &Tensor,
@@ -798,7 +870,7 @@ impl NormalModel for XLoraModel {
         &self.device
     }
     fn is_xlora(&self) -> bool {
-        true
+        false
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
@@ -836,7 +908,7 @@ impl NormalModel for XLoraModel {
     }
 }
 
-impl ScalingsMaker for XLoraModel {
+impl ScalingsMaker for Model {
     fn dtype(&self) -> DType {
         self.dtype
     }

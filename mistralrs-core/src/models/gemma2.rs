@@ -7,7 +7,7 @@ use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, MatMul, QLinear},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
@@ -31,18 +31,22 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
     pub vocab_size: usize,
+    pub sliding_window: usize,
+    pub attn_logit_softcapping: Option<f64>,
+    pub final_logit_softcapping: Option<f64>,
+    pub query_pre_attn_scalar: usize,
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
-    pub use_flash_attn: bool,
 }
 
 impl Config {
     pub fn hidden_act(&self) -> Result<Activation> {
         match (self.hidden_act, self.hidden_activation) {
             (None, Some(act)) | (Some(act), None) => Ok(act),
-            (Some(_), Some(_)) => {
-                candle_core::bail!("both hidden_act and hidden_activation are set")
+            (Some(act), Some(_)) => {
+                // If both are set just use hidden_act
+                Ok(act)
             }
             (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
         }
@@ -132,11 +136,19 @@ struct Attention {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    use_flash_attn: bool,
+    query_pre_attn_scalar: usize,
+    attn_logit_softcapping: Option<f64>,
+    use_sliding_window: bool,
+    sliding_window: Option<usize>,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        layer_idx: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -157,7 +169,14 @@ impl Attention {
             num_kv_groups,
             head_dim,
             rotary_emb,
-            use_flash_attn: cfg.use_flash_attn,
+            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
+            attn_logit_softcapping: cfg.attn_logit_softcapping,
+            use_sliding_window: layer_idx % 2 != 0,
+            sliding_window: if layer_idx % 2 != 0 {
+                Some(cfg.sliding_window)
+            } else {
+                None
+            },
         })
     }
 
@@ -165,6 +184,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -217,22 +237,44 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let mask = if self.use_sliding_window {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
+
+        // self.sliding_window is None if !self.use_sliding_window
+        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
+            kv_cache,
+            k,
+            v,
+            mask,
+            self.sliding_window,
+            false,
+        )?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            attention_mask,
-            self.use_flash_attn,
-            b_sz,
-            q_len,
+        let mut att = MatMul.matmul_affine_div(
+            &q.contiguous()?,
+            &k.t()?.contiguous()?,
+            (self.query_pre_attn_scalar as f64).sqrt(),
         )?;
+
+        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
+            att = (att / attn_logit_softcapping)?;
+            att = att.tanh()?;
+            att = (att * attn_logit_softcapping)?;
+        }
+
+        let att = match mask {
+            Some(m) => att.broadcast_add(&m)?,
+            None => att,
+        };
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
@@ -254,6 +296,8 @@ struct DecoderLayer {
     mlp: MLP,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    pre_feedforward_layernorm: RmsNorm,
+    post_feedforward_layernorm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -268,6 +312,7 @@ impl DecoderLayer {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
+            layer_idx,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
@@ -281,11 +326,23 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
+        let pre_feedforward_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
+        )?;
+        let post_feedforward_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
+        )?;
         Ok(Self {
             self_attn,
             mlp,
             input_layernorm,
             post_attention_layernorm,
+            pre_feedforward_layernorm,
+            post_feedforward_layernorm,
         })
     }
 
@@ -293,22 +350,30 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
+        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            start_offsets_kernel,
-            kv_cache,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(
+                &xs,
+                attention_mask,
+                sliding_attention_mask,
+                seqlen_offsets,
+                start_offsets_kernel,
+                kv_cache,
+            )?
+            .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
+        let xs = xs
+            .apply(&self.pre_feedforward_layernorm)?
+            .apply(&self.mlp)?
+            .apply(&self.post_feedforward_layernorm)?;
         residual + xs
     }
 }
@@ -324,6 +389,8 @@ pub struct Model {
     pub cache: Cache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    sliding_window: usize,
+    final_logit_softcapping: Option<f64>,
 }
 
 impl Model {
@@ -384,8 +451,10 @@ impl Model {
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
-            max_seq_len: default_max_position_embeddings(),
+            max_seq_len: cfg.max_position_embeddings,
             mapper,
+            sliding_window: cfg.sliding_window,
+            final_logit_softcapping: cfg.final_logit_softcapping,
         })
     }
 
@@ -405,11 +474,23 @@ impl Model {
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
+        let sliding_attention_mask = CausalMasker
+            .make_causal_mask_with_sliding_window_as_attn_bias(
+                input_ids,
+                &cache,
+                Some(self.sliding_window),
+                xs.dtype(),
+                self.layers[0].self_attn.num_heads,
+            )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
+                sliding_attention_mask
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
@@ -423,7 +504,16 @@ impl Model {
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             xs = xs.to_dtype(DType::F32)?;
         }
-        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
+
+        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+
+        if let Some(final_logit_softcapping) = self.final_logit_softcapping {
+            xs = (xs / final_logit_softcapping)?;
+            xs = xs.tanh()?;
+            xs = (xs * final_logit_softcapping)?;
+        }
+
+        extract_logits(&xs, context_lens)
     }
 }
 

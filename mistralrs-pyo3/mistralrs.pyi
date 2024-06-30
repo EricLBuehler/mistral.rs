@@ -63,6 +63,8 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Qwen2 = "qwen2"
+    Gemma2 = "gemma2"
 
 @dataclass
 class VisionArchitecture(Enum):
