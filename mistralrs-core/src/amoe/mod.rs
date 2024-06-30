@@ -241,12 +241,7 @@ impl MlpLayer for MoeMlp {
         let gathered_outputs = stacked_outputs
             .contiguous()?
             .gather(&indices.contiguous()?, 1)?;
-        let gate = gate
-            .unsqueeze(D::Minus1)?
-            .unsqueeze(D::Minus1)?
-            .broadcast_as(gathered_outputs.shape())?;
-        let weighted_outputs = gathered_outputs.broadcast_mul(&gate)?;
-        weighted_outputs.squeeze(1)
+        gathered_outputs.squeeze(1)
     }
 
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
