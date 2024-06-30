@@ -141,9 +141,12 @@
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
 <a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>classifier;
 <span class="kw">mod </span>config;
 <span class="kw">mod </span>gemma;
+<span class="kw">mod </span>gemma2;
 <span class="kw">mod </span>llama;
 <span class="kw">mod </span>mistral;
 <span class="kw">mod </span>mixtral;
@@ -158,6 +161,7 @@
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>config::XLoraConfig;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>gemma::XLoraModel <span class="kw">as </span>XLoraGemma;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>gemma2::Model <span class="kw">as </span>XLoraGemma2;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llama::XLoraLlama;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>mistral::XLoraModel <span class="kw">as </span>XLoraMistral;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>mixtral::XLoraModel <span class="kw">as </span>XLoraMixtral;
