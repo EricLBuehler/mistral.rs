@@ -30,6 +30,7 @@ tokio.workspace = true
 image.workspace = true
 reqwest.workspace = true
 base64.workspace = true
+pyo3_special_method_derive.workspace = true
 
 [build-dependencies]
 pyo3-build-config = "0.21"

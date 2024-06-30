@@ -4,10 +4,10 @@ use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
+use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fmt::Debug,
     fs,
     io::Read,
     str::FromStr,
@@ -80,6 +80,7 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
 }
 
 #[pyclass]
+#[derive(Dir, Dict, Str, Repr, Getattr)]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
@@ -847,26 +848,26 @@ impl Runner {
 }
 
 #[pyclass]
-#[derive(Debug)]
+#[derive(Dir, Dict, Str, Repr, Getattr)]
 /// An OpenAI API compatible completion request.
 struct CompletionRequest {
     _model: String,
-    prompt: String,
-    best_of: usize,
-    echo_prompt: bool,
-    presence_penalty: Option<f32>,
-    frequency_penalty: Option<f32>,
-    logit_bias: Option<HashMap<u32, f32>>,
-    max_tokens: Option<usize>,
-    n_choices: usize,
-    stop_seqs: Option<Vec<String>>,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    suffix: Option<String>,
-    top_k: Option<usize>,
-    grammar: Option<String>,
-    grammar_type: Option<String>,
-    adapters: Option<Vec<String>>,
+    pub prompt: String,
+    pub best_of: usize,
+    pub echo_prompt: bool,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    pub max_tokens: Option<usize>,
+    pub n_choices: usize,
+    pub stop_seqs: Option<Vec<String>>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub suffix: Option<String>,
+    pub top_k: Option<usize>,
+    pub grammar: Option<String>,
+    pub grammar_type: Option<String>,
+    pub adapters: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -933,11 +934,11 @@ impl CompletionRequest {
 }
 
 #[pyclass]
-#[derive(Debug)]
+#[derive(Dir, Dict, Str, Repr, Getattr)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
     #[allow(clippy::type_complexity)]
-    messages: Either<
+    pub messages: Either<
         Vec<
             HashMap<
                 String,
@@ -947,21 +948,21 @@ struct ChatCompletionRequest {
         String,
     >,
     _model: String,
-    logit_bias: Option<HashMap<u32, f32>>,
-    logprobs: bool,
-    top_logprobs: Option<usize>,
-    max_tokens: Option<usize>,
-    n_choices: usize,
-    presence_penalty: Option<f32>,
-    frequency_penalty: Option<f32>,
-    stop_seqs: Option<Vec<String>>,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    stream: bool,
-    top_k: Option<usize>,
-    grammar: Option<String>,
-    grammar_type: Option<String>,
-    adapters: Option<Vec<String>>,
+    pub logit_bias: Option<HashMap<u32, f32>>,
+    pub logprobs: bool,
+    pub top_logprobs: Option<usize>,
+    pub max_tokens: Option<usize>,
+    pub n_choices: usize,
+    pub presence_penalty: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub stop_seqs: Option<Vec<String>>,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub stream: bool,
+    pub top_k: Option<usize>,
+    pub grammar: Option<String>,
+    pub grammar_type: Option<String>,
+    pub adapters: Option<Vec<String>>,
 }
 
 #[pymethods]

@@ -9,6 +9,8 @@ use std::{
 use candle_core::{bail, Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
+#[cfg(feature = "pyo3_macros")]
+use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 
 use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
@@ -68,8 +70,8 @@ pub struct Sampler {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", derive(Dict, Dir, Getattr, Repr, Str))]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 /// Top-n logprobs element
 pub struct TopLogprob {
     pub token: u32,
