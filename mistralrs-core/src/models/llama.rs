@@ -209,10 +209,22 @@ impl MlpLayer for Mlp {
         &self.params
     }
     // c_fc1, c_fc2, c_proj
-    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
-        let new_c_fc1 = merge_delta!(self.c_fc1, deltas[0]);
-        let new_c_fc2 = merge_delta!(self.c_fc2, deltas[1]);
-        let new_c_proj = merge_delta!(self.c_proj, deltas[2]);
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let new_c_fc1 = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.c_fc1, delta)
+        } else {
+            self.c_fc1.clone()
+        };
+        let new_c_fc2 = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.c_fc2, delta)
+        } else {
+            self.c_fc2.clone()
+        };
+        let new_c_proj = if let Some(ref delta) = deltas[2] {
+            merge_delta!(self.c_proj, delta)
+        } else {
+            self.c_proj.clone()
+        };
 
         Ok(Box::new(Self {
             c_fc1: new_c_fc1,
@@ -521,30 +533,46 @@ impl AnyMoeBaseModelMixin for Llama {
                             },
                         )?));
                     }
-                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                    AnyMoeExpertType::LoraAdapter {
+                        rank,
+                        alpha,
+                        ref target_modules,
+                    } => {
                         let vb_mlp = vb.pp(layer).pp(&mlp);
 
-                        let c_fc1_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (hidden_size, intermediate_size),
-                            "c_fc1"
-                        );
-                        let c_fc2_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (hidden_size, intermediate_size),
-                            "c_fc2"
-                        );
-                        let c_proj_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (intermediate_size, hidden_size),
-                            "c_proj"
-                        );
+                        let c_fc1_delta = if target_modules.contains(&"c_fc1".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "c_fc1"
+                            ))
+                        } else {
+                            None
+                        };
+                        let c_fc2_delta = if target_modules.contains(&"c_fc2".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "c_fc2"
+                            ))
+                        } else {
+                            None
+                        };
+                        let c_proj_delta = if target_modules.contains(&"c_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (intermediate_size, hidden_size),
+                                "c_proj"
+                            ))
+                        } else {
+                            None
+                        };
 
                         row.push(self.blocks[layer].mlp.new_added_delta(vec![
                             c_fc1_delta,
@@ -558,7 +586,8 @@ impl AnyMoeBaseModelMixin for Llama {
         for (layer, expert) in layers.into_iter().zip(experts) {
             let mut experts_all = vec![self.blocks[layer].mlp.clone()];
             experts_all.extend(expert);
-            self.blocks[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
+            self.blocks[layer].mlp =
+                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
         }
         Ok(())
     }

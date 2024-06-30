@@ -62,7 +62,7 @@ impl Loader for AnyMoeLoader {
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
-            self.config,
+            self.config.clone(),
             self.path.clone(),
             self.prefix.clone(),
             self.mlp.clone(),
@@ -93,7 +93,7 @@ impl Loader for AnyMoeLoader {
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
-            self.config,
+            self.config.clone(),
             self.path.clone(),
             self.prefix.clone(),
             self.mlp.clone(),
@@ -245,7 +245,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             epochs,
             batch_size,
             expert_type,
-        } = self.config;
+        } = self.config.clone();
         let mut steps = 0;
 
         info!("Expert type: {expert_type:?}");
@@ -257,7 +257,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             &token,
             revision,
             &mlp.clone(),
-            self.config,
+            self.config.clone(),
             metadata.activation_dtype,
             &device,
             (prefix, mlp),

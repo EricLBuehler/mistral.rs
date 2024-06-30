@@ -19,12 +19,12 @@ macro_rules! get_delta_from_lora_ab {
 macro_rules! merge_delta {
     ($qmatmul:expr, $delta:expr) => {
         match &$qmatmul {
-            QMatMul::Tensor(w) => QMatMul::Tensor((w + &$delta)?),
-            QMatMul::TensorF16(w) => QMatMul::TensorF16((w + &$delta)?),
+            QMatMul::Tensor(w) => QMatMul::Tensor((w + $delta)?),
+            QMatMul::TensorF16(w) => QMatMul::TensorF16((w + $delta)?),
             QMatMul::QTensor(w) => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 QMatMul::QTensor(std::sync::Arc::new(
-                    candle_core::quantized::QTensor::quantize(&(w + &$delta)?, dtype)?,
+                    candle_core::quantized::QTensor::quantize(&(w + $delta)?, dtype)?,
                 ))
             }
         }

@@ -42,22 +42,23 @@ expert_type = "fine_tuned"
 ### With LoRA adapter experts
 ```toml
 [model]
-model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+model_id = "HuggingFaceH4/zephyr-7b-beta"
 arch = "mistral"
 
 [anymoe]
 dataset_csv = "test.csv"
 prefix = "model.layers"
 mlp = "mlp"
-model_ids = ["typeof/zephyr-7b-beta-lora"]
+model_ids = ["EricB/example_adapter"]
 layers = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 [anymoe.config]
 hidden_size = 4096
 
 [anymoe.config.expert_type.lora_adapter]
-rank = 64
+rank = 16
 alpha = 16
+target_modules = ["up_proj"]
 ```
 
 ## CLI usage

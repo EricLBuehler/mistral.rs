@@ -147,10 +147,22 @@ impl MlpLayer for MLP {
         &self.params
     }
     // gate, up, down
-    fn new_added_delta(&self, deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
-        let new_gate = merge_delta!(self.gate_proj.inner_ref(), deltas[0]);
-        let new_up = merge_delta!(self.up_proj.inner_ref(), deltas[1]);
-        let new_down = merge_delta!(self.down_proj.inner_ref(), deltas[2]);
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let new_gate = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.gate_proj.inner_ref(), delta)
+        } else {
+            self.gate_proj.inner_ref().clone()
+        };
+        let new_up = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.up_proj.inner_ref(), delta)
+        } else {
+            self.up_proj.inner_ref().clone()
+        };
+        let new_down = if let Some(ref delta) = deltas[2] {
+            merge_delta!(self.down_proj.inner_ref(), delta)
+        } else {
+            self.down_proj.inner_ref().clone()
+        };
 
         Ok(Box::new(Self {
             gate_proj: QLinear::from_old_and_qmatmul(new_gate, &self.gate_proj),
@@ -673,30 +685,46 @@ impl AnyMoeBaseModelMixin for Model {
                             vb.pp(layer).pp(&mlp),
                         )?));
                     }
-                    AnyMoeExpertType::LoraAdapter { rank, alpha } => {
+                    AnyMoeExpertType::LoraAdapter {
+                        rank,
+                        alpha,
+                        ref target_modules,
+                    } => {
                         let vb_mlp = vb.pp(layer).pp(&mlp);
 
-                        let gate_proj_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (hidden_size, intermediate_size),
-                            "gate_proj"
-                        );
-                        let up_proj_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (hidden_size, intermediate_size),
-                            "up_proj"
-                        );
-                        let down_proj_delta = get_delta_from_lora_ab!(
-                            vb_mlp,
-                            rank,
-                            alpha,
-                            (intermediate_size, hidden_size),
-                            "down_proj"
-                        );
+                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "gate_proj"
+                            ))
+                        } else {
+                            None
+                        };
+                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "up_proj"
+                            ))
+                        } else {
+                            None
+                        };
+                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (intermediate_size, hidden_size),
+                                "down_proj"
+                            ))
+                        } else {
+                            None
+                        };
 
                         row.push(self.layers[layer].mlp.new_added_delta(vec![
                             gate_proj_delta,
@@ -710,7 +738,8 @@ impl AnyMoeBaseModelMixin for Model {
         for (layer, expert) in layers.into_iter().zip(experts) {
             let mut experts_all = vec![self.layers[layer].mlp.clone()];
             experts_all.extend(expert);
-            self.layers[layer].mlp = Box::new(MoeMlp::new(experts_all, config, dtype, dev)?);
+            self.layers[layer].mlp =
+                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
         }
         Ok(())
     }

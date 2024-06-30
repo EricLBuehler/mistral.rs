@@ -79,7 +79,7 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     /// This is for LoRA experts and completes the merging process.
     /// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
-    fn new_added_delta(&self, _deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>>;
+    fn new_added_delta(&self, _deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>>;
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -99,15 +99,19 @@ serde_default_fn!(f64, default_lr, 1e-3);
 serde_default_fn!(usize, default_epochs, 100);
 serde_default_fn!(usize, default_bs, 4);
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum AnyMoeExpertType {
     #[serde(rename = "fine_tuned")]
     FineTuned,
     #[serde(rename = "lora_adapter")]
-    LoraAdapter { rank: usize, alpha: f64 },
+    LoraAdapter {
+        rank: usize,
+        alpha: f64,
+        target_modules: Vec<String>,
+    },
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AnyMoeConfig {
     pub hidden_size: usize,
     #[serde(default = "default_lr")]
@@ -266,7 +270,7 @@ impl MlpLayer for MoeMlp {
         true
     }
 
-    fn new_added_delta(&self, _deltas: Vec<Tensor>) -> Result<Box<dyn MlpLayer>> {
+    fn new_added_delta(&self, _deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         unreachable!()
     }
 }
