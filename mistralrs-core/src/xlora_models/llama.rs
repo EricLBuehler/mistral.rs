@@ -748,6 +748,9 @@ impl NormalModel for XLoraLlama {
         self.blocks[0].attn.max_seq_len
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        if self.xlora_classifier.is_some() {
+            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+        }
         let mut sum = 0;
         for layer in self.blocks.iter_mut() {
             sum += Arc::get_mut(&mut layer.attn.k_proj)
