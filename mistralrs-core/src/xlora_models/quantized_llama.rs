@@ -721,6 +721,9 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        if self.xlora_classifier.is_some() {
+            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+        }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {
             sum += layer.attention_wk.activate(&adapter_names)?;

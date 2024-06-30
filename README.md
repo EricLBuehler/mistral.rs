@@ -77,7 +77,7 @@ Mistal.rs supports several model categories:
 - Grammar support with Regex and Yacc.
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
-    - Provides methods to further reduce memory spikes.
+    - Extremely fast due to working in parallel
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -108,7 +108,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen 2|✅| |✅|
 |Phi 3 Vision|✅| |✅|
 |Idefics 2|✅| |✅|
-|Gemma 2|✅| |✅|
+|Gemma 2|✅|✅|✅|
 
 ## APIs and Integrations
 
@@ -351,6 +351,14 @@ You can launch interactive mode, a simple chat application running in the termin
 
 ```bash
 ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+```
+
+**Interactive mode for vision models:**
+
+You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
+
+```bash
+./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
 ```
 
 ## More quick examples:

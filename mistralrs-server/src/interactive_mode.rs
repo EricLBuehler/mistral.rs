@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose, Engine};
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
@@ -6,7 +7,8 @@ use mistralrs_core::{
 };
 use once_cell::sync::Lazy;
 use std::{
-    io::{self, Write},
+    fs::{self, File},
+    io::{self, Read, Write},
     sync::{atomic::Ordering, Arc, Mutex},
 };
 use tokio::sync::mpsc::channel;
@@ -23,9 +25,10 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
+    let mut images = Vec::new();
 
     let sampling_params = SamplingParams {
         temperature: Some(0.1),
@@ -51,28 +54,85 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>) {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
-        if prompt.is_empty() {
-            return;
-        }
+        let request_messages = if !vision_chat {
+            let mut prompt = String::new();
+            print!("> ");
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(&mut prompt)
+                .expect("Failed to get input");
+            if prompt.is_empty() {
+                return;
+            }
 
-        // Set the handler to terminate all seqs, so allowing cancelling running
-        *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
+            // Set the handler to terminate all seqs, so allowing cancelling running
+            *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
-        user_message.insert("role".to_string(), Either::Left("user".to_string()));
-        user_message.insert("content".to_string(), Either::Left(prompt));
-        messages.push(user_message);
+            let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+            user_message.insert("role".to_string(), Either::Left("user".to_string()));
+            user_message.insert("content".to_string(), Either::Left(prompt));
+            messages.push(user_message);
+
+            RequestMessage::Chat(messages.clone())
+        } else {
+            let mut prompt = String::new();
+            print!("Prompt > ");
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(&mut prompt)
+                .expect("Failed to get input");
+            if prompt.is_empty() {
+                return;
+            }
+
+            let mut image_url = String::new();
+            print!("Image URL or path, [ENTER] for no image > ");
+            io::stdout().flush().unwrap();
+            io::stdin()
+                .read_line(&mut image_url)
+                .expect("Failed to get input");
+            if image_url.is_empty() {
+                return;
+            }
+            if image_url.as_str() != "\n" {
+                let url = image_url.trim();
+                let bytes = if url.contains("http") {
+                    // Read from http
+                    match reqwest::get(url).await {
+                        Ok(http_resp) => http_resp.bytes().await.unwrap().to_vec(),
+                        Err(e) => panic!("{e}"),
+                    }
+                } else if let Ok(mut f) = File::open(url) {
+                    // Read from local file
+                    let metadata = fs::metadata(url).unwrap();
+                    let mut buffer = vec![0; metadata.len() as usize];
+                    f.read_exact(&mut buffer).unwrap();
+                    buffer
+                } else {
+                    // Decode with base64
+                    general_purpose::STANDARD.decode(url).unwrap()
+                };
+                images.push(image::load_from_memory(&bytes).unwrap());
+            }
+
+            // Set the handler to terminate all seqs, so allowing cancelling running
+            *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
+
+            let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+            user_message.insert("role".to_string(), Either::Left("user".to_string()));
+            user_message.insert("content".to_string(), Either::Left(prompt));
+            messages.push(user_message);
+
+            RequestMessage::VisionChat {
+                images: images.clone(),
+                messages: messages.clone(),
+            }
+        };
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(NormalRequest {
             id: mistralrs.next_request_id(),
-            messages: RequestMessage::Chat(messages.clone()),
+            messages: request_messages,
             sampling_params: sampling_params.clone(),
             response: tx,
             return_logprobs: false,

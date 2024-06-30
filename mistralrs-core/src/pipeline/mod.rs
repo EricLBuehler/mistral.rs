@@ -585,7 +585,7 @@ pub trait Pipeline:
                 None,
                 self.get_input_processor_config(),
             )
-            .unwrap();
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         match pre_op {
             CacheInstruction::In(adapter_inst) => {
