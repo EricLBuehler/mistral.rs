@@ -865,6 +865,9 @@
 <a href="#865" id="865">865</a>
 <a href="#866" id="866">866</a>
 <a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1671,6 +1674,9 @@
         <span class="self">self</span>.max_seq_len
     }
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Adapter activation is not supported for X-LoRA models as the adapter set must remain the same."</span>);
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
         <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {
             sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)

@@ -555,6 +555,9 @@
 <a href="#555" id="555">555</a>
 <a href="#556" id="556">556</a>
 <a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -925,6 +928,9 @@
 
 <span class="kw">impl </span>ModelWeights {
     <span class="kw">pub fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Adapter activation is not supported for X-LoRA models as the adapter set must remain the same."</span>);
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
         <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {
             sum += layer.attn_qkv.activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;

@@ -809,6 +809,9 @@
 <a href="#809" id="809">809</a>
 <a href="#810" id="810">810</a>
 <a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1559,6 +1562,9 @@
         <span class="self">self</span>.blocks[<span class="number">0</span>].attn.max_seq_len
     }
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Adapter activation is not supported for X-LoRA models as the adapter set must remain the same."</span>);
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
         <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut() {
             sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.k_proj)
