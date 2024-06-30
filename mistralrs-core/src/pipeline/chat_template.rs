@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
-use minijinja::{context, Environment, ErrorKind};
+use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::MessageContent;
 
@@ -28,8 +28,11 @@ pub struct AddedTokensDecoder {
     special: Option<bool>,
 }
 
-fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
-    Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+fn raise_exception(msg: String) -> Result<(), minijinja::Error> {
+    // We used to throw an error, now just warn.
+    // Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+    warn!("Chat template error: `{msg}`. Please ensure that the messages are correctly formatted.");
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
