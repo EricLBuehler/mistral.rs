@@ -108,7 +108,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen 2|✅| |✅|
 |Phi 3 Vision|✅| |✅|
 |Idefics 2|✅| |✅|
-|Gemma 2|✅| |✅|
+|Gemma 2|✅|✅|✅|
 
 ## APIs and Integrations
 
