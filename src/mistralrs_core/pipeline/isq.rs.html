@@ -255,7 +255,7 @@
             <span class="comment">// NOTE(EricLBuehler): On version 0.2.0, remove this
             </span><span class="kw">let </span>isq_low_mem = std::env::var(<span class="string">"ISQ_LOW_MEMORY"</span>).is_ok();
             <span class="kw">if </span>isq_low_mem {
-                <span class="macro">warn!</span>(<span class="string">"ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant"</span>);
+                <span class="macro">warn!</span>(<span class="string">"ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant"</span>);
             }
 
             <span class="macro">info!</span>(<span class="string">"Applying ISQ on {} threads."</span>, rayon::current_num_threads());
