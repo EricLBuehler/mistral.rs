@@ -353,6 +353,14 @@ You can launch interactive mode, a simple chat application running in the termin
 ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
+**Interactive mode for vision models:**
+
+You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
+
+```bash
+./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+```
+
 ## More quick examples:
 
 - X-LoRA with no quantization
