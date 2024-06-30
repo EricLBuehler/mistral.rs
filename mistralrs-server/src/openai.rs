@@ -50,6 +50,10 @@ fn default_1usize() -> usize {
     1
 }
 
+fn default_model() -> String {
+    "default".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type", content = "value")]
 pub enum Grammar {
@@ -65,6 +69,7 @@ pub struct ChatCompletionRequest {
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
     #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
     pub model: String,
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
