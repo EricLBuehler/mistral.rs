@@ -105,38 +105,23 @@ pub trait IsqModel {
         }
 
         let t_start = Instant::now();
-        #[cfg(not(feature = "metal"))]
-        {
-            // NOTE(EricLBuehler): On version 0.2.0, remove this
-            let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
-            if isq_low_mem {
-                warn!("ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant");
-            }
 
-            info!("Applying ISQ on {} threads.", rayon::current_num_threads());
-
-            use indicatif::ParallelProgressIterator;
-            use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-            tensors
-                .into_par_iter()
-                .zip(devices)
-                .progress_with(bar)
-                .for_each(|((tensor, _), device)| {
-                    generate_isq!(tensor, device, dtype, n_quantized)
-                });
+        // NOTE(EricLBuehler): On version 0.2.0, remove this
+        let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
+        if isq_low_mem {
+            warn!("ISQ_LOW_MEMORY is set but as of version 0.1.23, this is irrelevant");
         }
 
-        #[cfg(feature = "metal")]
-        {
-            use indicatif::ProgressIterator;
-            tensors
-                .into_iter()
-                .zip(devices)
-                .progress_with(bar)
-                .for_each(|((tensor, _), device)| {
-                    generate_isq!(tensor, device, dtype, n_quantized)
-                });
-        }
+        info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+
+        use indicatif::ParallelProgressIterator;
+        use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+        tensors
+            .into_par_iter()
+            .zip(devices)
+            .progress_with(bar)
+            .for_each(|((tensor, _), device)| generate_isq!(tensor, device, dtype, n_quantized));
+
         let delta = Instant::now().duration_since(t_start).as_secs_f32();
         info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
 
