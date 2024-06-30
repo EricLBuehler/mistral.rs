@@ -165,6 +165,12 @@
 <a href="#165" id="165">165</a>
 <a href="#166" id="166">166</a>
 <a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
@@ -217,6 +223,10 @@
     <span class="number">1
 </span>}
 
+<span class="kw">fn </span>default_model() -&gt; String {
+    <span class="string">"default"</span>.to_string()
+}
+
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = <span class="string">"type"</span>, content = <span class="string">"value"</span>)]
 </span><span class="kw">pub enum </span>Grammar {
@@ -232,6 +242,7 @@
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)]
     </span><span class="kw">pub </span>messages: Either&lt;Vec&lt;Message&gt;, String&gt;,
     <span class="attr">#[schema(example = <span class="string">"mistral"</span>)]
+    #[serde(default = <span class="string">"default_model"</span>)]
     </span><span class="kw">pub </span>model: String,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;HashMap&lt;u32, f32&gt;&gt;))]
     </span><span class="kw">pub </span>logit_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;,
@@ -286,6 +297,7 @@
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 </span><span class="kw">pub struct </span>CompletionRequest {
     <span class="attr">#[schema(example = <span class="string">"mistral"</span>)]
+    #[serde(default = <span class="string">"default_model"</span>)]
     </span><span class="kw">pub </span>model: String,
     <span class="attr">#[schema(example = <span class="string">"Say this is a test."</span>)]
     </span><span class="kw">pub </span>prompt: String,
