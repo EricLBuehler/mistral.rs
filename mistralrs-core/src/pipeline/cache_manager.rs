@@ -9,17 +9,12 @@ use super::{CacheManagerMixin, MetadataMixin};
 pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(
         &self,
-        pipeline: &mut T,
+        pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     );
-    fn clone_out_cache(
-        &self,
-        pipeline: &mut T,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn set_none_cache(&self, pipeline: &mut T, modify_draft_cache: bool);
+    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool);
 }
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
@@ -239,7 +234,7 @@ fn clone_out_cache(
 impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultCacheManager {
     fn clone_in_cache(
         &self,
-        pipeline: &mut T,
+        pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
@@ -276,7 +271,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultC
 
     fn clone_out_cache(
         &self,
-        pipeline: &mut T,
+        pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
@@ -310,7 +305,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultC
         }
     }
 
-    fn set_none_cache(&self, pipeline: &mut T, modify_draft_cache: bool) {
+    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool) {
         let mut new_cache = Vec::new();
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);

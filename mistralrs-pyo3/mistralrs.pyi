@@ -63,6 +63,8 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Qwen2 = "qwen2"
+    Gemma2 = "gemma2"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -151,10 +153,10 @@ class Which(Enum):
         repeat_last_n: int = 64
     @dataclass
     class VisionPlain:
+        arch: VisionArchitecture
         model_id: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
-        arch: VisionArchitecture
 
 class Runner:
     def __init__(

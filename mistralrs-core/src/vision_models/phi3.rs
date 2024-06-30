@@ -21,6 +21,7 @@ use crate::{
         extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
     serde_default_fn,
+    utils::progress::NiceProgressBar,
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
 };
 
@@ -165,7 +166,7 @@ impl Attention {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -192,15 +193,23 @@ impl Attention {
             self.num_kv_heads * self.head_dim,
         )?;
 
-        let q = q
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let (q, k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            (q, k, v)
+        };
 
         let (q, k) = self
             .rotary_emb
@@ -328,7 +337,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -775,7 +784,7 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),
@@ -818,7 +827,7 @@ impl Model {
     }
 
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
@@ -841,7 +850,7 @@ impl Model {
             self.layers[0].self_attn.num_heads,
         )?;
 
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -884,7 +893,7 @@ pub(crate) struct Phi3VisionSpecificArgs {
 
 impl VisionModel for Model {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],

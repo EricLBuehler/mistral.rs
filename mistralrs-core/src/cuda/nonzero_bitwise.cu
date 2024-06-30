@@ -66,7 +66,11 @@ __global__ void transform_indices(const uint32_t *temp_indices,
     int temp_index = temp_indices[idx];
     for (int i = num_dims - 1; i >= 0; i--) {
       d_out[idx * num_dims + i] = temp_index % dims[i];
-      temp_index /= dims[i];
+      if (dims[i] == 0) {
+        // Handle the error appropriately
+      } else {
+        temp_index /= dims[i];
+      }
     }
   }
 }

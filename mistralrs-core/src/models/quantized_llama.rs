@@ -10,6 +10,7 @@ use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductA
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
@@ -127,7 +128,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
@@ -142,21 +143,34 @@ impl LayerWeights {
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+        };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?;
+                .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+                .contiguous()?;
         }
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
@@ -211,7 +225,7 @@ impl ModelConfig::FromGGML for ModelWeights {
         let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in 0..ct.hparams.n_layer {
+        for layer_idx in NiceProgressBar(0..ct.hparams.n_layer, "Loading repeating layers") {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
@@ -348,7 +362,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
-        for layer_idx in 0..block_count {
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -484,7 +498,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -498,7 +512,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }

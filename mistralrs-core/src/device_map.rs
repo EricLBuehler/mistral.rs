@@ -128,6 +128,8 @@ pub trait DeviceMapper: Debug {
     ) -> VarBuilder<'a>;
     /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device>;
+    /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
+    fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor>;
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
@@ -164,6 +166,13 @@ impl DeviceMapper for LayerDeviceMapper {
             return Some(&self.nm_device);
         }
         self.mappings.get(layer)
+    }
+    fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
+        if loading_isq {
+            x.to_device(&Device::Cpu)
+        } else {
+            x.to_device(&self.nm_device)
+        }
     }
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
         if loading_isq {
@@ -205,6 +214,13 @@ impl DeviceMapper for DummyDeviceMapper {
             return Some(&self.nm_device);
         }
         None
+    }
+    fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
+        if loading_isq {
+            x.to_device(&Device::Cpu)
+        } else {
+            x.to_device(&self.nm_device)
+        }
     }
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
         if loading_isq {

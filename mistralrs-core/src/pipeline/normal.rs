@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader, Qwen2Loader,
+    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    Phi2Loader, Phi3Loader, Qwen2Loader,
 };
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -162,6 +162,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Phi2 => Box::new(Phi2Loader),
             NormalLoaderType::Phi3 => Box::new(Phi3Loader),
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
+            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -352,13 +353,13 @@ impl IsqPipelineMixin for NormalPipeline {
 }
 
 impl CacheManagerMixin for NormalPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -400,7 +401,7 @@ impl MetadataMixin for NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,

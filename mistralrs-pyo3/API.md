@@ -21,9 +21,11 @@ Additionally, for models without quantization, the model architecture should be 
 - `Phi2`
 - `Phi3`
 - `Qwen2`
+- `Gemma2`
 
 ### Architecture for vision models
 - `Phi3V`
+- `Idefics2`
 
 ```py
 class Which(Enum):

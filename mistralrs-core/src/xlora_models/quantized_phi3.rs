@@ -16,6 +16,7 @@ use crate::lora::Merge;
 use crate::lora::Ordering;
 use crate::lora::QLoraLinear;
 use crate::pipeline::extract_logits;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
@@ -111,7 +112,7 @@ impl LayerWeights {
 
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -137,15 +138,23 @@ impl LayerWeights {
             self.n_kv_head * self.head_dim,
         )?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let (q, k, v) = if seq_len != 1 {
+            let q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            (q, k, v)
+        };
 
         let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
@@ -256,7 +265,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let mapper = mapper.into_mapper(block_count, device)?;
 
         let mut count = 0;
-        for layer_idx in 0..block_count {
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
@@ -370,7 +379,7 @@ impl ModelWeights {
     }
 
     pub fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         scalings: Option<Tensor>,
@@ -400,7 +409,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 xs = mapper.map(xs, i)?;
             }
@@ -441,7 +450,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -526,7 +535,7 @@ impl ScalingsMaker for ModelWeights {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,

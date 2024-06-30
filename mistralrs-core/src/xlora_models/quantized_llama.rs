@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -181,7 +182,7 @@ struct LayerWeights {
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: &Option<Tensor>,
         start_offsets: &[usize],
@@ -213,21 +214,34 @@ impl LayerWeights {
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+        };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?;
+                .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+                .contiguous()?;
         }
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
@@ -490,7 +504,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
-        for layer_idx in 0..block_count {
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -737,7 +751,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -766,7 +780,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
@@ -809,7 +823,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -904,7 +918,7 @@ impl ScalingsMaker for ModelWeights {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,

@@ -6,6 +6,7 @@ use crate::{
     layers::ScaledDotProductAttention,
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{RotaryEmbedding, VarBuilder};
@@ -254,7 +255,7 @@ impl Attention {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -297,14 +298,18 @@ impl Attention {
 
         let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if q_len != 1 {
+            v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && q_len != 1 {
             q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -312,6 +317,14 @@ impl Attention {
             k = k
                 .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_heads, q_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?
                 .contiguous()?;
         }
 
@@ -413,7 +426,7 @@ impl DecoderLayer {
 
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -487,7 +500,7 @@ impl XLoraModel {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in 0..cfg.num_hidden_layers {
+        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 cfg.head_dim,
@@ -545,7 +558,13 @@ impl XLoraModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::Linear::new(embed_tokens.embeddings().clone(), None);
+        let lm_head = candle_nn::Linear::new(
+            mapper.cast_nm_device(
+                embed_tokens.embeddings(),
+                normal_loading_metadata.loading_isq,
+            )?,
+            None,
+        );
         Ok(Self {
             embed_tokens,
             layers,
@@ -565,7 +584,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -595,7 +614,7 @@ impl XLoraModel {
             self.layers[0].self_attn.num_heads,
         )?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
@@ -620,7 +639,7 @@ impl XLoraModel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -738,7 +757,7 @@ impl IsqModel for XLoraModel {
 
 impl NormalModel for XLoraModel {
     fn forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
         _start_offsets_kernel: Tensor,
@@ -748,7 +767,7 @@ impl NormalModel for XLoraModel {
         unreachable!()
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -825,7 +844,7 @@ impl ScalingsMaker for XLoraModel {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,

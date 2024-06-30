@@ -11,6 +11,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,14 +70,18 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -84,6 +89,14 @@ impl CausalSelfAttention {
             k = k
                 .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
                 .contiguous()?;
         }
 
@@ -255,7 +268,7 @@ pub struct Llama {
 
 impl Llama {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -316,7 +329,8 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            .into_iter()
             .map(|i| {
                 let rotary_emb = Arc::new(
                     RotaryEmbedding::new(
@@ -374,7 +388,7 @@ impl IsqModel for Llama {
 
 impl NormalModel for Llama {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -389,7 +403,7 @@ impl NormalModel for Llama {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
