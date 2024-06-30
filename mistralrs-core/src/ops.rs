@@ -435,6 +435,7 @@ impl NonZeroOp for Tensor {
     }
 }
 
+#[allow(dead_code)]
 pub struct TopKOutput {
     pub values: Tensor,
     pub indices: Tensor,

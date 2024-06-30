@@ -218,10 +218,7 @@ impl MlpLayer for MoeMlp {
         // ^ [b, n_e]
 
         // Gate with topk 1 to get the highest ranked expert
-        let TopKOutput {
-            values: gate,
-            indices,
-        } = gate.topk(1)?;
+        let TopKOutput { values: _, indices } = gate.topk(1)?;
 
         if self.training {
             *self.gating_output.write().unwrap() = Some(gate.clone());
