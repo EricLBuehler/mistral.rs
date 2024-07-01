@@ -112,6 +112,7 @@ pub struct Model {
     llm: Box<dyn LLaVALLM>,
     config: Config,
     device: Device,
+    dtype: DType,
 }
 
 impl Model {
@@ -122,7 +123,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
-
+        let dtype = vb.dtype();
         let clip_config = config.to_clip_config();
         let mm_projector = MMProjector::new(&vb, config)?;
         let clip_vision_tower = ClipVisionTower::new(
@@ -167,6 +168,7 @@ impl Model {
             llm,
             config: config.clone(),
             device,
+            dtype,
         })
     }
 
@@ -217,8 +219,7 @@ impl Model {
             .collect::<Result<Vec<i64>>>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
-        let image_features = self.encode_images(images)?; //[sum of samples of all images,patch_size*patch_size,hidden_size]
-        println!("image_features.shape = {:?}", image_features.shape());
+        let image_features = self.encode_images(&images.to_dtype(self.dtype)?)?; //[sum of samples of all images,patch_size*patch_size,hidden_size]
         let mut image_features_vec = Vec::new();
         let mut index = 0;
         for num_image_sample in num_image_samples {

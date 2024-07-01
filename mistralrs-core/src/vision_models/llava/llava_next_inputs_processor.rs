@@ -351,11 +351,6 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         ) {
             samples.push(patch);
         }
-        let dtype = match self.model_config.torch_dtype.as_str() {
-            "float16" => DType::F16,
-            "bfloat16" => DType::BF16,
-            _ => candle_core::bail!("unsupported dtype"),
-        };
         let image_mean = config
             .image_mean
             .unwrap_or(Self::DEFAULT_MEAN)
@@ -372,7 +367,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
                     config,
                     resized_size as u32,
                     filter,
-                    dtype,
+                    DType::BF16,
                     device,
                     &image_mean,
                     &image_std,

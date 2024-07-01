@@ -287,12 +287,6 @@ impl ImagePreProcessor for LLaVAInputProcessor {
 
         let original_size = images[0].dimensions();
         let filter = config.resampling.to_filter()?;
-        let dtype = match self.model_config.torch_dtype.as_str() {
-            "float16" => DType::F16,
-            "bfloat16" => DType::BF16,
-            "float32" => DType::F32,
-            _ => candle_core::bail!("unsupported dtype"),
-        };
         let image_mean = config
             .image_mean
             .unwrap_or(Self::DEFAULT_MEAN)
@@ -315,7 +309,7 @@ impl ImagePreProcessor for LLaVAInputProcessor {
                     config,
                     resized_size as u32,
                     filter,
-                    dtype,
+                    DType::BF16,
                     device,
                     &image_mean,
                     &image_std,

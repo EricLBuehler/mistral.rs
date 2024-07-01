@@ -68,6 +68,8 @@ class Architecture(Enum):
 class VisionArchitecture(Enum):
     Phi3V = "phi3v"
     Idefics2 = "idefics2"
+    LLaVANext = "LLaVANext"
+    LLaVA = "LLaVA"
 
 class Which(Enum):
     """

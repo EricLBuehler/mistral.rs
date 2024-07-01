@@ -2,7 +2,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="/root/autodl-tmp/llava-v1.6-mistral-7b-hf",
+        model_id="llava-hf/llava-v1.6-mistral-7b-hf",
         tokenizer_json=None,
         repeat_last_n=64,
         arch=VisionArchitecture.LLaVANext,
@@ -19,7 +19,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Everest_North_Face_toward_Base_Camp_Tibet_Luca_Galuzzi_2006.jpg"
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                         },
                     },
                     {

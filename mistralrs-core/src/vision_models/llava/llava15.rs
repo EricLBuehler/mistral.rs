@@ -103,6 +103,7 @@ pub struct Model {
     llm: Box<dyn LLaVALLM>,
     config: Config,
     device: Device,
+    dtype: DType,
 }
 
 impl Model {
@@ -113,7 +114,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
-
+        let dtype = vb.dtype();
         let clip_config = config.to_clip_config();
         let mm_projector = MMProjector::new(&vb, config)?;
         let clip_vision_tower = ClipVisionTower::new(
@@ -154,6 +155,7 @@ impl Model {
             llm,
             config: config.clone(),
             device,
+            dtype,
         })
     }
 
@@ -181,11 +183,11 @@ impl Model {
             .collect::<Result<Vec<i64>>>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
-        let image_features = self.encode_images(images)?; //[num of images,patch_size*patch_size,hidden_size]
+        let image_features = self.encode_images(&images.to_dtype(self.dtype)?)?; //[num of images,patch_size*patch_size,hidden_size]
         let num_of_images = image_features.shape().dims()[0];
         let mut image_features_vec = Vec::new();
         for i in 0..num_of_images {
-            image_features_vec.push(image_features.get(i)?.flatten(0, 1)?);
+            image_features_vec.push(image_features.get(i)?.unsqueeze(0)?);
         }
         for (i, image_index) in image_indexes.iter().enumerate() {
             let image_id = image_ids[i];

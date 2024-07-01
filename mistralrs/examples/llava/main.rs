@@ -19,7 +19,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         Some("chat_templates/vicuna.json".to_string()),
         None,
-        Some("/root/autodl-tmp/llava-1.5-7b-hf".to_string()),
+        Some("llava-hf/llava-1.5-7b-hf".to_string()),
     )
     .build(VisionLoaderType::LLaVA);
     // Load, into a Pipeline
@@ -27,7 +27,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        //&ModelDType::F16, // how can we load from config?
         &ModelDType::Auto,
         &Device::cuda_if_available(0)?,
         false,
@@ -42,11 +41,9 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
     let (tx, mut rx) = channel(10_000);
-    let img = image::io::Reader::open("./cat.jpg")?.decode()?;
     let request = Request::Normal(NormalRequest {
         messages: RequestMessage::VisionChat {
-            images: vec![img],
-            //images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
+            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
             messages: vec![IndexMap::from([
                 ("role".to_string(), Either::Left("user".to_string())),
                 (

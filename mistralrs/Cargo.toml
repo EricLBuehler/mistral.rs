@@ -68,3 +68,11 @@ required-features = []
 [[example]]
 name = "idefics2"
 required-features = []
+
+[[example]]
+name = "llava"
+required-features = []
+
+[[example]]
+name = "llava_next"
+required-features = []

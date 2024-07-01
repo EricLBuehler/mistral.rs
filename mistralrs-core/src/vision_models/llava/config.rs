@@ -12,7 +12,6 @@ pub struct Config {
     pub image_grid_pinpoints: Option<Vec<(u32, u32)>>,
     pub projector_hidden_act: String,
     pub text_config: LLaVATextConfig,
-    pub torch_dtype: String,
     pub vision_config: LLaVAVisionConfig,
     pub vision_feature_layer: isize,
     pub vision_feature_select_strategy: String,
