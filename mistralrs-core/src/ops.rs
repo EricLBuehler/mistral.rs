@@ -264,14 +264,47 @@ pub trait BitWiseOp {
 }
 
 impl BitWiseOp for Tensor {
+    #[cfg(feature = "metal")]
+    fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::And),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::And))
     }
 
+    #[cfg(feature = "metal")]
+    fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::Or),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Or))
     }
 
+    #[cfg(feature = "metal")]
+    fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::Xor),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Xor))
     }
@@ -427,6 +460,17 @@ pub trait NonZeroOp {
 }
 
 impl NonZeroOp for Tensor {
+    #[cfg(feature = "metal")]
+    fn nonzero(&self) -> Result<Tensor> {
+        if !self.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+        }
+        let original_device = self.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op1_no_bwd(&NonZero {})?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
             return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
