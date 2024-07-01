@@ -20,7 +20,7 @@ runner = Runner(
         prefix="model.layers",
         mlp="mlp",
         expert_type=AnyMoeExpertType.LoraAdapter(
-            rank=64, alpha=16.0, target_modules=["up_proj", "down_proj", "gate_proj"]
+            rank=64, alpha=16.0, target_modules=["gate_proj"]
         ),
         lr=1e-3,
         epochs=100,
