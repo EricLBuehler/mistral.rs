@@ -259,6 +259,15 @@ class AnyMoeConfig:
     ) -> None:
         """
         Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
+
+        To find the prefix/mlp values:
+
+            - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
+            - Look for the mlp layers: For example `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
+
+        To find the hidden size:
+
+            - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
         """
         ...
 

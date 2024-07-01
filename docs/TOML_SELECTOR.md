@@ -5,9 +5,13 @@ Mistral.rs supports loading models from a .toml file, and the fields are the sam
 There are a few cases which add functionality that cannot be found in the CLI.
 
 ## Speculative decoding
-For speculative decoding
+
+### What to specify
+**Under `[speculative]`**
 - Specify the `gamma` parameter
-- Choose a draft model (only requirement is that they have the same tokenizer)
+
+**Under `[speculative.draft_model]`**
+- Choose a draft model, just like under `[model]` (only requirement is that they have the same tokenizer)
 
 ```toml
 [model]
@@ -28,13 +32,23 @@ cargo run --release --features cuda -- -i toml -f toml_selectors/speculative_ggu
 ```
 
 ## AnyMoE
-For speculative decoding
+
+### What to specify
+**Under `[anymoe]`, required unless specified**
 - Specify the dataset
 - Find and specify the prefix/mlp values
-    - For .safetensors models, go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
-    - Look for the mlp layers: `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
+    - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
+    - Look for the mlp layers: For example `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
 - Specify the expert or LoRA adapter model IDs
-- If using a LoRA adapter model ID, specify the rank and alpha parameters.
+- (Optional) Specify layers to apply AnyMoE to.
+
+**Under `[anymoe.config]`**
+- Hidden size, typically found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+
+**(For LoRA experts) Under `[anymoe.config.expert_type.lora_adapter]`**
+- Rank
+- Alpha
+- Target modules
 
 ```
 cargo run --release --features cuda -- -i toml -f toml_selectors/anymoe.toml

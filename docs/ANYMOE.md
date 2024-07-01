@@ -28,7 +28,7 @@ AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the 
 
 > Note: When using LoRA adapter experts, it may not be necessary to set the layers where AnyMoE will be applied due to the lower memory usage.
 
-### With fine-tuned experts
+### Example of TOML selector with fine-tuned experts
 ```toml
 [model]
 model_id = "mistralai/Mistral-7B-Instruct-v0.1"
@@ -46,7 +46,7 @@ hidden_size = 4096
 expert_type = "fine_tuned"
 ```
 
-### With LoRA adapter experts
+### Example of TOML selector with LoRA adapter experts
 ```toml
 [model]
 model_id = "HuggingFaceH4/zephyr-7b-beta"
@@ -72,7 +72,7 @@ target_modules = ["up_proj", "down_proj", "gate_proj"]
 
 ## `mistralrs-server`
 
-CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe).
+CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe) where you can also find docs on the required fields.
 
 For example, to use the demo fine-tuned expert:
 ```
@@ -84,7 +84,7 @@ To use the demo LoRA expert:
 ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
 ```
 
-## Python API
+## Python example
 ```py
 from mistralrs import (
     Runner,
@@ -107,10 +107,11 @@ runner = Runner(
         dataset_csv="examples/amoe.csv",
         prefix="model.layers",
         mlp="mlp",
+        expert_type=AnyMoeExpertType.FineTuned(),
         lr=1e-3,
         epochs=100,
         batch_size=4,
-        expert_type=AnyMoeExpertType.FineTuned(),
+        model_ids=["HuggingFaceH4/zephyr-7b-beta"],
     ),
 )
 
@@ -131,3 +132,77 @@ print(res.usage)
 ```
 
 ## Rust API
+```rust
+use either::Either;
+use indexmap::IndexMap;
+use std::sync::Arc;
+use tokio::sync::mpsc::channel;
+
+use mistralrs::{
+    AnyMoeConfig, AnyMoeExpertType, AnyMoeLoader, Constraint, Device, DeviceMapMetadata, Loader,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
+    NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
+    SchedulerMethod, TokenSource,
+};
+
+/// Gets the best device, cpu, cuda if compiled with CUDA
+pub(crate) fn best_device() -> Result<Device> {
+    #[cfg(not(feature = "metal"))]
+    {
+        Device::cuda_if_available(0)
+    }
+    #[cfg(feature = "metal")]
+    {
+        Device::new_metal(0)
+    }
+}
+
+fn setup() -> anyhow::Result<Arc<MistralRs>> {
+    // Select a Mistral model
+    let loader = NormalLoaderBuilder::new(
+        NormalSpecificConfig {
+            use_flash_attn: false,
+            repeat_last_n: 64,
+        },
+        None,
+        None,
+        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
+    )
+    .build(NormalLoaderType::Mistral);
+    let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
+        target: loader,
+        config: AnyMoeConfig {
+            hidden_size: 4096,
+            lr: 1e-3,
+            epochs: 100,
+            batch_size: 4,
+            expert_type: AnyMoeExpertType::LoraAdapter {
+                rank: 64,
+                alpha: 16.,
+                target_modules: vec![
+                    "up_proj".to_string(),
+                    "down_proj".to_string(),
+                    "gate_proj".to_string(),
+                ],
+            },
+        },
+        prefix: "model.layers".to_string(),
+        mlp: "mlp".to_string(),
+        path: "examples/amoe.csv".to_string(),
+        model_ids: vec!["typeof/zephyr-7b-beta-lora".to_string()],
+        layers: vec![],
+    });
+    // Load, into a Pipeline
+    let pipeline = loader.load_model_from_hf(
+        None,
+        TokenSource::CacheToken,
+        &ModelDType::Auto,
+        &best_device()?,
+        false,
+        DeviceMapMetadata::dummy(),
+        None,
+    )?;
+    // Create the MistralRs, which is a runner
+    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+}
+```
