@@ -3,7 +3,7 @@
 AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE.
 
 ## Dataset
-Currently, AnyMoE expets a CSV dataset with 2 columns: `prompt` and `expert`. For example:
+Currently, AnyMoE expects a CSV dataset with 2 columns: `prompt` and `expert`. For example:
 ```csv
 prompt,expert
 Discuss the impact of Renaissance art on modern aesthetics,0
@@ -19,7 +19,7 @@ Describe the function and structure of DNA in genetic inheritance,1
 ```
 
 ## Experts
-AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogenous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
+AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
 
 ### With fine-tuned experts
 ```toml
