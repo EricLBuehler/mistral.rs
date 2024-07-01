@@ -9,7 +9,7 @@ macro_rules! finish_and_add_tokens_to_seq {
             &is_done,
         );
         // Handle streaming requests
-        if $seq.get_mut_group().is_streaming && $seq.get_mut_group().is_chat {
+        if $seq.get_mut_group().is_streaming {
             const STREAMING_RATE_LIMIT: usize = 3;
 
             let token_index = $seq.get_toks().len();
@@ -19,24 +19,44 @@ macro_rules! finish_and_add_tokens_to_seq {
                 if let Some(delta) =
                     $crate::handle_seq_error_ok!($seq.get_delta(), $seq.responder())
                 {
-                    $seq.add_streaming_chunk_choice_to_group($crate::ChunkChoice {
-                        delta: $crate::Delta {
-                            content: delta.clone(),
-                            role: "assistant".to_string(),
-                        },
-                        index: $seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if $seq.return_logprobs() {
-                            Some($crate::ResponseLogprob {
-                                token: delta,
-                                bytes: $logprobs.bytes.clone().into_bytes(),
-                                logprob: $logprobs.logprob,
-                                top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
-                            })
-                        } else {
-                            None
-                        },
-                    });
+                    if $seq.get_mut_group().is_chat {
+                        $seq.add_streaming_chunk_choice_to_group($crate::ChunkChoice {
+                            delta: $crate::Delta {
+                                content: delta.clone(),
+                                role: "assistant".to_string(),
+                            },
+                            index: $seq.get_response_index(),
+                            finish_reason: is_done.map(|x| x.to_string()),
+                            logprobs: if $seq.return_logprobs() {
+                                Some($crate::ResponseLogprob {
+                                    token: delta,
+                                    bytes: $logprobs.bytes.clone().into_bytes(),
+                                    logprob: $logprobs.logprob,
+                                    top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
+                                })
+                            } else {
+                                None
+                            },
+                        });
+                    } else {
+                        $seq.add_streaming_completion_chunk_choice_to_group(
+                            $crate::CompletionChunkChoice {
+                                text: delta.clone(),
+                                index: $seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: if $seq.return_logprobs() {
+                                    Some($crate::ResponseLogprob {
+                                        token: delta,
+                                        bytes: $logprobs.bytes.clone().into_bytes(),
+                                        logprob: $logprobs.logprob,
+                                        top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
+                                    })
+                                } else {
+                                    None
+                                },
+                            },
+                        );
+                    }
 
                     if let Some(reason) = is_done {
                         if $use_prefix_cacher {
@@ -142,7 +162,7 @@ macro_rules! finish_and_add_tokens_to_seq {
                 let group = $seq.get_mut_group();
                 if group.is_chat {
                     group
-                        .maybe_send_done_response(
+                        .maybe_send_chat_done_response(
                             $crate::ChatCompletionResponse {
                                 id: $seq.id().to_string(),
                                 choices: group.get_choices().to_vec(),
@@ -211,10 +231,11 @@ macro_rules! do_sample {
         for (sampled, seq) in std::iter::zip(sampled_vec, $seqs.iter_mut()) {
             let next_token = $crate::handle_seq_error_stateaware_ok!(sampled, seq);
 
+            let metadata = $this.get_metadata();
             let eos_tok = if $disable_eos_stop {
                 None
             } else {
-                Some(&$this.get_metadata().eos_tok[..])
+                Some(&metadata.eos_tok[..])
             };
 
             $crate::finish_and_add_tokens_to_seq!(

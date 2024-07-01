@@ -3,9 +3,10 @@ use std::fs::File;
 use serde::Deserialize;
 
 use crate::{
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -14,6 +15,14 @@ fn default_repeat_last_n() -> usize {
 
 fn default_one() -> usize {
     1
+}
+
+fn default_dtype() -> ModelDType {
+    ModelDType::Auto
+}
+
+fn default_empty_vec_usize() -> Vec<usize> {
+    Vec::new()
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +37,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -50,6 +60,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -68,6 +79,7 @@ pub enum TomlModelSelected {
         arch: NormalLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 
@@ -210,6 +222,7 @@ pub enum TomlModelSelected {
         arch: VisionLoaderType,
 
         /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
         dtype: ModelDType,
     },
 }
@@ -221,6 +234,28 @@ pub struct SpeculativeTomlModelSelected {
 
     /// Base model
     draft_model: TomlModelSelected,
+}
+
+#[derive(Deserialize)]
+pub struct AnyMoeTomlModelSelected {
+    /// Config
+    config: AnyMoeConfig,
+
+    /// Base model
+    dataset_csv: String,
+
+    /// Prefix of the mlp key (the part before the layer number: "a.b.c" in "a.b.c.0.mlp")
+    prefix: String,
+
+    /// Name of the mlp key (the part before the layer number: "mlp" in "a.b.c.0.mlp")
+    mlp: String,
+
+    /// Expert model ids
+    model_ids: Vec<String>,
+
+    /// Layer ids (zero indexed) of layers to apply AnyMoE to, if empty will use all
+    #[serde(default = "default_empty_vec_usize")]
+    layers: Vec<usize>,
 }
 
 #[derive(Deserialize)]
@@ -237,6 +272,9 @@ pub struct TomlSelector {
 
     /// Speculative model selector
     speculative: Option<SpeculativeTomlModelSelected>,
+
+    /// AnyMoE config
+    anymoe: Option<AnyMoeTomlModelSelected>,
 }
 
 #[derive(Clone)]
@@ -511,6 +549,27 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
                 config: SpeculativeConfig {
                     gamma: speculative.gamma,
                 },
+            })
+        } else {
+            loader
+        };
+        let loader = if let Some(AnyMoeTomlModelSelected {
+            config,
+            dataset_csv,
+            prefix,
+            mlp,
+            model_ids,
+            layers,
+        }) = selector.anymoe
+        {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config,
+                path: dataset_csv,
+                prefix,
+                mlp,
+                model_ids,
+                layers,
             })
         } else {
             loader

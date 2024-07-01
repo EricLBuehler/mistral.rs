@@ -106,6 +106,7 @@ fn run_bench(
                     Response::CompletionDone(res) => {
                         usages.push(res.usage);
                     }
+                    Response::CompletionChunk(_) => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }

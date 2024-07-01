@@ -12,14 +12,20 @@ use candle_nn::{
 use serde::Deserialize;
 
 use crate::{
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
+    merge_delta,
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -53,6 +59,7 @@ struct MLP {
     fc1: QLinear,
     fc2: QLinear,
     act: Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -65,11 +72,14 @@ impl MLP {
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
+            params: vec![cfg.hidden_size, cfg.intermediate_size],
         })
     }
 }
 
-impl Module for MLP {
+impl AnyMoeTrainableLayer for MLP {}
+
+impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -81,6 +91,35 @@ impl Module for MLP {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![self.fc1.inner(), self.fc2.inner()]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
+    }
+    // fc1, fc2
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let new_fc1 = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.fc1.inner_ref(), delta)
+        } else {
+            self.fc1.inner_ref().clone()
+        };
+        let new_fc2 = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.fc2.inner_ref(), delta)
+        } else {
+            self.fc2.inner_ref().clone()
+        };
+
+        Ok(Box::new(Self {
+            fc1: QLinear::from_old_and_qmatmul(new_fc1, &self.fc1),
+            fc2: QLinear::from_old_and_qmatmul(new_fc2, &self.fc2),
+            act: self.act,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -231,10 +270,9 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
+    mlp: Box<dyn MlpLayer>,
     input_layernorm: LayerNorm,
 }
 
@@ -260,7 +298,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp,
+            mlp: Box::new(mlp),
             input_layernorm,
         })
     }
@@ -319,7 +357,9 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             // Alternative rope scalings are not supported.
             let rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,
@@ -404,8 +444,14 @@ impl IsqModel for Model {
             tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
             tensors.push((layer.self_attn.dense.inner(), Some(i)));
-            tensors.push((layer.mlp.fc1.inner(), Some(i)));
-            tensors.push((layer.mlp.fc2.inner(), Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -453,5 +499,109 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        let mut mlps = Vec::new();
+        for layer in &self.layers {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        let mut mlps = Vec::new();
+        for layer in &mut self.layers {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+    ) -> Result<()> {
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.layers[layer].mlp.get_params()[1];
+                let hidden_size = self.layers[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(MLP::new(
+                            &Config {
+                                intermediate_size: self.layers[layer].mlp.get_params()[1],
+                                hidden_size: self.layers[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                            vb.pp(layer).pp(&mlp),
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter {
+                        rank,
+                        alpha,
+                        ref target_modules,
+                    } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let fc1_delta = if target_modules.contains(&"fc1".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "fc1"
+                            ))
+                        } else {
+                            None
+                        };
+                        let fc2_delta = if target_modules.contains(&"fc2".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (intermediate_size, hidden_size),
+                                "fc2"
+                            ))
+                        } else {
+                            None
+                        };
+
+                        row.push(
+                            self.layers[layer]
+                                .mlp
+                                .new_added_delta(vec![fc1_delta, fc2_delta])?,
+                        );
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.layers[layer].mlp =
+                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
+        }
+        Ok(())
+    }
+    fn amoe_supported(&self) -> bool {
+        true
     }
 }

@@ -1,6 +1,6 @@
 use candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
-    Tensor, WithDType,
+    Tensor, WithDType, D,
 };
 
 use std::{
@@ -264,14 +264,47 @@ pub trait BitWiseOp {
 }
 
 impl BitWiseOp for Tensor {
+    #[cfg(feature = "metal")]
+    fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::And),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::And))
     }
 
+    #[cfg(feature = "metal")]
+    fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::Or),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Or))
     }
 
+    #[cfg(feature = "metal")]
+    fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
+        let original_device = rhs.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op2_no_bwd(
+                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &BitWise::new(BitWiseOpEnum::Xor),
+            )?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWise::new(BitWiseOpEnum::Xor))
     }
@@ -427,6 +460,17 @@ pub trait NonZeroOp {
 }
 
 impl NonZeroOp for Tensor {
+    #[cfg(feature = "metal")]
+    fn nonzero(&self) -> Result<Tensor> {
+        if !self.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+        }
+        let original_device = self.device();
+        self.to_device(&candle_core::Device::Cpu)?
+            .apply_op1_no_bwd(&NonZero {})?
+            .to_device(original_device)
+    }
+    #[cfg(not(feature = "metal"))]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
             return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
@@ -435,7 +479,60 @@ impl NonZeroOp for Tensor {
     }
 }
 
+#[allow(dead_code)]
+pub struct TopKOutput {
+    pub values: Tensor,
+    pub indices: Tensor,
+}
+
+pub trait TopKLastDimOp {
+    /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
+    /// This expects a contiguous tensor.
+    fn topk(&self, topk: usize) -> Result<TopKOutput>;
+}
+
+impl TopKLastDimOp for Tensor {
+    fn topk(&self, topk: usize) -> Result<TopKOutput> {
+        // Sorted descending
+        let sorted_indices = self.arg_sort_last_dim(false)?;
+        let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
+        Ok(TopKOutput {
+            values: self.gather(&topk_indices, D::Minus1)?,
+            indices: topk_indices,
+        })
+    }
+}
+
 mod tests {
+    #[test]
+    fn test_topk() {
+        use crate::ops::{TopKLastDimOp, TopKOutput};
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        //  [[1, 3, 5],
+        //   [2, 4, 6]]
+        let x = Tensor::arange(1f32, 7f32, &device)
+            .unwrap()
+            .reshape((3, 2))
+            .unwrap()
+            .t()
+            .unwrap()
+            .contiguous()
+            .unwrap();
+        let TopKOutput { values, indices } = x.topk(2).unwrap();
+        assert_eq!(
+            x.to_vec2::<f32>().unwrap(),
+            vec![vec![1f32, 3f32, 5f32], vec![2f32, 4f32, 6f32]]
+        );
+        assert_eq!(
+            values.to_vec2::<f32>().unwrap(),
+            vec![vec![5f32, 3f32], vec![6f32, 4f32]]
+        );
+        assert_eq!(
+            indices.to_vec2::<u32>().unwrap(),
+            vec![vec![2u32, 1u32], vec![2u32, 1u32]]
+        );
+    }
 
     #[test]
     fn test_nonzero_cpu() {

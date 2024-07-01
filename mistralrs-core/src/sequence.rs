@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     response::CompletionChoice,
-    CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
     get_mut_group,
@@ -487,7 +487,11 @@ impl Sequence {
     }
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
-        get_mut_group!(self).streaming_chunks.push(chunk);
+        get_mut_group!(self).chat_streaming_chunks.push(chunk);
+    }
+
+    pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
+        get_mut_group!(self).completion_streaming_chunks.push(chunk);
     }
 
     pub fn get_adapters(&self) -> Option<Vec<String>> {
@@ -513,7 +517,8 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     completion_choices: Vec<(f32, CompletionChoice)>,
-    pub streaming_chunks: Vec<ChunkChoice>,
+    pub chat_streaming_chunks: Vec<ChunkChoice>,
+    pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
 }
@@ -529,7 +534,8 @@ impl SequenceGroup {
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
-            streaming_chunks: Vec::new(),
+            chat_streaming_chunks: Vec::new(),
+            completion_streaming_chunks: Vec::new(),
             is_streaming,
             is_chat,
             best_of,
@@ -571,7 +577,7 @@ impl SequenceGroup {
         }
     }
 
-    pub async fn maybe_send_done_response(
+    pub async fn maybe_send_chat_done_response(
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
@@ -588,10 +594,10 @@ impl SequenceGroup {
         seq: &Sequence,
         model: String,
     ) -> Result<(), Box<SendError<Response>>> {
-        if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
+        if self.chat_streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
 
-            std::mem::swap(&mut swap_streaming_chunks, &mut self.streaming_chunks);
+            std::mem::swap(&mut swap_streaming_chunks, &mut self.chat_streaming_chunks);
 
             seq.responder()
                 .send(Response::Chunk(ChatCompletionChunkResponse {
@@ -601,6 +607,24 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                }))
+                .await?;
+        } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {
+            let mut swap_streaming_chunks = vec![];
+
+            std::mem::swap(
+                &mut swap_streaming_chunks,
+                &mut self.completion_streaming_chunks,
+            );
+
+            seq.responder()
+                .send(Response::CompletionChunk(CompletionChunkResponse {
+                    id: seq.id.to_string(),
+                    choices: swap_streaming_chunks,
+                    created: seq.timestamp,
+                    model: model.clone(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "text_completion".to_string(),
                 }))
                 .await?;
         }

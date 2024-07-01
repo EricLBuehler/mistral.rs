@@ -31,6 +31,7 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
 
+mod amoe;
 mod cublaslt;
 mod gguf;
 pub mod layers;
@@ -49,15 +50,16 @@ mod utils;
 mod vision_models;
 mod xlora_models;
 
+pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
-    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
-    Idefics2Loader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader,
-    SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionModelLoader, VisionSpecificConfig,
+    chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
+    GemmaLoader, Idefics2Loader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
