@@ -76,7 +76,12 @@ fn main() -> anyhow::Result<()> {
 
     let response = rx.blocking_recv().unwrap();
     match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content),
+        Response::Done(c) => println!(
+            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
+            c.choices[0].message.content,
+            c.usage.avg_prompt_tok_per_sec,
+            c.usage.avg_compl_tok_per_sec
+        ),
         _ => unreachable!(),
     }
     Ok(())
