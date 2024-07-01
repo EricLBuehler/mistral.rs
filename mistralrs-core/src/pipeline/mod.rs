@@ -43,7 +43,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 pub use vision_loaders::{
-    Idefics2Loader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModelLoader,
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModelLoader,
 };
 
 use anyhow::Result;
