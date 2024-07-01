@@ -25,7 +25,7 @@ runner = Runner(
         lr=1e-3,
         epochs=100,
         batch_size=4,
-        model_ids=["EricB/example_adapter"],
+        model_ids=["typeof/zephyr-7b-beta-lora"],
     ),
 )
 
