@@ -39,6 +39,7 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
+
 pub struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -78,6 +79,7 @@ impl futures::Stream for Streamer {
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -398,6 +400,7 @@ pub async fn chatcompletions(
             Response::Chunk(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
+            Response::CompletionChunk(_) => unreachable!(),
         }
     }
 }

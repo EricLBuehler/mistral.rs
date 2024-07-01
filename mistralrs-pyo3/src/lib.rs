@@ -735,6 +735,7 @@ impl Runner {
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
                 }
             }
         })
@@ -822,6 +823,7 @@ impl Runner {
                 Response::Chunk(_) => unreachable!(),
                 Response::Done(_) => unreachable!(),
                 Response::ModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             }
         })
     }
