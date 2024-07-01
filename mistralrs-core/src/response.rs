@@ -81,7 +81,7 @@ generate_repr!(Choice);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
-/// Completion streaming chunk choice.
+/// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
     pub index: usize,
@@ -90,6 +90,19 @@ pub struct ChunkChoice {
 }
 
 generate_repr!(ChunkChoice);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+/// Chat completion streaming chunk choice.
+pub struct CompletionChunkChoice {
+    pub text: String,
+    pub index: usize,
+    pub logprobs: Option<ResponseLogprob>,
+    pub finish_reason: Option<String>,
+}
+
+generate_repr!(CompletionChunkChoice);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
@@ -169,18 +182,35 @@ pub struct CompletionResponse {
 
 generate_repr!(CompletionResponse);
 
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+/// Completion request choice.
+pub struct CompletionChunkChoiceResponse {
+    pub id: String,
+    pub choices: Vec<CompletionChunkChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: Usage,
+}
+
+generate_repr!(CompletionChunkChoiceResponse);
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
-/// - Chat (no suffix or prefix)
+/// - Chat (no prefix)
 /// - Completion (Completion- prefix)
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
-    ModelError(String, ChatCompletionResponse),
     // Chat
+    ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
     // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkChoiceResponse),
 }

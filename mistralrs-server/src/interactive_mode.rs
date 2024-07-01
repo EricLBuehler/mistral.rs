@@ -174,6 +174,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             }
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
