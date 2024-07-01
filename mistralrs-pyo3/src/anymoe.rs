@@ -41,6 +41,7 @@ pub struct AnyMoeConfig {
     pub(crate) mlp: String,
     pub(crate) model_ids: Vec<String>,
     pub(crate) layers: Vec<usize>,
+    pub(crate) gate_model_id: Option<String>,
 }
 
 #[pymethods]
@@ -57,6 +58,7 @@ impl AnyMoeConfig {
         lr = 1e-3,
         epochs = 100,
         batch_size = 4,
+        gate_model_id = None,
     ))]
     fn new(
         hidden_size: usize,
@@ -69,6 +71,7 @@ impl AnyMoeConfig {
         lr: f64,
         epochs: usize,
         batch_size: usize,
+        gate_model_id: Option<String>,
     ) -> Self {
         Self {
             hidden_size,
@@ -81,6 +84,7 @@ impl AnyMoeConfig {
             mlp,
             model_ids,
             layers,
+            gate_model_id,
         }
     }
 }

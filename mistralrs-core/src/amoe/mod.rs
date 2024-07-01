@@ -167,7 +167,7 @@ impl MoeMlp {
 
         let inference = gate_vb.is_some();
         let empty_map = VarBuilder::from_varmap(&var_map, dtype, dev);
-        let vb = gate_vb.unwrap_or_else(|| &empty_map);
+        let vb = gate_vb.unwrap_or(&empty_map);
         let vb = vb.pp("moe_gate").pp(layer);
 
         let lin = linear(config.hidden_size, n_experts, vb)?;
