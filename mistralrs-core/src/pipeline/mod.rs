@@ -699,7 +699,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     }
 }
 
-pub trait VisionModel: IsqModel {
+pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
