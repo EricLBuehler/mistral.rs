@@ -170,7 +170,6 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
-<a href="#173" id="173">173</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
@@ -325,8 +324,7 @@
     <span class="attr">#[serde(rename = <span class="string">"stop"</span>)]
     #[schema(example = <span class="macro">json!</span>(Option::None::&lt;StopTokens&gt;))]
     </span><span class="kw">pub </span>stop_seqs: <span class="prelude-ty">Option</span>&lt;StopTokens&gt;,
-    <span class="attr">#[serde(rename = <span class="string">"stream"</span>)]
-    </span><span class="kw">pub </span>_stream: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    <span class="kw">pub </span>stream: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     <span class="attr">#[schema(example = <span class="number">0.7</span>)]
     </span><span class="kw">pub </span>temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f64&gt;))]

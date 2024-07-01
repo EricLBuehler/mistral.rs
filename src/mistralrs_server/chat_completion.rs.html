@@ -401,6 +401,9 @@
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
 <a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -442,6 +445,7 @@
     }
 }
 <span class="kw">impl </span>std::error::Error <span class="kw">for </span>ModelErrorMessage {}
+
 <span class="kw">pub struct </span>Streamer {
     rx: Receiver&lt;Response&gt;,
     is_done: bool,
@@ -481,6 +485,7 @@
                 Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
         }
@@ -801,6 +806,7 @@
             Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
         }
     }
 }

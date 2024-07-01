@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CompletionResponder"],"fn":["completions","parse_request"],"struct":["JsonError","JsonModelError","ModelErrorMessage"],"trait":["ErrorToResponse"]};
+window.SIDEBAR_ITEMS = {"enum":["CompletionResponder"],"fn":["completions","parse_request"],"struct":["JsonError","JsonModelError","ModelErrorMessage","Streamer"],"trait":["ErrorToResponse"]};

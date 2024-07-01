@@ -184,6 +184,7 @@
 <a href="#184" id="184">184</a>
 <a href="#185" id="185">185</a>
 <a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
@@ -360,6 +361,7 @@
                 Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             }
         }
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =

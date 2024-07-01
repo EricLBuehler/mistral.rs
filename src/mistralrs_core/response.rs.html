@@ -184,6 +184,35 @@
 <a href="#184" id="184">184</a>
 <a href="#185" id="185">185</a>
 <a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
@@ -267,7 +296,7 @@
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
 #[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
-</span><span class="doccomment">/// Completion streaming chunk choice.
+</span><span class="doccomment">/// Chat completion streaming chunk choice.
 </span><span class="kw">pub struct </span>ChunkChoice {
     <span class="kw">pub </span>finish_reason: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>index: usize,
@@ -276,6 +305,19 @@
 }
 
 <span class="macro">generate_repr!</span>(ChunkChoice);
+
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+</span><span class="doccomment">/// Chat completion streaming chunk choice.
+</span><span class="kw">pub struct </span>CompletionChunkChoice {
+    <span class="kw">pub </span>text: String,
+    <span class="kw">pub </span>index: usize,
+    <span class="kw">pub </span>logprobs: <span class="prelude-ty">Option</span>&lt;ResponseLogprob&gt;,
+    <span class="kw">pub </span>finish_reason: <span class="prelude-ty">Option</span>&lt;String&gt;,
+}
+
+<span class="macro">generate_repr!</span>(CompletionChunkChoice);
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
 #[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
@@ -355,19 +397,35 @@
 
 <span class="macro">generate_repr!</span>(CompletionResponse);
 
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+</span><span class="doccomment">/// Completion request choice.
+</span><span class="kw">pub struct </span>CompletionChunkResponse {
+    <span class="kw">pub </span>id: String,
+    <span class="kw">pub </span>choices: Vec&lt;CompletionChunkChoice&gt;,
+    <span class="kw">pub </span>created: u128,
+    <span class="kw">pub </span>model: String,
+    <span class="kw">pub </span>system_fingerprint: String,
+    <span class="kw">pub </span>object: String,
+}
+
+<span class="macro">generate_repr!</span>(CompletionChunkResponse);
+
 <span class="doccomment">/// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
-/// - Chat (no suffix or prefix)
+/// - Chat (no prefix)
 /// - Completion (Completion- prefix)
 </span><span class="kw">pub enum </span>Response {
     InternalError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
     ValidationError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
-    ModelError(String, ChatCompletionResponse),
     <span class="comment">// Chat
-    </span>Done(ChatCompletionResponse),
+    </span>ModelError(String, ChatCompletionResponse),
+    Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
     <span class="comment">// Completion
     </span>CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkResponse),
 }
 </code></pre></div></section></main></body></html>

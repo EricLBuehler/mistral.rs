@@ -417,6 +417,7 @@
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -525,6 +526,7 @@
                     Response::CompletionDone(res) =&gt; {
                         usages.push(res.usage);
                     }
+                    Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 },
                 <span class="prelude-val">None </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Expected a Done response, got None"</span>,),
             }
