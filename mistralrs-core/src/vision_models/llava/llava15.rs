@@ -168,7 +168,7 @@ impl Model {
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
         input_ids: &Tensor, //[1,seq_len]
-        images: &Tensor,    //[sum of samples of all images,chanel,width,height]
+        images: &Tensor,    //[sum of samples of all images,channel,width,height]
         num_image_tokens: usize,
     ) -> Result<Tensor> {
         let image_indexes = input_ids
