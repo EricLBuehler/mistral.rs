@@ -6,12 +6,12 @@ arch = "mistral"
 dataset_csv = "test.csv"
 prefix = "model.layers"
 mlp = "mlp"
-model_ids = ["EricB/example_adapter"]
+model_ids = ["typeof/zephyr-7b-beta-lora"]
 
 [anymoe.config]
 hidden_size = 4096
 
 [anymoe.config.expert_type.lora_adapter]
-rank = 16
+rank = 64
 alpha = 16
 target_modules = ["gate_proj"]
