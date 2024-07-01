@@ -1,6 +1,6 @@
 # AnyMoE: Build an MoE model from anything, quickly
 
-AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE.
+AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE locally!
 
 ## Dataset
 Currently, AnyMoE expects a CSV dataset with 2 columns: `prompt` and `expert`. For example:
@@ -64,3 +64,13 @@ target_modules = ["gate_proj"]
 ## CLI usage
 
 CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe).
+
+For example, to use the demo fine-tuned expert:
+```
+./mistralrs_server -i toml -f toml-selectors/anymoe.toml
+```
+
+To use the demo LoRA expert:
+```
+./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
+```
