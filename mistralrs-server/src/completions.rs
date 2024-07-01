@@ -100,10 +100,6 @@ fn parse_request(
         warn!("Completion requests do not support logprobs.");
     }
 
-    if oairequest._stream.is_some_and(|x| x) {
-        warn!("Completion requests do not support streaming.");
-    }
-
     Request::Normal(NormalRequest {
         id: state.next_request_id(),
         messages: RequestMessage::Completion {
@@ -125,7 +121,7 @@ fn parse_request(
         },
         response: tx,
         return_logprobs: false,
-        is_streaming: false,
+        is_streaming: oairequest.stream.unwrap_or(false),
         suffix: oairequest.suffix,
         constraint: match oairequest.grammar {
             Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
@@ -154,11 +150,6 @@ pub async fn completions(
         );
     }
 
-    if oairequest._stream.is_some_and(|s| s) {
-        return CompletionResponder::ValidationError(
-            "Completion requests do not support streaming.".into(),
-        );
-    }
     let request = parse_request(oairequest, state.clone(), tx);
     let sender = state.get_sender().unwrap();
 
