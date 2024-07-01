@@ -202,6 +202,7 @@ class Runner:
             If it is a list of strings, each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
             the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
+        - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         """
         ...
 
