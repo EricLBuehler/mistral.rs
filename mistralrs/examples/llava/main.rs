@@ -11,7 +11,6 @@ use mistralrs::{
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
