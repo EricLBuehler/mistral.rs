@@ -428,10 +428,10 @@ Example:
 **Quantization support**
 |Model|GGUF|GGML|ISQ|
 |--|--|--|--|
-|Mistral 7B |✅| |✅|
+|Mistral|✅| |✅|
 |Gemma| | |✅|
 |Llama|✅|✅|✅|
-|Mixtral 8x7B|✅| |✅|
+|Mixtral|✅| |✅|
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
 |Qwen 2| | |✅|
@@ -450,16 +450,31 @@ Example:
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
 |--|--|--|--|
-|Mistral 7B |✅|✅| |
+|Mistral|✅|✅| |
 |Gemma|✅| | |
 |Llama|✅|✅|✅|
-|Mixtral 8x7B|✅|✅| |
+|Mixtral✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
+
+**AnyMoE support**
+|Model|AnyMoE|
+|--|--|
+|Mistral 7B|✅|
+|Gemma|✅|
+|Llama|✅|
+|Mixtral|✅|
+|Phi 2|✅|
+|Phi 3|✅|
+|Qwen 2|✅|
+|Phi 3 Vision| |
+|Idefics 2| |
+|Gemma 2|✅|
+
 
 ### Using derivative model
 
