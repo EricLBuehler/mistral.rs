@@ -1,40 +1,17 @@
-use std::sync::Arc;
+use mistralrs::{
+    load_normal_model, Constraint, Device, NormalRequest, Request, RequestMessage, Response,
+    SamplingParams,
+};
 use tokio::sync::mpsc::channel;
 
-use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
-};
-
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-            repeat_last_n: 64,
-        },
-        None,
-        None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-    )
-    .build(NormalLoaderType::Mistral);
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &Device::cuda_if_available(0)?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
-}
-
 fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let dev = Device::cuda_if_available(0)?;
+    let runner = load_normal_model!(
+        id = "mistralai/Mistral-7B-Instruct-v0.1".to_string(),
+        kind = Mistral,
+        device = dev,
+        use_flash_attn = false
+    );
 
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
@@ -52,7 +29,7 @@ fn main() -> anyhow::Result<()> {
         suffix: None,
         adapters: None,
     });
-    mistralrs.get_sender()?.blocking_send(request)?;
+    runner.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
     match response {
