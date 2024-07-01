@@ -477,6 +477,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
+        silent: bool,
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
@@ -486,7 +487,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
-                .with_progress(false)
+                .with_progress(!silent)
                 .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
                 .build()
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
@@ -505,7 +506,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, false, move |key| {
+            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
                 if regex.is_match(&key) {
                     // Idx of the last char of the layer id, +1
                     // Assumes N.MLP

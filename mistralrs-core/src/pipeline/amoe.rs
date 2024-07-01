@@ -70,6 +70,7 @@ impl Loader for AnyMoeLoader {
             token_source,
             revision,
             self.layers.clone(),
+            silent,
         )?)))
     }
 
@@ -101,6 +102,7 @@ impl Loader for AnyMoeLoader {
             TokenSource::None,
             None,
             self.layers.clone(),
+            silent,
         )?)))
     }
     fn get_id(&self) -> String {
@@ -125,12 +127,20 @@ impl AnyMoePipeline {
         token: TokenSource,
         revision: Option<String>,
         layers: Vec<usize>,
+        silent: bool,
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
         info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
-        let AnyMoeTrainingResult { steps, final_loss } =
-            this.amoe_pre_train(inputs, (prefix, mlp), model_ids, token, revision, layers)?;
+        let AnyMoeTrainingResult { steps, final_loss } = this.amoe_pre_train(
+            inputs,
+            (prefix, mlp),
+            model_ids,
+            token,
+            revision,
+            layers,
+            silent,
+        )?;
         info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
         Ok(this)
     }
@@ -226,6 +236,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         token: TokenSource,
         revision: Option<String>,
         layers: Vec<usize>,
+        silent: bool,
     ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
         let mut target = get_mut_arcmutex!(self.target);
         if !target.amoe_supported() {
@@ -263,6 +274,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             (prefix, mlp),
             layers,
             expert_type,
+            silent,
         )?;
         let layer_vars = target.amoe_layer_vars();
 

@@ -525,6 +525,7 @@ pub trait AnyMoePipelineMixin {
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
+        _silent: bool,
     ) -> candle_core::Result<()> {
         unreachable!()
     }
@@ -537,6 +538,7 @@ pub trait AnyMoePipelineMixin {
         _token: TokenSource,
         _revision: Option<String>,
         _layers: Vec<usize>,
+        _silent: bool,
     ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
         unreachable!()
     }
