@@ -11,6 +11,7 @@ pub enum Architecture {
     Phi2,
     Phi3,
     Qwen2,
+    Gemma2,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -23,6 +24,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Phi2 => Self::Phi2,
             Architecture::Phi3 => Self::Phi3,
             Architecture::Qwen2 => Self::Qwen2,
+            Architecture::Gemma2 => Self::Gemma2,
         }
     }
 }

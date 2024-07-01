@@ -26,17 +26,24 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     - [OpenAI compatible HTTP server](examples/http.md)
 
 ## Quick examples
-- 🦙 Run the Llama 3 model
 
-    *After following installation instructions*
+*After following installation instructions*
+
+- 🔥 AnyMoE: Build an MoE model quickly from anything, [docs here](docs/ANYMOE.md)
 
     ```
-    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3-8B-Instruct -a llama
+    ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
+    ```
+
+    Paper: https://arxiv.org/abs/2405.19076
+
+- 💎 Run the Gemma 2 model
+
+    ```
+    ./mistralrs_server -i plain -m google/gemma-2-9b-it -a gemma2
     ```
 
 - φ³ Run the Phi 3 model with 128K context window
-
-    *After following installation instructions*
 
     ```
     ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
@@ -46,8 +53,6 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
-
-    *After following installation instructions*
 
     ```
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
@@ -77,40 +82,43 @@ Mistal.rs supports several model categories:
 - Grammar support with Regex and Yacc.
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
-    - Provides methods to further reduce memory spikes.
+    - Extremely fast due to working in parallel
 
 **Powerful**:
 - Fast LoRA support with weight merging.
 - First X-LoRA inference platform with first class support.
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
+- AnyMoE: Build an MoE model from anything, quickly: [docs](docs/ANYMOE.md)
 
 
-This is a demo of interactive mode with streaming running Mistral GGUF:
+This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
 
-https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415
+<!-- Mistral GGUF demo, old API -->
+<!-- https://github.com/EricLBuehler/mistral.rs/assets/65165915/3396abcd-8d44-4bf7-95e6-aa532db09415 -->
 
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-9006-4ec6ebc6473c
 
 ## Support matrix
 
 > Note: See [supported models](#supported-models) for more information
 
-|Model|Supports quantization|Supports adapters|Supports device mapping|
-|--|--|--|--|
-|Mistral v0.1/v0.2/v0.3|✅|✅|✅|
-|Gemma|✅|✅|✅|
-|Llama 2/3|✅|✅|✅|
-|Mixtral|✅|✅|✅|
-|Phi 2|✅|✅|✅|
-|Phi 3|✅|✅|✅|
-|Qwen 2|✅| |✅|
-|Phi 3 Vision|✅| |✅|
-|Idefics 2|✅| |✅|
+|Model|Supports quantization|Supports adapters|Supports device mapping|Supported by AnyMoE|
+|--|--|--|--|--|
+|Mistral v0.1/v0.2/v0.3|✅|✅|✅|✅|
+|Gemma|✅|✅|✅|✅|
+|Llama 2/3|✅|✅|✅|✅|
+|Mixtral|✅|✅|✅| |
+|Phi 2|✅|✅|✅|✅|
+|Phi 3|✅|✅|✅|✅|
+|Qwen 2|✅| |✅|✅|
+|Phi 3 Vision|✅| |✅| |
+|Idefics 2|✅| |✅| |
+|Gemma 2|✅|✅|✅|✅|
 
 ## APIs and Integrations
 
-<details>
-  <summary><b>Rust Crate</b></summary>
+### Rust Crate
 
 Rust multithreaded/async API for easy integration into any application.
 
@@ -118,49 +126,17 @@ Rust multithreaded/async API for easy integration into any application.
 - [Examples](mistralrs/examples/)
 - To install: Add `mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git" }`
 
-</details>
-
-<details>
-  <summary><b>Python API</b></summary>
+### Python API
 
 Python API for mistral.rs.
 
 - [Installation including PyPI](mistralrs-pyo3/README.md)
 - [Docs](mistralrs-pyo3/API.md)
-- [Example](examples/python/python_api.py)
+- [Examples](examples/python)
 - [Cookbook](examples/python/cookbook.ipynb)
 
-```python
-from mistralrs import Runner, Which, ChatCompletionRequest
 
-runner = Runner(
-    which=Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-        tokenizer_json=None,
-        repeat_last_n=64,
-    )
-)
-
-res = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="mistral",
-        messages=[{"role":"user", "content":"Tell me a story about the Rust type system."}],
-        max_tokens=256,
-        presence_penalty=1.0,
-        top_p=0.1,
-        temperature=0.1,
-    )
-)
-print(res.choices[0].message.content)
-print(res.usage)
-```
-
-</details>
-
-<details>
-  <summary><b>HTTP Server</b></summary>
+### HTTP Server
 
 OpenAI API compatible API server
 
@@ -168,14 +144,10 @@ OpenAI API compatible API server
 - [Running](README.md#run)
 - [Example](examples/server/chat.py)
 
-</details>
 
-<details>
-  <summary><b>Llama Index integration</b></summary>
+### Llama Index integration (Python)
 
 - Docs: https://docs.llamaindex.ai/en/stable/examples/llm/mistral_rs/
-
-</details>
 
 ---
 
@@ -318,6 +290,8 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
   - `tokenizer_config.json`
   - `tokenizer.json` (if not specified separately)
   - `.safetensors` files.
+  - `preprocessor_config.json` (required for vision models).
+  - `processor_config.json` (optional for vision models).
 - `--quantized-model-id` (server) or `quantized_model_id` (python/rust):
   - Specified `.gguf` or `.ggml` file.
 - `--x-lora-model-id` (server) or `xlora_model_id` (python/rust):
@@ -370,6 +344,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi2`
 - `phi3`
 - `qwen2`
+- `gemma2`
 
 ### Architecture for vision models
 
@@ -384,6 +359,14 @@ You can launch interactive mode, a simple chat application running in the termin
 
 ```bash
 ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+```
+
+**Interactive mode for vision models:**
+
+You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
+
+```bash
+./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
 ```
 
 ## More quick examples:
@@ -445,15 +428,16 @@ Example:
 **Quantization support**
 |Model|GGUF|GGML|ISQ|
 |--|--|--|--|
-|Mistral 7B |✅| |✅|
+|Mistral|✅| |✅|
 |Gemma| | |✅|
 |Llama|✅|✅|✅|
-|Mixtral 8x7B|✅| |✅|
+|Mixtral|✅| |✅|
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
 |Qwen 2| | |✅|
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
+|Gemma 2| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -466,15 +450,31 @@ Example:
 **X-LoRA and LoRA support**
 |Model|X-LoRA|X-LoRA+GGUF|X-LoRA+GGML|
 |--|--|--|--|
-|Mistral 7B |✅|✅| |
+|Mistral|✅|✅| |
 |Gemma|✅| | |
 |Llama|✅|✅|✅|
-|Mixtral 8x7B|✅|✅| |
+|Mixtral✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
+|Gemma 2|✅| | |
+
+**AnyMoE support**
+|Model|AnyMoE|
+|--|--|
+|Mistral 7B|✅|
+|Gemma|✅|
+|Llama|✅|
+|Mixtral|✅|
+|Phi 2|✅|
+|Phi 3|✅|
+|Qwen 2|✅|
+|Phi 3 Vision| |
+|Idefics 2| |
+|Gemma 2|✅|
+
 
 ### Using derivative model
 

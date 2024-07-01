@@ -8,13 +8,19 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
+    amoe::{
+        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
+        MoeMlp,
+    },
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    merge_delta,
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -70,14 +76,18 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -85,6 +95,14 @@ impl CausalSelfAttention {
             k = k
                 .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
                 .contiguous()?;
         }
 
@@ -145,9 +163,28 @@ struct Mlp {
     c_fc1: QMatMul,
     c_fc2: QMatMul,
     c_proj: QMatMul,
+    params: Vec<usize>,
 }
 
 impl Mlp {
+    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        let h_size = cfg.hidden_size;
+        let i_size = cfg.intermediate_size;
+        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
+        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
+        let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
+        Ok(Self {
+            c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
+            c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
+            c_proj: QMatMul::Tensor(c_proj.weight().clone()),
+            params: vec![h_size, i_size],
+        })
+    }
+}
+
+impl AnyMoeTrainableLayer for Mlp {}
+
+impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let original_dtype = x.dtype();
         let mut x = x.clone();
@@ -162,27 +199,47 @@ impl Mlp {
         }
         Ok(res)
     }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
+    }
+    // c_fc1, c_fc2, c_proj
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let new_c_fc1 = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.c_fc1, delta)
+        } else {
+            self.c_fc1.clone()
+        };
+        let new_c_fc2 = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.c_fc2, delta)
+        } else {
+            self.c_fc2.clone()
+        };
+        let new_c_proj = if let Some(ref delta) = deltas[2] {
+            merge_delta!(self.c_proj, delta)
+        } else {
+            self.c_proj.clone()
+        };
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let h_size = cfg.hidden_size;
-        let i_size = cfg.intermediate_size;
-        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
-        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
-        let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
-        Ok(Self {
-            c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
-            c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
-            c_proj: QMatMul::Tensor(c_proj.weight().clone()),
-        })
+        Ok(Box::new(Self {
+            c_fc1: new_c_fc1,
+            c_fc2: new_c_fc2,
+            c_proj: new_c_proj,
+            params: self.params.clone(),
+        }))
     }
 }
 
-#[derive(Debug, Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Mlp,
+    mlp: Box<dyn MlpLayer>,
 }
 
 impl Block {
@@ -238,12 +295,11 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            mlp,
+            mlp: Box::new(mlp),
         })
     }
 }
 
-#[derive(Debug)]
 pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
@@ -317,33 +373,34 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
-            .into_iter()
-            .map(|i| {
-                let rotary_emb = Arc::new(
-                    RotaryEmbedding::new(
-                        cfg.rope_theta,
-                        head_dim,
-                        cfg.max_position_embeddings,
-                        mapper
-                            .device_for(i, false)
-                            .unwrap_or(&normal_loading_metadata.real_device),
-                        is_gptx,
-                        vb.dtype(),
+        let blocks: Vec<_> =
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+                .into_iter()
+                .map(|i| {
+                    let rotary_emb = Arc::new(
+                        RotaryEmbedding::new(
+                            cfg.rope_theta,
+                            head_dim,
+                            cfg.max_position_embeddings,
+                            mapper
+                                .device_for(i, false)
+                                .unwrap_or(&normal_loading_metadata.real_device),
+                            is_gptx,
+                            vb.dtype(),
+                        )
+                        .expect("Failed to create RoPE"),
+                    );
+                    Block::load(
+                        vb.pp(&format!("model.layers.{i}")),
+                        cfg,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        rotary_emb,
                     )
-                    .expect("Failed to create RoPE"),
-                );
-                Block::load(
-                    vb.pp(&format!("model.layers.{i}")),
-                    cfg,
-                    &*mapper,
-                    i,
-                    normal_loading_metadata.loading_isq,
-                    rotary_emb,
-                )
-                .expect("Failed to load block.")
-            })
-            .collect();
+                    .expect("Failed to load block.")
+                })
+                .collect();
 
         Ok(Self {
             wte,
@@ -366,9 +423,14 @@ impl IsqModel for Llama {
             tensors.push((&mut layer.attn.k_proj, Some(i)));
             tensors.push((&mut layer.attn.v_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
-            tensors.push((&mut layer.mlp.c_proj, Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -416,5 +478,120 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
+    }
+}
+
+impl AnyMoeBaseModelMixin for Llama {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        let mut mlps = Vec::new();
+        for layer in &self.blocks {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        let mut mlps = Vec::new();
+        for layer in &mut self.blocks {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+    ) -> Result<()> {
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.blocks.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.blocks[layer].mlp.get_params()[1];
+                let hidden_size = self.blocks[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(Mlp::load(
+                            vb.pp(layer).pp(&mlp),
+                            &Config {
+                                intermediate_size: self.blocks[layer].mlp.get_params()[1],
+                                hidden_size: self.blocks[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter {
+                        rank,
+                        alpha,
+                        ref target_modules,
+                    } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let c_fc1_delta = if target_modules.contains(&"c_fc1".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "c_fc1"
+                            ))
+                        } else {
+                            None
+                        };
+                        let c_fc2_delta = if target_modules.contains(&"c_fc2".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "c_fc2"
+                            ))
+                        } else {
+                            None
+                        };
+                        let c_proj_delta = if target_modules.contains(&"c_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (intermediate_size, hidden_size),
+                                "c_proj"
+                            ))
+                        } else {
+                            None
+                        };
+
+                        row.push(self.blocks[layer].mlp.new_added_delta(vec![
+                            c_fc1_delta,
+                            c_fc2_delta,
+                            c_proj_delta,
+                        ])?);
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.blocks[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.blocks[layer].mlp =
+                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
+        }
+        Ok(())
+    }
+    fn amoe_supported(&self) -> bool {
+        true
     }
 }

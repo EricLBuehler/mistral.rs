@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader, Qwen2Loader,
+    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    Phi2Loader, Phi3Loader, Qwen2Loader,
 };
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -9,11 +9,12 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
@@ -25,17 +26,18 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
+use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -50,7 +52,7 @@ pub struct NormalPipeline {
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -162,6 +164,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Phi2 => Box::new(Phi2Loader),
             NormalLoaderType::Phi3 => Box::new(Phi3Loader),
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
+            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -308,7 +311,7 @@ impl Loader for NormalLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -317,7 +320,8 @@ impl Loader for NormalLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: dtype,
+            }),
         })))
     }
 
@@ -393,8 +397,8 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
@@ -445,5 +449,84 @@ impl Pipeline for NormalPipeline {
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
+    }
+}
+
+impl AnyMoePipelineMixin for NormalPipeline {
+    fn amoe_done_training(&mut self) {
+        self.model.done_training();
+    }
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
+        self.model.get_vars()
+    }
+    fn amoe_base_model_trainable_params(&self) -> usize {
+        self.model.trainable_params()
+    }
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        self.model.take_cached_gating_outputs()
+    }
+    fn amoe_create_layers(
+        &mut self,
+        model_ids: Vec<String>,
+        token: &TokenSource,
+        revision: Option<String>,
+        match_regex: &str,
+        config: crate::amoe::AnyMoeConfig,
+        dtype: candle_core::DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        silent: bool,
+    ) -> candle_core::Result<()> {
+        let mut vbs = Vec::new();
+        // Precompile regex here
+        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        for model_id in model_ids {
+            let model_id_str = &model_id;
+            let model_id = Path::new(&model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+
+            let regex = regex.clone();
+            let match_regex_clone = match_regex.to_string();
+            let layers_clone = layers.clone();
+            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
+                if regex.is_match(&key) {
+                    // Idx of the last char of the layer id, +1
+                    // Assumes N.MLP
+                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                        .parse::<usize>()
+                        .unwrap();
+                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                } else {
+                    false
+                }
+            })?;
+            vbs.push(vb);
+        }
+
+        self.model
+            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers, expert_type)
+    }
+    fn amoe_supported(&self) -> bool {
+        self.model.amoe_supported()
     }
 }

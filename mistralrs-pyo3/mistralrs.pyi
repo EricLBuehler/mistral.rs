@@ -63,6 +63,8 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Qwen2 = "qwen2"
+    Gemma2 = "gemma2"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -85,6 +87,7 @@ class Which(Enum):
         arch: Architecture
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class XLora:
         arch: Architecture
@@ -94,6 +97,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class Lora:
         arch: Architecture
@@ -102,12 +106,14 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class GGUF:
         tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         repeat_last_n: int = 64
+
     @dataclass
     class XLoraGGUF:
         tok_model_id: str
@@ -117,6 +123,7 @@ class Which(Enum):
         order: str
         tgt_non_granular_index: int | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class LoraGGUF:
         tok_model_id: str
@@ -125,6 +132,7 @@ class Which(Enum):
         adapters_model_id: str
         order: str
         repeat_last_n: int = 64
+
     @dataclass
     class GGML:
         tok_model_id: str
@@ -132,6 +140,7 @@ class Which(Enum):
         quantized_filename: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class XLoraGGML:
         tok_model_id: str
@@ -142,6 +151,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class LoraGGML:
         tok_model_id: str
@@ -151,6 +161,7 @@ class Which(Enum):
         order: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+
     @dataclass
     class VisionPlain:
         arch: VisionArchitecture
@@ -171,6 +182,7 @@ class Runner:
         chat_template: str | None = None,
         num_device_layers: int | list[str] | None = None,
         in_situ_quant: str | None = None,
+        anymoe_config: AnyMoeConfig | None = None,
     ) -> None:
         """
         Load a model.
@@ -192,6 +204,7 @@ class Runner:
             If it is a list of strings, each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
             the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
+        - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         """
         ...
 
@@ -217,6 +230,49 @@ class Runner:
         """
         Send a request to make the specified adapters the active adapters for the model.
         """
+
+class AnyMoeExpertType(Enum):
+    """
+    Expert type for an AnyMoE model. May be:
+    - `AnyMoeExpertType.FineTuned()`
+    - `AnyMoeExpertType.LoraAdapter(rank: int, alpha: float, target_modules: list[str])`
+    """
+    @dataclass
+    class FineTuned:
+        pass
+
+    @dataclass
+    class LoraAdapter:
+        rank: int
+        alpha: float
+        target_modules: list[str]
+
+class AnyMoeConfig:
+    def __init__(
+        self,
+        hidden_size: str,
+        dataset_csv: str,
+        prefix: str,
+        mlp: str,
+        model_ids: list[str],
+        expert_type: AnyMoeExpertType,
+        lr: float = 1e-3,
+        epochs: int = 100,
+        batch_size: int = 4,
+    ) -> None:
+        """
+        Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
+
+        To find the prefix/mlp values:
+
+            - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
+            - Look for the mlp layers: For example `model.layers.27.mlp.down_proj.weight` means that the prefix is `model.layers` and the mlp is `mlp`.
+
+        To find the hidden size:
+
+            - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+        """
+        ...
 
 @dataclass
 class Usage:

@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
@@ -449,7 +450,9 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             // Alternative rope scalings are not supported.
             let rotary_emb = RotaryEmbedding::new_partial(
                 cfg.rope_theta,
@@ -728,6 +731,9 @@ impl NormalModel for Model {
         self.max_seq_len
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        if self.xlora_classifier.is_some() {
+            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+        }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {
             sum += Arc::get_mut(&mut layer.self_attn.k_proj)
@@ -786,3 +792,5 @@ impl ScalingsMaker for Model {
         )
     }
 }
+
+impl AnyMoeBaseModelMixin for Model {}

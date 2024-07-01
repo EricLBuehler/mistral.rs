@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.1.22", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.1.24", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
@@ -75,4 +75,8 @@ required-features = []
 
 [[example]]
 name = "llava_next"
+required-features = []
+
+[[example]]
+name = "anymoe_lora"
 required-features = []

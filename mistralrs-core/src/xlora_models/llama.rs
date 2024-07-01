@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     pipeline::IsqModel,
@@ -82,14 +83,18 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -97,6 +102,14 @@ impl CausalSelfAttention {
             k = k
                 .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
                 .contiguous()?;
         }
 
@@ -579,7 +592,7 @@ impl XLoraLlama {
         let mut count = 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> =
-            NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
                     let rotary_emb = Arc::new(
@@ -736,6 +749,9 @@ impl NormalModel for XLoraLlama {
         self.blocks[0].attn.max_seq_len
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        if self.xlora_classifier.is_some() {
+            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+        }
         let mut sum = 0;
         for layer in self.blocks.iter_mut() {
             sum += Arc::get_mut(&mut layer.attn.k_proj)
@@ -797,3 +813,5 @@ impl ScalingsMaker for XLoraLlama {
         )
     }
 }
+
+impl AnyMoeBaseModelMixin for XLoraLlama {}

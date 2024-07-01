@@ -35,8 +35,8 @@ macro_rules! api_dir_list {
                     .map(|s| {
                         s.unwrap()
                             .path()
-                            .file_name() // if we don't have this, we can't use the pure local mode
-                            .unwrap()
+                            .file_name()
+                            .unwrap() // Should never terminate in `..`
                             .to_str()
                             .expect("Could not convert to str")
                             .to_string()
@@ -71,7 +71,7 @@ macro_rules! api_get_file {
             } else if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
             }
-            info!("Loading `{:?}` locally at `{path:?}`", &$file);
+            info!("Loading `{}` locally at `{}`", &$file, path.display());
             path
         })
     };
@@ -338,6 +338,7 @@ macro_rules! normal_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load(
@@ -363,6 +364,7 @@ macro_rules! vision_normal_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load(
@@ -399,6 +401,7 @@ macro_rules! xlora_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load_xlora(
@@ -438,6 +441,7 @@ macro_rules! lora_model_loader {
             $dtype,
             $device,
             $silent,
+            |_| true,
         )?;
 
         $loader.load_xlora(

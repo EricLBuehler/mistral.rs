@@ -1,3 +1,4 @@
+mod amoe;
 mod cache_manager;
 pub mod chat_template;
 mod ggml;
@@ -14,10 +15,15 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::{
+    AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
+    AnyMoeTrainingResult,
+};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
 use crate::{DeviceMapMetadata, TryIntoDType};
+pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
@@ -47,7 +53,7 @@ pub use vision_loaders::{
 };
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor, Var};
 
 use crate::{
     sequence::Sequence,
@@ -274,6 +280,9 @@ pub enum ModelKind {
         target: Box<ModelKind>,
         draft: Box<ModelKind>,
     },
+
+    #[strum(to_string = "anymoe: target: `{target}`")]
+    AnyMoe { target: Box<ModelKind> },
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -331,6 +340,7 @@ impl ModelKind {
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
+            AnyMoe { target } => target.quantized_kind(),
         }
     }
 
@@ -355,6 +365,7 @@ impl ModelKind {
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }
+            AnyMoe { target } => target.adapted_kind(),
         }
     }
 }
@@ -426,6 +437,7 @@ pub struct GeneralMetadata {
     pub kind: ModelKind,
     // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
+    pub activation_dtype: DType,
 }
 
 pub enum AdapterInstruction {
@@ -479,7 +491,60 @@ pub trait MetadataMixin {
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
-    fn get_metadata(&self) -> &GeneralMetadata;
+    fn get_metadata(&self) -> Arc<GeneralMetadata>;
+}
+
+/// Implemented by the base model of an AnyMoe.
+pub trait AnyMoePipelineMixin {
+    /// Get vars for each gating layer
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
+        unreachable!()
+    }
+    fn amoe_done_training(&mut self) {
+        unreachable!()
+    }
+    fn amoe_base_model_trainable_params(&self) -> usize {
+        unreachable!()
+    }
+    fn amoe_supported(&self) -> bool {
+        false
+    }
+    /// Per-layer cached outputs.
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        unreachable!()
+    }
+    /// Inject the MoE layers
+    #[allow(clippy::too_many_arguments)]
+    fn amoe_create_layers(
+        &mut self,
+        _model_ids: Vec<String>,
+        _token: &TokenSource,
+        _revision: Option<String>,
+        _match_regex: &str,
+        _config: AnyMoeConfig,
+        _dtype: DType,
+        _dev: &Device,
+        (_prefix, _mlp): (String, String),
+        _layers: Vec<usize>,
+        _expert_type: AnyMoeExpertType,
+        _silent: bool,
+    ) -> candle_core::Result<()> {
+        unreachable!()
+    }
+    /// Pre-train the gating layers
+    #[allow(clippy::too_many_arguments)]
+    fn amoe_pre_train(
+        &self,
+        _inputs: AnyMoeTrainingInputs,
+        (_prefix, _mlp): (String, String),
+        _model_ids: Vec<String>,
+        _token: TokenSource,
+        _revision: Option<String>,
+        _layers: Vec<usize>,
+        _silent: bool,
+    ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
+        unreachable!()
+    }
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -497,6 +562,7 @@ pub trait Pipeline:
     + CacheManagerMixin
     + AdapterActivationMixin
     + MetadataMixin
+    + AnyMoePipelineMixin
 {
     fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 
@@ -524,7 +590,7 @@ pub trait Pipeline:
                 None,
                 self.get_input_processor_config(),
             )
-            .unwrap();
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         match pre_op {
             CacheInstruction::In(adapter_inst) => {
@@ -600,7 +666,7 @@ pub trait Pipeline:
     fn category(&self) -> ModelCategory;
 }
 
-pub trait NormalModel: IsqModel {
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn forward(
         &self,
         input_ids: &Tensor,
