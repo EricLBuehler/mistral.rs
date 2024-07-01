@@ -42,6 +42,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             epochs: 100,
             batch_size: 4,
             expert_type: AnyMoeExpertType::FineTuned,
+            gate_model_id: None,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),

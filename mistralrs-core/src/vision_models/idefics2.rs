@@ -1075,6 +1075,7 @@ impl AnyMoeBaseModelMixin for Idefics2 {
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
     ) -> Result<()> {
         self.text_model.create_anymoe_layers(
             additional_vbs,
@@ -1084,6 +1085,7 @@ impl AnyMoeBaseModelMixin for Idefics2 {
             (prefix, mlp),
             layers,
             expert_type,
+            gate_vb,
         )
     }
     fn amoe_supported(&self) -> bool {

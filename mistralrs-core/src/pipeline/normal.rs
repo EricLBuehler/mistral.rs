@@ -478,6 +478,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
         silent: bool,
+        gate_model_id: Option<String>,
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
@@ -523,8 +524,48 @@ impl AnyMoePipelineMixin for NormalPipeline {
             vbs.push(vb);
         }
 
-        self.model
-            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers, expert_type)
+        let gate_vb = if let Some(gate_model_id) = gate_model_id {
+            let model_id_str = &gate_model_id;
+            let model_id = Path::new(&gate_model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut gate_filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+            assert_eq!(
+                gate_filenames.len(),
+                1,
+                "Gate model ID must contain only one .safetensors file"
+            );
+
+            let vb = from_mmaped_safetensors(gate_filenames, vec![], dtype, dev, silent, |_| true)?;
+            Some(vb)
+        } else {
+            None
+        };
+
+        self.model.create_anymoe_layers(
+            vbs,
+            config,
+            dtype,
+            dev,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()

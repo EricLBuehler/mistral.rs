@@ -139,7 +139,7 @@ impl AnyMoePipeline {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
         info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
-        let AnyMoeTrainingResult { steps, final_loss } = this.amoe_pre_train(
+        match this.amoe_pre_train(
             inputs,
             (prefix, mlp),
             model_ids,
@@ -147,8 +147,14 @@ impl AnyMoePipeline {
             revision,
             layers,
             silent,
-        )?;
-        info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
+        )? {
+            Some(AnyMoeTrainingResult { steps, final_loss }) => {
+                info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}")
+            }
+            None => {
+                info!("Not training gating layer, using trained gating layer specified in config")
+            }
+        }
         Ok(this)
     }
 }
@@ -235,6 +241,7 @@ impl Pipeline for AnyMoePipeline {
 }
 
 impl AnyMoePipelineMixin for AnyMoePipeline {
+    // Training result is None if inference
     fn amoe_pre_train(
         &self,
         inputs: AnyMoeTrainingInputs,
@@ -244,7 +251,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         revision: Option<String>,
         layers: Vec<usize>,
         silent: bool,
-    ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
+    ) -> anyhow::Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
         let mut target = get_mut_arcmutex!(self.target);
         if !target.amoe_supported() {
             candle_core::bail!("AnyMoE is not supported for this model.");
@@ -263,6 +270,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             epochs,
             batch_size,
             expert_type,
+            gate_model_id,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -282,8 +290,14 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             layers,
             expert_type,
             silent,
+            gate_model_id,
         )?;
         let layer_vars = target.amoe_layer_vars();
+
+        // If there are no trainable params, assume we got a gate model id so no training
+        if target.amoe_base_model_trainable_params() == 0 {
+            return Ok(None);
+        }
 
         info!(
             "{} gating layers, {} trainable parameters, lr = {lr}, {epochs} epochs, batch size = {batch_size}",
@@ -438,10 +452,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_done_training();
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
-        Ok(AnyMoeTrainingResult {
+        Ok(Some(AnyMoeTrainingResult {
             steps,
             final_loss: latest_loss,
-        })
+        }))
     }
 }
 

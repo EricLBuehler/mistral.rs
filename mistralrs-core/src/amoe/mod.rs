@@ -55,6 +55,7 @@ pub trait AnyMoeBaseModelMixin {
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
+        _gate_vb: Option<VarBuilder>,
     ) -> Result<()> {
         candle_core::bail!("Model does not support AnyMoE layers");
     }
@@ -124,6 +125,7 @@ pub struct AnyMoeConfig {
     #[serde(default = "default_bs")]
     pub batch_size: usize,
     pub expert_type: AnyMoeExpertType,
+    pub gate_model_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -157,17 +159,21 @@ impl MoeMlp {
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
+        layer: usize,
+        gate_vb: Option<&VarBuilder>,
     ) -> Result<Self> {
         let n_experts = experts.len();
         let var_map = VarMap::new();
 
-        let vb = VarBuilder::from_varmap(&var_map, dtype, dev);
-        let vb = vb.pp("moe_gate");
+        let inference = gate_vb.is_some();
+        let empty_map = VarBuilder::from_varmap(&var_map, dtype, dev);
+        let vb = gate_vb.unwrap_or_else(|| &empty_map);
+        let vb = vb.pp("moe_gate").pp(layer);
 
         let lin = linear(config.hidden_size, n_experts, vb)?;
 
         let vars = var_map.all_vars();
-        if vars.is_empty() {
+        if vars.is_empty() && inference {
             candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
         }
         Ok(Self {
