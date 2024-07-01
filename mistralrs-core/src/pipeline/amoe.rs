@@ -1,8 +1,15 @@
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    fs::{self, File},
+    io::Read,
+    sync::Arc,
+};
 
+use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
+use image::DynamicImage;
 use indexmap::IndexMap;
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -323,7 +330,12 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                 // === PREPARE INPUTS ==
                 let mut seqs = Vec::new();
-                for AnyMoeTrainingInputRow { prompt, expert: _ } in batch {
+                for AnyMoeTrainingInputRow {
+                    prompt,
+                    expert: _,
+                    image_urls,
+                } in batch
+                {
                     let tokens = processor
                         .process(
                             &*target,
@@ -334,11 +346,43 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             true,
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    let images = image_urls.as_ref().map(|urls| {
+                        urls.iter()
+                            .map(|url| -> anyhow::Result<DynamicImage> {
+                                let bytes = if url.contains("http") {
+                                    // Read from http
+                                    match reqwest::blocking::get(url.clone()) {
+                                        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+                                        Err(e) => anyhow::bail!(e),
+                                    }
+                                } else if let Ok(mut f) = File::open(url) {
+                                    // Read from local file
+                                    let metadata = fs::metadata(url)?;
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    let mut buffer = vec![0; metadata.len() as usize];
+                                    f.read_exact(&mut buffer)?;
+                                    buffer
+                                } else {
+                                    // Decode with base64
+                                    general_purpose::STANDARD.decode(url)?
+                                };
+                                Ok(image::load_from_memory(&bytes)?)
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()
+                    });
+                    let images = match images {
+                        Some(Ok(x)) => Some(x),
+                        Some(Err(e)) => {
+                            return anyhow::Result::Err(candle_core::Error::Msg(e.to_string()))
+                        }
+                        None => None,
+                    };
                     seqs.push(new_dummy_seq(
                         tokens,
                         dummy_sender.clone(),
                         dummy_sampler.clone(),
                         dummy_group.clone(),
+                        images,
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -368,7 +412,13 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let labels = Tensor::from_vec(
                     batch
                         .iter()
-                        .map(|AnyMoeTrainingInputRow { prompt: _, expert }| *expert as u32)
+                        .map(
+                            |AnyMoeTrainingInputRow {
+                                 prompt: _,
+                                 expert,
+                                 image_urls: _,
+                             }| *expert as u32,
+                        )
                         .collect::<Vec<_>>(),
                     (batch.len(),),
                     &device,
@@ -402,6 +452,7 @@ fn new_dummy_seq(
     dummy_sender: tokio::sync::mpsc::Sender<Response>,
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
+    images: Option<Vec<DynamicImage>>,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -422,6 +473,6 @@ fn new_dummy_seq(
         None,
         None,
         None,
-        None, // TODO support images
+        images,
     )
 }
