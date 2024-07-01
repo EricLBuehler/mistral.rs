@@ -139,16 +139,20 @@ impl PhiRotaryEmbedding {
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f64 / (scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64))
+                    (1f64
+                        / (scaled_params.long_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
                 .collect::<Vec<_>>();
             let inv_freq_short = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f64 / (scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64))
+                    (1f64
+                        / (scaled_params.short_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
                 .collect::<Vec<_>>();
             let inv_freq_len = inv_freq_long.len();
@@ -158,8 +162,7 @@ impl PhiRotaryEmbedding {
                 .reshape((max_seq_len, 1))?;
 
             // Calculate sin,cos for long
-            let inv_freq_long =
-                Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
+            let inv_freq_long = Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?;
             let freqs_long = t.matmul(&inv_freq_long)?;
             let long_sin = freqs_long.sin()?.mul(scaling_factor)?.to_dtype(dtype)?;
             let long_cos = freqs_long.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
