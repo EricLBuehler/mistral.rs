@@ -283,7 +283,7 @@ pub fn get_model_paths(
 }
 
 /// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
-/// If the the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
+/// If the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
 /// have a `chat_template`, use the provided one.
 ///
 /// - Uses `chat_template_fallback` if `paths` does not contain a chat template file. This may be a literal or .json file.
