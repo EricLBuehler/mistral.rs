@@ -369,6 +369,8 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use anyhow::Result;
     use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -397,14 +399,19 @@ mod tests {
                 ));
 
                 let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
-                let mut file = std::fs::File::open(&filename)?;
-                convert_gguf_to_hf_tokenizer(
-                    &Content::read(&mut file)
-                        .map_err(|e| e.with_path(filename))
-                        .map_err(anyhow::Error::msg)?,
-                )
-                .map_err(anyhow::Error::msg)
-                .map(|res| res.tokenizer)
+                let tokenizer = {
+                    let mut file = std::fs::File::open(&filename)?;
+                    convert_gguf_to_hf_tokenizer(
+                        &Content::read(&mut file)
+                            .map_err(|e| e.with_path(filename.clone()))
+                            .map_err(anyhow::Error::msg)?,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .map(|res| res.tokenizer)?
+                };
+                // So that CI doesn't fail
+                fs::remove_file(&filename)?;
+                Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
@@ -415,14 +422,19 @@ mod tests {
                 ));
 
                 let filename = api.get("Meta-Llama-3-8B-Instruct.Q2_K.gguf").unwrap();
-                let mut file = std::fs::File::open(&filename)?;
-                convert_gguf_to_hf_tokenizer(
-                    &Content::read(&mut file)
-                        .map_err(|e| e.with_path(filename))
-                        .map_err(anyhow::Error::msg)?,
-                )
-                .map_err(anyhow::Error::msg)
-                .map(|res| res.tokenizer)
+                let tokenizer = {
+                    let mut file = std::fs::File::open(&filename)?;
+                    convert_gguf_to_hf_tokenizer(
+                        &Content::read(&mut file)
+                            .map_err(|e| e.with_path(filename.clone()))
+                            .map_err(anyhow::Error::msg)?,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .map(|res| res.tokenizer)?
+                };
+                // So that CI doesn't fail
+                fs::remove_file(&filename)?;
+                Ok(tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
         }
@@ -488,62 +500,29 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_llama() -> Result<()> {
-        let passage = get_test_passage();
-        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
-        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
-
-        // Without adding special tokens
-        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
-        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
-        assert_eq!(hf_decoded, gguf_decoded);
-        assert_eq!(passage, gguf_decoded);
-
-        // With special tokens added
-        // SKIPPED:
-        // - Bugged the GGUF tokenizer does not prepend `<s> `
-        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
-        /*
-        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
-        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
-        assert_eq!(hf_decoded, gguf_decoded);
-        */
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_encode_gpt2() -> Result<()> {
-        let passage = get_test_passage();
-        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)?;
-        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Gpt2)?;
-
-        // Without adding special tokens
-        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
-        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
-        assert_eq!(hf_decoded, gguf_decoded);
-        assert_eq!(passage, gguf_decoded);
-
-        // With special tokens added
-        // SKIPPED:
-        // - Bugged the GGUF tokenizer does not prepend `<s> `
-        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
-        /*
-        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
-        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
-        assert_eq!(hf_decoded, gguf_decoded);
-        */
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_decode_llama() -> Result<()> {
+    fn test_encode_decode_llama() -> Result<()> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 
+        let passage = get_test_passage();
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
+
+        // Without adding special tokens
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        assert_eq!(passage, gguf_decoded);
+
+        // With special tokens added
+        // SKIPPED:
+        // - Bugged the GGUF tokenizer does not prepend `<s> `
+        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
+        /*
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        */
 
         #[allow(clippy::cast_possible_truncation)]
         let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
@@ -563,12 +542,29 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_gpt2() -> Result<()> {
+    fn test_encode_decode_gpt2() -> Result<()> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 
+        let passage = get_test_passage();
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Gpt2)?;
+
+        // Without adding special tokens
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        assert_eq!(passage, gguf_decoded);
+
+        // With special tokens added
+        // SKIPPED:
+        // - Bugged the GGUF tokenizer does not prepend `<s> `
+        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
+        /*
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        */
 
         #[allow(clippy::cast_possible_truncation)]
         let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
