@@ -530,6 +530,7 @@ pub trait AnyMoePipelineMixin {
         unreachable!()
     }
     /// Pre-train the gating layers
+    #[allow(clippy::too_many_arguments)]
     fn amoe_pre_train(
         &self,
         _inputs: AnyMoeTrainingInputs,
