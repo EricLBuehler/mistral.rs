@@ -10,7 +10,12 @@ macro_rules! get_delta_from_lora_ab {
             .pp($name)
             .pp("lora_B")
             .get(($out_d, $rank), "weight")?;
-        (proj_b.matmul(&proj_a)? * $alpha)?
+        let scale = if $rank > 0 {
+            $alpha / $rank as f64
+        } else {
+            1.0
+        };
+        (proj_b.matmul(&proj_a)? * scale)?
     }};
 }
 
