@@ -4,28 +4,35 @@ use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
+use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
+#[cfg(feature = "pyo3_macros")]
+use pyo3::exceptions::PyValueError;
 use std::{
     cell::RefCell,
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex},
-    thread,
+    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
 
 mod aici;
+mod cuda;
 mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
-pub use model_loader::{get_tgt_non_granular_index, LoaderBuilder};
+mod ops;
+pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
 mod model_selected;
 pub use model_selected::ModelSelected;
+pub use toml_selector::get_toml_selected_model_dtype;
 
 mod cublaslt;
+mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
@@ -39,24 +46,29 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod utils;
+mod vision_models;
 mod xlora_models;
 
-pub use device_map::{DeviceMapMetadata, LayerDeviceMapper};
+pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
-    GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder,
-    GGUFSpecificConfig, GemmaLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, TokenSource,
+    chat_template::ChatTemplate, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
+    Idefics2Loader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
+    ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader,
+    SpeculativePipeline, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionModelLoader, VisionSpecificConfig,
 };
-pub use request::{Constraint, NormalRequest, Request, RequestMessage};
+pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::SchedulerMethod;
 use serde::Serialize;
 use tokio::runtime::Runtime;
-pub use toml_selector::{TomlLoaderArgs, TomlSelector};
+use toml_selector::{TomlLoaderArgs, TomlSelector};
+pub use utils::debug::initialize_logging;
+pub use utils::normal::{ModelDType, TryIntoDType};
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
@@ -66,11 +78,45 @@ pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// engine.
 pub struct MistralRs {
-    sender: Sender<Request>,
+    sender: RwLock<Sender<Request>>,
     log: Option<String>,
     id: String,
     creation_time: u64,
     next_request_id: Mutex<RefCell<usize>>,
+    reboot_state: RebootState,
+    engine_handler: RwLock<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct RebootState {
+    pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+    method: SchedulerMethod,
+    truncate_sequence: bool,
+    no_kv_cache: bool,
+    no_prefix_cache: bool,
+    prefix_cache_n: usize,
+    disable_eos_stop: bool,
+}
+
+#[derive(Debug)]
+pub enum MistralRsError {
+    EnginePoisoned,
+    SenderPoisoned,
+}
+
+impl std::fmt::Display for MistralRsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", &self)
+    }
+}
+
+impl std::error::Error for MistralRsError {}
+
+#[cfg(feature = "pyo3_macros")]
+impl From<MistralRsError> for pyo3::PyErr {
+    fn from(value: MistralRsError) -> Self {
+        PyValueError::new_err(format!("{:?}", value))
+    }
 }
 
 /// The MistralRsBuilder takes the pipeline and a scheduler method and constructs
@@ -150,35 +196,27 @@ fn set_gemm_reduced_precision_f16() {
     let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
-        Err(e) => match e {
-            candle_core::Error::Cuda(e) => {
-                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
-                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
-                    tracing::info!("GEMM reduced precision in BF16 not supported.");
-                    candle_core::cuda::set_gemm_reduced_precision_bf16(false);
-                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
+        Err(e) => {
+            if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                tracing::info!("GEMM reduced precision in BF16 not supported.");
+                candle_core::cuda::set_gemm_reduced_precision_bf16(false);
+                INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            _ => (),
-        },
+        }
     }
 
     let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_f16(true);
     match a.matmul(&a) {
-        Ok(_) => (),
-        Err(e) => match e {
-            candle_core::Error::Cuda(e) => {
-                let x = e.downcast::<candle_core::cuda::cudarc::cublas::result::CublasError>();
-                if format!("{x:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
-                    tracing::info!("GEMM reduced precision in F16 not supported.");
-                    candle_core::cuda::set_gemm_reduced_precision_f16(false);
-                    INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
+        Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
+        Err(e) => {
+            if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
+                tracing::info!("GEMM reduced precision in F16 not supported.");
+                candle_core::cuda::set_gemm_reduced_precision_f16(false);
+                INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
             }
-            _ => (),
-        },
+        }
     }
 }
 
@@ -199,7 +237,11 @@ impl MistralRs {
             gemm_full_precision_f16,
         } = config;
 
-        if !gemm_full_precision_f16.unwrap_or(false) {
+        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+            ModelCategory::Text => true,
+            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+        };
+        if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
         }
         setup_cublas_lt_wrapper();
@@ -210,19 +252,22 @@ impl MistralRs {
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
+        let reboot_state = RebootState {
+            pipeline: pipeline.clone(),
+            method: method.clone(),
+            truncate_sequence,
+            no_kv_cache,
+            no_prefix_cache,
+            prefix_cache_n,
+            disable_eos_stop,
+        };
+
         let (tx, rx) = channel(10_000);
 
-        let this = Arc::new(Self {
-            sender: tx,
-            log,
-            id: pipeline.try_lock().unwrap().name(),
-            creation_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time travel has occurred!")
-                .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
-        });
-        thread::spawn(move || {
+        let sender = RwLock::new(tx);
+        let id = pipeline.try_lock().unwrap().name();
+
+        let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
                 let mut engine = Engine::new(
@@ -239,11 +284,81 @@ impl MistralRs {
             });
         });
 
-        this
+        Arc::new(Self {
+            sender,
+            log,
+            id,
+            creation_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!")
+                .as_secs(),
+            next_request_id: Mutex::new(RefCell::new(0)),
+            reboot_state,
+            engine_handler: RwLock::new(engine_handler),
+        })
     }
 
-    pub fn get_sender(&self) -> Sender<Request> {
-        self.sender.clone()
+    /// attempts to reboot the engine, if the sender (only way to communicate with
+    /// the engine) is closed
+    fn reboot_engine(&self) -> Result<(), MistralRsError> {
+        let (new_sender, rx) = channel(10_000);
+        let reboot_state = self.reboot_state.clone();
+        let mut sender_lock = self.sender.write().map_err(|_| {
+            tracing::warn!("Couldn't get write lock on the sender during reboot attempt");
+            MistralRsError::SenderPoisoned
+        })?;
+        let mut engine_lock = self.engine_handler.write().map_err(|_| {
+            tracing::warn!("Couldn't get write lock on the engine during reboot attempt");
+            MistralRsError::EnginePoisoned
+        })?;
+
+        if !engine_lock.is_finished() {
+            tracing::info!("Engine already running, returning ok");
+            Ok(())
+        } else {
+            // critical section. A panic here could lead to poisoned locks
+            let new_engine_handler = thread::spawn(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let mut engine = Engine::new(
+                        rx,
+                        reboot_state.pipeline.clone(),
+                        reboot_state.method,
+                        reboot_state.truncate_sequence,
+                        reboot_state.no_kv_cache,
+                        reboot_state.no_prefix_cache,
+                        reboot_state.prefix_cache_n,
+                        reboot_state.disable_eos_stop,
+                    );
+                    engine.run().await;
+                });
+            });
+            *sender_lock = new_sender;
+            *engine_lock = new_engine_handler;
+            tracing::info!("Successfully rebooted engine and updated sender + engine handler");
+            Ok(())
+        }
+    }
+
+    fn engine_dead(&self) -> Result<bool, MistralRsError> {
+        match self.engine_handler.read() {
+            Ok(handler) => Ok(handler.is_finished()),
+            Err(_) => {
+                tracing::warn!("Couldn't get read lock on engine!");
+                Err(MistralRsError::EnginePoisoned)
+            }
+        }
+    }
+
+    pub fn get_sender(&self) -> Result<Sender<Request>, MistralRsError> {
+        if self.engine_dead()? {
+            tracing::warn!("Engine is dead, rebooting");
+            self.reboot_engine()?
+        }
+        match self.sender.read() {
+            Ok(sender) => Ok(sender.clone()),
+            Err(_) => Err(MistralRsError::SenderPoisoned),
+        }
     }
 
     pub fn get_id(&self) -> String {

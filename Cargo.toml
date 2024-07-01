@@ -5,11 +5,12 @@ members = [
     "mistralrs-pyo3",
     "mistralrs",
     "mistralrs-bench",
+    "mistralrs-vision",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.24"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -20,8 +21,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = { version = "1.0.80", feature = "std" }
-candle-core = { git = "https://github.com/spiceai/candle.git", rev = "38f8d9e01f8684d4fa4ee171bdde3f1a89f41c54" }
-candle-nn = { git = "https://github.com/spiceai/candle.git", rev = "38f8d9e01f8684d4fa4ee171bdde3f1a89f41c54" }
+candle-core = { git = "https://github.com/spiceai/candle.git", rev = "41aaac4dd80e64af6b9b8e02197fa58feb5809b3" }
+candle-nn = { git = "https://github.com/spiceai/candle.git", rev = "41aaac4dd80e64af6b9b8e02197fa58feb5809b3" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -32,9 +33,13 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 futures = "0.3"
 clap = { version = "4.5.1", features = ["derive"] }
-pyo3 = { version = "0.21.0", features = ["full", "extension-module"] }
+pyo3 = { version = "0.21.0", features = ["full", "extension-module", "either"] }
 tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
+# All features but avif, avif increases the msrv dramatically
+image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds', 'exr', 'ff', 'gif', 'hdr', 'ico', 'jpeg', 'png', 'pnm', 'qoi', 'tga', 'tiff', 'webp']}
+reqwest = { version = "0.12.4", features = ["blocking"] }
+base64 = "0.22.1"
 
 [profile.profiling]
 inherits = "release"

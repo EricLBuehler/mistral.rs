@@ -15,7 +15,7 @@ use crate::{
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response, DEBUG,
 };
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -254,7 +254,6 @@ impl Engine {
     }
 
     fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
-        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
         let vocab_size = tokenizer.get_vocab_size(true);
 
@@ -264,7 +263,11 @@ impl Engine {
                 for (k, v) in bias {
                     logits_bias[k as usize] = v;
                 }
-                Ok(Some(Tensor::from_vec(logits_bias, vocab_size, &device)?))
+                Ok(Some(Tensor::from_vec(
+                    logits_bias,
+                    vocab_size,
+                    &Device::Cpu,
+                )?))
             }
             None => Ok(None),
         }
@@ -288,7 +291,10 @@ impl Engine {
     }
 
     async fn add_request(&mut self, request: NormalRequest) {
-        let is_chat = matches!(request.messages, RequestMessage::Chat(_));
+        let is_chat = matches!(
+            request.messages,
+            RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }
+        );
         let echo_prompt = matches!(
             request.messages,
             RequestMessage::Completion {
@@ -299,7 +305,9 @@ impl Engine {
 
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
-            RequestMessage::Chat(_) | RequestMessage::CompletionTokens(_) => 1,
+            RequestMessage::Chat(_)
+            | RequestMessage::CompletionTokens(_)
+            | RequestMessage::VisionChat { .. } => 1,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -314,23 +322,36 @@ impl Engine {
             return;
         }
 
-        let mut force_tokens = None;
-        let formatted_prompt = match request.messages {
-            RequestMessage::Chat(messages) => {
-                let template = get_mut_arcmutex!(self.pipeline).apply_chat_template(messages, true);
+        let images = match request.messages {
+            RequestMessage::VisionChat {
+                ref images,
+                messages: _,
+            } => Some(images.clone()),
+            _ => None,
+        };
+
+        let mut prompt = match request.messages {
+            RequestMessage::Chat(messages)
+            | RequestMessage::VisionChat {
+                images: _,
+                messages,
+            } => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let template = pipeline.get_processor().process(pipeline, messages, true);
                 handle_seq_error!(template, request.response)
             }
-            RequestMessage::Completion { text, .. } => text,
-            RequestMessage::CompletionTokens(it) => {
-                let res = get_mut_arcmutex!(self.pipeline)
+            RequestMessage::Completion { text, .. } => {
+                let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
-                    .decode(&it, false)
-                    .expect("cannot decode completion tokens");
-                force_tokens = Some(it);
-                res
+                    .encode(text, false)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                handle_seq_error!(prompt, request.response)
+                    .get_ids()
+                    .to_vec()
             }
+            RequestMessage::CompletionTokens(it) => it,
         };
-        if formatted_prompt.is_empty() {
+        if prompt.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -340,13 +361,6 @@ impl Engine {
                 .expect("Expected receiver.");
             return;
         }
-        let mut prompt = match force_tokens {
-            Some(tks) => tks,
-            None => {
-                let prompt = get_mut_arcmutex!(self.pipeline).tokenize_prompt(&formatted_prompt);
-                handle_seq_error!(prompt, request.response)
-            }
-        };
 
         if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
@@ -523,11 +537,17 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(formatted_prompt.clone())
+                    Some(
+                        get_mut_arcmutex!(self.pipeline)
+                            .tokenizer()
+                            .decode(&prompt, false)
+                            .expect("cannot decode completion tokens"),
+                    )
                 } else {
                     None
                 },
                 request.adapters.clone(),
+                images.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

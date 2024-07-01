@@ -1,13 +1,16 @@
 use std::fs::{self, File};
 
 use crate::{
+    get_toml_selected_model_dtype,
     pipeline::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 
+/// A builder for a loader using the selected model.
 pub struct LoaderBuilder {
     model: ModelSelected,
     no_kv_cache: bool,
@@ -51,7 +54,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
-        | ModelSelected::Toml { .. } => None,
+        | ModelSelected::Toml { .. }
+        | ModelSelected::VisionPlain { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -64,6 +68,28 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
             tgt_non_granular_index,
             ..
         } => *tgt_non_granular_index,
+    }
+}
+
+pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
+    match model {
+        ModelSelected::Plain { dtype, .. }
+        | ModelSelected::Lora { dtype, .. }
+        | ModelSelected::XLora { dtype, .. }
+        | ModelSelected::VisionPlain { dtype, .. } => Ok(*dtype),
+        ModelSelected::GGUF { .. }
+        | ModelSelected::LoraGGUF { .. }
+        | ModelSelected::GGML { .. }
+        | ModelSelected::LoraGGML { .. }
+        | ModelSelected::XLoraGGUF { .. }
+        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
+        ModelSelected::Toml { file } => {
+            let selector: TomlSelector = toml::from_str(
+                &fs::read_to_string(file.clone())
+                    .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
+            )?;
+            Ok(get_toml_selected_model_dtype(&selector))
+        }
     }
 }
 
@@ -87,6 +113,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             tokenizer_json,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -105,6 +132,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             tgt_non_granular_index,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -131,6 +159,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             repeat_last_n,
             order,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -277,6 +306,22 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )?,
         )
         .build(),
+        ModelSelected::VisionPlain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+            dtype: _,
+        } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            args.chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch),
     };
     Ok(loader)
 }

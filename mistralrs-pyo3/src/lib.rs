@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
@@ -7,6 +8,8 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
+    fs,
+    io::Read,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -15,11 +18,12 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    initialize_logging, ChatCompletionResponse, CompletionResponse, Constraint,
+    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
     Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource,
+    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -29,7 +33,7 @@ use pyo3::{
 use std::fs::File;
 mod stream;
 mod which;
-use which::{Architecture, Which};
+use which::{Architecture, VisionArchitecture, Which};
 
 #[cfg(not(feature = "metal"))]
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
@@ -313,11 +317,27 @@ fn parse_which(
             .map_err(|e| PyValueError::new_err(e.to_string()))?,
         )
         .build(),
+        Which::VisionPlain {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } => VisionLoaderBuilder::new(
+            VisionSpecificConfig {
+                use_flash_attn,
+                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+            },
+            chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch.into()),
     })
 }
 
 #[pymethods]
 impl Runner {
+    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -340,7 +360,7 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<usize>,
+        num_device_layers: Option<Either<usize, Vec<String>>>,
         in_situ_quant: Option<String>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
@@ -349,7 +369,8 @@ impl Runner {
             | Which::GGUF { .. }
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
-            | Which::LoraGGML { .. } => None,
+            | Which::LoraGGML { .. }
+            | Which::VisionPlain { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -389,17 +410,59 @@ impl Runner {
         } else {
             None
         };
+
+        let mapper = match num_device_layers {
+            Some(Either::Right(device_layers)) => {
+                if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+                    let layers = device_layers[0].parse::<usize>().unwrap();
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ])
+                } else {
+                    let mut mapping = Vec::new();
+                    for layer in device_layers {
+                        let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                        if split.len() < 2 {
+                            panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                        }
+                        let ord = split[0]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                        let num = split[1]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                        for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                            if *ordinal == ord {
+                                panic!("Duplicate ordinal {ord}");
+                            }
+                        }
+                        mapping.push(DeviceLayerMapMetadata {
+                            ordinal: ord,
+                            layers: num,
+                        });
+                    }
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                }
+            }
+            Some(Either::Left(n_device_layers)) => {
+                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
+                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                    ordinal: 0,
+                    layers: n_device_layers,
+                }])
+            }
+            None => DeviceMapMetadata::dummy(),
+        };
+
         let pipeline = loader
             .load_model_from_hf(
                 None,
                 TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                None,
+                &ModelDType::Auto,
                 &device,
                 true, // Silent for jupyter
-                num_device_layers
-                    .map(DeviceMapMetadata::from_num_device_layers)
-                    .unwrap_or(DeviceMapMetadata::dummy()),
+                mapper,
                 isq,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -463,26 +526,173 @@ impl Runner {
                 messages: match request.messages {
                     Either::Left(ref messages) => {
                         let mut messages_vec = Vec::new();
+                        let mut image_urls = Vec::new();
                         for message in messages {
-                            let role = message.get("role").expect("Expected role");
-                            let content = message.get("content").expect("Expected role");
-                            let mut message_map = IndexMap::new();
-                            if !["user", "assistant", "system"].contains(&role.as_str()) {
-                                return Err(PyValueError::new_err(
-                                    "Only `user`, `assistant`, `system` roles supported.",
-                                ));
+                            match &message["content"] {
+                                Either::Left(content) => {
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, String>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert(
+                                        "role".to_string(),
+                                        Either::Left(
+                                            message["role"].as_ref().left().unwrap().clone(),
+                                        ),
+                                    );
+                                    message_map.insert(
+                                        "content".to_string(),
+                                        Either::Left(content.to_string()),
+                                    );
+                                    messages_vec.push(message_map);
+                                }
+                                Either::Right(image_messages) => {
+                                    if image_messages.len() != 2 {
+                                        return Err(PyValueError::new_err(
+                                        "Expected 2 items for the content of a message with an image."
+                                    .to_string()));
+                                    }
+                                    if message["role"].as_ref().left().unwrap() != "user" {
+                                        return Err(PyValueError::new_err(format!(
+                                        "Role for an image message must be `user`, but it is {}",
+                                        &message["role"].as_ref().left().unwrap()
+                                    )));
+                                    }
+
+                                    let mut items = Vec::new();
+                                    for image_message in image_messages {
+                                        if image_message.len() != 2 {
+                                            return Err(PyValueError::new_err("Expected 2 items for the sub-content of a message with an image.".to_string()));
+                                        }
+                                        if !image_message.contains_key("type") {
+                                            return Err(PyValueError::new_err(
+                                                "Expected `type` key in input message.".to_string(),
+                                            ));
+                                        }
+                                        if image_message["type"].is_right() {
+                                            return Err(PyValueError::new_err(
+                                                "Expected string value in `type`.".to_string(),
+                                            ));
+                                        }
+                                        items.push(
+                                            image_message["type"].as_ref().unwrap_left().clone(),
+                                        )
+                                    }
+
+                                    #[allow(clippy::type_complexity)]
+                                    fn get_content_and_url(
+                                        text_idx: usize,
+                                        url_idx: usize,
+                                        image_messages: &[HashMap<
+                                            String,
+                                            Either<String, HashMap<String, String>>,
+                                        >],
+                                    ) -> PyResult<(String, String)>
+                                    {
+                                        if image_messages[text_idx]["text"].is_right() {
+                                            return Err(PyValueError::new_err(
+                                                "Expected string value in `text`.".to_string(),
+                                            ));
+                                        }
+                                        let content = image_messages[text_idx]["text"]
+                                            .as_ref()
+                                            .unwrap_left()
+                                            .clone();
+                                        if image_messages[url_idx]["image_url"].is_left()
+                                            || !image_messages[url_idx]["image_url"]
+                                                .as_ref()
+                                                .unwrap_right()
+                                                .contains_key("url")
+                                        {
+                                            return Err(PyValueError::new_err("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
+                                        }
+                                        let url = image_messages[url_idx]["image_url"]
+                                            .as_ref()
+                                            .unwrap_right()["url"]
+                                            .clone();
+                                        Ok((content, url))
+                                    }
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, String>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert(
+                                        "role".to_string(),
+                                        Either::Left(
+                                            message["role"].as_ref().left().unwrap().clone(),
+                                        ),
+                                    );
+                                    let (content, url) = if items[0] == "text" {
+                                        get_content_and_url(0, 1, image_messages)?
+                                    } else {
+                                        get_content_and_url(1, 0, image_messages)?
+                                    };
+
+                                    let mut content_map = Vec::new();
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map
+                                        .insert("type".to_string(), "image".to_string());
+                                    content_map.push(content_image_map);
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert("type".to_string(), "text".to_string());
+                                    content_text_map.insert("text".to_string(), content);
+                                    content_map.push(content_text_map);
+
+                                    message_map
+                                        .insert("content".to_string(), Either::Right(content_map));
+                                    messages_vec.push(message_map);
+                                    image_urls.push(url);
+                                }
                             }
-                            message_map.insert("role".to_string(), role.to_string());
-                            message_map.insert("content".to_string(), content.clone());
-                            messages_vec.push(message_map);
                         }
-                        RequestMessage::Chat(messages_vec)
+                        if !image_urls.is_empty() {
+                            let mut images = Vec::new();
+                            for url in image_urls {
+                                let bytes = if url.contains("http") {
+                                    // Read from http
+                                    match reqwest::blocking::get(url.clone()) {
+                                        Ok(http_resp) => http_resp
+                                            .bytes()
+                                            .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                            .to_vec(),
+                                        Err(e) => {
+                                            return Err(PyValueError::new_err(format!("{e}")))
+                                        }
+                                    }
+                                } else if let Ok(mut f) = File::open(&url) {
+                                    // Read from local file
+                                    let metadata = fs::metadata(&url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                                    let mut buffer = vec![0; metadata.len() as usize];
+                                    f.read_exact(&mut buffer)?;
+                                    buffer
+                                } else {
+                                    // Decode with base64
+                                    general_purpose::STANDARD
+                                        .decode(url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                };
+                                images.push(
+                                    image::load_from_memory(&bytes)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                                );
+                            }
+                            RequestMessage::VisionChat {
+                                messages: messages_vec,
+                                images,
+                            }
+                        } else {
+                            RequestMessage::Chat(messages_vec)
+                        }
                     }
                     Either::Right(ref prompt) => {
                         let mut messages = Vec::new();
-                        let mut message_map = IndexMap::new();
-                        message_map.insert("role".to_string(), "user".to_string());
-                        message_map.insert("content".to_string(), prompt.to_string());
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                        message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
                         messages.push(message_map);
                         RequestMessage::Chat(messages)
                     }
@@ -508,7 +718,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
 
             if request.stream {
@@ -525,6 +735,7 @@ impl Runner {
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
                 }
             }
         })
@@ -597,7 +808,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
             let response = rx.blocking_recv().unwrap();
 
@@ -612,6 +823,7 @@ impl Runner {
                 Response::Chunk(_) => unreachable!(),
                 Response::Done(_) => unreachable!(),
                 Response::ModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             }
         })
     }
@@ -621,14 +833,18 @@ impl Runner {
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
         let request =
             _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
 
     /// Send a request to make the specified adapters the active adapters for the model.
     fn activate_adapters(&self, adapter_names: Vec<String>) {
         let request = _Request::ActivateAdapters(adapter_names);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner
+            .get_sender()
+            .unwrap()
+            .blocking_send(request)
+            .unwrap();
     }
 }
 
@@ -722,7 +938,16 @@ impl CompletionRequest {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
-    messages: Either<Vec<IndexMap<String, String>>, String>,
+    #[allow(clippy::type_complexity)]
+    messages: Either<
+        Vec<
+            HashMap<
+                String,
+                Either<String, Vec<HashMap<String, Either<String, HashMap<String, String>>>>>,
+            >,
+        >,
+        String,
+    >,
     _model: String,
     logit_bias: Option<HashMap<u32, f32>>,
     logprobs: bool,
@@ -786,14 +1011,46 @@ impl ChatCompletionRequest {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
                 let mut messages_vec = Vec::new();
                 for message in messages {
-                    messages_vec.push(message.extract::<IndexMap<String, String>>()?);
+                    messages_vec.push(message.extract::<HashMap<
+                        String,
+                        Either<
+                            String,
+                            Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                        >,
+                    >>()?);
                 }
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Left(
-                    messages_vec,
-                ))
+                Ok::<
+                    Either<
+                        Vec<
+                            HashMap<
+                                String,
+                                Either<
+                                    String,
+                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                                >,
+                            >,
+                        >,
+                        String,
+                    >,
+                    PyErr,
+                >(Either::Left(messages_vec))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
                 let prompt = messages.extract::<String>()?;
-                Ok::<Either<Vec<IndexMap<String, String>>, String>, PyErr>(Either::Right(prompt))
+                Ok::<
+                    Either<
+                        Vec<
+                            HashMap<
+                                String,
+                                Either<
+                                    String,
+                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
+                                >,
+                            >,
+                        >,
+                        String,
+                    >,
+                    PyErr,
+                >(Either::Right(prompt))
             } else {
                 return Err(PyTypeError::new_err("Expected a string or list of dicts."));
             }
@@ -822,11 +1079,14 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    initialize_logging();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
+    m.add_class::<VisionArchitecture>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

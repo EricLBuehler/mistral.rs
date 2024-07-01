@@ -2,22 +2,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use candle_core::{Tensor, D};
 
-use crate::{get_mut_arcmutex, sequence::Sequence, Pipeline};
+use crate::{get_mut_arcmutex, sequence::Sequence};
 
-pub trait CacheManager {
+use super::{CacheManagerMixin, MetadataMixin};
+
+pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(
         &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
+        pipeline: &T,
+        seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     );
-    fn clone_out_cache(
-        &self,
-        pipeline: &mut dyn Pipeline,
-        seqs: &mut [&mut Sequence],
-        modify_draft_cache: bool,
-    );
-    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool);
+    fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool);
 }
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
@@ -234,10 +231,10 @@ fn clone_out_cache(
     }
 }
 
-impl CacheManager for DefaultCacheManager {
+impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultCacheManager {
     fn clone_in_cache(
         &self,
-        pipeline: &mut dyn Pipeline,
+        pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
@@ -274,7 +271,7 @@ impl CacheManager for DefaultCacheManager {
 
     fn clone_out_cache(
         &self,
-        pipeline: &mut dyn Pipeline,
+        pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
@@ -308,7 +305,7 @@ impl CacheManager for DefaultCacheManager {
         }
     }
 
-    fn set_none_cache(&self, pipeline: &mut dyn Pipeline, modify_draft_cache: bool) {
+    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool) {
         let mut new_cache = Vec::new();
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);

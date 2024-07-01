@@ -1,11 +1,21 @@
-use std::{error::Error, sync::Arc};
-use tokio::sync::mpsc::{channel, Sender};
+use std::{
+    env,
+    error::Error,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::openai::{CompletionRequest, Grammar, StopTokens};
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
-    response::IntoResponse,
+    response::{
+        sse::{Event, KeepAlive},
+        IntoResponse, Sse,
+    },
 };
 use mistralrs_core::{
     CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
@@ -22,7 +32,55 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
+
+pub struct Streamer {
+    rx: Receiver<Response>,
+    is_done: bool,
+    state: Arc<MistralRs>,
+}
+
+impl futures::Stream for Streamer {
+    type Item = Result<Event, axum::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
+        match self.rx.try_recv() {
+            Ok(resp) => match resp {
+                Response::ModelError(msg, _) => {
+                    MistralRs::maybe_log_error(
+                        self.state.clone(),
+                        &ModelErrorMessage(msg.to_string()),
+                    );
+                    Poll::Ready(Some(Ok(Event::default().data(msg))))
+                }
+                Response::ValidationError(e) => {
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::InternalError(e) => {
+                    MistralRs::maybe_log_error(self.state.clone(), &*e);
+                    Poll::Ready(Some(Ok(Event::default().data(e.to_string()))))
+                }
+                Response::CompletionChunk(response) => {
+                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                        self.is_done = true;
+                    }
+                    MistralRs::maybe_log_response(self.state.clone(), &response);
+                    Poll::Ready(Some(Event::default().json_data(response)))
+                }
+                Response::Done(_) => unreachable!(),
+                Response::CompletionDone(_) => unreachable!(),
+                Response::CompletionModelError(_, _) => unreachable!(),
+                Response::Chunk(_) => unreachable!(),
+            },
+            Err(_) => Poll::Pending,
+        }
+    }
+}
+
 pub enum CompletionResponder {
+    Sse(Sse<Streamer>),
     Json(CompletionResponse),
     ModelError(String, CompletionResponse),
     InternalError(Box<dyn Error>),
@@ -69,6 +127,7 @@ impl ErrorToResponse for JsonModelError {}
 impl IntoResponse for CompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
+            CompletionResponder::Sse(s) => s.into_response(),
             CompletionResponder::Json(s) => Json(s).into_response(),
             CompletionResponder::InternalError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
@@ -86,7 +145,7 @@ fn parse_request(
     oairequest: CompletionRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
-) -> Request {
+) -> (Request, bool) {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -100,40 +159,40 @@ fn parse_request(
         warn!("Completion requests do not support logprobs.");
     }
 
-    if oairequest._stream.is_some_and(|x| x) {
-        warn!("Completion requests do not support streaming.");
-    }
-
-    Request::Normal(NormalRequest {
-        id: state.next_request_id(),
-        messages: RequestMessage::Completion {
-            text: oairequest.prompt,
-            echo_prompt: oairequest.echo_prompt,
-            best_of: oairequest.best_of,
-        },
-        sampling_params: SamplingParams {
-            temperature: oairequest.temperature,
-            top_k: oairequest.top_k,
-            top_p: oairequest.top_p,
-            top_n_logprobs: 1,
-            frequency_penalty: oairequest.frequency_penalty,
-            presence_penalty: oairequest.presence_penalty,
-            max_len: oairequest.max_tokens,
-            stop_toks,
-            logits_bias: oairequest.logit_bias,
-            n_choices: oairequest.n_choices,
-        },
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        suffix: oairequest.suffix,
-        constraint: match oairequest.grammar {
-            Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
-            Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
-            None => Constraint::None,
-        },
-        adapters: oairequest.adapters,
-    })
+    let is_streaming = oairequest.stream.unwrap_or(false);
+    (
+        Request::Normal(NormalRequest {
+            id: state.next_request_id(),
+            messages: RequestMessage::Completion {
+                text: oairequest.prompt,
+                echo_prompt: oairequest.echo_prompt,
+                best_of: oairequest.best_of,
+            },
+            sampling_params: SamplingParams {
+                temperature: oairequest.temperature,
+                top_k: oairequest.top_k,
+                top_p: oairequest.top_p,
+                top_n_logprobs: 1,
+                frequency_penalty: oairequest.frequency_penalty,
+                presence_penalty: oairequest.presence_penalty,
+                max_len: oairequest.max_tokens,
+                stop_toks,
+                logits_bias: oairequest.logit_bias,
+                n_choices: oairequest.n_choices,
+            },
+            response: tx,
+            return_logprobs: false,
+            is_streaming,
+            suffix: oairequest.suffix,
+            constraint: match oairequest.grammar {
+                Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
+                Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+                None => Constraint::None,
+            },
+            adapters: oairequest.adapters,
+        }),
+        is_streaming,
+    )
 }
 
 #[utoipa::path(
@@ -154,13 +213,8 @@ pub async fn completions(
         );
     }
 
-    if oairequest._stream.is_some_and(|s| s) {
-        return CompletionResponder::ValidationError(
-            "Completion requests do not support streaming.".into(),
-        );
-    }
-    let request = parse_request(oairequest, state.clone(), tx);
-    let sender = state.get_sender();
+    let (request, is_streaming) = parse_request(oairequest, state.clone(), tx);
+    let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());
@@ -168,32 +222,53 @@ pub async fn completions(
         return CompletionResponder::InternalError(e.into());
     }
 
-    let response = match rx.recv().await {
-        Some(response) => response,
-        None => {
-            let e = anyhow::Error::msg("No response received from the model.");
-            MistralRs::maybe_log_error(state, &*e);
-            return CompletionResponder::InternalError(e.into());
-        }
-    };
+    if is_streaming {
+        let streamer = Streamer {
+            rx,
+            is_done: false,
+            state,
+        };
 
-    match response {
-        Response::InternalError(e) => {
-            MistralRs::maybe_log_error(state, &*e);
-            CompletionResponder::InternalError(e)
+        CompletionResponder::Sse(
+            Sse::new(streamer).keep_alive(
+                KeepAlive::new()
+                    .interval(Duration::from_millis(
+                        env::var("KEEP_ALIVE_INTERVAL")
+                            .map(|val| val.parse::<u64>().unwrap_or(1000))
+                            .unwrap_or(1000),
+                    ))
+                    .text("keep-alive-text"),
+            ),
+        )
+    } else {
+        let response = match rx.recv().await {
+            Some(response) => response,
+            None => {
+                let e = anyhow::Error::msg("No response received from the model.");
+                MistralRs::maybe_log_error(state, &*e);
+                return CompletionResponder::InternalError(e.into());
+            }
+        };
+
+        match response {
+            Response::InternalError(e) => {
+                MistralRs::maybe_log_error(state, &*e);
+                CompletionResponder::InternalError(e)
+            }
+            Response::CompletionModelError(msg, response) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
+                MistralRs::maybe_log_response(state, &response);
+                CompletionResponder::ModelError(msg, response)
+            }
+            Response::ValidationError(e) => CompletionResponder::ValidationError(e),
+            Response::CompletionDone(response) => {
+                MistralRs::maybe_log_response(state, &response);
+                CompletionResponder::Json(response)
+            }
+            Response::CompletionChunk(_) => unreachable!(),
+            Response::Chunk(_) => unreachable!(),
+            Response::Done(_) => unreachable!(),
+            Response::ModelError(_, _) => unreachable!(),
         }
-        Response::CompletionModelError(msg, response) => {
-            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-            MistralRs::maybe_log_response(state, &response);
-            CompletionResponder::ModelError(msg, response)
-        }
-        Response::ValidationError(e) => CompletionResponder::ValidationError(e),
-        Response::CompletionDone(response) => {
-            MistralRs::maybe_log_response(state, &response);
-            CompletionResponder::Json(response)
-        }
-        Response::Chunk(_) => unreachable!(),
-        Response::Done(_) => unreachable!(),
-        Response::ModelError(_, _) => unreachable!(),
     }
 }

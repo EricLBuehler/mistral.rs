@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     response::CompletionChoice,
-    CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
     get_mut_group,
@@ -99,6 +99,7 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
+    input_images: Option<Vec<image::DynamicImage>>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -128,6 +129,7 @@ impl Sequence {
         suffix: Option<String>,
         prefix: Option<String>,
         adapters: Option<Vec<String>>,
+        input_images: Option<Vec<image::DynamicImage>>,
     ) -> Self {
         let prompt_len = tokens.len();
         Self {
@@ -169,6 +171,7 @@ impl Sequence {
             is_tmp: false,
             scheduling_urgency: 0,
             adapters,
+            input_images,
         }
     }
 
@@ -254,6 +257,12 @@ impl Sequence {
             return toks;
         }
         &self.tokens
+    }
+
+    /// This will also set prompt_len
+    pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
+        self.tokens = toks;
+        self.prompt_len = self.tokens.len();
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -478,11 +487,23 @@ impl Sequence {
     }
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
-        get_mut_group!(self).streaming_chunks.push(chunk);
+        get_mut_group!(self).chat_streaming_chunks.push(chunk);
+    }
+
+    pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
+        get_mut_group!(self).completion_streaming_chunks.push(chunk);
     }
 
     pub fn get_adapters(&self) -> Option<Vec<String>> {
         self.adapters.clone()
+    }
+
+    pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.take()
+    }
+
+    pub fn images(&self) -> Option<&[image::DynamicImage]> {
+        self.input_images.as_deref()
     }
 }
 
@@ -496,7 +517,8 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     completion_choices: Vec<(f32, CompletionChoice)>,
-    pub streaming_chunks: Vec<ChunkChoice>,
+    pub chat_streaming_chunks: Vec<ChunkChoice>,
+    pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
 }
@@ -512,7 +534,8 @@ impl SequenceGroup {
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
-            streaming_chunks: Vec::new(),
+            chat_streaming_chunks: Vec::new(),
+            completion_streaming_chunks: Vec::new(),
             is_streaming,
             is_chat,
             best_of,
@@ -554,7 +577,7 @@ impl SequenceGroup {
         }
     }
 
-    pub async fn maybe_send_done_response(
+    pub async fn maybe_send_chat_done_response(
         &self,
         response: ChatCompletionResponse,
         sender: Sender<Response>,
@@ -571,10 +594,10 @@ impl SequenceGroup {
         seq: &Sequence,
         model: String,
     ) -> Result<(), Box<SendError<Response>>> {
-        if self.streaming_chunks.len() == self.n_choices && self.is_streaming {
+        if self.chat_streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
 
-            std::mem::swap(&mut swap_streaming_chunks, &mut self.streaming_chunks);
+            std::mem::swap(&mut swap_streaming_chunks, &mut self.chat_streaming_chunks);
 
             seq.responder()
                 .send(Response::Chunk(ChatCompletionChunkResponse {
@@ -584,6 +607,24 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                }))
+                .await?;
+        } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {
+            let mut swap_streaming_chunks = vec![];
+
+            std::mem::swap(
+                &mut swap_streaming_chunks,
+                &mut self.completion_streaming_chunks,
+            );
+
+            seq.responder()
+                .send(Response::CompletionChunk(CompletionChunkResponse {
+                    id: seq.id.to_string(),
+                    choices: swap_streaming_chunks,
+                    created: seq.timestamp,
+                    model: model.clone(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "text_completion".to_string(),
                 }))
                 .await?;
         }

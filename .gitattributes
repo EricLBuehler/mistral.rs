@@ -1,0 +1,19 @@
+# Pattern syntax:
+# https://git-scm.com/docs/gitignore#_pattern_format
+
+# Normalize line endings of all non-binary files to LF upon check-in (`git add` / `git commit`):
+* text=auto
+
+# Use `eol=lf` / `eol=crlf` to enforce specific line endings on checkout for compatibility:
+# https://www.git-scm.com/docs/gitattributes/#_eol
+# NOTE:
+# - This setting implies the `text` attribute.
+# - `eol=lf` may not work as expected, if a file was committed with CRLF prior to the introduction of `.gitattribtues`.
+#
+# Relevant files for this setting:
+# - `.sh` (LF) / `.bat` (CRLF) and similar scripts that are platform specific.
+# - Scripts that utilize a shebang (`#!/usr/bin/env python3`) to hint the interpreter to run.
+# - `Dockerfile` (base image environment may require LF):
+#   https://github.com/EricLBuehler/mistral.rs/pull/361
+
+Dockerfile* eol=lf

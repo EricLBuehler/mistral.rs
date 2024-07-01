@@ -2,9 +2,9 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    Constraint, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
+    LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -63,7 +63,7 @@ fn run_bench(
         logits_bias: None,
         n_choices: 1,
     };
-    let sender = mistralrs.get_sender();
+    let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(NormalRequest {
@@ -106,6 +106,7 @@ fn run_bench(
                     Response::CompletionDone(res) => {
                         usages.push(res.usage);
                     }
+                    Response::CompletionChunk(_) => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
@@ -221,7 +222,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         logits_bias: None,
         n_choices: 1,
     };
-    let sender = mistralrs.get_sender();
+    let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
 
     let req = Request::Normal(NormalRequest {
@@ -270,13 +271,17 @@ struct Args {
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
 
-    /// Number of device layers to load and run on the device. All others will be on the CPU.
-    #[arg(short, long)]
-    num_device_layers: Option<usize>,
+    /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
+    /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
+    /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
+    #[arg(short, long, value_parser, value_delimiter = ';')]
+    num_device_layers: Option<Vec<String>>,
 }
 
 fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
+    initialize_logging();
+
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
     #[cfg(not(feature = "flash-attn"))]
@@ -310,15 +315,51 @@ fn main() -> anyhow::Result<()> {
         warn!("Using flash attention with a quantized model has no effect!")
     }
     info!("Model kind is: {}", loader.get_kind().to_string());
+
+    // Parse device mapper
+    let mapper = if let Some(device_layers) = args.num_device_layers {
+        if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+            let layers = device_layers[0].parse::<usize>().unwrap();
+            DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                ordinal: 0,
+                layers,
+            }])
+        } else {
+            let mut mapping = Vec::new();
+            for layer in device_layers {
+                let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                if split.len() < 2 {
+                    panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                }
+                let ord = split[0]
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                let num = split[1]
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                    if *ordinal == ord {
+                        panic!("Duplicate ordinal {ord}");
+                    }
+                }
+                mapping.push(DeviceLayerMapMetadata {
+                    ordinal: ord,
+                    layers: num,
+                });
+            }
+            DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+        }
+    } else {
+        DeviceMapMetadata::dummy()
+    };
+
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
-        None,
+        &ModelDType::Auto,
         &device,
         false,
-        args.num_device_layers
-            .map(DeviceMapMetadata::from_num_device_layers)
-            .unwrap_or(DeviceMapMetadata::dummy()),
+        mapper,
         None,
     )?;
     info!("Model loaded.");

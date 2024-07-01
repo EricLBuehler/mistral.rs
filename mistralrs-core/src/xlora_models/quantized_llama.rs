@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
@@ -13,14 +14,15 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{
-    repeat_kv, verify_sanity_gguf, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention,
-};
+use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
+use crate::models::quantized_llama::PropsGGUF;
+use crate::utils::gguf_metadata::ContentMetadata;
+use crate::utils::model_config as ModelConfig;
 
 const MAX_SEQ_LEN: u32 = 4096;
 const SUPPORTED_LAYERS: [&str; 7] = [
@@ -180,7 +182,7 @@ struct LayerWeights {
 impl LayerWeights {
     #[allow(clippy::too_many_arguments)]
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: &Option<Tensor>,
         start_offsets: &[usize],
@@ -212,21 +214,34 @@ impl LayerWeights {
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+        };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?;
+                .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+                .contiguous()?;
         }
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
@@ -269,8 +284,8 @@ pub struct ModelWeights {
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
 
-impl ModelWeights {
-    pub fn from_ggml(
+impl ModelConfig::FromAdapterGGML for ModelWeights {
+    fn from_ggml(
         mut ct: ggml_file::Content,
         gqa: usize,
         lora_config: &[((String, String), LoraConfig)],
@@ -440,9 +455,11 @@ impl ModelWeights {
             mapper: None,
         })
     }
+}
 
+impl ModelConfig::FromAdapterGGUF for ModelWeights {
     #[allow(clippy::too_many_arguments)]
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
@@ -453,39 +470,27 @@ impl ModelWeights {
         mapper: DeviceMapMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-        verify_sanity_gguf(
-            md_get("general.architecture")?.to_string().unwrap(),
-            "llama",
-        )?;
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
 
         // Parameter extraction from metadata.
-        let n_expert = md_get("llama.expert_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let n_expert_used = md_get("llama.expert_used_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
-        // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
+        let metadata = ContentMetadata {
+            path_prefix: "llama",
+            metadata: &ct.metadata,
+        };
+        let PropsGGUF {
+            n_expert,
+            n_expert_used,
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            rope_dim,
+            rms_norm_eps,
+            max_seq_len,
+            rope_freq_base,
+        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let rope_freq_base = md_get("llama.rope.freq_base")
-            .and_then(|m| m.to_f32())
-            .unwrap_or(10000f32);
         let head_dim = embedding_length / head_count;
-
-        let max_seq_len = md_get("llama.context_length")
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -496,8 +501,10 @@ impl ModelWeights {
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -710,8 +717,13 @@ impl ModelWeights {
             mapper: Some(mapper),
         })
     }
+}
 
+impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
+        if self.xlora_classifier.is_some() {
+            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+        }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {
             sum += layer.attention_wk.activate(&adapter_names)?;
@@ -742,7 +754,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -768,10 +780,10 @@ impl ModelWeights {
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             x,
             &cache,
-            x.dtype(),
+            DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }
@@ -814,7 +826,7 @@ impl ModelWeights {
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -909,7 +921,7 @@ impl ScalingsMaker for ModelWeights {
         self.xlora_classifier.as_ref().unwrap()
     }
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,

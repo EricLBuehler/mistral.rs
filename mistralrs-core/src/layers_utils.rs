@@ -16,13 +16,6 @@ pub fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result
     unimplemented!("Compile with '--features flash-attn'")
 }
 
-pub fn verify_sanity_gguf(arch: &str, expected_arch: &str) -> Result<()> {
-    if arch != expected_arch {
-        candle_core::bail!("Expected `{expected_arch}` architecture, got `{arch}`.");
-    }
-    Ok(())
-}
-
 pub fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)

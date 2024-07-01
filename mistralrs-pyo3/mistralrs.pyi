@@ -7,9 +7,13 @@ class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
     about input data, sampling, and how to return the response.
+
+    The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
     """
 
-    messages: list[dict[str, str]] | str
+    messages: (
+        list[dict[str, str]] | list[dict[str, list[dict[str, str | dict[str, str]]]]]
+    ) | str
     model: str
     logit_bias: dict[int, float] | None = None
     logprobs: bool = False
@@ -59,6 +63,13 @@ class Architecture(Enum):
     Mixtral = "mixtral"
     Llama = "llama"
     Phi2 = "phi2"
+    Qwen2 = "qwen2"
+    Gemma2 = "gemma2"
+
+@dataclass
+class VisionArchitecture(Enum):
+    Phi3V = "phi3v"
+    Idefics2 = "idefics2"
 
 class Which(Enum):
     """
@@ -140,6 +151,12 @@ class Which(Enum):
         order: str
         tokenizer_json: str | None = None
         repeat_last_n: int = 64
+    @dataclass
+    class VisionPlain:
+        arch: VisionArchitecture
+        model_id: str
+        tokenizer_json: str | None = None
+        repeat_last_n: int = 64
 
 class Runner:
     def __init__(
@@ -152,7 +169,7 @@ class Runner:
         speculative_gamma: int = 32,
         which_draft: Which | None = None,
         chat_template: str | None = None,
-        num_device_layers: int | None = None,
+        num_device_layers: int | list[str] | None = None,
         in_situ_quant: str | None = None,
     ) -> None:
         """
@@ -172,6 +189,8 @@ class Runner:
             The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
         - `num_device_layers` sets the number of layers to load and run on the device.
+            If it is a list of strings, each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
+            the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         """
         ...

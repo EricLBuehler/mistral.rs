@@ -9,6 +9,9 @@ use crate::device_map::DeviceMapper;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::pipeline::{extract_logits, Cache};
+use crate::utils::gguf_metadata::ContentMetadata;
+use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -56,7 +59,7 @@ impl LayerWeights {
     }
 
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
@@ -141,28 +144,77 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
     Ok(ln)
 }
 
-impl ModelWeights {
-    pub fn from_gguf<R: std::io::Seek + std::io::Read>(
+// phi2 `llm` fields:
+// https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#llm
+// NOTE: Types here do not match spec
+struct PropsGGUF {
+    head_count: usize,
+    head_count_kv: usize,
+    block_count: usize,
+    embedding_length: usize,
+    rope_dim: usize,
+    ln_eps: f64,
+    max_seq_len: usize,
+}
+
+impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
+    type Error = anyhow::Error;
+
+    fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
+        c.verify_arch("phi2")?;
+
+        let required = [
+            "attention.head_count",
+            "attention.head_count_kv",
+            "block_count",
+            "embedding_length",
+            "rope.dimension_count",
+            "attention.layer_norm_rms_epsilon",
+            "context_length",
+        ];
+        c.has_required_keys(&required)?;
+
+        // NOTE: Values are not aligned with GGUFv3 types
+        // TODO: Normalize value types to spec
+        let props = Self {
+            head_count: c.get_value::<u32>("attention.head_count")? as usize,
+            head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
+            block_count: c.get_value::<u32>("block_count")? as usize,
+            embedding_length: c.get_value::<u32>("embedding_length")? as usize,
+            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
+            ln_eps: c.get_value::<f32>("attention.layer_norm_rms_epsilon")? as f64,
+            max_seq_len: c
+                .get_value::<u64>("context_length")
+                .ok()
+                .unwrap_or(MAX_SEQ_LEN as u64) as usize,
+        };
+
+        Ok(props)
+    }
+}
+
+impl ModelConfig::FromGGUF for ModelWeights {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle_core::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
-
         // Parameter extraction from metadata.
-        let head_count = md_get("phi2.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("phi2.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("phi2.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("phi2.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("phi2.rope.dimension_count")?.to_u32()? as usize;
-        let ln_eps = md_get("phi2.attention.layer_norm_epsilon")?.to_f32()? as f64;
-        let max_seq_len = md_get("phi2.context_length")
-            .and_then(|m| m.to_u64())
-            .unwrap_or(MAX_SEQ_LEN as u64) as usize;
+        let metadata = ContentMetadata {
+            path_prefix: "phi2",
+            metadata: &ct.metadata,
+        };
+        let PropsGGUF {
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            rope_dim,
+            ln_eps,
+            max_seq_len,
+        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
@@ -174,8 +226,10 @@ impl ModelWeights {
         )?;
         let output = QLinear::new(&ct, reader, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
@@ -211,9 +265,11 @@ impl ModelWeights {
             mapper,
         })
     }
+}
 
+impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
@@ -223,10 +279,10 @@ impl ModelWeights {
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             &cache,
-            xs.dtype(),
+            DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let residual = &xs;
             let xs_norm = xs.apply(&layer.attn_norm)?;

@@ -2,9 +2,9 @@ use std::{fs::File, sync::Arc};
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
-    SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -30,7 +30,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        None,
+        &ModelDType::Auto,
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),
@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
         adapters: Some(vec!["adapter_2".to_string()]),
     });
 
-    mistralrs.get_sender().blocking_send(request)?;
+    mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
     match response {

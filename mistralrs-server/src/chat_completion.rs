@@ -1,6 +1,11 @@
+use base64::{engine::general_purpose, Engine};
 use std::{
+    collections::HashMap,
     env,
     error::Error,
+    fs::{self, File},
+    io::Read,
+    ops::Deref,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -8,7 +13,7 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::openai::{ChatCompletionRequest, Grammar, StopTokens};
+use crate::openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens};
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
@@ -34,6 +39,7 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
+
 pub struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -73,6 +79,7 @@ impl futures::Stream for Streamer {
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -143,11 +150,11 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
-fn parse_request(
+async fn parse_request(
     oairequest: ChatCompletionRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
-) -> (Request, bool) {
+) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -159,26 +166,136 @@ fn parse_request(
     let messages = match oairequest.messages {
         Either::Left(req_messages) => {
             let mut messages = Vec::new();
+            let mut image_urls = Vec::new();
             for message in req_messages {
-                let mut message_map = IndexMap::new();
-                message_map.insert("role".to_string(), message.role);
-                message_map.insert("content".to_string(), message.content);
-                messages.push(message_map);
+                match message.content.deref() {
+                    Either::Left(content) => {
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(message.role));
+                        message_map
+                            .insert("content".to_string(), Either::Left(content.to_string()));
+                        messages.push(message_map);
+                    }
+                    Either::Right(image_messages) => {
+                        if image_messages.len() != 2 {
+                            anyhow::bail!(
+                                "Expected 2 items for the content of a message with an image."
+                            );
+                        }
+                        if message.role != "user" {
+                            anyhow::bail!(
+                                "Role for an image message must be `user`, but it is {}",
+                                message.role
+                            );
+                        }
+
+                        let mut items = Vec::new();
+                        for image_message in image_messages {
+                            if image_message.len() != 2 {
+                                anyhow::bail!("Expected 2 items for the sub-content of a message with an image.");
+                            }
+                            if !image_message.contains_key("type") {
+                                anyhow::bail!("Expected `type` key in input message.");
+                            }
+                            if image_message["type"].is_right() {
+                                anyhow::bail!("Expected string value in `type`.");
+                            }
+                            items.push(image_message["type"].as_ref().unwrap_left().clone())
+                        }
+
+                        fn get_content_and_url(
+                            text_idx: usize,
+                            url_idx: usize,
+                            image_messages: &[HashMap<String, MessageInnerContent>],
+                        ) -> Result<(String, String)> {
+                            if image_messages[text_idx]["text"].is_right() {
+                                anyhow::bail!("Expected string value in `text`.");
+                            }
+                            let content = image_messages[text_idx]["text"]
+                                .as_ref()
+                                .unwrap_left()
+                                .clone();
+                            if image_messages[url_idx]["image_url"].is_left()
+                                || !image_messages[url_idx]["image_url"]
+                                    .as_ref()
+                                    .unwrap_right()
+                                    .contains_key("url")
+                            {
+                                anyhow::bail!("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
+                            }
+                            let url = image_messages[url_idx]["image_url"].as_ref().unwrap_right()
+                                ["url"]
+                                .clone();
+                            Ok((content, url))
+                        }
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, String>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(message.role));
+                        let (content, url) = if items[0] == "text" {
+                            get_content_and_url(0, 1, image_messages)?
+                        } else {
+                            get_content_and_url(1, 0, image_messages)?
+                        };
+
+                        let mut content_map = Vec::new();
+                        let mut content_image_map = IndexMap::new();
+                        content_image_map.insert("type".to_string(), "image".to_string());
+                        content_map.push(content_image_map);
+                        let mut content_text_map = IndexMap::new();
+                        content_text_map.insert("type".to_string(), "text".to_string());
+                        content_text_map.insert("text".to_string(), content);
+                        content_map.push(content_text_map);
+
+                        message_map.insert("content".to_string(), Either::Right(content_map));
+                        messages.push(message_map);
+                        image_urls.push(url);
+                    }
+                }
             }
-            RequestMessage::Chat(messages)
+            if !image_urls.is_empty() {
+                let mut images = Vec::new();
+                for url in image_urls {
+                    let bytes = if url.contains("http") {
+                        // Read from http
+                        match reqwest::get(url.clone()).await {
+                            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
+                            Err(e) => anyhow::bail!(e),
+                        }
+                    } else if let Ok(mut f) = File::open(&url) {
+                        // Read from local file
+                        let metadata = fs::metadata(&url)?;
+                        let mut buffer = vec![0; metadata.len() as usize];
+                        f.read_exact(&mut buffer)?;
+                        buffer
+                    } else {
+                        // Decode with base64
+                        general_purpose::STANDARD.decode(url)?
+                    };
+                    images.push(image::load_from_memory(&bytes)?);
+                }
+                RequestMessage::VisionChat { messages, images }
+            } else {
+                RequestMessage::Chat(messages)
+            }
         }
         Either::Right(prompt) => {
             let mut messages = Vec::new();
-            let mut message_map = IndexMap::new();
-            message_map.insert("role".to_string(), "user".to_string());
-            message_map.insert("content".to_string(), prompt);
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+                IndexMap::new();
+            message_map.insert("role".to_string(), Either::Left("user".to_string()));
+            message_map.insert("content".to_string(), Either::Left(prompt));
             messages.push(message_map);
             RequestMessage::Chat(messages)
         }
     };
 
     let is_streaming = oairequest.stream.unwrap_or(false);
-    (
+    Ok((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
             messages,
@@ -206,7 +323,7 @@ fn parse_request(
             adapters: oairequest.adapters,
         }),
         is_streaming,
-    )
+    ))
 }
 
 #[utoipa::path(
@@ -221,8 +338,15 @@ pub async fn chatcompletions(
     Json(oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = channel(10_000);
-    let (request, is_streaming) = parse_request(oairequest, state.clone(), tx);
-    let sender = state.get_sender();
+    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx).await {
+        Ok(x) => x,
+        Err(e) => {
+            let e = anyhow::Error::msg(e.to_string());
+            MistralRs::maybe_log_error(state, &*e);
+            return ChatCompletionResponder::InternalError(e.into());
+        }
+    };
+    let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());
@@ -276,6 +400,7 @@ pub async fn chatcompletions(
             Response::Chunk(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
+            Response::CompletionChunk(_) => unreachable!(),
         }
     }
 }

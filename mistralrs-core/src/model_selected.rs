@@ -1,8 +1,19 @@
 use clap::Subcommand;
 
-use crate::pipeline::NormalLoaderType;
+use crate::{
+    pipeline::{NormalLoaderType, VisionLoaderType},
+    ModelDType,
+};
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
+    x.parse()
+}
+
+fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_model_dtype(x: &str) -> Result<ModelDType, String> {
     x.parse()
 }
 
@@ -32,6 +43,10 @@ pub enum ModelSelected {
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 
     /// Select an X-LoRA architecture
@@ -64,6 +79,10 @@ pub enum ModelSelected {
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 
     /// Select a LoRA architecture
@@ -91,6 +110,10 @@ pub enum ModelSelected {
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 
     /// Select a GGUF model.
@@ -283,5 +306,28 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+    },
+
+    /// Select a vision plain model, without quantization or adapters
+    VisionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
+        #[arg(short, long)]
+        tokenizer_json: Option<String>,
+
+        /// Control the application of repeat penalty for the last n tokens
+        #[arg(long, default_value_t = 64)]
+        repeat_last_n: usize,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_vision_arch)]
+        arch: VisionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 }

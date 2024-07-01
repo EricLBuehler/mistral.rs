@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, NormalModel},
-    DeviceMapMetadata,
+    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    utils::progress::NiceProgressBar,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,14 +70,18 @@ impl CausalSelfAttention {
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+        };
 
         self.rotary_emb
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
                 .transpose(1, 2)?
@@ -85,6 +89,14 @@ impl CausalSelfAttention {
             k = k
                 .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
                 .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
                 .contiguous()?;
         }
 
@@ -227,12 +239,12 @@ impl Block {
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), loading_isq),
         )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), loading_isq),
         )?;
         Ok(Self {
             rms_1,
@@ -256,7 +268,7 @@ pub struct Llama {
 
 impl Llama {
     pub fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -294,11 +306,13 @@ impl Llama {
         cfg: &Config,
         vb: VarBuilder,
         is_gptx: bool,
-        mapper: DeviceMapMetadata,
-        loading_isq: bool,
-        real_device: Device,
+        normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
-        let mapper = mapper.into_mapper(cfg.num_hidden_layers, &real_device)?;
+        let mapper = normal_loading_metadata
+            .mapper
+            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -307,7 +321,7 @@ impl Llama {
         let lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -315,14 +329,17 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
+        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
+            .into_iter()
             .map(|i| {
                 let rotary_emb = Arc::new(
                     RotaryEmbedding::new(
                         cfg.rope_theta,
                         head_dim,
                         cfg.max_position_embeddings,
-                        mapper.device_for(i, false).unwrap_or(&real_device),
+                        mapper
+                            .device_for(i, false)
+                            .unwrap_or(&normal_loading_metadata.real_device),
                         is_gptx,
                         vb.dtype(),
                     )
@@ -333,7 +350,7 @@ impl Llama {
                     cfg,
                     &*mapper,
                     i,
-                    loading_isq,
+                    normal_loading_metadata.loading_isq,
                     rotary_emb,
                 )
                 .expect("Failed to load block.")
@@ -346,15 +363,32 @@ impl Llama {
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
-            device: real_device,
+            device: normal_loading_metadata.real_device,
             mapper,
         })
     }
 }
 
+impl IsqModel for Llama {
+    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
+            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
+            tensors.push((&mut layer.mlp.c_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+}
+
 impl NormalModel for Llama {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -369,7 +403,7 @@ impl NormalModel for Llama {
         )
     }
     fn xlora_forward(
-        &mut self,
+        &self,
         _input_ids: &Tensor,
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
@@ -394,19 +428,5 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
-    }
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.blocks.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q_proj, Some(i)));
-            tensors.push((&mut layer.attn.k_proj, Some(i)));
-            tensors.push((&mut layer.attn.v_proj, Some(i)));
-            tensors.push((&mut layer.attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc1, Some(i)));
-            tensors.push((&mut layer.mlp.c_fc2, Some(i)));
-            tensors.push((&mut layer.mlp.c_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
     }
 }

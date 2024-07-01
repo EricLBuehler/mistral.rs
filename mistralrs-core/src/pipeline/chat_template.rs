@@ -4,13 +4,16 @@ use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
 use minijinja::{context, Environment, ErrorKind};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-const SUPPORTED_ALTERNATE_EOS: [&str; 2] = [
-    "<|eot_id|>", // Handle Llama3 chat case
-    "<|im_end|>", // Handle ChatML case
+use crate::MessageContent;
+
+const SUPPORTED_ALTERNATE_EOS: [&str; 3] = [
+    "<|eot_id|>",    // Handle Llama3 chat case
+    "<|im_end|>",    // Handle ChatML case
+    "<end_of_turn>", // Handle Gemma2 chat case
 ];
 
 #[allow(dead_code)]
@@ -35,7 +38,8 @@ pub struct BeginEndUnkTok(
 );
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+/// Template for chat models including bos/eos/unk as well as the chat template.
 pub struct ChatTemplate {
     add_bos_token: Option<bool>,
     add_eos_token: Option<bool>,
@@ -43,8 +47,9 @@ pub struct ChatTemplate {
     additional_special_tokens: Option<Vec<String>>,
     pub bos_token: Option<BeginEndUnkTok>,
 
-    /// Jinja format chat templating for chat completion.
-    /// See: https://huggingface.co/docs/transformers/chat_templating
+    /// Jinja format [chat templating] for chat completion.
+    ///
+    /// [chat templating]: https://huggingface.co/docs/transformers/chat_templating
     pub chat_template: Option<String>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
@@ -168,7 +173,7 @@ pub struct GenerationConfig {
 }
 
 pub fn apply_chat_template_to(
-    messages: Vec<IndexMap<String, String>>,
+    messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     template: &str,
     bos_tok: Option<String>,
@@ -176,16 +181,30 @@ pub fn apply_chat_template_to(
     unk_tok: Option<String>,
 ) -> Result<String> {
     let mut env = Environment::new();
+
+    // enable python methods such as .strip()
+    env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+
     // https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
     env.set_lstrip_blocks(true);
     env.set_trim_blocks(true);
 
-    let template = template.replace(".strip()", "|trim");
-    env.add_template("chat_template", template.as_str())?;
+    #[derive(Serialize, Deserialize)]
+    struct UntaggedContent(#[serde(with = "either::serde_untagged")] MessageContent);
+    let mut new_messages = Vec::new();
+    for message in messages {
+        let mut new_message = IndexMap::new();
+        for (k, v) in message {
+            new_message.insert(k, UntaggedContent(v));
+        }
+        new_messages.push(new_message);
+    }
+
+    env.add_template("chat_template", template)?;
     env.add_function("raise_exception", raise_exception);
     let tmpl = env.get_template("chat_template").unwrap();
     Ok(tmpl.render(context! {
-        messages => messages,
+        messages => new_messages,
         add_generation_prompt => add_generation_prompt,
         bos_token => bos_tok,
         eos_token => eos_tok,

@@ -1,3 +1,4 @@
+#[doc(hidden)]
 #[macro_export]
 macro_rules! finish_and_add_tokens_to_seq {
     ($this:expr, $prefix_cacher:expr, $seq:expr, $logprobs:expr, $eos_tok:expr, $use_prefix_cacher:expr) => {{
@@ -8,32 +9,54 @@ macro_rules! finish_and_add_tokens_to_seq {
             &is_done,
         );
         // Handle streaming requests
-        if $seq.get_mut_group().is_streaming && $seq.get_mut_group().is_chat {
+        if $seq.get_mut_group().is_streaming {
+            const STREAMING_RATE_LIMIT: usize = 3;
+
             let token_index = $seq.get_toks().len();
-            let rate_limit_allowed = is_done.is_some() || token_index % 3 == 0;
+            let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
 
             if rate_limit_allowed {
                 if let Some(delta) =
                     $crate::handle_seq_error_ok!($seq.get_delta(), $seq.responder())
                 {
-                    $seq.add_streaming_chunk_choice_to_group($crate::ChunkChoice {
-                        delta: $crate::Delta {
-                            content: delta.clone(),
-                            role: "assistant".to_string(),
-                        },
-                        index: $seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if $seq.return_logprobs() {
-                            Some($crate::ResponseLogprob {
-                                token: delta,
-                                bytes: $logprobs.bytes.clone().into_bytes(),
-                                logprob: $logprobs.logprob,
-                                top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
-                            })
-                        } else {
-                            None
-                        },
-                    });
+                    if $seq.get_mut_group().is_chat {
+                        $seq.add_streaming_chunk_choice_to_group($crate::ChunkChoice {
+                            delta: $crate::Delta {
+                                content: delta.clone(),
+                                role: "assistant".to_string(),
+                            },
+                            index: $seq.get_response_index(),
+                            finish_reason: is_done.map(|x| x.to_string()),
+                            logprobs: if $seq.return_logprobs() {
+                                Some($crate::ResponseLogprob {
+                                    token: delta,
+                                    bytes: $logprobs.bytes.clone().into_bytes(),
+                                    logprob: $logprobs.logprob,
+                                    top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
+                                })
+                            } else {
+                                None
+                            },
+                        });
+                    } else {
+                        $seq.add_streaming_completion_chunk_choice_to_group(
+                            $crate::CompletionChunkChoice {
+                                text: delta.clone(),
+                                index: $seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: if $seq.return_logprobs() {
+                                    Some($crate::ResponseLogprob {
+                                        token: delta,
+                                        bytes: $logprobs.bytes.clone().into_bytes(),
+                                        logprob: $logprobs.logprob,
+                                        top_logprobs: $logprobs.top_logprobs.unwrap().clone(),
+                                    })
+                                } else {
+                                    None
+                                },
+                            },
+                        );
+                    }
 
                     if let Some(reason) = is_done {
                         if $use_prefix_cacher {
@@ -139,7 +162,7 @@ macro_rules! finish_and_add_tokens_to_seq {
                 let group = $seq.get_mut_group();
                 if group.is_chat {
                     group
-                        .maybe_send_done_response(
+                        .maybe_send_chat_done_response(
                             $crate::ChatCompletionResponse {
                                 id: $seq.id().to_string(),
                                 choices: group.get_choices().to_vec(),
@@ -177,6 +200,7 @@ macro_rules! finish_and_add_tokens_to_seq {
 }
 
 /// Sample and add to the prefix cache.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! do_sample {
     ($this:expr, $seqs:expr, $logits:expr, $prefix_cacher:expr, $disable_eos_stop:expr, $rng:expr) => {{

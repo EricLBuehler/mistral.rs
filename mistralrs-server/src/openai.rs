@@ -1,11 +1,36 @@
 use either::Either;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct MessageInnerContent(
+    #[serde(with = "either::serde_untagged")] Either<String, HashMap<String, String>>,
+);
+
+impl Deref for MessageInnerContent {
+    type Target = Either<String, HashMap<String, String>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct MessageContent(
+    #[serde(with = "either::serde_untagged")]
+    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
+);
+
+impl Deref for MessageContent {
+    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: String,
+    pub content: MessageContent,
     pub role: String,
     pub name: Option<String>,
 }
@@ -25,6 +50,10 @@ fn default_1usize() -> usize {
     1
 }
 
+fn default_model() -> String {
+    "default".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type", content = "value")]
 pub enum Grammar {
@@ -40,6 +69,7 @@ pub struct ChatCompletionRequest {
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
     #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
     pub model: String,
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
@@ -94,6 +124,7 @@ pub struct ModelObjects {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
     #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
     pub model: String,
     #[schema(example = "Say this is a test.")]
     pub prompt: String,
@@ -121,8 +152,7 @@ pub struct CompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
-    #[serde(rename = "stream")]
-    pub _stream: Option<bool>,
+    pub stream: Option<bool>,
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
     #[schema(example = json!(Option::None::<f64>))]
