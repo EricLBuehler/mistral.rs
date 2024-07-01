@@ -9,7 +9,11 @@ use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, MlpLayer}, device_map::DeviceMapper, layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention}, models::llama::Config, pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel}, utils::progress::NiceProgressBar, AnyMoeConfig, AnyMoeExpertType
+    device_map::DeviceMapper,
+    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    models::llama::Config,
+    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata},
+    utils::progress::NiceProgressBar,
 };
 
 use super::{LLaVALLM, OrdinaryRoPE};
@@ -24,7 +28,6 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    max_seq_len: usize,
 }
 
 impl CausalSelfAttention {
@@ -113,7 +116,6 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            max_seq_len: cfg.max_position_embeddings,
         })
     }
 }
@@ -298,19 +300,20 @@ impl Llama {
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
-        let blocks: Vec<_> = NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers")
-            .into_iter()
-            .map(|i| {
-                Block::load(
-                    vb.pp(&format!("model.layers.{i}")),
-                    cfg,
-                    &*mapper,
-                    i,
-                    normal_loading_metadata.loading_isq,
-                )
-                .expect("Failed to load block.")
-            })
-            .collect();
+        let blocks: Vec<_> =
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+                .into_iter()
+                .map(|i| {
+                    Block::load(
+                        vb.pp(&format!("model.layers.{i}")),
+                        cfg,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                    )
+                    .expect("Failed to load block.")
+                })
+                .collect();
         let rope_parameters = OrdinaryRoPE::create_parameters(
             head_dim,
             cfg.max_position_embeddings,
@@ -345,51 +348,6 @@ impl IsqModel for Llama {
             tensors.push((&mut layer.mlp.c_proj, Some(i)));
         }
         (tensors, &*self.mapper)
-    }
-}
-
-impl NormalModel for Llama {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-    ) -> Result<Tensor> {
-        self.forward_input(
-            input_ids,
-            seqlen_offsets,
-            start_offsets_kernel,
-            context_lens,
-        )
-    }
-    fn xlora_forward(
-        &self,
-        _input_ids: &Tensor,
-        _input_ids_full: &Tensor,
-        _seqlen_offsets: &[usize],
-        _seqlen_offsets_full: &[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
-        _no_kv_cache: bool,
-        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-    ) -> Result<Tensor> {
-        unimplemented!()
-    }
-    fn cache(&self) -> &crate::pipeline::Cache {
-        &self.kv_cache
-    }
-    fn device(&self) -> &Device {
-        &self.device
-    }
-    fn is_xlora(&self) -> bool {
-        false
-    }
-    fn max_seq_len(&self) -> usize {
-        self.blocks[0].attn.max_seq_len
     }
 }
 
@@ -433,120 +391,22 @@ impl LLaVALLM for Llama {
         let logits = MatMul.qmatmul(&x, &self.lm_head)?;
         extract_logits(&logits, context_lens)
     }
-}
-
-
-impl AnyMoeBaseModelMixin for Llama {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        let mut mlps = Vec::new();
-        for layer in &self.blocks {
-            mlps.push(&*layer.mlp);
-        }
-        mlps
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward_input(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
     }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        let mut mlps = Vec::new();
-        for layer in &mut self.blocks {
-            mlps.push(&mut layer.mlp);
-        }
-        mlps
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<VarBuilder>,
-        config: AnyMoeConfig,
-        dtype: DType,
-        dev: &Device,
-        (prefix, mlp): (String, String),
-        mut layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-    ) -> Result<()> {
-        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        if layers.is_empty() {
-            layers = (0..self.blocks.len()).collect::<Vec<_>>();
-        }
-        for _ in 0..layers.len() {
-            experts.push(Vec::new());
-        }
-        for vb in additional_vbs {
-            let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
-                    continue;
-                }
-
-                let intermediate_size = self.blocks[layer].mlp.get_params()[1];
-                let hidden_size = self.blocks[layer].mlp.get_params()[0];
-                match expert_type {
-                    AnyMoeExpertType::FineTuned => {
-                        row.push(Box::new(Mlp::load(
-                            vb.pp(layer).pp(&mlp),
-                            &Config {
-                                intermediate_size: self.blocks[layer].mlp.get_params()[1],
-                                hidden_size: self.blocks[layer].mlp.get_params()[0],
-                                ..Default::default()
-                            },
-                        )?));
-                    }
-                    AnyMoeExpertType::LoraAdapter {
-                        rank,
-                        alpha,
-                        ref target_modules,
-                    } => {
-                        let vb_mlp = vb.pp(layer).pp(&mlp);
-
-                        let c_fc1_delta = if target_modules.contains(&"c_fc1".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "c_fc1"
-                            ))
-                        } else {
-                            None
-                        };
-                        let c_fc2_delta = if target_modules.contains(&"c_fc2".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "c_fc2"
-                            ))
-                        } else {
-                            None
-                        };
-                        let c_proj_delta = if target_modules.contains(&"c_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (intermediate_size, hidden_size),
-                                "c_proj"
-                            ))
-                        } else {
-                            None
-                        };
-
-                        row.push(self.blocks[layer].mlp.new_added_delta(vec![
-                            c_fc1_delta,
-                            c_fc2_delta,
-                            c_proj_delta,
-                        ])?);
-                    }
-                }
-            }
-        }
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.blocks[layer].mlp.clone()];
-            experts_all.extend(expert);
-            self.blocks[layer].mlp =
-                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
-        }
-        Ok(())
-    }
-    fn amoe_supported(&self) -> bool {
-        true
+    fn cache(&self) -> &crate::pipeline::Cache {
+        &self.kv_cache
     }
 }

@@ -7,7 +7,7 @@ use candle_nn::{linear_no_bias, Activation, VarBuilder};
 use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
     utils::progress::NiceProgressBar,
 };
 
@@ -249,7 +249,6 @@ pub struct Model {
     sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
-    pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
 }
@@ -294,7 +293,9 @@ impl Model {
             vb_m.dtype(),
             &normal_loading_metadata.real_device,
         )?;
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             let layer = DecoderLayer::new(
                 cfg,
                 vb_l.pp(layer_idx),
@@ -322,7 +323,6 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
-            max_seq_len: cfg.max_position_embeddings,
             mapper,
             rope_parameters,
         })
@@ -405,51 +405,6 @@ impl IsqModel for Model {
     }
 }
 
-impl NormalModel for Model {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-    ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            start_offsets_kernel,
-            context_lens,
-        )
-    }
-    fn xlora_forward(
-        &self,
-        _input_ids: &Tensor,
-        _input_ids_full: &Tensor,
-        _seqlen_offsets: &[usize],
-        _seqlen_offsets_full: &[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
-        _no_kv_cache: bool,
-        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-    ) -> Result<Tensor> {
-        unimplemented!()
-    }
-    fn cache(&self) -> &Cache {
-        &self.cache
-    }
-    fn device(&self) -> &Device {
-        &self.device
-    }
-    fn is_xlora(&self) -> bool {
-        false
-    }
-    fn max_seq_len(&self) -> usize {
-        self.max_seq_len
-    }
-}
-
 impl LLaVALLM for Model {
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.get_input_embeddings(input_ids)
@@ -470,5 +425,24 @@ impl LLaVALLM for Model {
             start_offsets_kernel,
             context_lens,
         )
+    }
+
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+    ) -> Result<Tensor> {
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+    fn cache(&self) -> &Cache {
+        &self.cache
     }
 }

@@ -70,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         Response::Chunk(_) => println!("Chunk"),
         Response::CompletionModelError(_, _) => println!("Completion model error"),
         Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
+        _ => unreachable!("Unexpected response"),
     }
     Ok(())
 }

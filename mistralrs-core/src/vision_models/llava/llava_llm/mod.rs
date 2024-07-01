@@ -1,9 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::pipeline::{IsqModel, NormalModel};
+use crate::pipeline::{Cache, IsqModel};
 
-pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
+pub(crate) trait LLaVALLM: IsqModel + Sync + Send {
+    //Normal model without anymoe, but add embed and forward_input_embed. This is only a temporary solution. Finally when the rope problem solved for normal LLM models, we should refactor this.
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor>;
     fn forward_input_embed(
         &self,
@@ -13,6 +14,15 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor>;
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    fn cache(&self) -> &Cache;
 }
 
 #[derive(Debug)]
