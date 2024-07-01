@@ -1,6 +1,15 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments
+)]
+use crate::vision_models::preprocessor_config::PreProcessorConfig;
+use candle_core::{DType, Device, Result, Tensor};
+use image::{
+    imageops::{overlay, FilterType},
+    DynamicImage, GenericImageView, Rgb, RgbImage,
+};
 use std::cmp::min;
-
-use image::{imageops::overlay, DynamicImage, GenericImageView};
 
 pub(crate) fn get_anyres_image_grid_shape(
     image_size: (u32, u32),
@@ -71,7 +80,10 @@ pub(crate) fn calculate_unpad(size: (u32, u32), original_size: (u32, u32)) -> (u
     }
 }
 
-pub(crate) fn resize_and_pad_image(image: &DynamicImage, target_resolution: (u32, u32)) -> DynamicImage {
+pub(crate) fn resize_and_pad_image(
+    image: &DynamicImage,
+    target_resolution: (u32, u32),
+) -> DynamicImage {
     let (original_width, original_height) = image.dimensions();
     let original_width_f = original_width as f32;
     let original_height_f = original_height as f32;
@@ -134,4 +146,117 @@ pub(crate) fn calculate_middle(image_size: (u32, u32), center_size: (u32, u32)) 
         ((height as f32 - center_height as f32) / 2.0).ceil() as u32
     };
     (left, top)
+}
+
+pub(crate) fn expand2square(image: &DynamicImage, background_color: Rgb<u8>) -> DynamicImage {
+    let (width, height) = image.dimensions();
+    match width.cmp(&height) {
+        std::cmp::Ordering::Less => {
+            let mut new_image =
+                DynamicImage::from(RgbImage::from_pixel(height, height, background_color));
+            overlay(&mut new_image, image, ((height - width) / 2) as i64, 0);
+            new_image
+        }
+        std::cmp::Ordering::Equal => image.clone(),
+        std::cmp::Ordering::Greater => {
+            let mut new_image =
+                DynamicImage::from(RgbImage::from_pixel(width, width, background_color));
+            overlay(&mut new_image, image, 0, ((width - height) / 2) as i64);
+            new_image
+        }
+    }
+}
+
+pub struct LLaVAImageProcessor;
+
+impl LLaVAImageProcessor {
+    fn resize(image: &DynamicImage, size: u32, filter: FilterType) -> DynamicImage {
+        let (width, height) = image.dimensions();
+        if width == size && height == size {
+            image.clone()
+        } else {
+            let (new_width, new_height) = if width < height {
+                (
+                    size,
+                    (((size * height) as f32) / width as f32).ceil() as u32,
+                )
+            } else {
+                (
+                    (((size * width) as f32) / height as f32).ceil() as u32,
+                    size,
+                )
+            };
+            image.resize(new_width, new_height, filter)
+        }
+    }
+
+    fn center_crop(image: &DynamicImage, crop_size: (u32, u32)) -> DynamicImage {
+        let (width, height) = image.dimensions();
+        let (left, top) = calculate_middle((width, height), crop_size);
+        image.crop_imm(left, top, crop_size.0, crop_size.1)
+    }
+
+    fn rescale(tensor: &Tensor, rescale_factor: f64) -> Result<Tensor> {
+        tensor.affine(rescale_factor, 0.0)
+    }
+
+    fn to_tensor(image: &DynamicImage, device: &Device) -> Result<Tensor> {
+        let img = image.to_rgb8().into_raw();
+        let (width, height) = image.dimensions();
+        Tensor::from_vec(img, (height as usize, width as usize, 3), device)?.to_dtype(DType::F32)
+    }
+
+    fn normalize(tensor: &Tensor, image_mean: &[f32], image_std: &[f32]) -> Result<Tensor> {
+        let mean = Tensor::from_slice(image_mean, (3,), &Device::Cpu)?;
+        let std = Tensor::from_slice(image_std, (3,), &Device::Cpu)?;
+        tensor.broadcast_sub(&mean)?.broadcast_div(&std)
+    }
+
+    fn to_channel_dimension_format(tensor: &Tensor) -> Result<Tensor> {
+        tensor.permute((2, 0, 1))
+    }
+    pub fn process_one_image(
+        image: &DynamicImage,
+        preprocessor_config: &PreProcessorConfig,
+        resize_size: u32,
+        filter: FilterType,
+        dtype: DType,
+        device: &Device,
+        image_mean: &[f32],
+        image_std: &[f32],
+    ) -> Result<Tensor> {
+        let mut image = if preprocessor_config.do_resize.unwrap_or(true) {
+            Self::resize(image, resize_size, filter)
+        } else {
+            image.clone()
+        };
+        image = if preprocessor_config.do_center_crop.unwrap_or(true) {
+            let crop_width = *preprocessor_config
+                .crop_size
+                .as_ref()
+                .unwrap()
+                .get("width")
+                .unwrap();
+            let crop_height = *preprocessor_config
+                .crop_size
+                .as_ref()
+                .unwrap()
+                .get("height")
+                .unwrap();
+            Self::center_crop(&image, (crop_width, crop_height))
+        } else {
+            image
+        };
+        let mut pixel_value = Self::to_tensor(&image, &Device::Cpu)?;
+        if preprocessor_config.do_rescale.unwrap_or(true) {
+            let rescale_factor = preprocessor_config.rescale_factor.unwrap();
+            pixel_value = Self::rescale(&pixel_value, rescale_factor)?;
+        }
+        if preprocessor_config.do_normalize.unwrap_or(true) {
+            pixel_value = Self::normalize(&pixel_value, image_mean, image_std)?;
+        }
+        Self::to_channel_dimension_format(&pixel_value)?
+            .to_dtype(dtype)?
+            .to_device(device)
+    }
 }

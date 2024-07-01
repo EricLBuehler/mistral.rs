@@ -17,18 +17,17 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             repeat_last_n: 64,
         },
-        Some("chat_templates/vicuna.json".to_string()),
+        Some("chat_templates/mistral.json".to_string()),
         None,
-        Some("/root/autodl-tmp/llava-1.5-7b-hf".to_string()),
+        Some("/root/autodl-tmp/llava-v1.6-mistral-7b-hf".to_string()),
     )
-    .build(VisionLoaderType::LLaVA);
+    .build(VisionLoaderType::LLaVANext);
     // Load, into a Pipeline
 
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        //&ModelDType::F16, // how can we load from config?
-        &ModelDType::Auto,
+        &ModelDType::F16, // how can we load from config?
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),

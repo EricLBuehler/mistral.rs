@@ -1,5 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{Idefics2Loader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
+use super::vision_loaders::{
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
     CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
@@ -97,6 +99,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
+            VisionLoaderType::LLaVA => Box::new(LLaVALoader),
         };
         Box::new(VisionLoader {
             inner: loader,

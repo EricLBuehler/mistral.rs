@@ -5,31 +5,28 @@ use std::sync::Arc;
 use candle_core::Result;
 use candle_core::{DType, Device, Tensor};
 use image::GenericImageView;
+use image::Rgb;
 use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
+use super::llava15::LLaVAVisionSpecificArgs;
+use super::utils::{expand2square, LLaVAImageProcessor};
 use crate::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
 use crate::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
 use crate::sequence::Sequence;
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
-use crate::vision_models::llava::config::Config as LLaVANextConfig;
+use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::preprocessor_config::{PreProcessorConfig, ToFilter};
 use crate::vision_models::{preprocessor_config, ModelInputs};
 
-use super::llava_next::LLaVANextVisionSpecificArgs;
-use super::utils::{
-    calculate_unpad, divide_to_samples, get_anyres_image_grid_shape, get_num_samples,
-    resize_and_pad_image, select_best_resolution, LLaVAImageProcessor,
-};
-
-pub struct LLaVANextProcessor {
-    inputs_processor: Arc<LLaVANextInputProcessor>,
+pub struct LLaVAProcessor {
+    inputs_processor: Arc<LLaVAInputProcessor>,
 }
 
-impl Processor for LLaVANextProcessor {
+impl Processor for LLaVAProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         self.inputs_processor.clone()
     }
@@ -41,13 +38,13 @@ impl Processor for LLaVANextProcessor {
     }
 }
 
-impl LLaVANextProcessor {
+impl LLaVAProcessor {
     pub fn new(config: &str) -> Self {
         let model_config =
-            serde_json::from_str::<LLaVANextConfig>(config).expect("Failed to parse model config.");
+            serde_json::from_str::<LLaVAConfig>(config).expect("Failed to parse model config.");
         let image_tag_splitter =
             Regex::new(r"<\|image_\d+\|>").expect("Failed to compile split regex.");
-        let inputs_processor = Arc::new(LLaVANextInputProcessor {
+        let inputs_processor = Arc::new(LLaVAInputProcessor {
             image_tag_splitter,
             model_config: model_config.clone(),
         });
@@ -55,25 +52,21 @@ impl LLaVANextProcessor {
     }
 }
 
-pub struct LLaVANextInputProcessor {
+pub struct LLaVAInputProcessor {
     image_tag_splitter: Regex,
-    model_config: LLaVANextConfig,
+    model_config: LLaVAConfig,
 }
 
-impl LLaVANextInputProcessor {
-    fn get_num_image_tokens(&self, image_size: (u32, u32)) -> usize {
+impl LLaVAInputProcessor {
+    fn get_num_image_tokens(&self) -> usize {
         let patch_size = self.model_config.vision_config.patch_size;
-        let image_grid_pinpoints = self.model_config.image_grid_pinpoints.clone().unwrap();
-        let anyres_grid_shape =
-            get_anyres_image_grid_shape(image_size, &image_grid_pinpoints, patch_size as u32);
         let patch_per_side = self.model_config.vision_config.image_size / patch_size;
-        let unpad_shape = calculate_unpad(anyres_grid_shape, image_size);
-        patch_per_side * patch_per_side + (unpad_shape.0 as usize + 1) * (unpad_shape.1 as usize)
+        patch_per_side * patch_per_side
     }
 }
 
 // Copy from phi3_inputs_processor. different is (1) calculate of num_image_token (2) process_anyres_image (3)image_ids_pad
-impl InputsProcessor for LLaVANextInputProcessor {
+impl InputsProcessor for LLaVAInputProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
@@ -99,20 +92,14 @@ impl InputsProcessor for LLaVANextInputProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let crop_size = (
-            *config.crop_size.as_ref().unwrap().get("width").unwrap(),
-            *config.crop_size.as_ref().unwrap().get("height").unwrap(),
-        );
-        let (pixel_values, image_sizes, num_img_tokens, num_image_samples, n_images) = if is_prompt
+        let (pixel_values, num_img_tokens, n_images) = if is_prompt
             && input_seqs
                 .iter()
                 .map(|seq| seq.images().is_some())
                 .all(|x| x)
         {
             let mut pixel_values_accum = Vec::new();
-            let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
-            let mut num_image_samples_accum = Vec::new();
             let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
@@ -123,28 +110,15 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask: _,
-                    image_sizes,
+                    image_sizes: _,
                     num_img_tokens,
                 } = self.preprocess(imgs.clone(), config, device)?;
-                let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
-                image_sizes_accum.push(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
-                let image_grid_pinpoints = self.model_config.image_grid_pinpoints.clone().unwrap();
-                let num_img_samples = imgs
-                    .iter()
-                    .map(|img| {
-                        let original_size = img.dimensions();
-                        get_num_samples(original_size, &image_grid_pinpoints, crop_size) as usize
-                    })
-                    .collect::<Vec<_>>();
-                num_image_samples_accum.push(num_img_samples);
             }
             (
                 Some(Tensor::cat(&pixel_values_accum, 0)?),
-                Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
-                Some(num_image_samples_accum),
                 n_images,
             )
         } else {
@@ -177,27 +151,9 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 context_lens,
                 position_ids,
                 pixel_values: None,
-                model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
-                    image_sizes: None,
-                    num_image_tokens: None,
-                    num_image_samples: None,
-                }),
+                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
             }));
         };
-
-        let num_image_tokens_flat = num_img_tokens
-            .clone()
-            .unwrap()
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
-        let num_image_samples = num_image_samples
-            .unwrap()
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
 
         let mut toks = Vec::new();
         let detokenized = tokenizer
@@ -308,16 +264,12 @@ impl InputsProcessor for LLaVANextInputProcessor {
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
-                image_sizes,
-                num_image_tokens: Some(num_image_tokens_flat),
-                num_image_samples: Some(num_image_samples),
-            }),
+            model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
         }))
     }
 }
 
-impl ImagePreProcessor for LLaVANextInputProcessor {
+impl ImagePreProcessor for LLaVAInputProcessor {
     #[allow(clippy::excessive_precision)]
     const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
     #[allow(clippy::excessive_precision)]
@@ -332,39 +284,30 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
         let resized_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;
-        let image = images[0].clone();
-        let original_size = image.dimensions();
-        let image_grid_pinpoints = self.model_config.image_grid_pinpoints.clone().unwrap();
-        let best_resolution = select_best_resolution(original_size, &image_grid_pinpoints);
-        // Here I didn't use mistral_vision::Transform, because a lot transformations are before turning the image into a tensor
-        let image_padded = resize_and_pad_image(&image, best_resolution);
+
+        let original_size = images[0].dimensions();
         let filter = config.resampling.to_filter()?;
-        let image_original_resize =
-            image.resize_exact(resized_size as u32, resized_size as u32, filter);
-        let mut samples = vec![image_original_resize];
-        for patch in divide_to_samples(
-            &image_padded,
-            (
-                *config.crop_size.as_ref().unwrap().get("width").unwrap(),
-                *config.crop_size.as_ref().unwrap().get("height").unwrap(),
-            ),
-        ) {
-            samples.push(patch);
-        }
         let dtype = match self.model_config.torch_dtype.as_str() {
             "float16" => DType::F16,
             "bfloat16" => DType::BF16,
+            "float32" => DType::F32,
             _ => candle_core::bail!("unsupported dtype"),
         };
         let image_mean = config
             .image_mean
             .unwrap_or(Self::DEFAULT_MEAN)
             .map(|x| x as f32);
+        let mean_color = image_mean
+            .iter()
+            .map(|x| ((*x) * 255.0) as u8)
+            .collect::<Vec<u8>>();
+        let mean_color = Rgb::from([mean_color[0], mean_color[1], mean_color[2]]);
+        let image = expand2square(&images[0], mean_color);
         let image_std = config
             .image_std
             .unwrap_or(Self::DEFAULT_STD)
             .map(|x| x as f32);
-        let pixel_values = samples
+        let pixel_values = [image]
             .iter()
             .map(|x| {
                 LLaVAImageProcessor::process_one_image(
@@ -385,7 +328,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             pixel_values,
             pixel_attention_mask: None,
             image_sizes: Some((original_size.0 as usize, original_size.1 as usize)),
-            num_img_tokens: Some(vec![self.get_num_image_tokens(original_size)]),
+            num_img_tokens: Some(vec![self.get_num_image_tokens()]),
         })
     }
 }

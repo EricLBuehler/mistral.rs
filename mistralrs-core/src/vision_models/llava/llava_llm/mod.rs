@@ -7,7 +7,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor>;
     fn forward_input_embed(
         &self,
-        input_ids: &Tensor, // only for masking
+        input_ids: &Tensor,  // only for masking
         input_embed: Tensor, // we don't want to clone, so we pass it in
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
