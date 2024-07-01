@@ -65,7 +65,7 @@ hidden_size = 4096
 [anymoe.config.expert_type.lora_adapter]
 rank = 16
 alpha = 16
-target_modules = ["up_proj", "down_proj", "gate_proj"]
+target_modules = ["gate_proj"]
 ```
 
 ## Examples
@@ -180,8 +180,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                 rank: 64,
                 alpha: 16.,
                 target_modules: vec![
-                    "up_proj".to_string(),
-                    "down_proj".to_string(),
                     "gate_proj".to_string(),
                 ],
             },

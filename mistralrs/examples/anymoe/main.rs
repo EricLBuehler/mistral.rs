@@ -41,21 +41,13 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             lr: 1e-3,
             epochs: 100,
             batch_size: 4,
-            expert_type: AnyMoeExpertType::LoraAdapter {
-                rank: 64,
-                alpha: 16.,
-                target_modules: vec![
-                    "up_proj".to_string(),
-                    "down_proj".to_string(),
-                    "gate_proj".to_string(),
-                ],
-            },
+            expert_type: AnyMoeExpertType::FineTuned,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),
         path: "examples/amoe.csv".to_string(),
-        model_ids: vec!["typeof/zephyr-7b-beta-lora".to_string()],
-        layers: vec![],
+        model_ids: vec!["HuggingFaceH4/zephyr-7b-beta".to_string()],
+        layers: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     });
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
