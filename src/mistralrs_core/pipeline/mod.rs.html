@@ -905,7 +905,74 @@
 <a href="#905" id="905">905</a>
 <a href="#906" id="906">906</a>
 <a href="#907" id="907">907</a>
-</pre></div><pre class="rust"><code><span class="kw">mod </span>cache_manager;
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+</pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
@@ -921,10 +988,15 @@
 <span class="kw">mod </span>vision;
 <span class="kw">mod </span>vision_loaders;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::amoe::{
+    AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
+    AnyMoeTrainingResult,
+};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">mod </span>sampling_pipeline;
 <span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
 <span class="kw">use crate</span>::{DeviceMapMetadata, TryIntoDType};
+<span class="kw">pub use </span>amoe::{AnyMoeLoader, AnyMoePipeline};
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
@@ -952,7 +1024,7 @@
 <span class="kw">pub use </span>vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::{Device, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, Tensor, Var};
 
 <span class="kw">use crate</span>::{
     sequence::Sequence,
@@ -1179,6 +1251,9 @@
         target: Box&lt;ModelKind&gt;,
         draft: Box&lt;ModelKind&gt;,
     },
+
+    <span class="attr">#[strum(to_string = <span class="string">"anymoe: target: `{target}`"</span>)]
+    </span>AnyMoe { target: Box&lt;ModelKind&gt; },
 }
 
 <span class="attr">#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -1236,6 +1311,7 @@
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
+            AnyMoe { target } =&gt; target.quantized_kind(),
         }
     }
 
@@ -1260,6 +1336,7 @@
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }
+            AnyMoe { target } =&gt; target.adapted_kind(),
         }
     }
 }
@@ -1331,6 +1408,7 @@
     <span class="kw">pub </span>kind: ModelKind,
     <span class="comment">// TODO: Replace is_xlora queries to check via kind instead:
     </span><span class="kw">pub </span>is_xlora: bool,
+    <span class="kw">pub </span>activation_dtype: DType,
 }
 
 <span class="kw">pub enum </span>AdapterInstruction {
@@ -1384,7 +1462,60 @@
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt;;
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>);
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata;
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt;;
+}
+
+<span class="doccomment">/// Implemented by the base model of an AnyMoe.
+</span><span class="kw">pub trait </span>AnyMoePipelineMixin {
+    <span class="doccomment">/// Get vars for each gating layer
+    </span><span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="kw">fn </span>amoe_done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">false
+    </span>}
+    <span class="doccomment">/// Per-layer cached outputs.
+    </span><span class="kw">fn </span>amoe_take_cached_gating_outputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;Tensor&gt; {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="doccomment">/// Inject the MoE layers
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>amoe_create_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        _model_ids: Vec&lt;String&gt;,
+        _token: <span class="kw-2">&amp;</span>TokenSource,
+        _revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        _match_regex: <span class="kw-2">&amp;</span>str,
+        _config: AnyMoeConfig,
+        _dtype: DType,
+        _dev: <span class="kw-2">&amp;</span>Device,
+        (_prefix, _mlp): (String, String),
+        _layers: Vec&lt;usize&gt;,
+        _expert_type: AnyMoeExpertType,
+        _silent: bool,
+    ) -&gt; candle_core::Result&lt;()&gt; {
+        <span class="macro">unreachable!</span>()
+    }
+    <span class="doccomment">/// Pre-train the gating layers
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>amoe_pre_train(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _inputs: AnyMoeTrainingInputs,
+        (_prefix, _mlp): (String, String),
+        _model_ids: Vec&lt;String&gt;,
+        _token: TokenSource,
+        _revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        _layers: Vec&lt;usize&gt;,
+        _silent: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;AnyMoeTrainingResult, candle_core::Error&gt; {
+        <span class="macro">unreachable!</span>()
+    }
 }
 
 <span class="attr">#[derive(PartialEq, Copy, Clone)]
@@ -1402,6 +1533,7 @@
     + CacheManagerMixin
     + AdapterActivationMixin
     + MetadataMixin
+    + AnyMoePipelineMixin
 {
     <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt;;
 
@@ -1505,7 +1637,7 @@
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory;
 }
 
-<span class="kw">pub trait </span>NormalModel: IsqModel {
+<span class="kw">pub trait </span>NormalModel: IsqModel + AnyMoeBaseModelMixin {
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,

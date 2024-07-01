@@ -518,14 +518,74 @@
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
 <a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::File;
 
 <span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">use crate</span>::{
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig,
 };
 
 <span class="kw">fn </span>default_repeat_last_n() -&gt; usize {
@@ -535,6 +595,14 @@
 <span class="kw">fn </span>default_one() -&gt; usize {
     <span class="number">1
 </span>}
+
+<span class="kw">fn </span>default_dtype() -&gt; ModelDType {
+    ModelDType::Auto
+}
+
+<span class="kw">fn </span>default_empty_vec_usize() -&gt; Vec&lt;usize&gt; {
+    Vec::new()
+}
 
 <span class="attr">#[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -548,6 +616,7 @@
         </span>arch: NormalLoaderType,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
+        </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
     },
 
@@ -570,6 +639,7 @@
         </span>arch: NormalLoaderType,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
+        </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
     },
 
@@ -588,6 +658,7 @@
         </span>arch: NormalLoaderType,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
+        </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
     },
 
@@ -730,6 +801,7 @@
         </span>arch: VisionLoaderType,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
+        </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
     },
 }
@@ -741,6 +813,28 @@
 
     <span class="doccomment">/// Base model
     </span>draft_model: TomlModelSelected,
+}
+
+<span class="attr">#[derive(Deserialize)]
+</span><span class="kw">pub struct </span>AnyMoeTomlModelSelected {
+    <span class="doccomment">/// Config
+    </span>config: AnyMoeConfig,
+
+    <span class="doccomment">/// Base model
+    </span>dataset_csv: String,
+
+    <span class="doccomment">/// Prefix of the mlp key (the part before the layer number: "a.b.c" in "a.b.c.0.mlp")
+    </span>prefix: String,
+
+    <span class="doccomment">/// Name of the mlp key (the part before the layer number: "mlp" in "a.b.c.0.mlp")
+    </span>mlp: String,
+
+    <span class="doccomment">/// Expert model ids
+    </span>model_ids: Vec&lt;String&gt;,
+
+    <span class="doccomment">/// Layer ids (zero indexed) of layers to apply AnyMoE to, if empty will use all
+    </span><span class="attr">#[serde(default = <span class="string">"default_empty_vec_usize"</span>)]
+    </span>layers: Vec&lt;usize&gt;,
 }
 
 <span class="attr">#[derive(Deserialize)]
@@ -757,6 +851,9 @@
 
     <span class="doccomment">/// Speculative model selector
     </span>speculative: <span class="prelude-ty">Option</span>&lt;SpeculativeTomlModelSelected&gt;,
+
+    <span class="doccomment">/// AnyMoE config
+    </span>anymoe: <span class="prelude-ty">Option</span>&lt;AnyMoeTomlModelSelected&gt;,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -1031,6 +1128,27 @@
                 config: SpeculativeConfig {
                     gamma: speculative.gamma,
                 },
+            })
+        } <span class="kw">else </span>{
+            loader
+        };
+        <span class="kw">let </span>loader = <span class="kw">if let </span><span class="prelude-val">Some</span>(AnyMoeTomlModelSelected {
+            config,
+            dataset_csv,
+            prefix,
+            mlp,
+            model_ids,
+            layers,
+        }) = selector.anymoe
+        {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config,
+                path: dataset_csv,
+                prefix,
+                mlp,
+                model_ids,
+                layers,
             })
         } <span class="kw">else </span>{
             loader

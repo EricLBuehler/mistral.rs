@@ -321,6 +321,7 @@
 <a href="#321" id="321">321</a>
 <a href="#322" id="322">322</a>
 <a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
@@ -403,6 +404,7 @@
             candle_core::DType::F32,
             device,
             silent,
+            |<span class="kw">_</span>| <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

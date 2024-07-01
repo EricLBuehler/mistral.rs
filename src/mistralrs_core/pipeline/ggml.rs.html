@@ -504,6 +504,10 @@
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
 <a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -511,8 +515,8 @@
     XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -535,7 +539,7 @@
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, GgmlDType};
-<span class="kw">use </span>candle_core::{Device, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
@@ -560,7 +564,7 @@
     chat_template: Arc&lt;ChatTemplate&gt;,
     model_id: String,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
-    metadata: GeneralMetadata,
+    metadata: Arc&lt;GeneralMetadata&gt;,
 }
 
 <span class="doccomment">/// A loader for a GGML model.
@@ -837,7 +841,7 @@
                     tgt_non_granular_index,
                 }
             }),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
@@ -846,7 +850,8 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: DType::F32,
+            }),
         })))
     }
 
@@ -958,8 +963,8 @@
             <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
         }
     }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+        <span class="self">self</span>.metadata.clone()
     }
 }
 
@@ -1010,4 +1015,7 @@
         ModelCategory::Text
     }
 }
+
+<span class="comment">// TODO
+</span><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>GGMLPipeline {}
 </code></pre></div></section></main></body></html>

@@ -188,7 +188,7 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>encoding = pipeline
             .tokenizer()
-            .encode(prompt, <span class="bool-val">false</span>)
+            .encode(prompt, <span class="bool-val">true</span>)
             .map_err(|e| anyhow::Error::msg(e.to_string()))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
     }

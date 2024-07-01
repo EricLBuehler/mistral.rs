@@ -350,12 +350,16 @@
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
 <a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, Cache, CacheManager,
-    CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
-    ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
+    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
+    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
     VisionModelLoader, XLoraPaths,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
@@ -394,7 +398,7 @@
     tok_trie: Arc&lt;TokTrie&gt;,
     chat_template: Arc&lt;ChatTemplate&gt;,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc&lt;GeneralMetadata&gt;,
     processor: Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;,
     preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
 }
@@ -579,7 +583,7 @@
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
             model_id: <span class="self">self</span>.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
@@ -588,7 +592,8 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 has_no_kv_cache: <span class="bool-val">false</span>,
-            },
+                activation_dtype: dtype,
+            }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
         })))
@@ -652,8 +657,8 @@
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
         <span class="self">self</span>.model.device().clone()
     }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+        <span class="self">self</span>.metadata.clone()
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
         <span class="self">self</span>.model_id.clone()
@@ -702,4 +707,7 @@
         }
     }
 }
+
+<span class="comment">// TODO
+</span><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>VisionPipeline {}
 </code></pre></div></section></main></body></html>

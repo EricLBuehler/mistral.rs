@@ -571,6 +571,10 @@
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -595,8 +599,9 @@
 
 <span class="kw">use super</span>::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheInstruction, CacheManager, CacheManagerMixin,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
 <span class="doccomment">/// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -706,7 +711,7 @@
     target: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     draft: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
     gamma: usize,
-    metadata: GeneralMetadata,
+    metadata: Arc&lt;GeneralMetadata&gt;,
     category: ModelCategory,
 }
 
@@ -829,8 +834,8 @@
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).reset_non_granular_state();
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).reset_non_granular_state();
     }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+        <span class="self">self</span>.metadata.clone()
     }
 }
 
@@ -1144,4 +1149,7 @@
         <span class="self">self</span>.category
     }
 }
+
+<span class="comment">// TODO
+</span><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>SpeculativePipeline {}
 </code></pre></div></section></main></body></html>

@@ -627,9 +627,62 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
-    Tensor, WithDType,
+    Tensor, WithDType, D,
 };
 
 <span class="kw">use </span>std::{
@@ -1064,7 +1117,60 @@
     }
 }
 
+<span class="attr">#[allow(dead_code)]
+</span><span class="kw">pub struct </span>TopKOutput {
+    <span class="kw">pub </span>values: Tensor,
+    <span class="kw">pub </span>indices: Tensor,
+}
+
+<span class="kw">pub trait </span>TopKLastDimOp {
+    <span class="doccomment">/// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
+    /// This expects a contiguous tensor.
+    </span><span class="kw">fn </span>topk(<span class="kw-2">&amp;</span><span class="self">self</span>, topk: usize) -&gt; <span class="prelude-ty">Result</span>&lt;TopKOutput&gt;;
+}
+
+<span class="kw">impl </span>TopKLastDimOp <span class="kw">for </span>Tensor {
+    <span class="kw">fn </span>topk(<span class="kw-2">&amp;</span><span class="self">self</span>, topk: usize) -&gt; <span class="prelude-ty">Result</span>&lt;TopKOutput&gt; {
+        <span class="comment">// Sorted descending
+        </span><span class="kw">let </span>sorted_indices = <span class="self">self</span>.arg_sort_last_dim(<span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_indices = sorted_indices.narrow(D::Minus1, <span class="number">0</span>, topk)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(TopKOutput {
+            values: <span class="self">self</span>.gather(<span class="kw-2">&amp;</span>topk_indices, D::Minus1)<span class="question-mark">?</span>,
+            indices: topk_indices,
+        })
+    }
+}
+
 <span class="kw">mod </span>tests {
+    <span class="attr">#[test]
+    </span><span class="kw">fn </span>test_topk() {
+        <span class="kw">use </span><span class="kw">crate</span>::ops::{TopKLastDimOp, TopKOutput};
+        <span class="kw">use </span>candle_core::Tensor;
+        <span class="kw">let </span>device = candle_core::Device::Cpu;
+        <span class="comment">//  [[1, 3, 5],
+        //   [2, 4, 6]]
+        </span><span class="kw">let </span>x = Tensor::arange(<span class="number">1f32</span>, <span class="number">7f32</span>, <span class="kw-2">&amp;</span>device)
+            .unwrap()
+            .reshape((<span class="number">3</span>, <span class="number">2</span>))
+            .unwrap()
+            .t()
+            .unwrap()
+            .contiguous()
+            .unwrap();
+        <span class="kw">let </span>TopKOutput { values, indices } = x.topk(<span class="number">2</span>).unwrap();
+        <span class="macro">assert_eq!</span>(
+            x.to_vec2::&lt;f32&gt;().unwrap(),
+            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">3f32</span>, <span class="number">5f32</span>], <span class="macro">vec!</span>[<span class="number">2f32</span>, <span class="number">4f32</span>, <span class="number">6f32</span>]]
+        );
+        <span class="macro">assert_eq!</span>(
+            values.to_vec2::&lt;f32&gt;().unwrap(),
+            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">5f32</span>, <span class="number">3f32</span>], <span class="macro">vec!</span>[<span class="number">6f32</span>, <span class="number">4f32</span>]]
+        );
+        <span class="macro">assert_eq!</span>(
+            indices.to_vec2::&lt;u32&gt;().unwrap(),
+            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>], <span class="macro">vec!</span>[<span class="number">2u32</span>, <span class="number">1u32</span>]]
+        );
+    }
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_nonzero_cpu() {

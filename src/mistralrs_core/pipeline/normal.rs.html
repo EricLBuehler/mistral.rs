@@ -448,6 +448,88 @@
 <a href="#448" id="448">448</a>
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -459,11 +541,12 @@
     TokenSource, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
@@ -475,17 +558,18 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
-    do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
-<span class="kw">use </span>candle_core::{Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
+<span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
-<span class="kw">use </span>std::path::PathBuf;
+<span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -500,7 +584,7 @@
     chat_template: Arc&lt;ChatTemplate&gt;,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc&lt;GeneralMetadata&gt;,
 }
 
 <span class="doccomment">/// A loader for a "normal" (non-quantized) model.
@@ -759,7 +843,7 @@
                 }
             }),
             model_id: <span class="self">self</span>.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
@@ -768,7 +852,8 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: dtype,
+            }),
         })))
     }
 
@@ -844,8 +929,8 @@
             <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
         }
     }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+        <span class="self">self</span>.metadata.clone()
     }
 }
 
@@ -896,6 +981,85 @@
     }
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
         ModelCategory::Text
+    }
+}
+
+<span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>NormalPipeline {
+    <span class="kw">fn </span>amoe_done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.model.done_training();
+    }
+    <span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
+        <span class="self">self</span>.model.get_vars()
+    }
+    <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.model.trainable_params()
+    }
+    <span class="kw">fn </span>amoe_take_cached_gating_outputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;Tensor&gt; {
+        <span class="self">self</span>.model.take_cached_gating_outputs()
+    }
+    <span class="kw">fn </span>amoe_create_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        model_ids: Vec&lt;String&gt;,
+        token: <span class="kw-2">&amp;</span>TokenSource,
+        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        match_regex: <span class="kw-2">&amp;</span>str,
+        config: <span class="kw">crate</span>::amoe::AnyMoeConfig,
+        dtype: candle_core::DType,
+        dev: <span class="kw-2">&amp;</span>Device,
+        (prefix, mlp): (String, String),
+        layers: Vec&lt;usize&gt;,
+        expert_type: AnyMoeExpertType,
+        silent: bool,
+    ) -&gt; candle_core::Result&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>vbs = Vec::new();
+        <span class="comment">// Precompile regex here
+        </span><span class="kw">let </span>regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+        <span class="kw">for </span>model_id <span class="kw">in </span>model_ids {
+            <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>model_id;
+            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>model_id);
+
+            <span class="kw">let </span>api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+            <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
+            <span class="kw">let </span>api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
+            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
+                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
+            }
+
+            <span class="kw">let </span>regex = regex.clone();
+            <span class="kw">let </span>match_regex_clone = match_regex.to_string();
+            <span class="kw">let </span>layers_clone = layers.clone();
+            <span class="kw">let </span>vb = from_mmaped_safetensors(filenames, <span class="macro">vec!</span>[], dtype, dev, silent, <span class="kw">move </span>|key| {
+                <span class="kw">if </span>regex.is_match(<span class="kw-2">&amp;</span>key) {
+                    <span class="comment">// Idx of the last char of the layer id, +1
+                    // Assumes N.MLP
+                    </span><span class="kw">let </span>last_layer_idx = key.find(<span class="kw-2">&amp;</span>match_regex_clone).unwrap() - <span class="number">1</span>;
+                    <span class="kw">let </span>first_layer_idx = key[..last_layer_idx].rfind(<span class="string">'.'</span>).unwrap();
+                    <span class="kw">let </span>layer_n = key[first_layer_idx + <span class="number">1</span>..last_layer_idx]
+                        .parse::&lt;usize&gt;()
+                        .unwrap();
+                    layers_clone.contains(<span class="kw-2">&amp;</span>layer_n) || layers_clone.is_empty()
+                } <span class="kw">else </span>{
+                    <span class="bool-val">false
+                </span>}
+            })<span class="question-mark">?</span>;
+            vbs.push(vb);
+        }
+
+        <span class="self">self</span>.model
+            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers, expert_type)
+    }
+    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.model.amoe_supported()
     }
 }
 </code></pre></div></section></main></body></html>

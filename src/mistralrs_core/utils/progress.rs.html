@@ -124,6 +124,13 @@
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
 <a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::thread::JoinHandle;
 
 <span class="kw">use </span>either::Either;
@@ -230,18 +237,25 @@
 }
 
 <span class="doccomment">/// Nice progress bar with over an iterator and a message.
-</span><span class="kw">pub struct </span>NiceProgressBar&lt;T: ExactSizeIterator&gt;(<span class="kw">pub </span>T, <span class="kw">pub </span><span class="kw-2">&amp;</span><span class="lifetime">'static </span>str);
+/// COLOR is one of r,g,b
+</span><span class="kw">pub struct </span>NiceProgressBar&lt;T: ExactSizeIterator, <span class="kw">const </span>COLOR: char = <span class="string">'b'</span>&gt;(<span class="kw">pub </span>T, <span class="kw">pub </span><span class="kw-2">&amp;</span><span class="lifetime">'static </span>str);
 
-<span class="kw">impl</span>&lt;T: ExactSizeIterator&gt; IntoIterator <span class="kw">for </span>NiceProgressBar&lt;T&gt; {
+<span class="kw">impl</span>&lt;T: ExactSizeIterator, <span class="kw">const </span>COLOR: char&gt; IntoIterator <span class="kw">for </span>NiceProgressBar&lt;T, COLOR&gt; {
     <span class="kw">type </span>IntoIter = ProgressBarIter&lt;T&gt;;
     <span class="kw">type </span>Item = T::Item;
 
     <span class="kw">fn </span>into_iter(<span class="self">self</span>) -&gt; <span class="self">Self</span>::IntoIter {
+        <span class="kw">let </span>color = <span class="kw">match </span>COLOR {
+            <span class="string">'b' </span>=&gt; <span class="string">"blue"</span>,
+            <span class="string">'g' </span>=&gt; <span class="string">"green"</span>,
+            <span class="string">'r' </span>=&gt; <span class="string">"red"</span>,
+            other =&gt; <span class="macro">panic!</span>(<span class="string">"Color char `{other}` not supported"</span>),
+        };
         <span class="kw">let </span>bar = ProgressBar::new(<span class="self">self</span>.<span class="number">0</span>.len() <span class="kw">as </span>u64);
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-                    <span class="string">"{}: [{{elapsed_precise}}] [{{bar:40.cyan/blue}}] {{pos}}/{{len}} ({{eta}})"</span>,
+                    <span class="string">"{}: [{{elapsed_precise}}] [{{bar:40.{color}/{color}}}] {{pos}}/{{len}} ({{eta}})"</span>,
                     <span class="self">self</span>.<span class="number">1
                 </span>))
                 .unwrap()

@@ -908,7 +908,7 @@
             RequestMessage::Completion { text, .. } =&gt; {
                 <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                     .tokenizer()
-                    .encode(text, <span class="bool-val">false</span>)
+                    .encode(text, <span class="bool-val">true</span>)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 <span class="macro">handle_seq_error!</span>(prompt, request.response)
                     .get_ids()
@@ -1001,7 +1001,7 @@
                 };
 
                 <span class="kw">for </span>stop_txt <span class="kw">in </span>s {
-                    <span class="kw">let </span>encoded = tokenizer.encode(stop_txt.to_string(), <span class="bool-val">false</span>);
+                    <span class="kw">let </span>encoded = tokenizer.encode(stop_txt.to_string(), <span class="bool-val">true</span>);
                     <span class="kw">let </span>toks = <span class="macro">handle_seq_error!</span>(encoded, request.response)
                         .get_ids()
                         .to_vec();

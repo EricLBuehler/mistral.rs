@@ -462,6 +462,10 @@
 <a href="#462" id="462">462</a>
 <a href="#463" id="463">463</a>
 <a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -803,6 +807,7 @@
             <span class="macro-nonterminal">$dtype</span>,
             <span class="macro-nonterminal">$device</span>,
             <span class="macro-nonterminal">$silent</span>,
+            |<span class="kw">_</span>| <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
         <span class="macro-nonterminal">$loader</span>.load(
@@ -828,6 +833,7 @@
             <span class="macro-nonterminal">$dtype</span>,
             <span class="macro-nonterminal">$device</span>,
             <span class="macro-nonterminal">$silent</span>,
+            |<span class="kw">_</span>| <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
         <span class="macro-nonterminal">$loader</span>.load(
@@ -864,6 +870,7 @@
             <span class="macro-nonterminal">$dtype</span>,
             <span class="macro-nonterminal">$device</span>,
             <span class="macro-nonterminal">$silent</span>,
+            |<span class="kw">_</span>| <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
         <span class="macro-nonterminal">$loader</span>.load_xlora(
@@ -903,6 +910,7 @@
             <span class="macro-nonterminal">$dtype</span>,
             <span class="macro-nonterminal">$device</span>,
             <span class="macro-nonterminal">$silent</span>,
+            |<span class="kw">_</span>| <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
         <span class="macro-nonterminal">$loader</span>.load_xlora(

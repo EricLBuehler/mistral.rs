@@ -651,6 +651,10 @@
 <a href="#651" id="651">651</a>
 <a href="#652" id="652">652</a>
 <a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -658,8 +662,8 @@
     TokenSource, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -692,7 +696,7 @@
     gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue},
     GgmlDType,
 };
-<span class="kw">use </span>candle_core::{Device, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
@@ -722,7 +726,7 @@
     chat_template: Arc&lt;ChatTemplate&gt;,
     model_id: String,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
-    metadata: GeneralMetadata,
+    metadata: Arc&lt;GeneralMetadata&gt;,
 }
 
 <span class="doccomment">/// Loader for a GGUF model.
@@ -1132,7 +1136,7 @@
                     tgt_non_granular_index,
                 }
             }),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
@@ -1141,7 +1145,8 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: DType::F32,
+            }),
         })))
     }
 
@@ -1239,8 +1244,8 @@
             <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
         }
     }
-    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>GeneralMetadata {
-        <span class="kw-2">&amp;</span><span class="self">self</span>.metadata
+    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+        <span class="self">self</span>.metadata.clone()
     }
 }
 
@@ -1304,4 +1309,7 @@
         ModelCategory::Text
     }
 }
+
+<span class="comment">// TODO
+</span><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>GGUFPipeline {}
 </code></pre></div></section></main></body></html>
