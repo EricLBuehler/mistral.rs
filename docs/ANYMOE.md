@@ -23,6 +23,8 @@ Interpret the symbolism in Salvador Dalí's paintings,0
 Describe the function and structure of DNA in genetic inheritance,1
 ```
 
+For a vision model, the optional column `image_urls` is allowed which is a list of image URLs/local paths or Base64 encoded images.
+
 ## Experts
 AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
 
