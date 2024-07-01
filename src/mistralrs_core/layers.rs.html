@@ -620,6 +620,8 @@
 <a href="#620" id="620">620</a>
 <a href="#621" id="621">621</a>
 <a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -640,7 +642,6 @@
 
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_utils::{flash_attn, repeat_kv};
-
 <span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -762,16 +763,20 @@
                 .step_by(<span class="number">2</span>)
                 .enumerate()
                 .map(|(k, i)| {
-                    <span class="number">1f64 </span>/ (scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64))
+                    (<span class="number">1f64
+                        </span>/ (scaled_params.long_factor[k]
+                            * cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64)))
+                        <span class="kw">as </span>f32
                 })
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             <span class="kw">let </span>inv_freq_short = (<span class="number">0</span>..dim)
                 .step_by(<span class="number">2</span>)
                 .enumerate()
                 .map(|(k, i)| {
-                    <span class="number">1f64 </span>/ (scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64))
+                    (<span class="number">1f64
+                        </span>/ (scaled_params.short_factor[k]
+                            * cfg.rope_theta.powf(i <span class="kw">as </span>f64 / dim <span class="kw">as </span>f64)))
+                        <span class="kw">as </span>f32
                 })
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             <span class="kw">let </span>inv_freq_len = inv_freq_long.len();
@@ -781,8 +786,7 @@
                 </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?</span>;
 
             <span class="comment">// Calculate sin,cos for long
-            </span><span class="kw">let </span>inv_freq_long =
-                Tensor::from_vec(inv_freq_long, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+            </span><span class="kw">let </span>inv_freq_long = Tensor::from_vec(inv_freq_long, (<span class="number">1</span>, inv_freq_len), dev)<span class="question-mark">?</span>;
             <span class="kw">let </span>freqs_long = t.matmul(<span class="kw-2">&amp;</span>inv_freq_long)<span class="question-mark">?</span>;
             <span class="kw">let </span>long_sin = freqs_long.sin()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
             <span class="kw">let </span>long_cos = freqs_long.cos()<span class="question-mark">?</span>.mul(scaling_factor)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
