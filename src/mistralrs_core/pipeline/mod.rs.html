@@ -1672,7 +1672,7 @@
     }
 }
 
-<span class="kw">pub trait </span>VisionModel: IsqModel {
+<span class="kw">pub trait </span>VisionModel: IsqModel + AnyMoeBaseModelMixin {
     <span class="comment">// pixel_values and pixel_attention_mask only specified for prompt seqs
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>forward(

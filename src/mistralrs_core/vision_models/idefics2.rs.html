@@ -1092,6 +1092,41 @@
 <a href="#1092" id="1092">1092</a>
 <a href="#1093" id="1093">1093</a>
 <a href="#1094" id="1094">1094</a>
+<a href="#1095" id="1095">1095</a>
+<a href="#1096" id="1096">1096</a>
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a>
+<a href="#1104" id="1104">1104</a>
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a>
+<a href="#1110" id="1110">1110</a>
+<a href="#1111" id="1111">1111</a>
+<a href="#1112" id="1112">1112</a>
+<a href="#1113" id="1113">1113</a>
+<a href="#1114" id="1114">1114</a>
+<a href="#1115" id="1115">1115</a>
+<a href="#1116" id="1116">1116</a>
+<a href="#1117" id="1117">1117</a>
+<a href="#1118" id="1118">1118</a>
+<a href="#1119" id="1119">1119</a>
+<a href="#1120" id="1120">1120</a>
+<a href="#1121" id="1121">1121</a>
+<a href="#1122" id="1122">1122</a>
+<a href="#1123" id="1123">1123</a>
+<a href="#1124" id="1124">1124</a>
+<a href="#1125" id="1125">1125</a>
+<a href="#1126" id="1126">1126</a>
+<a href="#1127" id="1127">1127</a>
+<a href="#1128" id="1128">1128</a>
+<a href="#1129" id="1129">1129</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1103,10 +1138,12 @@
 <span class="kw">use </span>std::{any::Any, ops::Mul};
 
 <span class="kw">use crate</span>::{
+    amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model <span class="kw">as </span>Mistral,
     pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
 <span class="kw">use </span><span class="kw">crate</span>::models::mistral;
@@ -2148,6 +2185,39 @@
     <span class="kw">fn </span>get_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="self">self</span>.text_model.get_tensors()
     }
+}
+
+<span class="comment">// AnyMoE is forwarded to the base model
+</span><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Idefics2 {
+    <span class="kw">fn </span>get_mlps(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>MlpLayer&gt; {
+        <span class="self">self</span>.text_model.get_mlps()
+    }
+    <span class="kw">fn </span>get_mlps_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
+        <span class="self">self</span>.text_model.get_mlps_mut()
+    }
+    <span class="kw">fn </span>create_anymoe_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        additional_vbs: Vec&lt;VarBuilder&gt;,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: <span class="kw-2">&amp;</span>Device,
+        (prefix, mlp): (String, String),
+        layers: Vec&lt;usize&gt;,
+        expert_type: AnyMoeExpertType,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="self">self</span>.text_model.create_anymoe_layers(
+            additional_vbs,
+            config,
+            dtype,
+            dev,
+            (prefix, mlp),
+            layers,
+            expert_type,
+        )
+    }
+    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
 }
 
 <span class="kw">impl </span>VisionModel <span class="kw">for </span>Idefics2 {
