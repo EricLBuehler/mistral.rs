@@ -13,6 +13,6 @@ response = openai.completions.create(
     stream=True,
 )
 for chunk in response:
-    delta = chunk.choices[0].delta.content
+    delta = chunk.choices[0].text
     print(delta, end="")
     sys.stdout.flush()
