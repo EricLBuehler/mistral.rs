@@ -77,5 +77,5 @@ hidden_size = 4096
 [anymoe.config.expert_type.lora_adapter]
 rank = 16
 alpha = 16
-target_modules = ["gate_proj"]
+target_modules = ["up_proj", "down_proj", "gate_proj"]
 ```

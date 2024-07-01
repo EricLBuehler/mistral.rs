@@ -52,11 +52,11 @@ impl AnyMoeConfig {
         prefix,
         mlp,
         model_ids,
+        expert_type,
         layers = vec![],
         lr = 1e-3,
         epochs = 100,
         batch_size = 4,
-        expert_type = AnyMoeExpertType::FineTuned { },
     ))]
     fn new(
         hidden_size: usize,
@@ -64,11 +64,11 @@ impl AnyMoeConfig {
         prefix: String,
         mlp: String,
         model_ids: Vec<String>,
+        expert_type: AnyMoeExpertType,
         layers: Vec<usize>,
         lr: f64,
         epochs: usize,
         batch_size: usize,
-        expert_type: AnyMoeExpertType,
     ) -> Self {
         Self {
             hidden_size,

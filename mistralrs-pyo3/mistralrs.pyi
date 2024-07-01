@@ -245,14 +245,22 @@ class AnyMoeExpertType(Enum):
         target_modules: list[str]
 
 class AnyMoeConfig:
-    hidden_size: str
-    dataset_csv: str
-    prefix: str
-    mlp: str
-    model_ids: list[str]
-    lr: float = 1e-3
-    epochs: int = 100
-    batch_size: int = 4
+    def __init__(
+        self,
+        hidden_size: str,
+        dataset_csv: str,
+        prefix: str,
+        mlp: str,
+        model_ids: list[str],
+        expert_type: AnyMoeExpertType,
+        lr: float = 1e-3,
+        epochs: int = 100,
+        batch_size: int = 4,
+    ) -> None:
+        """
+        Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
+        """
+        ...
 
 @dataclass
 class Usage:

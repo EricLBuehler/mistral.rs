@@ -2,6 +2,11 @@
 
 AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE locally!
 
+It has the following features:
+- Apply AnyMoE to any supported model
+    - `plain`
+- Specify the layers to apply AnyMoE to for efficient training
+
 ## Dataset
 Currently, AnyMoE expects a CSV dataset with 2 columns: `prompt` and `expert`. For example:
 ```csv
@@ -21,6 +26,8 @@ Describe the function and structure of DNA in genetic inheritance,1
 ## Experts
 AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
 
+> Note: When using LoRA adapter experts, it may not be necessary to set the layers where AnyMoE will be applied due to the lower memory usage.
+
 ### With fine-tuned experts
 ```toml
 [model]
@@ -28,7 +35,7 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "test.csv"
+dataset_csv = "examples/amoe.csv"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["HuggingFaceH4/zephyr-7b-beta"]
@@ -46,7 +53,7 @@ model_id = "HuggingFaceH4/zephyr-7b-beta"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "test.csv"
+dataset_csv = "examples/amoe.csv"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["EricB/example_adapter"]
@@ -58,10 +65,12 @@ hidden_size = 4096
 [anymoe.config.expert_type.lora_adapter]
 rank = 16
 alpha = 16
-target_modules = ["gate_proj"]
+target_modules = ["up_proj", "down_proj", "gate_proj"]
 ```
 
-## CLI usage
+## Examples
+
+## `mistralrs-server`
 
 CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe).
 
@@ -74,3 +83,51 @@ To use the demo LoRA expert:
 ```
 ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
 ```
+
+## Python API
+```py
+from mistralrs import (
+    Runner,
+    Which,
+    ChatCompletionRequest,
+    Architecture,
+    AnyMoeConfig,
+    AnyMoeExpertType,
+)
+
+runner = Runner(
+    which=Which.Plain(
+        model_id="mistralai/Mistral-7B-Instruct-v0.1",
+        tokenizer_json=None,
+        repeat_last_n=64,
+        arch=Architecture.Mistral,
+    ),
+    anymoe_config=AnyMoeConfig(
+        hidden_size=4096,
+        dataset_csv="examples/amoe.csv",
+        prefix="model.layers",
+        mlp="mlp",
+        lr=1e-3,
+        epochs=100,
+        batch_size=4,
+        expert_type=AnyMoeExpertType.FineTuned(),
+    ),
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="mistral",
+        messages=[
+            {"role": "user", "content": "Tell me a story about the Rust type system."}
+        ],
+        max_tokens=256,
+        presence_penalty=1.0,
+        top_p=0.1,
+        temperature=0.1,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)
+```
+
+## Rust API

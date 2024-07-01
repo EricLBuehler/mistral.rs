@@ -3,7 +3,7 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "test.csv"
+dataset_csv = "examples/amoe.csv"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["typeof/zephyr-7b-beta-lora"]
@@ -14,4 +14,4 @@ hidden_size = 4096
 [anymoe.config.expert_type.lora_adapter]
 rank = 64
 alpha = 16
-target_modules = ["gate_proj"]
+target_modules = ["up_proj", "down_proj", "gate_proj"]

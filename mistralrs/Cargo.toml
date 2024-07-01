@@ -68,3 +68,7 @@ required-features = []
 [[example]]
 name = "idefics2"
 required-features = []
+
+[[example]]
+name = "anymoe"
+required-features = []

@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use anymoe::AnyMoeConfig;
+use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
@@ -1110,6 +1110,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<VisionArchitecture>()?;
+    m.add_class::<AnyMoeConfig>()?;
+    m.add_class::<AnyMoeExpertType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;
