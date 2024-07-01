@@ -186,17 +186,16 @@ generate_repr!(CompletionResponse);
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Completion request choice.
-pub struct CompletionChunkChoiceResponse {
+pub struct CompletionChunkResponse {
     pub id: String,
     pub choices: Vec<CompletionChunkChoice>,
-    pub created: u64,
+    pub created: u128,
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
-    pub usage: Usage,
 }
 
-generate_repr!(CompletionChunkChoiceResponse);
+generate_repr!(CompletionChunkResponse);
 
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
@@ -212,5 +211,5 @@ pub enum Response {
     // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
-    CompletionChunk(CompletionChunkChoiceResponse),
+    CompletionChunk(CompletionChunkResponse),
 }

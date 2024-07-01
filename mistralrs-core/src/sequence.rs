@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     response::CompletionChoice,
-    CompletionChunkChoice, CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
     get_mut_group,
@@ -607,6 +607,24 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                }))
+                .await?;
+        } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {
+            let mut swap_streaming_chunks = vec![];
+
+            std::mem::swap(
+                &mut swap_streaming_chunks,
+                &mut self.completion_streaming_chunks,
+            );
+
+            seq.responder()
+                .send(Response::CompletionChunk(CompletionChunkResponse {
+                    id: seq.id.to_string(),
+                    choices: swap_streaming_chunks,
+                    created: seq.timestamp,
+                    model: model.clone(),
+                    system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                    object: "text_completion".to_string(),
                 }))
                 .await?;
         }
