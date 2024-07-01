@@ -65,6 +65,7 @@ tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
 mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
+serde_plain = "1.0.2"
 
 [features]
 pyo3_macros = ["pyo3"]

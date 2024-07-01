@@ -238,7 +238,7 @@ impl MistralRs {
         } = config;
 
         let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
-            ModelCategory::Text => true,
+            ModelCategory::AutoRegressive | ModelCategory::Seq2Seq => true,
             ModelCategory::Vision { has_conv2d } => !has_conv2d,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {

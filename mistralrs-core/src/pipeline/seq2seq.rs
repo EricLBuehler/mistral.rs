@@ -1,11 +1,8 @@
 use super::cache_manager::DefaultCacheManager;
-use super::normal_loaders::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader,
-};
+use super::seq2seq_loaders::{Seq2SeqLoaderType, T5Loader};
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, Seq2SeqModel, Seq2SeqModelLoader,
     TokenSource, XLoraPaths,
 };
 use super::{
@@ -20,7 +17,6 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
@@ -42,8 +38,8 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
 
-pub struct NormalPipeline {
-    model: Box<dyn NormalModel + Send + Sync>,
+pub struct Seq2SeqPipeline {
+    model: Box<dyn Seq2SeqModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
@@ -54,10 +50,10 @@ pub struct NormalPipeline {
 }
 
 /// A loader for a "normal" (non-quantized) model.
-pub struct NormalLoader {
-    inner: Box<dyn NormalModelLoader>,
+pub struct Seq2SeqLoader {
+    inner: Box<dyn Seq2SeqModelLoader>,
     model_id: String,
-    config: NormalSpecificConfig,
+    config: Seq2SeqSpecificConfig,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -69,9 +65,9 @@ pub struct NormalLoader {
 
 #[derive(Default)]
 /// A builder for a loader for a "normal" (non-quantized) model.
-pub struct NormalLoaderBuilder {
+pub struct Seq2SeqLoaderBuilder {
     model_id: Option<String>,
-    config: NormalSpecificConfig,
+    config: Seq2SeqSpecificConfig,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -83,14 +79,14 @@ pub struct NormalLoaderBuilder {
 
 #[derive(Clone, Copy, Default)]
 /// Config specific to loading a normal model.
-pub struct NormalSpecificConfig {
+pub struct Seq2SeqSpecificConfig {
     pub use_flash_attn: bool,
     pub repeat_last_n: usize,
 }
 
-impl NormalLoaderBuilder {
+impl Seq2SeqLoaderBuilder {
     pub fn new(
-        config: NormalSpecificConfig,
+        config: Seq2SeqSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
@@ -153,18 +149,11 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
-        let loader: Box<dyn NormalModelLoader> = match loader {
-            NormalLoaderType::Mistral => Box::new(MistralLoader),
-            NormalLoaderType::Gemma => Box::new(GemmaLoader),
-            NormalLoaderType::Llama => Box::new(LlamaLoader),
-            NormalLoaderType::Mixtral => Box::new(MixtralLoader),
-            NormalLoaderType::Phi2 => Box::new(Phi2Loader),
-            NormalLoaderType::Phi3 => Box::new(Phi3Loader),
-            NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
-            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
+    pub fn build(self, loader: Seq2SeqLoaderType) -> Box<dyn Loader> {
+        let loader: Box<dyn Seq2SeqModelLoader> = match loader {
+            Seq2SeqLoaderType::T5 => Box::new(T5Loader),
         };
-        Box::new(NormalLoader {
+        Box::new(Seq2SeqLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -179,7 +168,7 @@ impl NormalLoaderBuilder {
     }
 }
 
-impl Loader for NormalLoader {
+impl Loader for Seq2SeqLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -217,18 +206,10 @@ impl Loader for NormalLoader {
         let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
+            info!("Loading model `{}` on {device:?}...", self.get_id());
         }
 
-        info!(
-            "Model config: {:?}",
-            self.inner
-                .get_config_repr(&config, self.config.use_flash_attn)?
-        );
+        info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()
@@ -240,34 +221,6 @@ impl Loader for NormalLoader {
 
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
-                paths,
-                dtype,
-                &load_device,
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                in_situ_quant.is_some(),
-                device.clone()
-            ),
-            ModelKind::Adapter {
-                adapter: AdapterKind::XLora,
-            } => xlora_model_loader!(
-                paths,
-                dtype,
-                &load_device,
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                in_situ_quant.is_some(),
-                device.clone()
-            ),
-            ModelKind::Adapter {
-                adapter: AdapterKind::Lora,
-            } => lora_model_loader!(
                 paths,
                 dtype,
                 &load_device,
@@ -296,7 +249,7 @@ impl Loader for NormalLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
-        Ok(Arc::new(Mutex::new(NormalPipeline {
+        Ok(Arc::new(Mutex::new(Seq2SeqPipeline {
             model,
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
@@ -334,7 +287,7 @@ impl Loader for NormalLoader {
     }
 }
 
-impl PreProcessingMixin for NormalPipeline {
+impl PreProcessingMixin for Seq2SeqPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
@@ -343,7 +296,7 @@ impl PreProcessingMixin for NormalPipeline {
     }
 }
 
-impl IsqPipelineMixin for NormalPipeline {
+impl IsqPipelineMixin for Seq2SeqPipeline {
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
         let device = self.device().clone();
         self.model
@@ -352,14 +305,14 @@ impl IsqPipelineMixin for NormalPipeline {
     }
 }
 
-impl CacheManagerMixin for NormalPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+impl CacheManagerMixin for Seq2SeqPipeline {
+    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -370,15 +323,13 @@ impl CacheManagerMixin for NormalPipeline {
     }
 }
 
-impl AdapterActivationMixin for NormalPipeline {
+impl AdapterActivationMixin for Seq2SeqPipeline {
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        self.model
-            .activate_adapters(adapter_names)
-            .map_err(anyhow::Error::msg)
+        todo!()
     }
 }
 
-impl MetadataMixin for NormalPipeline {
+impl MetadataMixin for Seq2SeqPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
@@ -400,39 +351,9 @@ impl MetadataMixin for NormalPipeline {
 }
 
 #[async_trait::async_trait]
-impl Pipeline for NormalPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
-        let ModelInputs {
-            input_ids,
-            input_ids_full,
-            seqlen_offsets,
-            seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
-            context_lens,
-            position_ids,
-        } = *inputs.downcast().expect("Downcast failed.");
-        match self.model.is_xlora() {
-            false => self.model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                position_ids,
-            ),
-            true => self.model.xlora_forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap_or(&input_ids),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
-                self.no_kv_cache,
-                &self.non_granular_state,
-                context_lens,
-                position_ids,
-            ),
-        }
+impl Pipeline for Seq2SeqPipeline {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+        todo!()
     }
     async fn sample(
         &self,
@@ -445,6 +366,6 @@ impl Pipeline for NormalPipeline {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::AutoRegressive
+        ModelCategory::Seq2Seq
     }
 }
