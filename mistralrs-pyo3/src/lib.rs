@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+use anymoe::AnyMoeConfig;
 use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
@@ -18,7 +19,7 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, ChatCompletionResponse, CompletionResponse, Constraint,
+    initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
     DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
@@ -31,6 +32,7 @@ use pyo3::{
     types::{PyList, PyString},
 };
 use std::fs::File;
+mod anymoe;
 mod stream;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
@@ -349,7 +351,8 @@ impl Runner {
         which_draft = None,
         chat_template = None,
         num_device_layers = None,
-        in_situ_quant = None
+        in_situ_quant = None,
+        anymoe_config = None,
     ))]
     fn new(
         which: Which,
@@ -362,6 +365,7 @@ impl Runner {
         chat_template: Option<String>,
         num_device_layers: Option<Either<usize, Vec<String>>>,
         in_situ_quant: Option<String>,
+        anymoe_config: Option<AnyMoeConfig>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -399,6 +403,25 @@ impl Runner {
                 config: SpeculativeConfig {
                     gamma: speculative_gamma,
                 },
+            })
+        } else {
+            loader
+        };
+        let loader = if let Some(amoe_conf) = anymoe_config {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config: mistralrs_core::AnyMoeConfig {
+                    hidden_size: amoe_conf.hidden_size,
+                    lr: amoe_conf.lr,
+                    epochs: amoe_conf.epochs,
+                    batch_size: amoe_conf.batch_size,
+                    expert_type: amoe_conf.expert_type.into(),
+                },
+                path: amoe_conf.dataset_csv,
+                prefix: amoe_conf.prefix,
+                mlp: amoe_conf.mlp,
+                model_ids: amoe_conf.model_ids,
+                layers: amoe_conf.layers,
             })
         } else {
             loader

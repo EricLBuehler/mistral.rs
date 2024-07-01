@@ -1,0 +1,86 @@
+use pyo3::{pyclass, pymethods};
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub enum AnyMoeExpertType {
+    FineTuned {},
+    LoraAdapter {
+        rank: usize,
+        alpha: f64,
+        target_modules: Vec<String>,
+    },
+}
+
+impl From<AnyMoeExpertType> for mistralrs_core::AnyMoeExpertType {
+    fn from(val: AnyMoeExpertType) -> Self {
+        match val {
+            AnyMoeExpertType::FineTuned {} => Self::FineTuned,
+            AnyMoeExpertType::LoraAdapter {
+                rank,
+                alpha,
+                target_modules,
+            } => Self::LoraAdapter {
+                rank,
+                alpha,
+                target_modules,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+#[pyclass]
+pub struct AnyMoeConfig {
+    pub(crate) hidden_size: usize,
+    pub(crate) lr: f64,
+    pub(crate) epochs: usize,
+    pub(crate) batch_size: usize,
+    pub(crate) expert_type: AnyMoeExpertType,
+    pub(crate) dataset_csv: String,
+    pub(crate) prefix: String,
+    pub(crate) mlp: String,
+    pub(crate) model_ids: Vec<String>,
+    pub(crate) layers: Vec<usize>,
+}
+
+#[pymethods]
+impl AnyMoeConfig {
+    #[new]
+    #[pyo3(signature = (
+        hidden_size,
+        dataset_csv,
+        prefix,
+        mlp,
+        model_ids,
+        layers = vec![],
+        lr = 1e-3,
+        epochs = 100,
+        batch_size = 4,
+        expert_type = AnyMoeExpertType::FineTuned { },
+    ))]
+    fn new(
+        hidden_size: usize,
+        dataset_csv: String,
+        prefix: String,
+        mlp: String,
+        model_ids: Vec<String>,
+        layers: Vec<usize>,
+        lr: f64,
+        epochs: usize,
+        batch_size: usize,
+        expert_type: AnyMoeExpertType,
+    ) -> Self {
+        Self {
+            hidden_size,
+            lr,
+            epochs,
+            batch_size,
+            expert_type,
+            dataset_csv,
+            prefix,
+            mlp,
+            model_ids,
+            layers,
+        }
+    }
+}

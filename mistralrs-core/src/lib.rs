@@ -50,6 +50,7 @@ mod utils;
 mod vision_models;
 mod xlora_models;
 
+pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
 pub use pipeline::{
     chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
