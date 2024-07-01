@@ -513,8 +513,20 @@ impl QLinear {
         }
     }
 
+    pub fn from_old_and_qmatmul(inner: QMatMul, old: &Self) -> Self {
+        Self {
+            inner,
+            bias: old.bias.clone(),
+            dtype: old.dtype,
+        }
+    }
+
     pub fn inner(&mut self) -> &mut QMatMul {
         &mut self.inner
+    }
+
+    pub fn inner_ref(&self) -> &QMatMul {
+        &self.inner
     }
 
     pub fn is_quant(&self) -> bool {
@@ -545,6 +557,60 @@ impl Module for QLinear {
         } else {
             forward_fn(&self.inner, &xs)?.to_dtype(self.dtype)
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RotaryEmbedding(candle_nn::RotaryEmbedding);
+
+impl RotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new(
+            base,
+            head_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
+    }
+
+    pub fn new_partial(
+        base: f32,
+        head_dim: usize,
+        rot_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new_partial(
+            base,
+            head_dim,
+            rot_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
+    }
+
+    pub fn forward(
+        &self,
+        positions: &[usize],
+        positions_kernel: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
+        b_sz: usize,
+    ) -> Result<()> {
+        self.0.forward(positions, positions_kernel, q, k, b_sz)
     }
 }
 

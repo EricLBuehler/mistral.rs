@@ -3,6 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     pipeline::{IsqModel, NormalLoadingMetadata},
@@ -412,7 +413,9 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
-        for layer_idx in NiceProgressBar(0..cfg.num_hidden_layers, "Loading repeating layers") {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
+        {
             let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
                 vb.dtype(),
                 cfg.clone(),
@@ -749,3 +752,5 @@ impl ScalingsMaker for Model {
         )
     }
 }
+
+impl AnyMoeBaseModelMixin for Model {}

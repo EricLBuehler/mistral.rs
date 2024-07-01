@@ -343,7 +343,7 @@ impl Engine {
             RequestMessage::Completion { text, .. } => {
                 let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
-                    .encode(text, false)
+                    .encode(text, true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 handle_seq_error!(prompt, request.response)
                     .get_ids()
@@ -436,7 +436,7 @@ impl Engine {
                 };
 
                 for stop_txt in s {
-                    let encoded = tokenizer.encode(stop_txt.to_string(), false);
+                    let encoded = tokenizer.encode(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
