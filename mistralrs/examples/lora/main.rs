@@ -87,6 +87,14 @@ fn main() -> anyhow::Result<()> {
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),
+        Response::InternalError(e) => panic!("Internal error: {e}"),
+        Response::ValidationError(e) => panic!("Validation error: {e}"),
+        Response::ModelError(e, c) => panic!(
+            "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
+            c.choices[0].message.content,
+            c.usage.avg_prompt_tok_per_sec,
+            c.usage.avg_compl_tok_per_sec
+        ),
         _ => unreachable!(),
     }
     Ok(())
