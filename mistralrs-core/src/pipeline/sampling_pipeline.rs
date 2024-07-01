@@ -9,7 +9,7 @@ macro_rules! finish_and_add_tokens_to_seq {
             &is_done,
         );
         // Handle streaming requests
-        if $seq.get_mut_group().is_streaming && $seq.get_mut_group().is_chat {
+        if $seq.get_mut_group().is_streaming {
             const STREAMING_RATE_LIMIT: usize = 3;
 
             let token_index = $seq.get_toks().len();
