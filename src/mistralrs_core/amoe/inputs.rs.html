@@ -29,6 +29,7 @@
 <a href="#29" id="29">29</a>
 <a href="#30" id="30">30</a>
 <a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, path::Path};
 
 <span class="kw">use </span>csv::Reader;
@@ -44,6 +45,7 @@
 </span><span class="kw">pub struct </span>AnyMoeTrainingInputRow {
     <span class="kw">pub </span>prompt: String,
     <span class="kw">pub </span>expert: usize,
+    <span class="kw">pub </span>image_urls: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 }
 
 <span class="kw">pub struct </span>AnyMoeTrainingInputs(<span class="kw">pub </span>Vec&lt;AnyMoeTrainingInputRow&gt;);
