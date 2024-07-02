@@ -747,6 +747,13 @@
 <a href="#747" id="747">747</a>
 <a href="#748" id="748">748</a>
 <a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -1406,6 +1413,7 @@
         (prefix, mlp): (String, String),
         <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
         expert_type: AnyMoeExpertType,
+        gate_vb: <span class="prelude-ty">Option</span>&lt;VarBuilder&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>experts: Vec&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt;&gt; = Vec::new();
         <span class="kw">if </span>layers.is_empty() {
@@ -1487,8 +1495,14 @@
         <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
             <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
             experts_all.extend(expert);
-            <span class="self">self</span>.layers[layer].mlp =
-                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)<span class="question-mark">?</span>);
+            <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
+                experts_all,
+                config.clone(),
+                dtype,
+                dev,
+                layer,
+                gate_vb.as_ref(),
+            )<span class="question-mark">?</span>);
         }
         <span class="prelude-val">Ok</span>(())
     }

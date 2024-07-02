@@ -276,15 +276,60 @@
 <a href="#276" id="276">276</a>
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, RwLock};
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
-<span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor, Var, D};
+<span class="kw">use </span>candle_core::{quantized::QMatMul, safetensors, DType, Device, <span class="prelude-ty">Result</span>, Tensor, Var, D};
 <span class="kw">use </span>candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">mod </span>inputs;
 <span class="kw">mod </span>macros;
 <span class="kw">pub use </span>inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     ops::{TopKLastDimOp, TopKOutput},
@@ -300,13 +345,29 @@
             .map(|mlp| mlp.get_vars())
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }
-    <span class="kw">fn </span>done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="kw">let _ </span>= <span class="self">self
+    <span class="kw">fn </span>finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>out = HashMap::new();
+        <span class="kw">for </span>mlp <span class="kw">in </span><span class="self">self
             </span>.get_mlps_mut()
             .iter_mut()
             .filter(|mlp| mlp.is_moe_layer())
-            .map(|mlp| mlp.done_training())
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        {
+            <span class="kw">let </span>out_accum = <span class="kw">if </span>gate_model_id.is_some() {
+                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span>out)
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>};
+            mlp.finish_training(out_accum);
+        }
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(gate_model_id) = gate_model_id {
+            <span class="kw">if </span>!Path::new(<span class="kw-2">&amp;</span>gate_model_id).exists() {
+                fs::create_dir_all(<span class="kw-2">&amp;</span>gate_model_id)<span class="question-mark">?</span>;
+            }
+            <span class="kw">let </span>save_path = Path::new(<span class="kw-2">&amp;</span>gate_model_id).join(<span class="string">"gate.safetensors"</span>);
+            safetensors::save(<span class="kw-2">&amp;</span>out, <span class="kw-2">&amp;</span>save_path)<span class="question-mark">?</span>;
+            <span class="macro">info!</span>(<span class="string">"Saved gating layers to `{}`"</span>, save_path.display());
+        }
+        <span class="prelude-val">Ok</span>(())
     }
     <span class="kw">fn </span>trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.get_mlps()
@@ -333,6 +394,7 @@
         (_prefix, _mlp): (String, String),
         _layers: Vec&lt;usize&gt;,
         _expert_type: AnyMoeExpertType,
+        _gate_vb: <span class="prelude-ty">Option</span>&lt;VarBuilder&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="macro">candle_core::bail!</span>(<span class="string">"Model does not support AnyMoE layers"</span>);
     }
@@ -367,7 +429,7 @@
     <span class="kw">fn </span>get_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Var&gt; {
         <span class="macro">vec!</span>[]
     }
-    <span class="kw">fn </span>done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+    <span class="kw">fn </span>finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _out: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>HashMap&lt;String, Tensor&gt;&gt;) {}
     <span class="kw">fn </span>trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="number">0
     </span>}
@@ -379,6 +441,7 @@
 <span class="macro">serde_default_fn!</span>(f64, default_lr, <span class="number">1e-3</span>);
 <span class="macro">serde_default_fn!</span>(usize, default_epochs, <span class="number">100</span>);
 <span class="macro">serde_default_fn!</span>(usize, default_bs, <span class="number">4</span>);
+<span class="macro">serde_default_fn!</span>(bool, default_true, <span class="bool-val">true</span>);
 
 <span class="attr">#[derive(Serialize, Deserialize, Clone, Debug)]
 </span><span class="kw">pub enum </span>AnyMoeExpertType {
@@ -402,6 +465,9 @@
     <span class="attr">#[serde(default = <span class="string">"default_bs"</span>)]
     </span><span class="kw">pub </span>batch_size: usize,
     <span class="kw">pub </span>expert_type: AnyMoeExpertType,
+    <span class="kw">pub </span>gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="attr">#[serde(default = <span class="string">"default_true"</span>)]
+    </span><span class="kw">pub </span>training: bool,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -426,6 +492,7 @@
     training: bool,
     vars: Vec&lt;Var&gt;,
     gating_output: Arc&lt;RwLock&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;&gt;,
+    layer_idx: usize,
 }
 
 <span class="kw">impl </span>MoeMlp {
@@ -435,17 +502,21 @@
         config: AnyMoeConfig,
         dtype: DType,
         dev: <span class="kw-2">&amp;</span>Device,
+        layer: usize,
+        gate_vb: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>VarBuilder&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>n_experts = experts.len();
         <span class="kw">let </span>var_map = VarMap::new();
 
-        <span class="kw">let </span>vb = VarBuilder::from_varmap(<span class="kw-2">&amp;</span>var_map, dtype, dev);
-        <span class="kw">let </span>vb = vb.pp(<span class="string">"moe_gate"</span>);
+        <span class="kw">let </span>inference = gate_vb.is_some();
+        <span class="kw">let </span>empty_map = VarBuilder::from_varmap(<span class="kw-2">&amp;</span>var_map, dtype, dev);
+        <span class="kw">let </span>vb = gate_vb.unwrap_or(<span class="kw-2">&amp;</span>empty_map);
+        <span class="kw">let </span>vb = vb.pp(<span class="string">"moe_gate"</span>).pp(layer);
 
         <span class="kw">let </span>lin = linear(config.hidden_size, n_experts, vb)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>vars = var_map.all_vars();
-        <span class="kw">if </span>vars.is_empty() {
+        <span class="kw">if </span>vars.is_empty() &amp;&amp; !inference {
             <span class="macro">candle_core::bail!</span>(<span class="string">"No vars to train in MoeMlp, perhaps there are no layers?"</span>);
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -454,18 +525,24 @@
             training: <span class="bool-val">true</span>,
             vars,
             gating_output: Arc::new(RwLock::new(<span class="prelude-val">None</span>)),
+            layer_idx: layer,
         })
     }
 }
 
 <span class="kw">impl </span>AnyMoeTrainableLayer <span class="kw">for </span>MoeMlp {
-    <span class="kw">fn </span>done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+    <span class="kw">fn </span>finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, out: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>HashMap&lt;String, Tensor&gt;&gt;) {
         <span class="self">self</span>.training = <span class="bool-val">false</span>;
+        <span class="kw">let </span>w = <span class="self">self</span>.gate.lin.weight().detach();
+        <span class="kw">let </span>b = <span class="self">self</span>.gate.lin.bias().map(|b| b.detach());
         <span class="self">self</span>.gate = MoeGate {
-            lin: Linear::new(
-                <span class="self">self</span>.gate.lin.weight().detach(),
-                <span class="self">self</span>.gate.lin.bias().map(|b| b.detach()),
-            ),
+            lin: Linear::new(w.clone(), b.clone()),
+        };
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(out) = out {
+            out.insert(<span class="macro">format!</span>(<span class="string">"moe_gate.{}.weight"</span>, <span class="self">self</span>.layer_idx), w);
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b {
+                out.insert(<span class="macro">format!</span>(<span class="string">"moe_gate.{}.bias"</span>, <span class="self">self</span>.layer_idx), b);
+            }
         }
     }
     <span class="kw">fn </span>trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
@@ -539,6 +616,7 @@
             training: <span class="self">self</span>.training,
             vars: <span class="self">self</span>.vars.clone(),
             gating_output: <span class="self">self</span>.gating_output.clone(),
+            layer_idx: <span class="self">self</span>.layer_idx,
         })
     }
 

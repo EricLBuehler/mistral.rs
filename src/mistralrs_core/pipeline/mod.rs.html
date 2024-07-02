@@ -971,6 +971,7 @@
 <a href="#971" id="971">971</a>
 <a href="#972" id="972">972</a>
 <a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -1471,7 +1472,7 @@
     </span><span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
         <span class="macro">unreachable!</span>()
     }
-    <span class="kw">fn </span>amoe_done_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+    <span class="kw">fn </span>amoe_finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; candle_core::Result&lt;()&gt; {
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
@@ -1499,6 +1500,7 @@
         _layers: Vec&lt;usize&gt;,
         _expert_type: AnyMoeExpertType,
         _silent: bool,
+        _gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; candle_core::Result&lt;()&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1513,7 +1515,7 @@
         _revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
         _layers: Vec&lt;usize&gt;,
         _silent: bool,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;AnyMoeTrainingResult, candle_core::Error&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;AnyMoeTrainingResult&gt;, candle_core::Error&gt; {
         <span class="macro">unreachable!</span>()
     }
 }

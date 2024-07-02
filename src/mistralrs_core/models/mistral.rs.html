@@ -653,6 +653,13 @@
 <a href="#653" id="653">653</a>
 <a href="#654" id="654">654</a>
 <a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -1218,6 +1225,7 @@
         (prefix, mlp): (String, String),
         <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
         expert_type: AnyMoeExpertType,
+        gate_vb: <span class="prelude-ty">Option</span>&lt;VarBuilder&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>experts: Vec&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt;&gt; = Vec::new();
         <span class="kw">if </span>layers.is_empty() {
@@ -1299,8 +1307,14 @@
         <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
             <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
             experts_all.extend(expert);
-            <span class="self">self</span>.layers[layer].mlp =
-                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)<span class="question-mark">?</span>);
+            <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
+                experts_all,
+                config.clone(),
+                dtype,
+                dev,
+                layer,
+                gate_vb.as_ref(),
+            )<span class="question-mark">?</span>);
         }
         <span class="prelude-val">Ok</span>(())
     }
