@@ -500,7 +500,7 @@ pub trait AnyMoePipelineMixin {
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn amoe_done_training(&mut self) {
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
         unreachable!()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {
@@ -528,6 +528,7 @@ pub trait AnyMoePipelineMixin {
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
         _silent: bool,
+        _gate_model_id: Option<String>,
     ) -> candle_core::Result<()> {
         unreachable!()
     }
@@ -542,7 +543,7 @@ pub trait AnyMoePipelineMixin {
         _revision: Option<String>,
         _layers: Vec<usize>,
         _silent: bool,
-    ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
+    ) -> Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
         unreachable!()
     }
 }
@@ -701,7 +702,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     }
 }
 
-pub trait VisionModel: IsqModel {
+pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(

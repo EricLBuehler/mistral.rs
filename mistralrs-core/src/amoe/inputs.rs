@@ -13,6 +13,7 @@ pub struct AnyMoeTrainingResult {
 pub struct AnyMoeTrainingInputRow {
     pub prompt: String,
     pub expert: usize,
+    pub image_urls: Option<Vec<String>>,
 }
 
 pub struct AnyMoeTrainingInputs(pub Vec<AnyMoeTrainingInputRow>);

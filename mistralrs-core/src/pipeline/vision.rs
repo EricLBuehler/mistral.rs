@@ -21,17 +21,18 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    do_sample, get_paths, vision_normal_model_loader, DeviceMapMetadata, Ordering, Pipeline,
-    TryIntoDType,
+    api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
+    DeviceMapMetadata, Ordering, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
+use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -355,5 +356,133 @@ impl Pipeline for VisionPipeline {
     }
 }
 
-// TODO
-impl AnyMoePipelineMixin for VisionPipeline {}
+impl AnyMoePipelineMixin for VisionPipeline {
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+        self.model.finish_training(gate_model_id)
+    }
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
+        self.model.get_vars()
+    }
+    fn amoe_base_model_trainable_params(&self) -> usize {
+        self.model.trainable_params()
+    }
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        self.model.take_cached_gating_outputs()
+    }
+    fn amoe_create_layers(
+        &mut self,
+        model_ids: Vec<String>,
+        token: &TokenSource,
+        revision: Option<String>,
+        match_regex: &str,
+        config: crate::amoe::AnyMoeConfig,
+        dtype: candle_core::DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        silent: bool,
+        gate_model_id: Option<String>,
+    ) -> candle_core::Result<()> {
+        let mut vbs = Vec::new();
+        // Precompile regex here
+        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        for model_id in model_ids {
+            let model_id_str = &model_id;
+            let model_id = Path::new(&model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+
+            let regex = regex.clone();
+            let match_regex_clone = match_regex.to_string();
+            let layers_clone = layers.clone();
+            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
+                if regex.is_match(&key) {
+                    // Idx of the last char of the layer id, +1
+                    // Assumes N.MLP
+                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                        .parse::<usize>()
+                        .unwrap();
+                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                } else {
+                    false
+                }
+            })?;
+            vbs.push(vb);
+        }
+
+        let gate_vb = if let Some(gate_model_id) = gate_model_id {
+            let model_id_str = &gate_model_id;
+            let model_id = Path::new(&gate_model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut gate_filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+            assert_eq!(
+                gate_filenames.len(),
+                1,
+                "Gate model ID must contain only one .safetensors file"
+            );
+
+            let vb = from_mmaped_safetensors(
+                gate_filenames.clone(),
+                vec![],
+                dtype,
+                dev,
+                silent,
+                |_| true,
+            )?;
+            info!(
+                "Loaded gating layers from `{}`",
+                gate_filenames[0].display()
+            );
+            Some(vb)
+        } else {
+            None
+        };
+
+        self.model.create_anymoe_layers(
+            vbs,
+            config,
+            dtype,
+            dev,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
+    }
+    fn amoe_supported(&self) -> bool {
+        self.model.amoe_supported()
+    }
+}

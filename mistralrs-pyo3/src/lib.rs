@@ -416,6 +416,8 @@ impl Runner {
                     epochs: amoe_conf.epochs,
                     batch_size: amoe_conf.batch_size,
                     expert_type: amoe_conf.expert_type.into(),
+                    gate_model_id: amoe_conf.gate_model_id.clone(),
+                    training: amoe_conf.training,
                 },
                 path: amoe_conf.dataset_csv,
                 prefix: amoe_conf.prefix,

@@ -9,10 +9,12 @@ use serde::Deserialize;
 use std::{any::Any, ops::Mul};
 
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
 use crate::models::mistral;
@@ -1053,6 +1055,41 @@ impl Idefics2 {
 impl IsqModel for Idefics2 {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         self.text_model.get_tensors()
+    }
+}
+
+// AnyMoE is forwarded to the base model
+impl AnyMoeBaseModelMixin for Idefics2 {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        self.text_model.get_mlps()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        self.text_model.get_mlps_mut()
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
+    ) -> Result<()> {
+        self.text_model.create_anymoe_layers(
+            additional_vbs,
+            config,
+            dtype,
+            dev,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
+    }
+    fn amoe_supported(&self) -> bool {
+        true
     }
 }
 
