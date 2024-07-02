@@ -115,6 +115,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 3 Vision|✅| |✅| |
 |Idefics 2|✅| |✅| |
 |Gemma 2|✅|✅|✅|✅|
+|Starcoder 2|✅|✅|✅|✅|
 
 ## APIs and Integrations
 
@@ -345,6 +346,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi3`
 - `qwen2`
 - `gemma2`
+- `starcoder2`
 
 ### Architecture for vision models
 
@@ -438,6 +440,7 @@ Example:
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
+|Starcoder 2| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -460,6 +463,7 @@ Example:
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
+|Starcoder 2|✅| | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -474,6 +478,7 @@ Example:
 |Phi 3 Vision| |
 |Idefics 2| |
 |Gemma 2|✅|
+|Starcoder 2|✅|
 
 
 ### Using derivative model
