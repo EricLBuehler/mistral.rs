@@ -109,14 +109,16 @@ trait LoadTensors {
             .into_iter()
             .map(|(name, _)| name)
             .filter(|x| predicate(x.to_string()));
-        let iter = self.get_name_key_pairs(names_only);
+        let iter = self.get_name_key_pairs(names_only).collect::<Vec<_>>();
 
         // Take the filtered list of tensors to load, store with derived lookup key:
         let mut loaded_tensors = HashMap::new();
-        for (load_name, key_name) in iter.with_progress(is_silent) {
-            let tensor = tensors.load(&load_name, device)?.to_dtype(dtype)?;
+        if !iter.is_empty() {
+            for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
+                let tensor = tensors.load(&load_name, device)?.to_dtype(dtype)?;
 
-            loaded_tensors.insert(key_name, tensor);
+                loaded_tensors.insert(key_name, tensor);
+            }
         }
 
         Ok(loaded_tensors)

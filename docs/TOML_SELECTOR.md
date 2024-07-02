@@ -61,7 +61,7 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "test.csv"
+dataset_json = "test.csv"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["HuggingFaceH4/zephyr-7b-beta"]
@@ -79,7 +79,7 @@ model_id = "HuggingFaceH4/zephyr-7b-beta"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "test.csv"
+dataset_json = "test.csv"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["EricB/example_adapter"]

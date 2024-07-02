@@ -250,7 +250,7 @@ class AnyMoeConfig:
     def __init__(
         self,
         hidden_size: str,
-        dataset_csv: str,
+        dataset_json: str,
         prefix: str,
         mlp: str,
         model_ids: list[str],

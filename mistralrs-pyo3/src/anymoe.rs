@@ -36,7 +36,7 @@ pub struct AnyMoeConfig {
     pub(crate) epochs: usize,
     pub(crate) batch_size: usize,
     pub(crate) expert_type: AnyMoeExpertType,
-    pub(crate) dataset_csv: String,
+    pub(crate) dataset_json: String,
     pub(crate) prefix: String,
     pub(crate) mlp: String,
     pub(crate) model_ids: Vec<String>,
@@ -50,7 +50,7 @@ impl AnyMoeConfig {
     #[new]
     #[pyo3(signature = (
         hidden_size,
-        dataset_csv,
+        dataset_json,
         prefix,
         mlp,
         model_ids,
@@ -64,7 +64,7 @@ impl AnyMoeConfig {
     ))]
     fn new(
         hidden_size: usize,
-        dataset_csv: String,
+        dataset_json: String,
         prefix: String,
         mlp: String,
         model_ids: Vec<String>,
@@ -82,7 +82,7 @@ impl AnyMoeConfig {
             epochs,
             batch_size,
             expert_type,
-            dataset_csv,
+            dataset_json,
             prefix,
             mlp,
             model_ids,

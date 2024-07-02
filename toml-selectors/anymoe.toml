@@ -3,7 +3,7 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "examples/amoe.csv"
+dataset_json = "examples/amoe.json"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["HuggingFaceH4/zephyr-7b-beta"]

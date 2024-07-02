@@ -70,7 +70,7 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-            self.path.clone(),
+            AnyMoeTrainingInputs::from_json(&self.path)?,
             self.prefix.clone(),
             self.mlp.clone(),
             self.model_ids.clone(),
@@ -102,7 +102,7 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-            self.path.clone(),
+            AnyMoeTrainingInputs::from_json(&self.path)?,
             self.prefix.clone(),
             self.mlp.clone(),
             self.model_ids.clone(),
@@ -127,7 +127,7 @@ impl AnyMoePipeline {
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: AnyMoeConfig,
-        path: String,
+        inputs: AnyMoeTrainingInputs,
         prefix: String,
         mlp: String,
         model_ids: Vec<String>,
@@ -137,8 +137,7 @@ impl AnyMoePipeline {
         silent: bool,
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
-        let inputs = AnyMoeTrainingInputs::from_csv(path)?;
-        info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
+        info!("Loaded pretraining dataset of {} samples.", inputs.len());
         match this.amoe_pre_train(
             inputs,
             (prefix, mlp),
@@ -327,7 +326,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             .collect::<candle_core::Result<Vec<_>>>()?;
 
         let mut rng = thread_rng();
-        let mut samples = inputs.0;
+        let mut samples = inputs.into_inner();
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
