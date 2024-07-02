@@ -7,6 +7,7 @@ use candle_core::quantized::QMatMul;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, Activation, Linear, VarBuilder};
 
+use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
 use crate::ops::NonZeroOp;
 use crate::pipeline::IsqModel;
@@ -16,6 +17,7 @@ use crate::pipeline::VisionModel;
 use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::vision_models::llava::utils::get_anyres_image_grid_shape;
+use crate::{AnyMoeConfig, AnyMoeExpertType};
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 
@@ -384,6 +386,41 @@ impl VisionModel for Model {
     }
 
     fn has_conv2d(&self) -> bool {
+        true
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    //untested
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        self.llm.get_mlps()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        self.llm.get_mlps_mut()
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
+    ) -> Result<()> {
+        self.llm.create_anymoe_layers(
+            additional_vbs,
+            config,
+            dtype,
+            dev,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
+    }
+    fn amoe_supported(&self) -> bool {
         true
     }
 }

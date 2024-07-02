@@ -5,10 +5,14 @@ use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{linear_no_bias, Activation, VarBuilder};
 
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
+    get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    merge_delta,
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
 use super::{LLaVALLM, OrdinaryRoPE};
@@ -21,6 +25,7 @@ struct MLP {
     up_proj: QMatMul,
     down_proj: QMatMul,
     act_fn: Activation,
+    params: Vec<usize>,
 }
 
 impl MLP {
@@ -35,11 +40,14 @@ impl MLP {
             up_proj: QMatMul::Tensor(up_proj.weight().clone()),
             down_proj: QMatMul::Tensor(down_proj.weight().clone()),
             act_fn: cfg.hidden_act,
+            params: vec![hidden_sz, intermediate_sz],
         })
     }
 }
 
-impl Module for MLP {
+impl AnyMoeTrainableLayer for MLP {}
+
+impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -53,6 +61,41 @@ impl Module for MLP {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
+    }
+    // gate, up, down
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let new_gate = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.gate_proj, delta)
+        } else {
+            self.gate_proj.clone()
+        };
+        let new_up = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.up_proj, delta)
+        } else {
+            self.up_proj.clone()
+        };
+        let new_down = if let Some(ref delta) = deltas[2] {
+            merge_delta!(self.down_proj, delta)
+        } else {
+            self.down_proj.clone()
+        };
+
+        Ok(Box::new(Self {
+            gate_proj: new_gate,
+            up_proj: new_up,
+            down_proj: new_down,
+            act_fn: self.act_fn,
+            params: self.params.clone(),
+        }))
     }
 }
 
@@ -175,10 +218,9 @@ impl Attention {
     }
 }
 
-#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
+    mlp: Box<dyn MlpLayer>,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -208,7 +250,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp,
+            mlp: Box::new(mlp),
             input_layernorm,
             post_attention_layernorm,
         })
@@ -235,12 +277,13 @@ impl DecoderLayer {
         )?;
         xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
-        xs + residual
+        let xs = self
+            .mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        residual + xs
     }
 }
 
-#[derive(Debug)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
@@ -249,6 +292,7 @@ pub struct Model {
     sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
+    pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
 }
@@ -323,6 +367,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
+            max_seq_len: cfg.max_position_embeddings,
             mapper,
             rope_parameters,
         })
@@ -397,9 +442,14 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-            tensors.push((&mut layer.mlp.up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_tensors()
+                    .into_iter()
+                    .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
         }
         (tensors, &*self.mapper)
     }
@@ -426,7 +476,9 @@ impl LLaVALLM for Model {
             context_lens,
         )
     }
+}
 
+impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -442,7 +494,153 @@ impl LLaVALLM for Model {
             context_lens,
         )
     }
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
     fn cache(&self) -> &Cache {
         &self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+}
+
+impl AnyMoeBaseModelMixin for Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        let mut mlps = Vec::new();
+        for layer in &self.layers {
+            mlps.push(&*layer.mlp);
+        }
+        mlps
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        let mut mlps = Vec::new();
+        for layer in &mut self.layers {
+            mlps.push(&mut layer.mlp);
+        }
+        mlps
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        dtype: DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        mut layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
+    ) -> Result<()> {
+        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
+        if layers.is_empty() {
+            layers = (0..self.layers.len()).collect::<Vec<_>>();
+        }
+        for _ in 0..layers.len() {
+            experts.push(Vec::new());
+        }
+        for vb in additional_vbs {
+            let vb = vb.pp(&prefix);
+            for (layer, row) in experts.iter_mut().enumerate() {
+                if !layers.contains(&layer) {
+                    continue;
+                }
+
+                let intermediate_size = self.layers[layer].mlp.get_params()[1];
+                let hidden_size = self.layers[layer].mlp.get_params()[0];
+                match expert_type {
+                    AnyMoeExpertType::FineTuned => {
+                        row.push(Box::new(MLP::new(
+                            &Config {
+                                intermediate_size: self.layers[layer].mlp.get_params()[1],
+                                hidden_size: self.layers[layer].mlp.get_params()[0],
+                                ..Default::default()
+                            },
+                            vb.pp(layer).pp(&mlp),
+                        )?));
+                    }
+                    AnyMoeExpertType::LoraAdapter {
+                        rank,
+                        alpha,
+                        ref target_modules,
+                    } => {
+                        let vb_mlp = vb.pp(layer).pp(&mlp);
+
+                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "gate_proj"
+                            ))
+                        } else {
+                            None
+                        };
+                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (hidden_size, intermediate_size),
+                                "up_proj"
+                            ))
+                        } else {
+                            None
+                        };
+                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
+                            Some(get_delta_from_lora_ab!(
+                                vb_mlp,
+                                rank,
+                                alpha,
+                                (intermediate_size, hidden_size),
+                                "down_proj"
+                            ))
+                        } else {
+                            None
+                        };
+
+                        row.push(self.layers[layer].mlp.new_added_delta(vec![
+                            gate_proj_delta,
+                            up_proj_delta,
+                            down_proj_delta,
+                        ])?);
+                    }
+                }
+            }
+        }
+        for (layer, expert) in layers.into_iter().zip(experts) {
+            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            experts_all.extend(expert);
+            self.layers[layer].mlp = Box::new(MoeMlp::new(
+                experts_all,
+                config.clone(),
+                dtype,
+                dev,
+                layer,
+                gate_vb.as_ref(),
+            )?);
+        }
+        Ok(())
+    }
+    fn amoe_supported(&self) -> bool {
+        true
     }
 }
