@@ -1,5 +1,6 @@
 [package]
 name = "mistralrs-bench"
+publish = false
 version.workspace = true
 edition.workspace = true
 description.workspace = true
