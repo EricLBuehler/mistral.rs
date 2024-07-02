@@ -22,13 +22,13 @@ pub type RxStackRecognizer = StackRecognizer<StateID, RecRx>;
 
 impl RecRx {
     pub fn from_rx(rx: &str, size_limit: Option<usize>) -> Result<Self> {
-        let rx = if rx.ends_with("$") {
+        let rx = if rx.ends_with('$') {
             rx.to_string()
         } else {
             rx.to_string() + "$"
         };
-        let rx = if rx.starts_with("^") {
-            rx[1..].to_string()
+        let rx = if let Some(stripped) = rx.strip_prefix('^') {
+            stripped.to_string()
         } else {
             rx
         };
@@ -77,6 +77,7 @@ impl RecRx {
         &self.info
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_stack_recognizer(self) -> RxStackRecognizer {
         StackRecognizer::from(self)
     }

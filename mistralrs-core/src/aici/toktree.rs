@@ -123,13 +123,13 @@ impl TrieNode {
 const LEN_BITS: u32 = 10;
 
 impl TokTrie {
-    pub fn from(info: &TokRxInfo, words: &Vec<Vec<u8>>) -> Self {
+    pub fn from(info: &TokRxInfo, words: &[Vec<u8>]) -> Self {
         let mut trie = TrieHash::new(0xff);
         let mut token_offsets = Vec::new();
         let mut token_data = Vec::new();
         assert!(info.vocab_size == words.len() as u32);
         for (idx, word) in words.iter().enumerate() {
-            if word.len() > 0 {
+            if !word.is_empty() {
                 trie.insert(word, idx as u32);
             }
             assert!(word.len() < (1 << LEN_BITS));
@@ -141,7 +141,7 @@ impl TokTrie {
         let mut nodes = Vec::new();
         trie.serialize(&mut nodes, 0);
         let mut r = TokTrie {
-            info: info.clone(),
+            info: *info,
             token_offsets,
             token_data,
             nodes,
@@ -160,7 +160,7 @@ impl TokTrie {
             if tok_ids.len() == 1 && tok_ids[0] != tok_id {
                 self.token_duplicates
                     .entry(tok_ids[0])
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(tok_id);
             }
         }
@@ -176,7 +176,7 @@ impl TokTrie {
     }
 
     fn next_node(&self, n: &TrieNode) -> usize {
-        return self.node_offset(n) + n.subtree_size();
+        self.node_offset(n) + n.subtree_size()
     }
 
     pub fn info(&self) -> &TokRxInfo {
@@ -209,7 +209,7 @@ impl TokTrie {
 
         let ts_neg = ts.negated();
         let use_neg = ts_neg.num_set() * 20 < ts.num_set();
-        let ts1 = if use_neg { &ts_neg } else { &ts };
+        let ts1 = if use_neg { &ts_neg } else { ts };
         let num_set = ts1.num_set();
         let max_tok = std::cmp::min(max_examples, num_set);
         let mut token_names = Vec::new();
@@ -245,7 +245,7 @@ impl TokTrie {
         toks.iter()
             .map(|t| {
                 let s = self.token_dbg(*t);
-                if s.starts_with("\"") {
+                if s.starts_with('\"') {
                     self.token_str(*t)
                 } else {
                     format!("≺{}≻", s)
@@ -260,7 +260,7 @@ impl TokTrie {
             .iter()
             .map(|t| {
                 let s = self.token_dbg(*t);
-                if s.starts_with("\"") {
+                if s.starts_with('\"') {
                     s[1..s.len() - 1].to_string()
                 } else {
                     format!("≺{}≻", s)
@@ -280,7 +280,7 @@ impl TokTrie {
         } else {
             // format!("{:?}[{}]", self.token_str(idx), idx)
             let s = self.token_str(idx);
-            if s.len() == 0 {
+            if s.is_empty() {
                 format!("EMPTY[{}]", idx)
             } else if !s.contains('\u{fffd}') {
                 format!("{:?}", s)
@@ -315,7 +315,7 @@ impl TokTrie {
 
     pub fn greedy_tokenize(&self, bytes: &[u8]) -> Vec<TokenId> {
         let mut r = Vec::new();
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return r;
         }
 
@@ -338,7 +338,7 @@ impl TokTrie {
                     n = self.root();
                 }
             }
-            idx = idx + 1;
+            idx += 1;
         }
         r.push(last_tok.unwrap());
         r
@@ -385,7 +385,7 @@ impl TokTrie {
     }
 
     pub fn prefix_token_id(&self, bytes: &[u8]) -> (TokenId, usize) {
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
         let mut last = (0, 0);
         let mut n = self.root();
         for (idx, byte) in bytes.iter().enumerate() {
@@ -397,7 +397,7 @@ impl TokTrie {
                 last = (tok, idx + 1);
             }
         }
-        return last;
+        last
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
@@ -464,7 +464,7 @@ impl TokTrie {
             trie_bytes: trie_data.len() as u32,
             token_offset_bytes: token_offsets.len() as u32,
             token_data_bytes: trie_data.len() as u32,
-            info: self.info.clone(),
+            info: self.info,
             align: [],
         };
 
@@ -479,16 +479,15 @@ impl TokTrie {
         &self.nodes[0]
     }
 
-    pub fn check_against(&self, tokens: &Vec<Vec<u8>>) {
+    pub fn check_against(&self, tokens: &[Vec<u8>]) {
         let vocab_size = tokens.len();
-        for idx in 0..vocab_size {
-            let bytes = &tokens[idx];
+        for (idx, bytes) in tokens.iter().enumerate().take(vocab_size) {
             let tid = idx as TokenId;
             assert!(bytes == self.token(tid));
             let root = self.root();
-            if bytes.len() > 0 {
+            if !bytes.is_empty() {
                 let tid2 = self
-                    .child_at_bytes(root, &bytes)
+                    .child_at_bytes(root, bytes)
                     .unwrap()
                     .token_id()
                     .unwrap();
@@ -500,20 +499,15 @@ impl TokTrie {
     }
 
     pub fn child_at_byte<'a>(&'a self, n: &'a TrieNode, byte: u8) -> Option<&'a TrieNode> {
-        for child in self.node_children(n) {
-            if child.byte() == byte {
-                return Some(child);
-            }
-        }
-        None
+        self.node_children(n).find(|&child| child.byte() == byte)
     }
 
     pub fn all_subtokens(&self, bytes: &[u8]) -> Vec<TokenId> {
         let mut r = Vec::new();
         for i in 0..bytes.len() {
             let mut n = self.root();
-            for j in i..bytes.len() {
-                n = match self.child_at_byte(n, bytes[j]) {
+            for x in bytes.iter().skip(i) {
+                n = match self.child_at_byte(n, *x) {
                     Some(n) => n,
                     None => break,
                 };
@@ -552,6 +546,7 @@ impl TokTrie {
         logits.set_all(false);
         if start.is_empty() {
             // EOS is only allowed if there is no forced byte prefix
+            #[allow(clippy::useless_vec)]
             for tok in vec![SpecialToken::EndOfSentence] {
                 if r.special_allowed(tok) {
                     logits.allow_token(self.special_token(tok))
@@ -559,7 +554,7 @@ impl TokTrie {
             }
         }
         // all prefixes of 'start' are also allowed
-        if start.len() > 0 {
+        if !start.is_empty() {
             for len in 1..=start.len() {
                 let bytes = &start[0..len];
                 if let Some(tok) = self.token_id(bytes) {
@@ -672,7 +667,7 @@ impl TokTrie {
                 next_pop = n.num_parents() - 1;
             }
         }
-        if start.len() == 0 {
+        if start.is_empty() {
             // if start was non-empty, trie_finished() is supposed to clean this up
             r.pop_bytes(next_pop);
         }
@@ -706,7 +701,7 @@ impl TokTrie {
                 next_pop = n.num_parents() - 1;
             }
         }
-        if start.len() == 0 {
+        if start.is_empty() {
             // if start was non-empty, trie_finished() is supposed to clean this up
             r.pop_bytes(next_pop);
         }
@@ -751,7 +746,7 @@ impl TrieHash {
         }
     }
     fn insert(&mut self, word: &[u8], token_id: u32) {
-        if word.len() == 0 {
+        if word.is_empty() {
             // Some tokenizers have duplicate tokens...
             // we just override
             // assert!(self.token_id == NO_TOKEN);

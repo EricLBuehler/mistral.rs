@@ -19,11 +19,8 @@ pub struct ByteTokenizer {
 
 // useful when debugging this: https://www.cogsci.ed.ac.uk/~richard/utf-8.cgi
 
-fn is_self_mapped(c: char) -> bool {
-    match c {
-        '!'..='~' | '\u{00A1}'..='\u{00AC}' | '\u{00AE}'..='\u{00FF}' => true,
-        _ => false,
-    }
+const fn is_self_mapped(c: char) -> bool {
+    matches!(c, '!'..='~' | '\u{00A1}'..='\u{00AC}' | '\u{00AE}'..='\u{00FF}')
 }
 
 fn build_char_map() -> HashMap<char, u8> {
@@ -126,7 +123,7 @@ impl ByteTokenizer {
             }
             if let Some(tok_name) = res.hf_tokenizer.id_to_token(tok_id) {
                 if is_byte_fallback {
-                    if tok_name.len() == 6 && tok_name.starts_with("<0x") && tok_name.ends_with(">")
+                    if tok_name.len() == 6 && tok_name.starts_with("<0x") && tok_name.ends_with('>')
                     {
                         // parse hex number from tok_name
                         let hex_str = &tok_name[3..5];
@@ -143,7 +140,7 @@ impl ByteTokenizer {
                         .map(|c| {
                             char_map
                                 .get(&c)
-                                .map(|c| *c)
+                                .copied()
                                 .ok_or_else(|| anyhow!("missing char: {}", c))
                         })
                         .collect();

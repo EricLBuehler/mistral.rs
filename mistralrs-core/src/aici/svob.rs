@@ -37,6 +37,7 @@ impl Default for SimpleVob {
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl Into<Vec<u32>> for SimpleVob {
     fn into(self) -> Vec<u32> {
         self.data
@@ -121,12 +122,11 @@ impl SimpleVob {
         let src = self.as_slice();
         let numelts = self.size;
         let max_len = numelts / 32;
-        for idx in 0..max_len {
-            let d = src[idx];
+        for (idx, d) in src.iter().enumerate().take(max_len) {
             // optimize for the two common cases
-            if d == 0 {
+            if *d == 0 {
                 continue;
-            } else if d == u32::MAX {
+            } else if *d == u32::MAX {
                 for bit in 0..32 {
                     f(idx * 32 + bit);
                 }
@@ -151,14 +151,13 @@ impl SimpleVob {
         let src = self.as_slice();
         let numelts = self.size;
         let max_len = numelts / 32;
-        for idx in 0..max_len {
-            let d = src[idx];
+        for (idx, d) in src.iter().enumerate().take(max_len) {
             // optimize for the two common cases
-            if d == 0 {
+            if *d == 0 {
                 for bit in 0..32 {
                     f(idx * 32 + bit);
                 }
-            } else if d == u32::MAX {
+            } else if *d == u32::MAX {
                 continue;
             } else {
                 for bit in 0..32 {
@@ -181,14 +180,13 @@ impl SimpleVob {
         let src = self.as_slice();
         let numelts = self.size;
         let max_len = numelts / 32;
-        for idx in 0..max_len {
-            let d = src[idx];
+        for (idx, d) in src.iter().enumerate().take(max_len) {
             // optimize for the two common cases
-            if d == 0 {
+            if *d == 0 {
                 for bit in 0..32 {
                     f(false, idx * 32 + bit);
                 }
-            } else if d == u32::MAX {
+            } else if *d == u32::MAX {
                 for bit in 0..32 {
                     f(true, idx * 32 + bit);
                 }
@@ -357,7 +355,7 @@ impl<'a> Iterator for SimpleVobIter<'a> {
             bitoff = 0;
             dataoff += 1;
         }
-        return None;
+        None
     }
 }
 
