@@ -502,9 +502,8 @@
 };
 <span class="kw">use </span>lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 <span class="kw">use </span>rustc_hash::FxHashMap;
-<span class="kw">use </span>std::sync::{Arc, RwLock};
+<span class="kw">use </span>std::sync::RwLock;
 <span class="kw">use </span>std::vec;
-<span class="kw">use </span>tracing::debug;
 <span class="kw">use </span>vob::{vob, Vob};
 
 <span class="kw">type </span>StorageT = u32;
@@ -519,15 +518,14 @@
     Continue,
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>CfgStats {
+<span class="kw">struct </span>CfgStats {
     yacc_actions: usize,
     states_pushed: usize,
 }
 
 <span class="kw">pub struct </span>CfgParser {
-    grm: Arc&lt;YaccGrammar&lt;StorageT&gt;&gt;,
-    stable: Arc&lt;StateTable&lt;StorageT&gt;&gt;,
+    grm: YaccGrammar&lt;StorageT&gt;,
+    stable: StateTable&lt;StorageT&gt;,
     lexer: Lexer,
     byte_states: Vec&lt;ByteState&gt;,
     pat_idx_to_tidx: Vec&lt;TIdx&lt;u32&gt;&gt;,
@@ -626,10 +624,10 @@
         };
 
         <span class="kw">if </span><span class="bool-val">false </span>{
-            <span class="macro">debug!</span>(<span class="string">"core\n{}\n\n"</span>, sgraph.pp(<span class="kw-2">&amp;</span>grm, <span class="bool-val">true</span>));
+            <span class="macro">println!</span>(<span class="string">"core\n{}\n\n"</span>, sgraph.pp(<span class="kw-2">&amp;</span>grm, <span class="bool-val">true</span>));
             <span class="kw">for </span>pidx <span class="kw">in </span>grm.iter_pidxs() {
                 <span class="kw">let </span>prod = grm.prod(pidx);
-                <span class="macro">debug!</span>(<span class="string">"{:?} -&gt; {}"</span>, prod, prod.len());
+                <span class="macro">println!</span>(<span class="string">"{:?} -&gt; {}"</span>, prod, prod.len());
             }
         }
 
@@ -665,8 +663,8 @@
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="kw">for </span>ridx <span class="kw">in </span>grm.iter_rules() {
-            <span class="kw">let </span>rname = grm.rule_name_str(ridx);
-            <span class="kw">if </span>rname.to_uppercase() != rname {
+            <span class="kw">let </span>rule_name = grm.rule_name_str(ridx);
+            <span class="kw">if </span>rule_name.to_uppercase() != rule_name {
                 <span class="kw">continue</span>;
             }
             <span class="kw">for </span>pidx <span class="kw">in </span>grm.rule_to_prods(ridx) {
@@ -674,20 +672,20 @@
                 <span class="kw">if let </span>[Symbol::Token(tidx)] = toks {
                     <span class="kw">let </span>idx = <span class="kw-2">*</span>tidx_to_pat_idx.get(tidx).unwrap();
                     <span class="comment">// this doesn't seem very useful
-                    // friendly_pattern_names[idx] = rname.to_string();
-                    </span><span class="kw">if </span>rname == <span class="string">"SKIP" </span>{
+                    // friendly_pattern_names[idx] = rule_name.to_string();
+                    </span><span class="kw">if </span>rule_name == <span class="string">"SKIP" </span>{
                         skip_patterns.set(idx, <span class="bool-val">true</span>);
                     }
                 }
             }
         }
 
-        <span class="macro">debug!</span>(<span class="string">"patterns: {:?}"</span>, friendly_pattern_names);
+        <span class="macro">println!</span>(<span class="string">"patterns: {:?}"</span>, friendly_pattern_names);
 
         <span class="kw">let </span><span class="kw-2">mut </span>vobset = VobSet::new();
         <span class="comment">// all-zero has to be inserted first
-        </span><span class="kw">let </span>_all0 = vobset.get(<span class="kw-2">&amp;</span><span class="macro">vob!</span>[<span class="bool-val">false</span>; patterns.len()]);
-        <span class="kw">let </span>all1 = vobset.get(<span class="kw-2">&amp;</span><span class="macro">vob!</span>[<span class="bool-val">true</span>; patterns.len()]);
+        </span><span class="kw">let </span>_all0 = vobset.insert_or_get(<span class="kw-2">&amp;</span><span class="macro">vob!</span>[<span class="bool-val">false</span>; patterns.len()]);
+        <span class="kw">let </span>all1 = vobset.insert_or_get(<span class="kw-2">&amp;</span><span class="macro">vob!</span>[<span class="bool-val">true</span>; patterns.len()]);
 
         <span class="comment">// TIME: 27ms
         </span><span class="kw">let </span>dfa = Lexer::from(patterns, <span class="kw-2">&amp;mut </span>vobset);
@@ -720,13 +718,13 @@
                     }
                 }
 
-                vobset.get(<span class="kw-2">&amp;</span>r)
+                vobset.insert_or_get(<span class="kw-2">&amp;</span>r)
             })
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="kw">let </span><span class="kw-2">mut </span>cfg = CfgParser {
-            grm: grm.into(),
-            stable: stable.into(),
+            grm,
+            stable,
             lexer: dfa,
             byte_states: <span class="macro">vec!</span>[byte_state],
             pat_idx_to_tidx,
@@ -747,7 +745,7 @@
         <span class="comment">// compute viable set of initial tokens
         </span>cfg.byte_states[<span class="number">0</span>].viable = cfg.viable_vobidx(cfg_start);
         <span class="kw">if </span>LOG_PARSER {
-            <span class="macro">debug!</span>(
+            <span class="macro">println!</span>(
                 <span class="string">"initial viable: {:?}"</span>,
                 cfg.vobset.resolve(cfg.byte_states[<span class="number">0</span>].viable)
             );
@@ -778,7 +776,7 @@
             <span class="kw">let </span>act = <span class="self">self</span>.stable.action(stidx, lexeme);
 
             <span class="kw">if </span>LOG_PARSER {
-                <span class="macro">debug!</span>(
+                <span class="macro">println!</span>(
                     <span class="string">"parse: {:?} {:?} -&gt; {:?}"</span>,
                     pstack,
                     <span class="self">self</span>.friendly_token_name(lexeme),
@@ -811,10 +809,10 @@
 
     <span class="attr">#[allow(dead_code)]
     </span><span class="kw">fn </span>print_viable(<span class="kw-2">&amp;</span><span class="self">self</span>, lbl: <span class="kw-2">&amp;</span>str, vob: <span class="kw-2">&amp;</span>Vob) {
-        <span class="macro">debug!</span>(<span class="string">"viable tokens {}:"</span>, lbl);
+        <span class="macro">println!</span>(<span class="string">"viable tokens {}:"</span>, lbl);
         <span class="kw">for </span>(idx, b) <span class="kw">in </span>vob.iter().enumerate() {
             <span class="kw">if </span>b {
-                <span class="macro">debug!</span>(<span class="string">"  {}: {}"</span>, idx, <span class="self">self</span>.friendly_pattern_names[idx]);
+                <span class="macro">println!</span>(<span class="string">"  {}: {}"</span>, idx, <span class="self">self</span>.friendly_pattern_names[idx]);
             }
         }
     }
@@ -843,7 +841,7 @@
             </span><span class="prelude-val">Some</span>((ls, <span class="prelude-val">Some</span>(pat_idx))) =&gt; (<span class="string">"parse"</span>, <span class="self">self</span>.run_parser(pat_idx, <span class="kw-2">&amp;</span>top, ls)),
         };
         <span class="kw">if </span>LOG_PARSER {
-            <span class="macro">debug!</span>(
+            <span class="macro">println!</span>(
                 <span class="string">" -&gt; {} {}"</span>,
                 info,
                 <span class="kw">if </span>res.is_none() { <span class="string">"error" </span>} <span class="kw">else </span>{ <span class="string">"ok" </span>}
@@ -870,14 +868,16 @@
             <span class="kw">let </span><span class="kw-2">mut </span>s = <span class="self">self</span>.stats.write().unwrap();
             s.yacc_actions += <span class="number">1</span>;
         }
-
+        <span class="kw">if </span>LOG_PARSER {
+            <span class="macro">println!</span>();
+        }
         <span class="kw">let </span>pstack = <span class="self">self</span>.pstack_for(top);
         <span class="kw">if </span><span class="self">self</span>.skip_patterns[pat_idx] {
             <span class="kw">let </span>stidx = <span class="kw-2">*</span>pstack.last().unwrap();
             <span class="kw">let </span>viable = <span class="self">self</span>.viable_vobidx(stidx);
             <span class="comment">//self.print_viable("reset", &amp;viable);
             </span><span class="kw">if </span>LOG_PARSER {
-                <span class="macro">debug!</span>(<span class="string">"parse: {:?} skip"</span>, pstack);
+                <span class="macro">println!</span>(<span class="string">"parse: {:?} skip"</span>, pstack);
             }
             <span class="comment">// reset viable states - they have been narrowed down to SKIP
             </span><span class="self">self</span>.mk_byte_state(ls, top.parse_stack_idx, viable)

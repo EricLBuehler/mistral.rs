@@ -176,15 +176,19 @@
 <a href="#176" id="176">176</a>
 <a href="#177" id="177">177</a>
 <a href="#178" id="178">178</a>
-</pre></div><pre class="rust"><code><span class="comment">// Originally from https://github.com/microsoft/aici/blob/64f0b551dee49e320e9b3b92289f3d6f2e888276/aicirt/src/bintokens.rs
-// Licensed under the MIT license
-
-</span><span class="kw">use </span><span class="kw">crate</span>::aici::{bytes::TokRxInfo, toktree::TokTrie};
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::bytes::TokRxInfo;
 <span class="kw">use </span>anyhow::{anyhow, bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::collections::{BTreeMap, HashMap};
 <span class="kw">use </span>tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-<span class="kw">use </span>tracing::{error, warn};
+<span class="kw">use </span>tracing::warn;
+
+<span class="kw">use </span><span class="kw">super</span>::toktree::TokTrie;
 
 <span class="attr">#[derive(Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>ByteTokenizer {
@@ -195,9 +199,13 @@
     token_bytes: Vec&lt;Vec&lt;u8&gt;&gt;,
     <span class="kw">pub </span>special: BTreeMap&lt;String, u32&gt;,
 }
-<span class="kw">fn </span>is_self_mapped(c: char) -&gt; bool {
+
+<span class="comment">// useful when debugging this: https://www.cogsci.ed.ac.uk/~richard/utf-8.cgi
+
+</span><span class="kw">const fn </span>is_self_mapped(c: char) -&gt; bool {
     <span class="macro">matches!</span>(c, <span class="string">'!'</span>..=<span class="string">'~' </span>| <span class="string">'\u{00A1}'</span>..=<span class="string">'\u{00AC}' </span>| <span class="string">'\u{00AE}'</span>..=<span class="string">'\u{00FF}'</span>)
 }
+
 <span class="kw">fn </span>build_char_map() -&gt; HashMap&lt;char, u8&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>res = HashMap::default();
     <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="number">0x100u32</span>;
@@ -266,8 +274,7 @@
             <span class="macro">bail!</span>(<span class="string">"can't determine decoder type: {:?}"</span>, hft.get_decoder());
         }
 
-        <span class="attr">#[allow(clippy::cast_possible_truncation)]
-        </span><span class="kw">let </span>vocab_size = hft.get_vocab_size(<span class="bool-val">true</span>) <span class="kw">as </span>u32;
+        <span class="kw">let </span>vocab_size = hft.get_vocab_size(<span class="bool-val">true</span>) <span class="kw">as </span>u32;
         <span class="kw">let </span>added = hft.get_added_tokens_decoder();
 
         <span class="kw">let </span><span class="kw-2">mut </span>res = ByteTokenizer {
@@ -294,6 +301,9 @@
         <span class="kw">let </span>char_map = build_char_map();
 
         <span class="kw">for </span>tok_id <span class="kw">in </span><span class="number">0</span>..vocab_size {
+            <span class="kw">if </span>added.contains_key(<span class="kw-2">&amp;</span>tok_id) {
+                <span class="kw">continue</span>;
+            }
             <span class="kw">if let </span><span class="prelude-val">Some</span>(tok_name) = res.hf_tokenizer.id_to_token(tok_id) {
                 <span class="kw">if </span>is_byte_fallback {
                     <span class="kw">if </span>tok_name.len() == <span class="number">6 </span>&amp;&amp; tok_name.starts_with(<span class="string">"&lt;0x"</span>) &amp;&amp; tok_name.ends_with(<span class="string">'&gt;'</span>)
@@ -320,7 +330,7 @@
                     <span class="kw">let </span>bytes = <span class="kw">match </span>bytes {
                         <span class="prelude-val">Ok</span>(b) =&gt; b,
                         <span class="prelude-val">Err</span>(e) =&gt; {
-                            <span class="macro">error!</span>(<span class="string">"error: {} for {:?}"</span>, e, tok_name);
+                            <span class="macro">println!</span>(<span class="string">"error: {} for {:?}"</span>, e, tok_name);
                             <span class="kw">continue</span>;
                         }
                     };

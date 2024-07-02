@@ -346,10 +346,6 @@
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
 <a href="#348" id="348">348</a>
-<a href="#349" id="349">349</a>
-<a href="#350" id="350">350</a>
-<a href="#351" id="351">351</a>
-<a href="#352" id="352">352</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>regex_automata::{
     dfa::{dense, Automaton},
     util::syntax,
@@ -360,7 +356,6 @@
 
 <span class="kw">pub type </span>PatIdx = usize;
 <span class="kw">pub type </span>StateID = regex_automata::util::primitives::StateID;
-<span class="kw">use </span>tracing::debug;
 
 <span class="kw">const </span>LOG_LEXER: bool = <span class="bool-val">false</span>;
 
@@ -388,8 +383,7 @@
 }
 
 <span class="kw">impl </span>VobIdx {
-    <span class="attr">#[allow(clippy::cast_possible_truncation)]
-    </span><span class="kw">pub fn </span>new(v: usize) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(v: usize) -&gt; <span class="self">Self </span>{
         VobIdx { v: v <span class="kw">as </span>u32 }
     }
 
@@ -406,8 +400,7 @@
     </span>}
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub struct </span>VobSet {
+<span class="kw">pub struct </span>VobSet {
     vobs: Vec&lt;Vob&gt;,
     by_vob: FxHashMap&lt;Vob, VobIdx&gt;,
     non_empty: Vob,
@@ -422,7 +415,7 @@
         }
     }
 
-    <span class="kw">pub fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vob: <span class="kw-2">&amp;</span>Vob) -&gt; VobIdx {
+    <span class="kw">pub fn </span>insert_or_get(<span class="kw-2">&amp;mut </span><span class="self">self</span>, vob: <span class="kw-2">&amp;</span>Vob) -&gt; VobIdx {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(idx) = <span class="self">self</span>.by_vob.get(vob) {
             <span class="kw">return </span><span class="kw-2">*</span>idx;
         }
@@ -460,7 +453,7 @@
                     }
                 }
             }
-            <span class="macro">debug!</span>(
+            <span class="macro">println!</span>(
                 <span class="string">"vob set: {} VOBs, {} nonempty"</span>,
                 <span class="self">self</span>.vobs.len(),
                 <span class="self">self</span>.non_empty.len()
@@ -469,8 +462,7 @@
     }
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub struct </span>Lexer {
+<span class="kw">pub struct </span>Lexer {
     dfa: dense::DFA&lt;Vec&lt;u32&gt;&gt;,
     initial: LexerState,
     vobidx_by_state_off: Vec&lt;VobIdx&gt;,
@@ -489,14 +481,14 @@
             .build_many(<span class="kw-2">&amp;</span>patterns)
             .unwrap();
 
-        <span class="macro">debug!</span>(
+        <span class="macro">println!</span>(
             <span class="string">"dfa: {} bytes, {} patterns"</span>,
             dfa.memory_usage(),
             patterns.len(),
         );
         <span class="kw">if </span><span class="bool-val">false </span>{
             <span class="kw">for </span>p <span class="kw">in </span><span class="kw-2">&amp;</span>patterns {
-                <span class="macro">debug!</span>(<span class="string">"  {}"</span>, p)
+                <span class="macro">println!</span>(<span class="string">"  {}"</span>, p)
             }
         }
 
@@ -530,7 +522,7 @@
                     <span class="kw">let </span>idx = dfa.match_pattern(s2, idx).as_usize();
                     v.set(idx, <span class="bool-val">true</span>);
                     <span class="kw">if </span>LOG_LEXER {
-                        <span class="macro">debug!</span>(<span class="string">"  match: {:?} {}"</span>, <span class="kw-2">*</span>s, patterns[idx])
+                        <span class="macro">println!</span>(<span class="string">"  match: {:?} {}"</span>, <span class="kw-2">*</span>s, patterns[idx])
                     }
                 }
             }
@@ -555,7 +547,7 @@
             }
 
             <span class="kw">if </span>LOG_LEXER {
-                <span class="macro">debug!</span>(<span class="string">"iter {} {}"</span>, num_set, states.len());
+                <span class="macro">println!</span>(<span class="string">"iter {} {}"</span>, num_set, states.len());
             }
             <span class="kw">if </span>num_set == <span class="number">0 </span>{
                 <span class="kw">break</span>;
@@ -569,10 +561,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>vobidx_by_state_off =
             <span class="macro">vec!</span>[VobIdx::all_zero(); <span class="number">1 </span>+ (states_idx.iter().max().unwrap() &gt;&gt; shift)];
         <span class="kw">for </span>(k, v) <span class="kw">in </span>reachable_patterns.iter() {
-            vobidx_by_state_off[k.as_usize() &gt;&gt; shift] = vobset.get(v);
+            vobidx_by_state_off[k.as_usize() &gt;&gt; shift] = vobset.insert_or_get(v);
         }
 
-        <span class="macro">debug!</span>(<span class="string">"initial: {:?}; {} states"</span>, initial, states.len());
+        <span class="macro">println!</span>(<span class="string">"initial: {:?}; {} states"</span>, initial, states.len());
 
         <span class="kw">let </span><span class="kw-2">mut </span>lex = Lexer {
             dfa,
@@ -585,11 +577,11 @@
         <span class="kw">if </span>LOG_LEXER {
             <span class="kw">for </span>s <span class="kw">in </span><span class="kw-2">&amp;</span>states {
                 <span class="kw">if </span>lex.is_dead(<span class="kw-2">*</span>s) {
-                    <span class="macro">debug!</span>(<span class="string">"dead: {:?} {}"</span>, s, lex.dfa.is_dead_state(<span class="kw-2">*</span>s));
+                    <span class="macro">println!</span>(<span class="string">"dead: {:?} {}"</span>, s, lex.dfa.is_dead_state(<span class="kw-2">*</span>s));
                 }
             }
 
-            <span class="macro">debug!</span>(<span class="string">"reachable: {:#?}"</span>, reachable_patterns);
+            <span class="macro">println!</span>(<span class="string">"reachable: {:#?}"</span>, reachable_patterns);
         }
 
         lex
@@ -631,7 +623,7 @@
             .unwrap();
 
         <span class="kw">if </span>LOG_LEXER {
-            <span class="macro">debug!</span>(<span class="string">"token: {}"</span>, pat_idx);
+            <span class="macro">println!</span>(<span class="string">"token: {}"</span>, pat_idx);
         }
 
         <span class="prelude-val">Some</span>(pat_idx)
@@ -643,7 +635,7 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(byte) = byte {
             <span class="kw">let </span>state = dfa.next_state(prev, byte);
             <span class="kw">if </span>LOG_LEXER {
-                <span class="macro">debug!</span>(
+                <span class="macro">println!</span>(
                     <span class="string">"lex: {:?} -{:?}-&gt; {:?} d={}"</span>,
                     prev,
                     byte <span class="kw">as </span>char,
@@ -660,7 +652,7 @@
                 </span>} <span class="kw">else </span>{
                     <span class="kw">let </span>state = dfa.next_state(<span class="self">self</span>.initial.state, byte);
                     <span class="kw">if </span>LOG_LEXER {
-                        <span class="macro">debug!</span>(<span class="string">"lex0: {:?} -{:?}-&gt; {:?}"</span>, <span class="self">self</span>.initial, byte <span class="kw">as </span>char, state);
+                        <span class="macro">println!</span>(<span class="string">"lex0: {:?} -{:?}-&gt; {:?}"</span>, <span class="self">self</span>.initial, byte <span class="kw">as </span>char, state);
                     }
                     <span class="prelude-val">Some</span>((<span class="self">self</span>.mk_state(state), tok))
                 }

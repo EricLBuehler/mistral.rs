@@ -582,10 +582,11 @@
 <a href="#582" id="582">582</a>
 <a href="#583" id="583">583</a>
 <a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader,
+    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -749,6 +750,7 @@
             NormalLoaderType::Phi3 =&gt; Box::new(Phi3Loader),
             NormalLoaderType::Qwen2 =&gt; Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 =&gt; Box::new(Gemma2Loader),
+            NormalLoaderType::Starcoder2 =&gt; Box::new(Starcoder2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,

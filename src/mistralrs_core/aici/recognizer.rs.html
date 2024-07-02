@@ -87,16 +87,23 @@
 <a href="#87" id="87">87</a>
 <a href="#88" id="88">88</a>
 <a href="#89" id="89">89</a>
+<a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::toktree::{Recognizer, SpecialToken};
 <span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">pub trait </span>FunctionalRecognizer&lt;S: Copy&gt; {
     <span class="doccomment">/// Initial state
-    </span><span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;S, anyhow::Error&gt;;
-    <span class="doccomment">/// Extend the recognizer with given byte.
-    </span><span class="kw">fn </span>append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: S, byte: u8) -&gt; S;
-    <span class="doccomment">/// Check if given byte is allowed in given state.
-    </span><span class="kw">fn </span>byte_allowed(<span class="kw-2">&amp;</span><span class="self">self</span>, state: S, byte: u8) -&gt; bool;
+    </span><span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; S;
+    <span class="doccomment">/// Extend the recognizer with given byte if allowed.
+    </span><span class="kw">fn </span>try_append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: S, byte: u8) -&gt; <span class="prelude-ty">Option</span>&lt;S&gt;;
     <span class="doccomment">/// Check if given special token is allowed in given state.
     </span><span class="kw">fn </span>special_allowed(<span class="kw-2">&amp;</span><span class="self">self</span>, state: S, tok: SpecialToken) -&gt; bool;
 }
@@ -109,20 +116,26 @@
 }
 
 <span class="kw">impl</span>&lt;S: Copy, R: FunctionalRecognizer&lt;S&gt;&gt; StackRecognizer&lt;S, R&gt; {
-    <span class="kw">pub fn </span>from(rec: R) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>stack = <span class="macro">vec!</span>[rec.initial()<span class="question-mark">?</span>; <span class="number">130</span>];
-        <span class="kw">let </span>rec = StackRecognizer {
+    <span class="kw">pub fn </span>from(rec: R) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>stack = <span class="macro">vec!</span>[rec.initial(); <span class="number">300</span>];
+        StackRecognizer {
             rec,
             stack,
             stack_ptr: <span class="number">0</span>,
-        };
-        <span class="prelude-val">Ok</span>(rec)
+        }
     }
 
-    <span class="kw">pub fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
+    <span class="kw">pub fn </span>reset(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
         <span class="self">self</span>.stack_ptr = <span class="number">0</span>;
-        <span class="self">self</span>.stack[<span class="number">0</span>] = <span class="self">self</span>.rec.initial()<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(())
+        <span class="self">self</span>.stack[<span class="number">0</span>] = <span class="self">self</span>.rec.initial();
+    }
+
+    <span class="kw">pub fn </span>recognizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>R {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.rec
+    }
+
+    <span class="kw">pub fn </span>recognizer_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>R {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.rec
     }
 }
 
@@ -136,25 +149,13 @@
 
 <span class="kw">impl</span>&lt;S: Copy + Debug, R: FunctionalRecognizer&lt;S&gt;&gt; Recognizer <span class="kw">for </span>StackRecognizer&lt;S, R&gt; {
     <span class="attr">#[inline(always)]
-    </span><span class="kw">fn </span>push_byte(<span class="kw-2">&amp;mut </span><span class="self">self</span>, byte: u8) {
-        <span class="kw">let </span>state = <span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr];
-        <span class="kw">let </span>state = <span class="self">self</span>.rec.append(state, byte);
-        <span class="self">self</span>.stack_ptr += <span class="number">1</span>;
-        <span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr] = state;
-    }
-
-    <span class="attr">#[inline(always)]
     </span><span class="kw">fn </span>pop_bytes(<span class="kw-2">&amp;mut </span><span class="self">self</span>, num: usize) {
         <span class="self">self</span>.stack_ptr -= num;
     }
 
-    <span class="attr">#[inline(always)]
-    </span><span class="kw">fn </span>byte_allowed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, byte: u8) -&gt; bool {
-        <span class="self">self</span>.rec.byte_allowed(<span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr], byte)
-    }
-
     <span class="kw">fn </span>trie_finished(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="macro">assert!</span>(<span class="self">self</span>.stack_ptr == <span class="number">0</span>);
+        <span class="comment">// println!("{:?}", &amp;self.stack[0..=self.stack_ptr]);
+        </span><span class="macro">assert!</span>(<span class="self">self</span>.stack_ptr == <span class="number">0</span>);
     }
 
     <span class="kw">fn </span>collapse(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
@@ -168,12 +169,29 @@
 
     <span class="attr">#[inline(always)]
     </span><span class="kw">fn </span>try_push_byte(<span class="kw-2">&amp;mut </span><span class="self">self</span>, byte: u8) -&gt; bool {
-        <span class="kw">if </span><span class="self">self</span>.rec.byte_allowed(<span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr], byte) {
-            <span class="self">self</span>.push_byte(byte);
-            <span class="bool-val">true
-        </span>} <span class="kw">else </span>{
-            <span class="bool-val">false
-        </span>}
+        <span class="kw">match </span><span class="self">self</span>.rec.try_append(<span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr], byte) {
+            <span class="prelude-val">Some</span>(state) =&gt; {
+                <span class="self">self</span>.stack_ptr += <span class="number">1</span>;
+                <span class="self">self</span>.stack[<span class="self">self</span>.stack_ptr] = state;
+                <span class="bool-val">true
+            </span>}
+            <span class="prelude-val">None </span>=&gt; <span class="bool-val">false</span>,
+        }
     }
+}
+
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">pub struct </span>AnythingGoes {}
+
+<span class="kw">impl </span>FunctionalRecognizer&lt;()&gt; <span class="kw">for </span>AnythingGoes {
+    <span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
+
+    <span class="kw">fn </span>try_append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: (), _byte: u8) -&gt; <span class="prelude-ty">Option</span>&lt;()&gt; {
+        <span class="prelude-val">Some</span>(state)
+    }
+
+    <span class="kw">fn </span>special_allowed(<span class="kw-2">&amp;</span><span class="self">self</span>, _state: (), _tok: SpecialToken) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
 }
 </code></pre></div></section></main></body></html>

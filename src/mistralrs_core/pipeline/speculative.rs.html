@@ -575,6 +575,8 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -1090,13 +1092,15 @@
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(rx.as_mut(), accepted.token);
+                        .append_token(rx.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
                 }
                 SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
                     <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(cfg.as_mut(), accepted.token);
+                        .append_token(cfg.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
                 }
                 SequenceRecognizer::None =&gt; {}
             }

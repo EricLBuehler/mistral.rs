@@ -64,7 +64,62 @@
 <a href="#64" id="64">64</a>
 <a href="#65" id="65">65</a>
 <a href="#66" id="66">66</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::aici::{recognizer::FunctionalRecognizer, toktree::SpecialToken};
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a>
+<a href="#76" id="76">76</a>
+<a href="#77" id="77">77</a>
+<a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
+<a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
+<a href="#87" id="87">87</a>
+<a href="#88" id="88">88</a>
+<a href="#89" id="89">89</a>
+<a href="#90" id="90">90</a>
+<a href="#91" id="91">91</a>
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
+
+<span class="kw">use </span><span class="kw">crate</span>::aici::{
+    recognizer::{FunctionalRecognizer, StackRecognizer},
+    toktree::SpecialToken,
+};
+<span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>regex_automata::{
     dfa::{dense, Automaton},
     util::{primitives::StateID, syntax},
@@ -75,50 +130,93 @@
 <span class="attr">#[derive(Clone)]
 </span><span class="kw">pub struct </span>RecRx {
     dfa: dense::DFA&lt;Vec&lt;u32&gt;&gt;,
+    info: String,
 }
 
+<span class="kw">pub type </span>RxStackRecognizer = StackRecognizer&lt;StateID, RecRx&gt;;
+
 <span class="kw">impl </span>RecRx {
-    <span class="kw">pub fn </span>from_rx(rx: <span class="kw-2">&amp;</span>str) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>from_rx(rx: <span class="kw-2">&amp;</span>str, size_limit: <span class="prelude-ty">Option</span>&lt;usize&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>rx = <span class="kw">if </span>rx.ends_with(<span class="string">'$'</span>) {
             rx.to_string()
         } <span class="kw">else </span>{
             rx.to_string() + <span class="string">"$"
         </span>};
+        <span class="kw">let </span>rx = <span class="kw">if let </span><span class="prelude-val">Some</span>(stripped) = rx.strip_prefix(<span class="string">'^'</span>) {
+            stripped.to_string()
+        } <span class="kw">else </span>{
+            rx
+        };
+        <span class="comment">// default to 16MB - it takes about 1s to build
+        </span><span class="kw">let </span>size_limit = size_limit.unwrap_or(<span class="number">16 </span>&lt;&lt; <span class="number">20</span>);
+        <span class="kw">let </span>t0 = std::time::Instant::now();
+        <span class="kw">let </span>cfg = dense::Config::new()
+            .start_kind(regex_automata::dfa::StartKind::Anchored)
+            .dfa_size_limit(<span class="prelude-val">Some</span>(size_limit))
+            .determinize_size_limit(<span class="prelude-val">Some</span>(size_limit));
         <span class="kw">let </span>dfa = dense::Builder::new()
-            .configure(dense::Config::new().start_kind(regex_automata::dfa::StartKind::Anchored))
+            .configure(cfg)
             .syntax(syntax::Config::new().unicode(<span class="bool-val">false</span>).utf8(<span class="bool-val">false</span>))
-            .build(<span class="kw-2">&amp;</span>rx)
-            .map_err(|e| anyhow::Error::msg(<span class="macro">format!</span>(<span class="string">"Could not compile regex `{rx}` - {e:?}"</span>)))<span class="question-mark">?</span>;
+            .build(<span class="kw-2">&amp;</span>rx);
+        <span class="kw">let </span>dfa = <span class="kw">match </span>dfa {
+            <span class="prelude-val">Ok</span>(dfa) =&gt; dfa,
+            <span class="prelude-val">Err</span>(e) =&gt; {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(e) = e.source() {
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(e) = e.source() {
+                        <span class="macro">bail!</span>(<span class="string">"error building dfa(2): {}"</span>, e)
+                    } <span class="kw">else </span>{
+                        <span class="macro">bail!</span>(<span class="string">"error building dfa(1): {}"</span>, e)
+                    }
+                } <span class="kw">else </span>{
+                    <span class="macro">bail!</span>(<span class="string">"error building dfa(0): {}"</span>, e)
+                }
+            }
+        };
+        <span class="kw">let </span>time = t0.elapsed();
+        <span class="kw">let </span>mb_per_s = dfa.memory_usage() <span class="kw">as </span>f64 / time.as_secs_f64() / <span class="number">1024.0 </span>/ <span class="number">1024.0</span>;
+        <span class="kw">let </span>info = <span class="macro">format!</span>(
+            <span class="string">"dfa: {} bytes; time {:?}; {:.3} MB/s"</span>,
+            dfa.memory_usage(),
+            time,
+            mb_per_s
+        );
 
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ dfa })
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = dfa.start_state(<span class="kw-2">&amp;</span>anchored_start()) {
+            <span class="macro">bail!</span>(<span class="string">"DFA has no start state; {}"</span>, e)
+        }
+
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ dfa, info })
+    }
+
+    <span class="kw">pub fn </span>info(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.info
+    }
+
+    <span class="attr">#[allow(clippy::wrong_self_convention)]
+    </span><span class="kw">pub fn </span>to_stack_recognizer(<span class="self">self</span>) -&gt; RxStackRecognizer {
+        StackRecognizer::from(<span class="self">self</span>)
     }
 }
 
+<span class="kw">fn </span>anchored_start() -&gt; regex_automata::util::start::Config {
+    regex_automata::util::start::Config::new().anchored(regex_automata::Anchored::Yes)
+}
+
 <span class="kw">impl </span>FunctionalRecognizer&lt;RecRxState&gt; <span class="kw">for </span>RecRx {
-    <span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; anyhow::Result&lt;RecRxState&gt; {
-        <span class="kw">let </span>state = <span class="self">self
-            </span>.dfa
-            .universal_start_state(regex_automata::Anchored::Yes);
+    <span class="kw">fn </span>initial(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; RecRxState {
+        <span class="self">self</span>.dfa
+            .start_state(<span class="kw-2">&amp;</span>anchored_start())
+            .expect(<span class="string">"dfa has no start state"</span>)
+    }
 
-        <span class="kw">match </span>state {
-            <span class="prelude-val">Some</span>(state) =&gt; <span class="prelude-val">Ok</span>(state),
-            <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>err = anyhow::Error::msg(
-                    <span class="string">"dfa has no universal start state; make sure it doesn't match empty string"</span>,
-                );
-                <span class="prelude-val">Err</span>(err)
-            }
+    <span class="attr">#[inline(always)]
+    </span><span class="kw">fn </span>try_append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: RecRxState, byte: u8) -&gt; <span class="prelude-ty">Option</span>&lt;RecRxState&gt; {
+        <span class="kw">let </span>next = <span class="self">self</span>.dfa.next_state(state, byte);
+        <span class="kw">if </span><span class="self">self</span>.dfa.is_dead_state(next) {
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            <span class="prelude-val">Some</span>(next)
         }
-    }
-
-    <span class="attr">#[inline(always)]
-    </span><span class="kw">fn </span>append(<span class="kw-2">&amp;</span><span class="self">self</span>, state: RecRxState, byte: u8) -&gt; RecRxState {
-        <span class="self">self</span>.dfa.next_state(state, byte)
-    }
-
-    <span class="attr">#[inline(always)]
-    </span><span class="kw">fn </span>byte_allowed(<span class="kw-2">&amp;</span><span class="self">self</span>, state: RecRxState, byte: u8) -&gt; bool {
-        !<span class="self">self</span>.dfa.is_dead_state(<span class="self">self</span>.dfa.next_state(state, byte))
     }
 
     <span class="attr">#[inline(always)]

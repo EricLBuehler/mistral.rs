@@ -14,13 +14,51 @@
 <a href="#14" id="14">14</a>
 <a href="#15" id="15">15</a>
 <a href="#16" id="16">16</a>
-</pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">type </span>TokenId = u32;
+<a href="#17" id="17">17</a>
+<a href="#18" id="18">18</a>
+<a href="#19" id="19">19</a>
+<a href="#20" id="20">20</a>
+<a href="#21" id="21">21</a>
+<a href="#22" id="22">22</a>
+<a href="#23" id="23">23</a>
+<a href="#24" id="24">24</a>
+<a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
+<a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::mem::size_of;
 
-<span class="attr">#[repr(C)]
-#[derive(Clone, PartialEq, Eq, Debug)]
+<span class="kw">use </span>bytemuck_derive::{Pod, Zeroable};
+
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">type </span>TokenId = u32;
+
+<span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroable, Pod)]
+#[repr(C)]
 </span><span class="kw">pub struct </span>TokRxInfo {
     <span class="kw">pub </span>vocab_size: u32,
     <span class="kw">pub </span>tok_eos: TokenId,
+}
+
+<span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroable, Pod)]
+#[repr(C)]
+</span><span class="kw">pub struct </span>U32Pair(<span class="kw">pub </span>u32, <span class="kw">pub </span>u32);
+
+<span class="kw">pub fn </span>vec_from_bytes&lt;T: bytemuck::Pod&gt;(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; Vec&lt;T&gt; {
+    <span class="kw">if </span>bytes.len() % size_of::&lt;T&gt;() != <span class="number">0 </span>{
+        <span class="macro">panic!</span>(
+            <span class="string">"vecT: got {} bytes, needed multiple of {}"</span>,
+            bytes.len(),
+            size_of::&lt;T&gt;()
+        );
+    }
+    bytemuck::cast_slice(bytes).to_vec()
 }
 
 <span class="kw">pub fn </span>to_hex_string(bytes: <span class="kw-2">&amp;</span>[u8]) -&gt; String {

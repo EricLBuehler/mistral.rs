@@ -810,7 +810,7 @@
     <span class="kw">fn </span>build_sequence_recognizer(constraint: <span class="kw-2">&amp;</span>Constraint) -&gt; anyhow::Result&lt;SequenceRecognizer&gt; {
         <span class="kw">let </span>recognizer = <span class="kw">match </span>constraint {
             Constraint::Regex(rx) =&gt; {
-                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)<span class="question-mark">?</span>)<span class="question-mark">?</span>.into())
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, <span class="prelude-val">None</span>)<span class="question-mark">?</span>).into())
             }
             Constraint::Yacc(cfg) =&gt; SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)<span class="question-mark">?</span>.into()),
             Constraint::None =&gt; SequenceRecognizer::None,
