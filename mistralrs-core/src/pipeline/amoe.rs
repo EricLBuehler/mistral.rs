@@ -138,7 +138,7 @@ impl AnyMoePipeline {
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
         let inputs = AnyMoeTrainingInputs::from_csv(path)?;
-        info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
+        info!("Loaded pretraining dataset of {} samples.", inputs.len());
         match this.amoe_pre_train(
             inputs,
             (prefix, mlp),
@@ -327,7 +327,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             .collect::<candle_core::Result<Vec<_>>>()?;
 
         let mut rng = thread_rng();
-        let mut samples = inputs.0;
+        let mut samples = inputs.into_inner();
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);

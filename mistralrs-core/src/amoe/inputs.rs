@@ -16,7 +16,10 @@ pub struct AnyMoeTrainingInputRow {
     pub image_urls: Option<Vec<String>>,
 }
 
-pub struct AnyMoeTrainingInputs(pub Vec<AnyMoeTrainingInputRow>);
+#[derive(Deserialize, Debug)]
+pub struct AnyMoeTrainingInputs {
+    rows: Vec<AnyMoeTrainingInputRow>,
+}
 
 impl AnyMoeTrainingInputs {
     pub fn from_csv<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
@@ -27,6 +30,16 @@ impl AnyMoeTrainingInputs {
             let row: AnyMoeTrainingInputRow = result?;
             rows.push(row);
         }
-        Ok(Self(rows))
+        Ok(Self { rows })
+    }
+    pub fn from_json<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
+        let file = File::open(file)?;
+        Ok(serde_json::from_reader(file)?)
+    }
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+    pub fn into_inner(self) -> Vec<AnyMoeTrainingInputRow> {
+        self.rows
     }
 }
