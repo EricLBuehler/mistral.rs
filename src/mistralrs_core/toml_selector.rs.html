@@ -821,7 +821,7 @@
     </span>config: AnyMoeConfig,
 
     <span class="doccomment">/// Base model
-    </span>dataset_csv: String,
+    </span>dataset_json: String,
 
     <span class="doccomment">/// Prefix of the mlp key (the part before the layer number: "a.b.c" in "a.b.c.0.mlp")
     </span>prefix: String,
@@ -1134,7 +1134,7 @@
         };
         <span class="kw">let </span>loader = <span class="kw">if let </span><span class="prelude-val">Some</span>(AnyMoeTomlModelSelected {
             config,
-            dataset_csv,
+            dataset_json,
             prefix,
             mlp,
             model_ids,
@@ -1144,7 +1144,7 @@
             Box::new(AnyMoeLoader {
                 target: loader,
                 config,
-                path: dataset_csv,
+                path: dataset_json,
                 prefix,
                 mlp,
                 model_ids,

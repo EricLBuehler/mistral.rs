@@ -163,6 +163,8 @@
 <a href="#163" id="163">163</a>
 <a href="#164" id="164">164</a>
 <a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
 </span><span class="kw">use </span>std::{collections::HashMap, path::PathBuf, thread::JoinHandle};
@@ -274,14 +276,16 @@
             .into_iter()
             .map(|(name, <span class="kw">_</span>)| name)
             .filter(|x| predicate(x.to_string()));
-        <span class="kw">let </span>iter = <span class="self">self</span>.get_name_key_pairs(names_only);
+        <span class="kw">let </span>iter = <span class="self">self</span>.get_name_key_pairs(names_only).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="comment">// Take the filtered list of tensors to load, store with derived lookup key:
         </span><span class="kw">let </span><span class="kw-2">mut </span>loaded_tensors = HashMap::new();
-        <span class="kw">for </span>(load_name, key_name) <span class="kw">in </span>iter.with_progress(is_silent) {
-            <span class="kw">let </span>tensor = tensors.load(<span class="kw-2">&amp;</span>load_name, device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+        <span class="kw">if </span>!iter.is_empty() {
+            <span class="kw">for </span>(load_name, key_name) <span class="kw">in </span>iter.into_iter().with_progress(is_silent) {
+                <span class="kw">let </span>tensor = tensors.load(<span class="kw-2">&amp;</span>load_name, device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
 
-            loaded_tensors.insert(key_name, tensor);
+                loaded_tensors.insert(key_name, tensor);
+            }
         }
 
         <span class="prelude-val">Ok</span>(loaded_tensors)
