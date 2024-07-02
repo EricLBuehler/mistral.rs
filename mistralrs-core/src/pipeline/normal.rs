@@ -453,8 +453,8 @@ impl Pipeline for NormalPipeline {
 }
 
 impl AnyMoePipelineMixin for NormalPipeline {
-    fn amoe_done_training(&mut self) {
-        self.model.done_training();
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+        self.model.finish_training(gate_model_id)
     }
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         self.model.get_vars()

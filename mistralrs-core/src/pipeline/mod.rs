@@ -498,7 +498,7 @@ pub trait AnyMoePipelineMixin {
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn amoe_done_training(&mut self) {
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
         unreachable!()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {

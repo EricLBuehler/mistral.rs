@@ -271,6 +271,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             batch_size,
             expert_type,
             gate_model_id,
+            training,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -290,7 +291,11 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             layers,
             expert_type,
             silent,
-            gate_model_id,
+            if !training {
+                gate_model_id.clone()
+            } else {
+                None
+            },
         )?;
         let layer_vars = target.amoe_layer_vars();
 
@@ -449,7 +454,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             }
         }
 
-        target.amoe_done_training();
+        target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
         Ok(Some(AnyMoeTrainingResult {
