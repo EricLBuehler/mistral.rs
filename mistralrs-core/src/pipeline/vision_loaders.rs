@@ -34,8 +34,8 @@ pub trait VisionModelLoader {
     ) -> Arc<dyn Processor + Send + Sync>;
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the vision model as.
 pub enum VisionLoaderType {
     #[serde(rename = "phi3v")]
