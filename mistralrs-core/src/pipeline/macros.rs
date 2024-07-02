@@ -2,14 +2,85 @@
 #[macro_export]
 macro_rules! api_dir_list {
     ($api:expr, $model_id:expr) => {
-        $api.info()
-            .map(|repo| {
-                repo.siblings
-                    .iter()
-                    .map(|x| x.rfilename.clone())
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_else(|e| {
+        if std::path::Path::new($model_id).is_absolute() {
+            let listing = std::fs::read_dir($model_id);
+            if listing.is_err() {
+                panic!("Cannot list directory {:?}", $model_id)
+            }
+            let listing = listing.unwrap();
+            listing
+                .into_iter()
+                .map(|s| {
+                    s.unwrap()
+                        .path()
+                        .file_name()
+                        .unwrap() // Should never terminate in `..`
+                        .to_str()
+                        .expect("Could not convert to str")
+                        .to_string()
+                })
+                .collect::<Vec<String>>()
+                .into_iter()
+        } else {
+            $api.info()
+                .map(|repo| {
+                    repo.siblings
+                        .iter()
+                        .map(|x| x.rfilename.clone())
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_else(|e| {
+                    // If we do not get a 404, it was something else.
+                    let format = format!("{e:?}");
+                    let mut unauth = false;
+                    if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
+                        let resp = resp.into_response();
+                        // If it's 401, assume that we're running locally only.
+                        if resp.as_ref().is_some_and(|r| r.status() == 401) {
+                            unauth = true;
+                        } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
+                            panic!("{format}");
+                        }
+                    }
+
+                    let listing = std::fs::read_dir($model_id);
+                    if listing.is_err() && unauth {
+                        panic!("{format}");
+                    } else if listing.is_err() {
+                        panic!("Cannot list directory {:?}", $model_id)
+                    }
+                    let listing = listing.unwrap();
+                    listing
+                        .into_iter()
+                        .map(|s| {
+                            s.unwrap()
+                                .path()
+                                .file_name()
+                                .unwrap() // Should never terminate in `..`
+                                .to_str()
+                                .expect("Could not convert to str")
+                                .to_string()
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .into_iter()
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! api_get_file {
+    ($api:expr, $file:expr, $model_id:expr) => {
+        if std::path::Path::new($model_id).is_absolute() {
+            let path = $model_id.join($file);
+            if !path.exists() {
+                panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
+            }
+            info!("Loading `{}` locally at `{}`", &$file, path.display());
+            path
+        } else {
+            $api.get($file).unwrap_or_else(|e| {
                 // If we do not get a 404, it was something else.
                 let format = format!("{e:?}");
                 let mut unauth = false;
@@ -23,57 +94,16 @@ macro_rules! api_dir_list {
                     }
                 }
 
-                let listing = std::fs::read_dir($model_id);
-                if listing.is_err() && unauth {
+                let path = $model_id.join($file);
+                if !path.exists() && unauth {
                     panic!("{format}");
-                } else if listing.is_err() {
-                    panic!("Cannot list directory {:?}", $model_id)
+                } else if !path.exists() {
+                    panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
                 }
-                let listing = listing.unwrap();
-                listing
-                    .into_iter()
-                    .map(|s| {
-                        s.unwrap()
-                            .path()
-                            .file_name()
-                            .unwrap() // Should never terminate in `..`
-                            .to_str()
-                            .expect("Could not convert to str")
-                            .to_string()
-                    })
-                    .collect::<Vec<String>>()
+                info!("Loading `{}` locally at `{}`", &$file, path.display());
+                path
             })
-            .into_iter()
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! api_get_file {
-    ($api:expr, $file:expr, $model_id:expr) => {
-        $api.get($file).unwrap_or_else(|e| {
-            // If we do not get a 404, it was something else.
-            let format = format!("{e:?}");
-            let mut unauth = false;
-            if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                let resp = resp.into_response();
-                // If it's 401, assume that we're running locally only.
-                if resp.as_ref().is_some_and(|r| r.status() == 401) {
-                    unauth = true;
-                } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
-                    panic!("{format}");
-                }
-            }
-
-            let path = $model_id.join($file);
-            if !path.exists() && unauth {
-                panic!("{format}");
-            } else if !path.exists() {
-                panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
-            }
-            info!("Loading `{}` locally at `{}`", &$file, path.display());
-            path
-        })
+        }
     };
 }
 
@@ -92,7 +122,6 @@ macro_rules! get_paths {
             revision.clone(),
         ));
         let model_id = std::path::Path::new(&$this.model_id);
-
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
             info!("Using tokenizer.json at `{p}`");
             PathBuf::from_str(p)?
@@ -100,10 +129,8 @@ macro_rules! get_paths {
             info!("Loading `tokenizer.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id)
         };
-
         info!("Loading `config.json` at `{}`", $this.model_id);
         let config_filename = $crate::api_get_file!(api, "config.json", model_id);
-
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
@@ -112,7 +139,6 @@ macro_rules! get_paths {
             &api,
             &model_id,
         )?;
-
         let XLoraPaths {
             adapter_configs,
             adapter_safetensors,
@@ -127,7 +153,6 @@ macro_rules! get_paths {
             revision.clone(),
             &$this.xlora_order,
         )?;
-
         let gen_conf = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
             .contains(&"generation_config.json".to_string())
@@ -141,7 +166,6 @@ macro_rules! get_paths {
         } else {
             None
         };
-
         let preprocessor_config = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())
@@ -155,7 +179,6 @@ macro_rules! get_paths {
         } else {
             None
         };
-
         let processor_config = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
             .contains(&"processor_config.json".to_string())
@@ -169,7 +192,6 @@ macro_rules! get_paths {
         } else {
             None
         };
-
         let template_filename = if let Some(ref p) = $this.chat_template {
             info!("Using chat template file at `{p}`");
             Some(PathBuf::from_str(p)?)
@@ -181,7 +203,6 @@ macro_rules! get_paths {
                 model_id
             ))
         };
-
         Ok(Box::new($path_name {
             tokenizer_filename,
             config_filename,
