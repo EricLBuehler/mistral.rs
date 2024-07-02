@@ -141,7 +141,6 @@ macro_rules! get_paths {
         } else {
             None
         };
-
         let preprocessor_config = if $crate::api_dir_list!(api, model_id)
             .collect::<Vec<_>>()
             .contains(&"preprocessor_config.json".to_string())
