@@ -871,16 +871,25 @@ impl NormalModelLoader for Starcoder2Loader {
     }
     fn load_xlora(
         &self,
-        _config: &str,
-        _use_flash_attn: bool,
-        _vb: VarBuilder,
-        _lora_config: &[((String, String), LoraConfig)],
-        _xlora_config: Option<XLoraConfig>,
-        _xlora_ordering: Ordering,
-        _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        todo!()
+        Ok(Box::new(xlora_models::XLoraStarcoder2::new(
+            &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
     }
     fn is_gptx(&self) -> bool {
         true
