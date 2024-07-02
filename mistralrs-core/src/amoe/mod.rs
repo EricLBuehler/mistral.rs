@@ -48,7 +48,7 @@ pub trait AnyMoeBaseModelMixin {
             }
             let save_path = Path::new(&gate_model_id).join("gate.safetensors");
             safetensors::save(&out, &save_path)?;
-            info!("Saved gating layers to {}", save_path.display());
+            info!("Saved gating layers to `{}`", save_path.display());
         }
         Ok(())
     }
@@ -199,7 +199,7 @@ impl MoeMlp {
         let lin = linear(config.hidden_size, n_experts, vb)?;
 
         let vars = var_map.all_vars();
-        if vars.is_empty() && inference {
+        if vars.is_empty() && !inference {
             candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
         }
         Ok(Self {

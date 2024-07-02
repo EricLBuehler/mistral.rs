@@ -459,7 +459,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 silent,
                 |_| true,
             )?;
-            info!("Loaded gating layers from {}", gate_filenames[0].display());
+            info!("Loaded gating layers from `{}`", gate_filenames[0].display());
             Some(vb)
         } else {
             None
