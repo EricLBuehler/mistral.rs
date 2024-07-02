@@ -11,6 +11,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use plotly::{ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -455,6 +456,20 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
+
+        let mut plot = Plot::new();
+        for (i, loss) in all_losses.into_iter().enumerate() {
+            plot.add_trace(Scatter::new(
+                (0..loss.len())
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|x| x as f32)
+                    .collect::<Vec<_>>(),
+                loss,
+            ));
+        }
+
+        plot.write_image("out.svg", ImageFormat::SVG, 800, 600, 1.0);
 
         Ok(Some(AnyMoeTrainingResult {
             steps,
