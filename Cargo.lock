@@ -2080,6 +2080,7 @@ dependencies = [
  "bindgen_cuda",
  "buildstructor",
  "bytemuck",
+ "bytemuck_derive",
  "candle-core",
  "candle-flash-attn",
  "candle-nn",

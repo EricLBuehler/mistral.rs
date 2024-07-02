@@ -8,7 +8,6 @@ use vob::{vob, Vob};
 
 pub type PatIdx = usize;
 pub type StateID = regex_automata::util::primitives::StateID;
-use tracing::debug;
 
 const LOG_LEXER: bool = false;
 
@@ -36,7 +35,6 @@ pub struct VobIdx {
 }
 
 impl VobIdx {
-    #[allow(clippy::cast_possible_truncation)]
     pub fn new(v: usize) -> Self {
         VobIdx { v: v as u32 }
     }
@@ -54,7 +52,6 @@ impl VobIdx {
     }
 }
 
-#[derive(Clone)]
 pub struct VobSet {
     vobs: Vec<Vob>,
     by_vob: FxHashMap<Vob, VobIdx>,
@@ -70,7 +67,7 @@ impl VobSet {
         }
     }
 
-    pub fn get(&mut self, vob: &Vob) -> VobIdx {
+    pub fn insert_or_get(&mut self, vob: &Vob) -> VobIdx {
         if let Some(idx) = self.by_vob.get(vob) {
             return *idx;
         }
@@ -108,7 +105,7 @@ impl VobSet {
                     }
                 }
             }
-            debug!(
+            println!(
                 "vob set: {} VOBs, {} nonempty",
                 self.vobs.len(),
                 self.non_empty.len()
@@ -117,7 +114,6 @@ impl VobSet {
     }
 }
 
-#[derive(Clone)]
 pub struct Lexer {
     dfa: dense::DFA<Vec<u32>>,
     initial: LexerState,
@@ -137,14 +133,14 @@ impl Lexer {
             .build_many(&patterns)
             .unwrap();
 
-        debug!(
+        println!(
             "dfa: {} bytes, {} patterns",
             dfa.memory_usage(),
             patterns.len(),
         );
         if false {
             for p in &patterns {
-                debug!("  {}", p)
+                println!("  {}", p)
             }
         }
 
@@ -156,18 +152,19 @@ impl Lexer {
         incoming.insert(initial, Vec::new());
 
         // TIME: 1.5ms
-        while let Some(s) = todo.pop() {
+        while todo.len() > 0 {
+            let s = todo.pop().unwrap();
             for b in 0..=255 {
                 let s2 = dfa.next_state(s, b);
-                incoming.entry(s2).or_insert_with(|| {
+                if !incoming.contains_key(&s2) {
                     todo.push(s2);
-                    Vec::new()
-                });
+                    incoming.insert(s2, Vec::new());
+                }
                 incoming.get_mut(&s2).unwrap().push(s);
             }
         }
 
-        let states = incoming.keys().copied().collect::<Vec<_>>();
+        let states = incoming.keys().map(|x| *x).collect::<Vec<_>>();
         let mut reachable_patterns = FxHashMap::default();
 
         for s in &states {
@@ -178,7 +175,7 @@ impl Lexer {
                     let idx = dfa.match_pattern(s2, idx).as_usize();
                     v.set(idx, true);
                     if LOG_LEXER {
-                        debug!("  match: {:?} {}", *s, patterns[idx])
+                        println!("  match: {:?} {}", *s, patterns[idx])
                     }
                 }
             }
@@ -203,7 +200,7 @@ impl Lexer {
             }
 
             if LOG_LEXER {
-                debug!("iter {} {}", num_set, states.len());
+                println!("iter {} {}", num_set, states.len());
             }
             if num_set == 0 {
                 break;
@@ -217,10 +214,10 @@ impl Lexer {
         let mut vobidx_by_state_off =
             vec![VobIdx::all_zero(); 1 + (states_idx.iter().max().unwrap() >> shift)];
         for (k, v) in reachable_patterns.iter() {
-            vobidx_by_state_off[k.as_usize() >> shift] = vobset.get(v);
+            vobidx_by_state_off[k.as_usize() >> shift] = vobset.insert_or_get(v);
         }
 
-        debug!("initial: {:?}; {} states", initial, states.len());
+        println!("initial: {:?}; {} states", initial, states.len());
 
         let mut lex = Lexer {
             dfa,
@@ -233,11 +230,11 @@ impl Lexer {
         if LOG_LEXER {
             for s in &states {
                 if lex.is_dead(*s) {
-                    debug!("dead: {:?} {}", s, lex.dfa.is_dead_state(*s));
+                    println!("dead: {:?} {}", s, lex.dfa.is_dead_state(*s));
                 }
             }
 
-            debug!("reachable: {:#?}", reachable_patterns);
+            println!("reachable: {:#?}", reachable_patterns);
         }
 
         lex
@@ -279,7 +276,7 @@ impl Lexer {
             .unwrap();
 
         if LOG_LEXER {
-            debug!("token: {}", pat_idx);
+            println!("token: {}", pat_idx);
         }
 
         Some(pat_idx)
@@ -291,7 +288,7 @@ impl Lexer {
         if let Some(byte) = byte {
             let state = dfa.next_state(prev, byte);
             if LOG_LEXER {
-                debug!(
+                println!(
                     "lex: {:?} -{:?}-> {:?} d={}",
                     prev,
                     byte as char,
@@ -308,7 +305,7 @@ impl Lexer {
                 } else {
                     let state = dfa.next_state(self.initial.state, byte);
                     if LOG_LEXER {
-                        debug!("lex0: {:?} -{:?}-> {:?}", self.initial, byte as char, state);
+                        println!("lex0: {:?} -{:?}-> {:?}", self.initial, byte as char, state);
                     }
                     Some((self.mk_state(state), tok))
                 }
@@ -339,7 +336,7 @@ fn vob_and_is_zero(a: &Vob, b: &Vob) -> bool {
             return false;
         }
     }
-    true
+    return true;
 }
 
 fn vob_is_zero(v: &Vob) -> bool {

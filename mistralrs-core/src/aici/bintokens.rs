@@ -1,12 +1,11 @@
-// Originally from https://github.com/microsoft/aici/blob/64f0b551dee49e320e9b3b92289f3d6f2e888276/aicirt/src/bintokens.rs
-// Licensed under the MIT license
-
-use crate::aici::{bytes::TokRxInfo, toktree::TokTrie};
+use crate::aici::bytes::TokRxInfo;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-use tracing::{error, warn};
+use tracing::warn;
+
+use super::toktree::TokTrie;
 
 #[derive(Serialize, Deserialize)]
 pub struct ByteTokenizer {
@@ -17,9 +16,16 @@ pub struct ByteTokenizer {
     token_bytes: Vec<Vec<u8>>,
     pub special: BTreeMap<String, u32>,
 }
+
+// useful when debugging this: https://www.cogsci.ed.ac.uk/~richard/utf-8.cgi
+
 fn is_self_mapped(c: char) -> bool {
-    matches!(c, '!'..='~' | '\u{00A1}'..='\u{00AC}' | '\u{00AE}'..='\u{00FF}')
+    match c {
+        '!'..='~' | '\u{00A1}'..='\u{00AC}' | '\u{00AE}'..='\u{00FF}' => true,
+        _ => false,
+    }
 }
+
 fn build_char_map() -> HashMap<char, u8> {
     let mut res = HashMap::default();
     let mut k = 0x100u32;
@@ -88,7 +94,6 @@ impl ByteTokenizer {
             bail!("can't determine decoder type: {:?}", hft.get_decoder());
         }
 
-        #[allow(clippy::cast_possible_truncation)]
         let vocab_size = hft.get_vocab_size(true) as u32;
         let added = hft.get_added_tokens_decoder();
 
@@ -116,9 +121,12 @@ impl ByteTokenizer {
         let char_map = build_char_map();
 
         for tok_id in 0..vocab_size {
+            if added.contains_key(&tok_id) {
+                continue;
+            }
             if let Some(tok_name) = res.hf_tokenizer.id_to_token(tok_id) {
                 if is_byte_fallback {
-                    if tok_name.len() == 6 && tok_name.starts_with("<0x") && tok_name.ends_with('>')
+                    if tok_name.len() == 6 && tok_name.starts_with("<0x") && tok_name.ends_with(">")
                     {
                         // parse hex number from tok_name
                         let hex_str = &tok_name[3..5];
@@ -135,14 +143,14 @@ impl ByteTokenizer {
                         .map(|c| {
                             char_map
                                 .get(&c)
-                                .copied()
+                                .map(|c| *c)
                                 .ok_or_else(|| anyhow!("missing char: {}", c))
                         })
                         .collect();
                     let bytes = match bytes {
                         Ok(b) => b,
                         Err(e) => {
-                            error!("error: {} for {:?}", e, tok_name);
+                            println!("error: {} for {:?}", e, tok_name);
                             continue;
                         }
                     };
