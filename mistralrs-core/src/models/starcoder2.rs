@@ -60,7 +60,19 @@ impl AnyMoeTrainableLayer for MLP {}
 
 impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.c_fc)?.apply(&self.act)?.apply(&self.c_proj)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.c_fc.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut res = xs
+            .apply(&self.c_fc)?
+            .apply(&self.act)?
+            .apply(&self.c_proj)?;
+        if self.c_fc.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
         vec![self.c_fc.inner(), self.c_proj.inner()]
@@ -147,9 +159,19 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if self.q_proj.is_quant() {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        let mut q = self.q_proj.forward(&xs)?;
+        let mut k = self.k_proj.forward(&xs)?;
+        let mut v = self.v_proj.forward(&xs)?;
+        if self.q_proj.is_quant() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
@@ -195,7 +217,7 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_output = ScaledDotProductAttention.run_attention(
+        let mut attn_output = ScaledDotProductAttention.run_attention(
             &q,
             &k,
             &v,
@@ -207,10 +229,17 @@ impl Attention {
             q_len,
         )?;
 
-        attn_output
+        if self.q_proj.is_quant() {
+            attn_output = attn_output.to_dtype(DType::F32)?;
+        }
+        let mut res = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.hidden_size))?
-            .apply(&self.o_proj)
+            .apply(&self.o_proj)?;
+        if self.q_proj.is_quant() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
