@@ -84,7 +84,7 @@ impl FromStr for ScaledRopeType {
     type Err = candle_core::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "su" => Ok(Self::Su),
+            "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
