@@ -419,7 +419,7 @@ impl Runner {
                     gate_model_id: amoe_conf.gate_model_id.clone(),
                     training: amoe_conf.training,
                 },
-                path: amoe_conf.dataset_csv,
+                path: amoe_conf.dataset_json,
                 prefix: amoe_conf.prefix,
                 mlp: amoe_conf.mlp,
                 model_ids: amoe_conf.model_ids,

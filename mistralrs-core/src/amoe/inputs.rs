@@ -22,6 +22,8 @@ pub struct AnyMoeTrainingInputs {
 }
 
 impl AnyMoeTrainingInputs {
+    /// From a CSV file with the mandatory columns `prompt` (String), `expert` (usize), and the optional
+    /// column `image_urls` (`Vec<String>`).
     pub fn from_csv<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let file = File::open(file)?;
         let mut reader = Reader::from_reader(file);
@@ -32,13 +34,18 @@ impl AnyMoeTrainingInputs {
         }
         Ok(Self { rows })
     }
+
+    /// From a JSON file with the top-level key being `rows` (array), which contains objects with the
+    /// keys `prompt` (String), `expert` (usize), `image_urls` (Option<Vec<String>>).
     pub fn from_json<P: AsRef<Path>>(file: P) -> anyhow::Result<Self> {
         let file = File::open(file)?;
         Ok(serde_json::from_reader(file)?)
     }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }
+
     pub fn into_inner(self) -> Vec<AnyMoeTrainingInputRow> {
         self.rows
     }

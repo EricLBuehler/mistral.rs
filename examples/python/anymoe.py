@@ -16,7 +16,7 @@ runner = Runner(
     ),
     anymoe_config=AnyMoeConfig(
         hidden_size=4096,
-        dataset_csv="examples/amoe.csv",
+        dataset_json="examples/amoe.json",
         prefix="model.layers",
         mlp="mlp",
         expert_type=AnyMoeExpertType.FineTuned(),

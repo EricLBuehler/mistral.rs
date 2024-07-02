@@ -47,7 +47,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),
-        path: "examples/amoe.csv".to_string(),
+        path: "examples/amoe.json".to_string(),
         model_ids: vec!["HuggingFaceH4/zephyr-7b-beta".to_string()],
         layers: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     });
