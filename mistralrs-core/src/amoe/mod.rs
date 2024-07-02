@@ -1,12 +1,18 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, Var, D};
+use candle_core::{quantized::QMatMul, safetensors, DType, Device, Result, Tensor, Var, D};
 use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
 use serde::{Deserialize, Serialize};
 
 mod inputs;
 mod macros;
 pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use tracing::info;
 
 use crate::{
     ops::{TopKLastDimOp, TopKOutput},
@@ -22,13 +28,29 @@ pub trait AnyMoeBaseModelMixin {
             .map(|mlp| mlp.get_vars())
             .collect::<Vec<_>>()
     }
-    fn done_training(&mut self) {
-        let _ = self
+    fn finish_training(&mut self, gate_model_id: Option<String>) -> Result<()> {
+        let mut out = HashMap::new();
+        for mlp in self
             .get_mlps_mut()
             .iter_mut()
             .filter(|mlp| mlp.is_moe_layer())
-            .map(|mlp| mlp.done_training())
-            .collect::<Vec<_>>();
+        {
+            let out_accum = if gate_model_id.is_some() {
+                Some(&mut out)
+            } else {
+                None
+            };
+            mlp.finish_training(out_accum);
+        }
+        if let Some(gate_model_id) = gate_model_id {
+            if !Path::new(&gate_model_id).exists() {
+                fs::create_dir_all(&gate_model_id)?;
+            }
+            let save_path = Path::new(&gate_model_id).join("gate.safetensors");
+            safetensors::save(&out, &save_path)?;
+            info!("Saved gating layers to `{}`", save_path.display());
+        }
+        Ok(())
     }
     fn trainable_params(&self) -> usize {
         self.get_mlps()
@@ -55,6 +77,7 @@ pub trait AnyMoeBaseModelMixin {
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
+        _gate_vb: Option<VarBuilder>,
     ) -> Result<()> {
         candle_core::bail!("Model does not support AnyMoE layers");
     }
@@ -89,7 +112,7 @@ pub trait AnyMoeTrainableLayer {
     fn get_vars(&self) -> Vec<Var> {
         vec![]
     }
-    fn done_training(&mut self) {}
+    fn finish_training(&mut self, _out: Option<&mut HashMap<String, Tensor>>) {}
     fn trainable_params(&self) -> usize {
         0
     }
@@ -101,6 +124,7 @@ pub trait AnyMoeTrainableLayer {
 serde_default_fn!(f64, default_lr, 1e-3);
 serde_default_fn!(usize, default_epochs, 100);
 serde_default_fn!(usize, default_bs, 4);
+serde_default_fn!(bool, default_true, true);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum AnyMoeExpertType {
@@ -124,6 +148,9 @@ pub struct AnyMoeConfig {
     #[serde(default = "default_bs")]
     pub batch_size: usize,
     pub expert_type: AnyMoeExpertType,
+    pub gate_model_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub training: bool,
 }
 
 #[derive(Clone)]
@@ -148,6 +175,7 @@ pub struct MoeMlp {
     training: bool,
     vars: Vec<Var>,
     gating_output: Arc<RwLock<Option<Tensor>>>,
+    layer_idx: usize,
 }
 
 impl MoeMlp {
@@ -157,17 +185,21 @@ impl MoeMlp {
         config: AnyMoeConfig,
         dtype: DType,
         dev: &Device,
+        layer: usize,
+        gate_vb: Option<&VarBuilder>,
     ) -> Result<Self> {
         let n_experts = experts.len();
         let var_map = VarMap::new();
 
-        let vb = VarBuilder::from_varmap(&var_map, dtype, dev);
-        let vb = vb.pp("moe_gate");
+        let inference = gate_vb.is_some();
+        let empty_map = VarBuilder::from_varmap(&var_map, dtype, dev);
+        let vb = gate_vb.unwrap_or(&empty_map);
+        let vb = vb.pp("moe_gate").pp(layer);
 
         let lin = linear(config.hidden_size, n_experts, vb)?;
 
         let vars = var_map.all_vars();
-        if vars.is_empty() {
+        if vars.is_empty() && !inference {
             candle_core::bail!("No vars to train in MoeMlp, perhaps there are no layers?");
         }
         Ok(Self {
@@ -176,18 +208,24 @@ impl MoeMlp {
             training: true,
             vars,
             gating_output: Arc::new(RwLock::new(None)),
+            layer_idx: layer,
         })
     }
 }
 
 impl AnyMoeTrainableLayer for MoeMlp {
-    fn done_training(&mut self) {
+    fn finish_training(&mut self, out: Option<&mut HashMap<String, Tensor>>) {
         self.training = false;
+        let w = self.gate.lin.weight().detach();
+        let b = self.gate.lin.bias().map(|b| b.detach());
         self.gate = MoeGate {
-            lin: Linear::new(
-                self.gate.lin.weight().detach(),
-                self.gate.lin.bias().map(|b| b.detach()),
-            ),
+            lin: Linear::new(w.clone(), b.clone()),
+        };
+        if let Some(out) = out {
+            out.insert(format!("moe_gate.{}.weight", self.layer_idx), w);
+            if let Some(b) = b {
+                out.insert(format!("moe_gate.{}.bias", self.layer_idx), b);
+            }
         }
     }
     fn trainable_params(&self) -> usize {
@@ -261,6 +299,7 @@ impl MlpLayer for MoeMlp {
             training: self.training,
             vars: self.vars.clone(),
             gating_output: self.gating_output.clone(),
+            layer_idx: self.layer_idx,
         })
     }
 

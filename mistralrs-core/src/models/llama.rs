@@ -505,6 +505,7 @@ impl AnyMoeBaseModelMixin for Llama {
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
@@ -586,8 +587,14 @@ impl AnyMoeBaseModelMixin for Llama {
         for (layer, expert) in layers.into_iter().zip(experts) {
             let mut experts_all = vec![self.blocks[layer].mlp.clone()];
             experts_all.extend(expert);
-            self.blocks[layer].mlp =
-                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
+            self.blocks[layer].mlp = Box::new(MoeMlp::new(
+                experts_all,
+                config.clone(),
+                dtype,
+                dev,
+                layer,
+                gate_vb.as_ref(),
+            )?);
         }
         Ok(())
     }
