@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod inputs;
 mod macros;
 pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use tracing::info;
 
 use crate::{
     ops::{TopKLastDimOp, TopKOutput},
@@ -42,11 +43,14 @@ pub trait AnyMoeBaseModelMixin {
             mlp.finish_training(out_accum);
         }
         if let Some(gate_model_id) = gate_model_id {
-            fs::create_dir_all(&gate_model_id)?;
-            safetensors::save(&out, Path::new(&gate_model_id).join("gate.safetensors"))
-        } else {
-            Ok(())
+            if !Path::new(&gate_model_id).exists() {
+                fs::create_dir_all(&gate_model_id)?;
+            }
+            let save_path = Path::new(&gate_model_id).join("gate.safetensors");
+            safetensors::save(&out, &save_path)?;
+            info!("Saved gating layers to {}", save_path.display());
         }
+        Ok(())
     }
     fn trainable_params(&self) -> usize {
         self.get_mlps()

@@ -550,7 +550,15 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 "Gate model ID must contain only one .safetensors file"
             );
 
-            let vb = from_mmaped_safetensors(gate_filenames, vec![], dtype, dev, silent, |_| true)?;
+            let vb = from_mmaped_safetensors(
+                gate_filenames.clone(),
+                vec![],
+                dtype,
+                dev,
+                silent,
+                |_| true,
+            )?;
+            info!("Loaded gating layers from {}", gate_filenames[0].display());
             Some(vb)
         } else {
             None
