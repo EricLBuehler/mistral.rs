@@ -94,9 +94,6 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
 ) -> PyResult<Box<dyn Loader>> {
-    const REPEAT_LAST_N_DEFAULT: usize = 64;
-    const GQA_DEFAULT: usize = 1;
-
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -111,7 +108,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -129,7 +126,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -156,7 +153,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -177,9 +174,7 @@ fn parse_which(
             quantized_filename,
             repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -195,9 +190,7 @@ fn parse_which(
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -222,9 +215,7 @@ fn parse_which(
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -247,10 +238,7 @@ fn parse_which(
             repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -269,10 +257,7 @@ fn parse_which(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -300,10 +285,7 @@ fn parse_which(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -327,7 +309,7 @@ fn parse_which(
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,

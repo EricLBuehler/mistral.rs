@@ -32,7 +32,7 @@ reqwest.workspace = true
 base64.workspace = true
 
 [build-dependencies]
-pyo3-build-config = "0.21"
+pyo3-build-config = "0.22"
 
 [features]
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
