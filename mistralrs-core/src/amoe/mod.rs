@@ -1,5 +1,7 @@
 use std::{
     collections::HashMap,
+    fs,
+    path::Path,
     sync::{Arc, RwLock},
 };
 
@@ -40,7 +42,8 @@ pub trait AnyMoeBaseModelMixin {
             mlp.finish_training(out_accum);
         }
         if let Some(gate_model_id) = gate_model_id {
-            safetensors::save(&out, gate_model_id)
+            fs::create_dir_all(&gate_model_id)?;
+            safetensors::save(&out, Path::new(&gate_model_id).join("gate.safetensors"))
         } else {
             Ok(())
         }

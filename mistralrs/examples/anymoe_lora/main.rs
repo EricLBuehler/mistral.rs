@@ -47,6 +47,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                 target_modules: vec!["gate_proj".to_string()],
             },
             gate_model_id: None,
+            training: true,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),
