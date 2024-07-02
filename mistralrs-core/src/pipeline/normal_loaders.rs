@@ -812,7 +812,7 @@ impl NormalModelLoader for Gemma2Loader {
 
 // ======================== Starcoder2 loader
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Starcoder2BasicConfig {
     vocab_size: usize,
     hidden_size: usize,
@@ -886,8 +886,7 @@ impl NormalModelLoader for Starcoder2Loader {
         true
     }
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        // Already will warn about it
-        Ok(Box::new(serde_json::from_str::<models::starcoder2::Config>(
+        Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
         )?))
     }
