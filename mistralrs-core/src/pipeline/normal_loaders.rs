@@ -887,7 +887,7 @@ impl NormalModelLoader for Starcoder2Loader {
     }
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
-        Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+        Ok(Box::new(serde_json::from_str::<models::starcoder2::Config>(
             config,
         )?))
     }
