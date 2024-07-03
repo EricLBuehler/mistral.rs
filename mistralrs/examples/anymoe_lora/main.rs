@@ -46,8 +46,9 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                 alpha: 16.,
                 target_modules: vec!["gate_proj".to_string()],
             },
-            gate_model_id: None,
+            gate_model_id: None, // Set this to Some("path/to/model/id") for the pretrained gating model id
             training: true,
+            loss_svg: None,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),

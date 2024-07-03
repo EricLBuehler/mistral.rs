@@ -26,6 +26,8 @@ runner = Runner(
         epochs=100,
         batch_size=4,
         model_ids=["typeof/zephyr-7b-beta-lora"],
+        # For inference (use a pretrained gating layer) see `anymoe_inference.py`
+        loss_svg="loss.svg",
     ),
 )
 

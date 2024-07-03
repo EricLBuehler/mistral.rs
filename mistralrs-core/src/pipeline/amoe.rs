@@ -2,6 +2,7 @@ use std::{
     any::Any,
     fs::{self, File},
     io::Read,
+    path::Path,
     sync::Arc,
 };
 
@@ -272,6 +273,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             expert_type,
             gate_model_id,
             training,
+            loss_svg,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -457,33 +459,42 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
-        let mut plot = Plot::new();
-        for gate in 0..all_losses[0].len() {
-            let gate_loss = all_losses
-                .iter()
-                .map(|losses| losses[gate])
-                .collect::<Vec<_>>();
-            #[allow(clippy::cast_precision_loss)]
-            plot.add_trace(Scatter::new(
-                (0..gate_loss.len())
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .map(|x| x as f32)
-                    .collect::<Vec<_>>(),
-                gate_loss,
-            ));
+        if let Some(loss_svg) = loss_svg {
+            let mut plot = Plot::new();
+            for gate in 0..all_losses[0].len() {
+                let gate_loss = all_losses
+                    .iter()
+                    .map(|losses| losses[gate])
+                    .collect::<Vec<_>>();
+                #[allow(clippy::cast_precision_loss)]
+                plot.add_trace(Scatter::new(
+                    (0..gate_loss.len())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|x| x as f32)
+                        .collect::<Vec<_>>(),
+                    gate_loss,
+                ));
+            }
+
+            plot.set_layout(
+                plot.layout()
+                    .clone()
+                    .show_legend(false)
+                    .title(format!("Gating layers ({} layers)", all_losses[0].len()))
+                    .x_axis(Axis::new().title("Step"))
+                    .y_axis(Axis::new().title("Loss")),
+            );
+
+            let path = Path::new(&loss_svg);
+            if !path
+                .extension()
+                .is_some_and(|e| e.to_string_lossy().to_string() == "svg".to_string())
+            {
+                candle_core::bail!("`loss_svg` must have an extension `svg`.");
+            }
+            plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
         }
-
-        plot.set_layout(
-            plot.layout()
-                .clone()
-                .show_legend(false)
-                .title(format!("Gating layers ({} layers)", all_losses[0].len()))
-                .x_axis(Axis::new().title("Step"))
-                .y_axis(Axis::new().title("Loss")),
-        );
-
-        plot.write_image("out.svg", ImageFormat::SVG, 800, 600, 1.0);
 
         Ok(Some(AnyMoeTrainingResult {
             steps,
