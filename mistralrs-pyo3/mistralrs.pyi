@@ -258,6 +258,9 @@ class AnyMoeConfig:
         lr: float = 1e-3,
         epochs: int = 100,
         batch_size: int = 4,
+        gate_model_id: str | None = None,
+        training: bool = False,
+        loss_svg: str | None = None,
     ) -> None:
         """
         Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
@@ -270,6 +273,11 @@ class AnyMoeConfig:
         To find the hidden size:
 
             - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+
+        > Note: `gate_model_id` specifies the gating model ID. If `training == True`, then safetensors will be written here.
+            Otherwise, the pretrained safetensors will be loaded and no training occurs.
+
+        > Note: if `training == True`, `loss_svg` has no effect. Otherwise, an SVG image will be saved here.
         """
         ...
 
