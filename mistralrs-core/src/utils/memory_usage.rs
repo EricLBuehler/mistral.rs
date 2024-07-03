@@ -14,7 +14,12 @@ impl MemoryUsage {
                 Ok(usize::try_from(sys.free_memory())? * KB_TO_BYTES)
             }
             #[cfg(feature = "cuda")]
-            Device::Cuda(_) => candle_core::cuda::cudarc::driver::result::mem_get_info().0,
+            Device::Cuda(_) => {
+                use candle_core::cuda_backend::WrapErr;
+                Ok(candle_core::cuda::cudarc::driver::result::mem_get_info()
+                    .w()?
+                    .0)
+            }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
                 candle_core::bail!("Cannot get memory available for CUDA device")
