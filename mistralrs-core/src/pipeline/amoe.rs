@@ -11,7 +11,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use plotly::{ImageFormat, Plot, Scatter};
+use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -474,7 +474,14 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             ));
         }
 
-        plot.set_layout(plot.layout().clone().show_legend(false));
+        plot.set_layout(
+            plot.layout()
+                .clone()
+                .show_legend(false)
+                .title(format!("Gating layers ({} layers)", all_losses[0].len()))
+                .x_axis(Axis::new().title("Step"))
+                .y_axis(Axis::new().title("Loss")),
+        );
 
         plot.write_image("out.svg", ImageFormat::SVG, 800, 600, 1.0);
 
