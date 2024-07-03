@@ -1,15 +1,24 @@
-use serde::Deserialize;
+use candle_core::{Result, Tensor};
 
 pub mod gptq;
 
-#[derive(Debug, Clone, Deserialize)]
-pub enum QuantMethod {
-    GptQ,
+#[derive(Debug, Clone)]
+pub enum QuantMethodConfig {
+    GptQ {
+        bits: i32,
+        use_exllama: bool,
+        q_weight: Tensor,
+        gptq_qzeros: Tensor,
+        gptq_scales: Tensor,
+        g_idx: Tensor,
+    },
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct QuantizedConfig {
-    bits: i32,
-    group_size: i32,
-    quant_method: QuantMethod,
+pub trait QuantMethod {
+    fn new(method: QuantMethodConfig) -> Self
+    where
+        Self: Sized;
+
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    fn matmul(&mut self, a: &Tensor) -> Result<Tensor>;
 }

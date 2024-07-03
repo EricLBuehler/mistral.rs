@@ -728,7 +728,7 @@ fp_gemm_half_q_half_gptq_kernel pick_gemm_half_q_half_gptq_kernel(
   return NULL;
 }
 
-void gemm_half_q_half_cuda_part(const half* a, const uint32_t* b_q_weight,
+extern "C" void gemm_half_q_half_cuda_part(const half* a, const uint32_t* b_q_weight,
                                 const uint32_t* b_gptq_qzeros,
                                 const half* b_gptq_scales, const int* b_q_perm,
                                 half* c, int size_m, int size_n, int size_k,
@@ -744,8 +744,7 @@ void gemm_half_q_half_cuda_part(const half* a, const uint32_t* b_q_weight,
   fp_gemm_half_q_half_gptq_kernel kernel =
       pick_gemm_half_q_half_gptq_kernel(true, m_count, bit);
 
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  kernel<<<gridDim, blockDim, 0, stream>>>(a, b_q_weight, b_gptq_qzeros,
+  kernel<<<gridDim, blockDim, 0>>>(a, b_q_weight, b_gptq_qzeros,
                                            b_gptq_scales, c, size_m, size_n,
                                            size_k, groups, b_q_perm);
 }
@@ -1141,7 +1140,7 @@ __global__ void reconstruct_exllama_2bit_kernel(
   }
 }
 
-void reconstruct_exllama(const uint32_t* b_q_weight,
+extern "C" void reconstruct_exllama(const uint32_t* b_q_weight,
                          const uint32_t* b_gptq_qzeros,
                          const half* b_gptq_scales, const int* b_q_perm,
                          half* out, int height, int width, int groups,
@@ -1161,8 +1160,7 @@ void reconstruct_exllama(const uint32_t* b_q_weight,
     reconstruct_exllama_kernel = reconstruct_exllama_8bit_kernel;
   }
 
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  reconstruct_exllama_kernel<<<gridDim, blockDim, 0, stream>>>(
+  reconstruct_exllama_kernel<<<gridDim, blockDim, 0>>>(
       b_q_weight, b_q_perm, b_gptq_qzeros, b_gptq_scales, height, width, groups,
       out);
 }
@@ -1353,7 +1351,7 @@ __global__ void gemm_half_q_half_alt_8bit_kernel(
   }
 }
 
-void gemm_half_q_half_alt(const half* a, const uint32_t* b_q_weight,
+extern "C" void gemm_half_q_half_alt(const half* a, const uint32_t* b_q_weight,
                           const uint32_t* b_gptq_qzeros,
                           const half* b_gptq_scales, const int* b_g_idx,
                           half* c, int size_m, int size_n, int size_k,
@@ -1371,8 +1369,7 @@ void gemm_half_q_half_alt(const half* a, const uint32_t* b_q_weight,
     kernel = gemm_half_q_half_alt_8bit_kernel;
   }
 
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  kernel<<<gridDim, blockDim, 0, stream>>>(
+  kernel<<<gridDim, blockDim, 0>>>(
       (const half2*)a, b_q_weight, c, b_gptq_scales, b_gptq_qzeros, b_g_idx,
       size_m, size_k / 32 * bit, size_n);
 }
@@ -1456,7 +1453,7 @@ __global__ void reconstruct_gptq_3bit_kernel(
   }
 }
 
-void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gptq_qzeros,
+extern"C" void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gptq_qzeros,
                       const half* b_gptq_scales, const int* b_g_idx, half* out,
                       int height, int width, int groups, int bit) {
   dim3 blockDim, gridDim;
@@ -1475,13 +1472,12 @@ void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gptq_qzeros,
     gridDim.y = DIVIDE(height, 32);
   }
 
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  kernel<<<gridDim, blockDim, 0, stream>>>(b_q_weight, b_gptq_scales,
+  kernel<<<gridDim, blockDim, 0>>>(b_q_weight, b_gptq_scales,
                                            b_gptq_qzeros, b_g_idx, height,
                                            width, groups, out);
 }
 
-// NOTE(EricLBuehler): gemm_half_q_half_cuda is the primary entrypoint.
+/*
 extern "C" void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
                            const uint32_t* b_q_weight,
                            const uint32_t* b_gptq_qzeros,
@@ -1534,6 +1530,7 @@ extern "C" void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* 
                          c, size_m, size_n, size_k, bit);
   }
 }
+*/
 
 __global__ void shuffle_4bit_kernel(uint32_t* __restrict__ b_q_weight,
                                     const int size_k, const int size_n) {
