@@ -171,10 +171,10 @@ Enabling features is done by passing `--features ...` to the build system. When 
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
 |-|-|-|-|-|
-|A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A10 GPU, CUDA|89|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|119|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A100 GPU, CUDA|119|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
