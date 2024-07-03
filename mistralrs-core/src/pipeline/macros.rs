@@ -2,7 +2,7 @@
 #[macro_export]
 macro_rules! api_dir_list {
     ($api:expr, $model_id:expr) => {
-        if std::path::Path::new($model_id).is_absolute() {
+        if std::path::Path::new($model_id).exists() {
             let listing = std::fs::read_dir($model_id);
             if listing.is_err() {
                 panic!("Cannot list directory {:?}", $model_id)
@@ -29,40 +29,7 @@ macro_rules! api_dir_list {
                         .map(|x| x.rfilename.clone())
                         .collect::<Vec<String>>()
                 })
-                .unwrap_or_else(|e| {
-                    // If we do not get a 404, it was something else.
-                    let format = format!("{e:?}");
-                    let mut unauth = false;
-                    if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                        let resp = resp.into_response();
-                        // If it's 401, assume that we're running locally only.
-                        if resp.as_ref().is_some_and(|r| r.status() == 401) {
-                            unauth = true;
-                        } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
-                            panic!("{format}");
-                        }
-                    }
-
-                    let listing = std::fs::read_dir($model_id);
-                    if listing.is_err() && unauth {
-                        panic!("{format}");
-                    } else if listing.is_err() {
-                        panic!("Cannot list directory {:?}", $model_id)
-                    }
-                    let listing = listing.unwrap();
-                    listing
-                        .into_iter()
-                        .map(|s| {
-                            s.unwrap()
-                                .path()
-                                .file_name()
-                                .unwrap() // Should never terminate in `..`
-                                .to_str()
-                                .expect("Could not convert to str")
-                                .to_string()
-                        })
-                        .collect::<Vec<String>>()
-                })
+                .unwrap_or_else(|e| panic!("Could not get directory listing from API: {:?}", e))
                 .into_iter()
         }
     };
@@ -72,7 +39,7 @@ macro_rules! api_dir_list {
 #[macro_export]
 macro_rules! api_get_file {
     ($api:expr, $file:expr, $model_id:expr) => {
-        if std::path::Path::new($model_id).is_absolute() {
+        if std::path::Path::new($model_id).exists() {
             let path = $model_id.join($file);
             if !path.exists() {
                 panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
@@ -80,29 +47,8 @@ macro_rules! api_get_file {
             info!("Loading `{}` locally at `{}`", &$file, path.display());
             path
         } else {
-            $api.get($file).unwrap_or_else(|e| {
-                // If we do not get a 404, it was something else.
-                let format = format!("{e:?}");
-                let mut unauth = false;
-                if let hf_hub::api::sync::ApiError::RequestError(resp) = e {
-                    let resp = resp.into_response();
-                    // If it's 401, assume that we're running locally only.
-                    if resp.as_ref().is_some_and(|r| r.status() == 401) {
-                        unauth = true;
-                    } else if resp.as_ref().is_some_and(|r| r.status() != 404) {
-                        panic!("{format}");
-                    }
-                }
-
-                let path = $model_id.join($file);
-                if !path.exists() && unauth {
-                    panic!("{format}");
-                } else if !path.exists() {
-                    panic!("File \"{}\" not found at model id {:?}", $file, $model_id)
-                }
-                info!("Loading `{}` locally at `{}`", &$file, path.display());
-                path
-            })
+            $api.get($file)
+                .unwrap_or_else(|e| panic!("Could not get file {:?} from API: {:?}", $file, e))
         }
     };
 }
