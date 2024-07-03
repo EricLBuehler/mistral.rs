@@ -1,117 +1,57 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
+use candle_nn::{layer_norm, linear_b, LayerNorm, VarBuilder};
 use std::sync::Arc;
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
-
 use crate::{
-    amoe::{
-        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
-        MoeMlp,
-    },
+    amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear},
+    layers::{CausalMasker, QLinear, RotaryEmbedding, ScaledDotProductAttention},
+    layers_utils::repeat_kv,
     merge_delta,
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
-    pub attention_bias: bool,
-    pub head_dim: usize,
-    // The code gemma configs include both hidden_act and hidden_activation.
-    pub hidden_act: Option<Activation>,
-    pub hidden_activation: Option<Activation>,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_attention_heads: usize,
-    pub num_hidden_layers: usize,
-    pub num_key_value_heads: usize,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    pub vocab_size: usize,
-    pub sliding_window: usize,
-    pub attn_logit_softcapping: Option<f64>,
-    pub final_logit_softcapping: Option<f64>,
-    pub query_pre_attn_scalar: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
-    pub max_position_embeddings: usize,
-}
-
-impl Config {
-    pub fn hidden_act(&self) -> Result<Activation> {
-        match (self.hidden_act, self.hidden_activation) {
-            (None, Some(act)) | (Some(act), None) => Ok(act),
-            (Some(act), Some(_)) => {
-                // If both are set just use hidden_act
-                Ok(act)
-            }
-            (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl RmsNorm {
-    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(dim, "weight")?;
-        Ok(Self { weight, eps })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x_dtype = x.dtype();
-        let internal_dtype = match x_dtype {
-            DType::F16 | DType::BF16 => DType::F32,
-            d => d,
-        };
-        let hidden_size = x.dim(D::Minus1)?;
-        let x = x.to_dtype(internal_dtype)?;
-        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
-    }
+    pub(crate) vocab_size: usize,
+    pub(crate) hidden_size: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) num_hidden_layers: usize,
+    pub(crate) num_attention_heads: usize,
+    pub(crate) num_key_value_heads: usize,
+    pub(crate) hidden_act: candle_nn::Activation,
+    pub(crate) max_position_embeddings: usize,
+    pub(crate) norm_epsilon: f64,
+    pub(crate) rope_theta: f64,
+    pub(crate) use_bias: bool,
+    pub(crate) sliding_window: Option<usize>,
+    pub(crate) use_flash_attn: bool,
 }
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: QLinear,
-    up_proj: QLinear,
-    down_proj: QLinear,
-    act_fn: candle_nn::Activation,
+    c_fc: QLinear,
+    c_proj: QLinear,
+    act: candle_nn::Activation,
     params: Vec<usize>,
 }
 
 impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let hidden_sz = cfg.hidden_size;
-        let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("gate_proj"))?;
-        let up_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("up_proj"))?;
-        let down_proj = linear(intermediate_sz, hidden_sz, false, vb.pp("down_proj"))?;
+        let (h_size, i_size) = (cfg.hidden_size, cfg.intermediate_size);
+        let c_fc = linear_b(h_size, i_size, cfg.use_bias, vb.pp("c_fc"))?;
+        let c_proj = linear_b(i_size, h_size, cfg.use_bias, vb.pp("c_proj"))?;
         Ok(Self {
-            gate_proj: QLinear::from_linear(gate_proj),
-            up_proj: QLinear::from_linear(up_proj),
-            down_proj: QLinear::from_linear(down_proj),
-            act_fn: cfg.hidden_act()?,
-            params: vec![hidden_sz, intermediate_sz],
+            c_fc: QLinear::from_linear(c_fc),
+            c_proj: QLinear::from_linear(c_proj),
+            act: cfg.hidden_act,
+            params: vec![h_size, i_size],
         })
     }
 }
@@ -122,23 +62,20 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.gate_proj.is_quant() {
+        if self.c_fc.is_quant() {
             xs = xs.to_dtype(DType::F32)?;
         }
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        let mut res = (lhs * rhs)?.apply(&self.down_proj)?;
-        if self.gate_proj.is_quant() {
+        let mut res = xs
+            .apply(&self.c_fc)?
+            .apply(&self.act)?
+            .apply(&self.c_proj)?;
+        if self.c_fc.is_quant() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        vec![
-            self.gate_proj.inner(),
-            self.up_proj.inner(),
-            self.down_proj.inner(),
-        ]
+        vec![self.c_fc.inner(), self.c_proj.inner()]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -146,35 +83,29 @@ impl MlpLayer for MLP {
     fn get_params(&self) -> &[usize] {
         &self.params
     }
-    // gate, up, down
+    // c_fc, c_proj
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        let new_gate = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.gate_proj.inner_ref(), delta)
+        let new_c_fc = if let Some(ref delta) = deltas[0] {
+            merge_delta!(self.c_fc.inner_ref(), delta)
         } else {
-            self.gate_proj.inner_ref().clone()
+            self.c_fc.inner_ref().clone()
         };
-        let new_up = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.up_proj.inner_ref(), delta)
+        let new_c_proj = if let Some(ref delta) = deltas[1] {
+            merge_delta!(self.c_proj.inner_ref(), delta)
         } else {
-            self.up_proj.inner_ref().clone()
-        };
-        let new_down = if let Some(ref delta) = deltas[2] {
-            merge_delta!(self.down_proj.inner_ref(), delta)
-        } else {
-            self.down_proj.inner_ref().clone()
+            self.c_proj.inner_ref().clone()
         };
 
         Ok(Box::new(Self {
-            gate_proj: QLinear::from_old_and_qmatmul(new_gate, &self.gate_proj),
-            up_proj: QLinear::from_old_and_qmatmul(new_up, &self.up_proj),
-            down_proj: QLinear::from_old_and_qmatmul(new_down, &self.down_proj),
-            act_fn: self.act_fn,
+            c_fc: QLinear::from_old_and_qmatmul(new_c_fc, &self.c_fc),
+            c_proj: QLinear::from_old_and_qmatmul(new_c_proj, &self.c_proj),
+            act: self.act,
             params: self.params.clone(),
         }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match self.gate_proj.inner_ref() {
+        match &self.c_fc.inner_ref() {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
@@ -191,30 +122,24 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
+    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    query_pre_attn_scalar: usize,
-    attn_logit_softcapping: Option<f64>,
-    use_sliding_window: bool,
+    use_flash_attn: bool,
     sliding_window: Option<usize>,
 }
 
 impl Attention {
-    fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
-        cfg: &Config,
-        layer_idx: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = cfg.head_dim;
-        let bias = cfg.attention_bias;
-        let q_proj = linear(hidden_sz, num_heads * head_dim, bias, vb.pp("q_proj"))?;
-        let k_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
-        let v_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
-        let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
+        let head_dim = hidden_sz / num_heads;
+        let b = cfg.use_bias;
+        let q_proj = linear_b(hidden_sz, num_heads * head_dim, b, vb.pp("q_proj"))?;
+        let k_proj = linear_b(hidden_sz, num_kv_heads * head_dim, b, vb.pp("k_proj"))?;
+        let v_proj = linear_b(hidden_sz, num_kv_heads * head_dim, b, vb.pp("v_proj"))?;
+        let o_proj = linear_b(num_heads * head_dim, hidden_sz, b, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj: QLinear::from_linear(q_proj),
             k_proj: QLinear::from_linear(k_proj),
@@ -224,15 +149,10 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
+            hidden_size: hidden_sz,
             rotary_emb,
-            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
-            attn_logit_softcapping: cfg.attn_logit_softcapping,
-            use_sliding_window: layer_idx % 2 != 0,
-            sliding_window: if layer_idx % 2 != 0 {
-                Some(cfg.sliding_window)
-            } else {
-                None
-            },
+            use_flash_attn: cfg.use_flash_attn,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -240,7 +160,6 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
@@ -293,18 +212,11 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let mask = if self.use_sliding_window {
-            sliding_attention_mask
-        } else {
-            attention_mask
-        };
-
-        // self.sliding_window is None if !self.use_sliding_window
-        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
+        let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
             kv_cache,
             k,
             v,
-            mask,
+            attention_mask,
             self.sliding_window,
             false,
         )?;
@@ -312,32 +224,24 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut att = MatMul.matmul_affine_div(
-            &q.contiguous()?,
-            &k.t()?.contiguous()?,
-            (self.query_pre_attn_scalar as f64).sqrt(),
+        let mut attn_output = ScaledDotProductAttention.run_attention(
+            &q,
+            &k,
+            &v,
+            self.num_heads,
+            self.head_dim,
+            attn_mask.as_ref(),
+            self.use_flash_attn,
+            b_sz,
+            q_len,
         )?;
-
-        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
-            att = (att / attn_logit_softcapping)?;
-            att = att.tanh()?;
-            att = (att * attn_logit_softcapping)?;
-        }
-
-        let att = match mask {
-            Some(m) => att.broadcast_add(&m)?,
-            None => att,
-        };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
         let mut res = attn_output
             .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?
+            .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)?;
         if self.q_proj.is_quant() {
             res = res.to_dtype(original_dtype)?;
@@ -349,10 +253,8 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Box<dyn MlpLayer>,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
-    pre_feedforward_layernorm: RmsNorm,
-    post_feedforward_layernorm: RmsNorm,
+    input_layernorm: LayerNorm,
+    post_attention_layernorm: LayerNorm,
 }
 
 impl DecoderLayer {
@@ -367,37 +269,24 @@ impl DecoderLayer {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
-            layer_idx,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            cfg.norm_epsilon,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            cfg.norm_epsilon,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
-        )?;
-        let pre_feedforward_layernorm = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
-        )?;
-        let post_feedforward_layernorm = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
             mlp: Box::new(mlp),
             input_layernorm,
             post_attention_layernorm,
-            pre_feedforward_layernorm,
-            post_feedforward_layernorm,
         })
     }
 
@@ -405,30 +294,24 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        sliding_attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(
-                &xs,
-                attention_mask,
-                sliding_attention_mask,
-                seqlen_offsets,
-                start_offsets_kernel,
-                kv_cache,
-            )?
-            .apply(&self.post_attention_layernorm)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            start_offsets_kernel,
+            kv_cache,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
             .mlp
-            .forward(&xs.apply(&self.pre_feedforward_layernorm)?)?
-            .apply(&self.post_feedforward_layernorm)?;
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }
@@ -436,15 +319,13 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: LayerNorm,
     lm_head: QMatMul,
-    hidden_size: usize,
+    sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    sliding_window: usize,
-    final_logit_softcapping: Option<f64>,
 }
 
 impl Model {
@@ -458,8 +339,8 @@ impl Model {
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
-
         let vb_m = vb.pp("model");
+
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -467,32 +348,32 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
-                cfg.head_dim,
+                head_dim,
                 cfg.max_position_embeddings,
                 mapper
                     .device_for(layer_idx, false)
                     .unwrap_or(&normal_loading_metadata.real_device),
                 is_gptx,
-                vb.dtype(),
+                vb_m.dtype(),
             )?);
-            let layer = DecoderLayer::new(
+            layers.push(DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
-            )?;
-            layers.push(layer)
+            )?)
         }
-        let norm = RmsNorm::new(
+        let norm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            cfg.norm_epsilon,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
@@ -504,13 +385,11 @@ impl Model {
             layers,
             norm,
             lm_head,
-            device: normal_loading_metadata.real_device,
-            hidden_size: cfg.hidden_size,
+            sliding_window: cfg.sliding_window,
+            device: vb.device().clone(),
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
-            sliding_window: cfg.sliding_window,
-            final_logit_softcapping: cfg.final_logit_softcapping,
         })
     }
 
@@ -521,23 +400,17 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.forward(input_ids)?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = self.embed_tokens.forward(input_ids)?;
+
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             &cache,
+            self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
-        let sliding_attention_mask = CausalMasker
-            .make_causal_mask_with_sliding_window_as_attn_bias(
-                input_ids,
-                &cache,
-                Some(self.sliding_window),
-                xs.dtype(),
-                self.layers[0].self_attn.num_heads,
-            )?;
+
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -546,30 +419,13 @@ impl Model {
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
-                sliding_attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
-            )?;
+            )?
         }
         let xs = xs.to_device(&self.device)?;
-        let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
-        }
-
-        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
-
-        if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
-        }
-
-        extract_logits(&xs, context_lens)
+        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
     }
 }
 
@@ -699,45 +555,34 @@ impl AnyMoeBaseModelMixin for Model {
                     } => {
                         let vb_mlp = vb.pp(layer).pp(&mlp);
 
-                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
+                        let c_fc_delta = if target_modules.contains(&"c_fc".to_string()) {
                             Some(get_delta_from_lora_ab!(
                                 vb_mlp,
                                 rank,
                                 alpha,
                                 (hidden_size, intermediate_size),
-                                "gate_proj"
+                                "c_fc"
                             ))
                         } else {
                             None
                         };
-                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "up_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
+                        let c_proj_delta = if target_modules.contains(&"c_proj".to_string()) {
                             Some(get_delta_from_lora_ab!(
                                 vb_mlp,
                                 rank,
                                 alpha,
                                 (intermediate_size, hidden_size),
-                                "down_proj"
+                                "c_proj"
                             ))
                         } else {
                             None
                         };
 
-                        row.push(self.layers[layer].mlp.new_added_delta(vec![
-                            gate_proj_delta,
-                            up_proj_delta,
-                            down_proj_delta,
-                        ])?);
+                        row.push(
+                            self.layers[layer]
+                                .mlp
+                                .new_added_delta(vec![c_fc_delta, c_proj_delta])?,
+                        );
                     }
                 }
             }

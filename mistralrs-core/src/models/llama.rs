@@ -233,6 +233,13 @@ impl MlpLayer for Mlp {
             params: self.params.clone(),
         }))
     }
+
+    fn dtype_device(&self) -> (DType, Device) {
+        match &self.c_fc1 {
+            QMatMul::QTensor(q) => (DType::F32, q.device()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
+        }
+    }
 }
 
 struct Block {
@@ -500,11 +507,10 @@ impl AnyMoeBaseModelMixin for Llama {
         &mut self,
         additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
-        dtype: DType,
-        dev: &Device,
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
@@ -524,8 +530,9 @@ impl AnyMoeBaseModelMixin for Llama {
                 let hidden_size = self.blocks[layer].mlp.get_params()[0];
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
+                        let (dtype, device) = self.blocks[layer].mlp.dtype_device();
                         row.push(Box::new(Mlp::load(
-                            vb.pp(layer).pp(&mlp),
+                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                             &Config {
                                 intermediate_size: self.blocks[layer].mlp.get_params()[1],
                                 hidden_size: self.blocks[layer].mlp.get_params()[0],
@@ -586,8 +593,15 @@ impl AnyMoeBaseModelMixin for Llama {
         for (layer, expert) in layers.into_iter().zip(experts) {
             let mut experts_all = vec![self.blocks[layer].mlp.clone()];
             experts_all.extend(expert);
-            self.blocks[layer].mlp =
-                Box::new(MoeMlp::new(experts_all, config.clone(), dtype, dev)?);
+            let (dtype, device) = self.blocks[layer].mlp.dtype_device();
+            self.blocks[layer].mlp = Box::new(MoeMlp::new(
+                experts_all,
+                config.clone(),
+                dtype,
+                &device,
+                layer,
+                gate_vb.as_ref(),
+            )?);
         }
         Ok(())
     }

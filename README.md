@@ -29,13 +29,11 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
-- 🔥 AnyMoE: Build an MoE model quickly from anything, [docs here](docs/ANYMOE.md)
+- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
     ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
     ```
-
-    Paper: https://arxiv.org/abs/2405.19076
 
 - 💎 Run the Gemma 2 model
 
@@ -89,7 +87,9 @@ Mistal.rs supports several model categories:
 - First X-LoRA inference platform with first class support.
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
-- AnyMoE: Build an MoE model from anything, quickly: [docs](docs/ANYMOE.md)
+- AnyMoE: Build a memory-efficient MoE model from anything, in seconds
+    - [Paper](https://arxiv.org/abs/2405.19076)
+    - [Docs](docs/ANYMOE.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -115,6 +115,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 3 Vision|✅| |✅| |
 |Idefics 2|✅| |✅| |
 |Gemma 2|✅|✅|✅|✅|
+|Starcoder 2|✅|✅|✅|✅|
 
 ## APIs and Integrations
 
@@ -170,10 +171,10 @@ Enabling features is done by passing `--features ...` to the build system. When 
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
 |-|-|-|-|-|
-|A10 GPU, CUDA|78|78|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|6|19|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A10 GPU, CUDA|89|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|119|119|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A100 GPU, CUDA|119|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
@@ -181,6 +182,8 @@ Please submit more benchmarks via raising an issue!
 
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
+
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.1.25)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
@@ -345,6 +348,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi3`
 - `qwen2`
 - `gemma2`
+- `starcoder2`
 
 ### Architecture for vision models
 
@@ -438,6 +442,7 @@ Example:
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
+|Starcoder 2| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -453,13 +458,14 @@ Example:
 |Mistral|✅|✅| |
 |Gemma|✅| | |
 |Llama|✅|✅|✅|
-|Mixtral✅|✅| |
+|Mixtral|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
+|Starcoder 2|✅| | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -474,6 +480,7 @@ Example:
 |Phi 3 Vision| |
 |Idefics 2| |
 |Gemma 2|✅|
+|Starcoder 2|✅|
 
 
 ### Using derivative model

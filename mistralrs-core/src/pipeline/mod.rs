@@ -34,6 +34,7 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
     NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
+    Starcoder2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 pub(crate) use processing::{
@@ -498,7 +499,7 @@ pub trait AnyMoePipelineMixin {
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn amoe_done_training(&mut self) {
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
         unreachable!()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {
@@ -526,6 +527,7 @@ pub trait AnyMoePipelineMixin {
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
         _silent: bool,
+        _gate_model_id: Option<String>,
     ) -> candle_core::Result<()> {
         unreachable!()
     }
@@ -540,7 +542,7 @@ pub trait AnyMoePipelineMixin {
         _revision: Option<String>,
         _layers: Vec<usize>,
         _silent: bool,
-    ) -> Result<AnyMoeTrainingResult, candle_core::Error> {
+    ) -> Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
         unreachable!()
     }
 }

@@ -513,13 +513,15 @@ impl Pipeline for SpeculativePipeline {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(rx.as_mut(), accepted.token);
+                        .append_token(rx.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::Cfg(ref mut cfg) => {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(cfg.as_mut(), accepted.token);
+                        .append_token(cfg.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::None => {}
             }

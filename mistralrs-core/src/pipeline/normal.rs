@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader,
+    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
 };
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -165,6 +165,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Phi3 => Box::new(Phi3Loader),
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
+            NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -453,8 +454,8 @@ impl Pipeline for NormalPipeline {
 }
 
 impl AnyMoePipelineMixin for NormalPipeline {
-    fn amoe_done_training(&mut self) {
-        self.model.done_training();
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+        self.model.finish_training(gate_model_id)
     }
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         self.model.get_vars()
@@ -478,6 +479,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
         silent: bool,
+        gate_model_id: Option<String>,
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
@@ -523,8 +525,51 @@ impl AnyMoePipelineMixin for NormalPipeline {
             vbs.push(vb);
         }
 
+        let gate_vb = if let Some(gate_model_id) = gate_model_id {
+            let model_id_str = &gate_model_id;
+            let model_id = Path::new(&gate_model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut gate_filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+            assert_eq!(
+                gate_filenames.len(),
+                1,
+                "Gate model ID must contain only one .safetensors file"
+            );
+
+            let vb = from_mmaped_safetensors(
+                gate_filenames.clone(),
+                vec![],
+                dtype,
+                dev,
+                silent,
+                |_| true,
+            )?;
+            info!(
+                "Loaded gating layers from `{}`",
+                gate_filenames[0].display()
+            );
+            Some(vb)
+        } else {
+            None
+        };
+
         self.model
-            .create_anymoe_layers(vbs, config, dtype, dev, (prefix, mlp), layers, expert_type)
+            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()

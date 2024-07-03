@@ -42,10 +42,13 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             epochs: 100,
             batch_size: 4,
             expert_type: AnyMoeExpertType::FineTuned,
+            gate_model_id: None, // Set this to Some("path/to/model/id") for the pretrained gating model id
+            training: true,
+            loss_svg: None,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),
-        path: "examples/amoe.csv".to_string(),
+        path: "examples/amoe.json".to_string(),
         model_ids: vec!["HuggingFaceH4/zephyr-7b-beta".to_string()],
         layers: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     });

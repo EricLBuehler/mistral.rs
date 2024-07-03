@@ -245,7 +245,7 @@ impl Engine {
     fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
         let recognizer = match constraint {
             Constraint::Regex(rx) => {
-                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)?)?.into())
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, None)?).into())
             }
             Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
             Constraint::None => SequenceRecognizer::None,

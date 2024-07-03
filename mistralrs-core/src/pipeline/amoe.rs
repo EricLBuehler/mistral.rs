@@ -2,6 +2,7 @@ use std::{
     any::Any,
     fs::{self, File},
     io::Read,
+    path::Path,
     sync::Arc,
 };
 
@@ -11,6 +12,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::info;
@@ -70,7 +72,7 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-            self.path.clone(),
+            AnyMoeTrainingInputs::from_json(&self.path)?,
             self.prefix.clone(),
             self.mlp.clone(),
             self.model_ids.clone(),
@@ -102,7 +104,7 @@ impl Loader for AnyMoeLoader {
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
             self.config.clone(),
-            self.path.clone(),
+            AnyMoeTrainingInputs::from_json(&self.path)?,
             self.prefix.clone(),
             self.mlp.clone(),
             self.model_ids.clone(),
@@ -127,7 +129,7 @@ impl AnyMoePipeline {
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: AnyMoeConfig,
-        path: String,
+        inputs: AnyMoeTrainingInputs,
         prefix: String,
         mlp: String,
         model_ids: Vec<String>,
@@ -137,9 +139,8 @@ impl AnyMoePipeline {
         silent: bool,
     ) -> anyhow::Result<Self> {
         let this = Self { target, config };
-        let inputs = AnyMoeTrainingInputs::from_csv(path)?;
-        info!("Loaded pretraining dataset of {} samples.", inputs.0.len());
-        let AnyMoeTrainingResult { steps, final_loss } = this.amoe_pre_train(
+        info!("Loaded pretraining dataset of {} samples.", inputs.len());
+        match this.amoe_pre_train(
             inputs,
             (prefix, mlp),
             model_ids,
@@ -147,8 +148,14 @@ impl AnyMoePipeline {
             revision,
             layers,
             silent,
-        )?;
-        info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}");
+        )? {
+            Some(AnyMoeTrainingResult { steps, final_loss }) => {
+                info!("Finished training in {steps} steps. Final losses per layer: {final_loss:?}")
+            }
+            None => {
+                info!("Not training gating layer, using trained gating layer specified in config")
+            }
+        }
         Ok(this)
     }
 }
@@ -235,6 +242,7 @@ impl Pipeline for AnyMoePipeline {
 }
 
 impl AnyMoePipelineMixin for AnyMoePipeline {
+    // Training result is None if inference
     fn amoe_pre_train(
         &self,
         inputs: AnyMoeTrainingInputs,
@@ -244,7 +252,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         revision: Option<String>,
         layers: Vec<usize>,
         silent: bool,
-    ) -> anyhow::Result<AnyMoeTrainingResult, candle_core::Error> {
+    ) -> anyhow::Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
         let mut target = get_mut_arcmutex!(self.target);
         if !target.amoe_supported() {
             candle_core::bail!("AnyMoE is not supported for this model.");
@@ -263,6 +271,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             epochs,
             batch_size,
             expert_type,
+            gate_model_id,
+            training,
+            loss_svg,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -282,8 +293,18 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             layers,
             expert_type,
             silent,
+            if !training {
+                gate_model_id.clone()
+            } else {
+                None
+            },
         )?;
         let layer_vars = target.amoe_layer_vars();
+
+        // If there are no trainable params, assume we got a gate model id so no training
+        if target.amoe_base_model_trainable_params() == 0 {
+            return Ok(None);
+        }
 
         info!(
             "{} gating layers, {} trainable parameters, lr = {lr}, {epochs} epochs, batch size = {batch_size}",
@@ -308,7 +329,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             .collect::<candle_core::Result<Vec<_>>>()?;
 
         let mut rng = thread_rng();
-        let mut samples = inputs.0;
+        let mut samples = inputs.into_inner();
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
@@ -426,7 +447,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                 let cached = target.amoe_take_cached_gating_outputs();
                 for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
-                    let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
+                    let loss = candle_nn::loss::cross_entropy(
+                        &output,
+                        &labels.to_device(output.device())?,
+                    )?;
                     let gradstore = loss.backward()?;
                     optimizer.step(&gradstore)?;
                     latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
@@ -435,13 +459,50 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             }
         }
 
-        target.amoe_done_training();
+        target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
-        Ok(AnyMoeTrainingResult {
+        if let Some(loss_svg) = loss_svg {
+            let mut plot = Plot::new();
+            for gate in 0..all_losses[0].len() {
+                let gate_loss = all_losses
+                    .iter()
+                    .map(|losses| losses[gate])
+                    .collect::<Vec<_>>();
+                #[allow(clippy::cast_precision_loss)]
+                plot.add_trace(Scatter::new(
+                    (0..gate_loss.len())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .map(|x| x as f32)
+                        .collect::<Vec<_>>(),
+                    gate_loss,
+                ));
+            }
+
+            plot.set_layout(
+                plot.layout()
+                    .clone()
+                    .show_legend(false)
+                    .title(format!("Gating layers ({} layers)", all_losses[0].len()))
+                    .x_axis(Axis::new().title("Step"))
+                    .y_axis(Axis::new().title("Loss")),
+            );
+
+            let path = Path::new(&loss_svg);
+            if !path
+                .extension()
+                .is_some_and(|e| e.to_string_lossy() == *"svg")
+            {
+                candle_core::bail!("`loss_svg` must have an extension `svg`.");
+            }
+            plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
+        }
+
+        Ok(Some(AnyMoeTrainingResult {
             steps,
             final_loss: latest_loss,
-        })
+        }))
     }
 }
 

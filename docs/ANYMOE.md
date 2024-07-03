@@ -1,29 +1,34 @@
-# AnyMoE: Build an MoE model from anything, quickly
+# Build a memory-efficient MoE model from anything, in seconds
 
 AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE locally!
 
 It has the following features:
 - Apply AnyMoE to any supported model
     - `plain`
+    - `vision-plain`
 - Specify the layers to apply AnyMoE to for efficient training
 
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
+
 ## Dataset
-Currently, AnyMoE expects a CSV dataset with 2 columns: `prompt` and `expert`. For example:
-```csv
-prompt,expert
-Discuss the impact of Renaissance art on modern aesthetics,0
-Explain the significance of the theory of relativity in modern physics,1
-Analyze the themes of existentialism in 20th-century literature,0
-Describe the process of photosynthesis and its importance to ecosystems,1
-Evaluate the role of classical music in contemporary film scores,0
-Outline the steps of the scientific method and their importance in experiments,1
-Compare and contrast the philosophies of Socrates and Nietzsche,0
-Discuss the ethical implications of artificial intelligence in society,1
-Interpret the symbolism in Salvador Dalí's paintings,0
-Describe the function and structure of DNA in genetic inheritance,1
+Currently, AnyMoE expects a JSON dataset with one top-level key `row`, which is an array of objects with keys `prompt` (string), `expert` (integer), and `image_urls` (optional array of strings). For example:
+```json
+{
+    "rows": [
+        {
+            "prompt": "Discuss the impact of Renaissance art on modern aesthetics",
+            "expert": 0
+        },
+        {
+            "prompt": "Explain the significance of the theory of relativity in modern physics",
+            "expert": 1
+        },
+    ]
+}
+  
 ```
 
-For a vision model, the optional column `image_urls` is allowed which is a list of image URLs/local paths or Base64 encoded images.
+For a vision model, `image_urls` may contain an array of image URLs/local paths or Base64 encoded images.
 
 ## Experts
 AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
@@ -37,7 +42,7 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "examples/amoe.csv"
+dataset_json = "examples/amoe.json"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["HuggingFaceH4/zephyr-7b-beta"]
@@ -55,7 +60,7 @@ model_id = "HuggingFaceH4/zephyr-7b-beta"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "examples/amoe.csv"
+dataset_json = "examples/amoe.json"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["EricB/example_adapter"]
@@ -106,7 +111,7 @@ runner = Runner(
     ),
     anymoe_config=AnyMoeConfig(
         hidden_size=4096,
-        dataset_csv="examples/amoe.csv",
+        dataset_json="examples/amoe.json",
         prefix="model.layers",
         mlp="mlp",
         expert_type=AnyMoeExpertType.FineTuned(),
@@ -188,7 +193,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),
-        path: "examples/amoe.csv".to_string(),
+        path: "examples/amoe.json".to_string(),
         model_ids: vec!["typeof/zephyr-7b-beta-lora".to_string()],
         layers: vec![],
     });
