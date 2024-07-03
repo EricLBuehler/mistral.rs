@@ -8,6 +8,8 @@ It has the following features:
     - `vision-plain`
 - Specify the layers to apply AnyMoE to for efficient training
 
+> Note: Device mapping is not supported for AnyMoE models yet. This will be added the next release, 0.1.26, in 2 days.
+
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
 
 ## Dataset
