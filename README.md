@@ -29,7 +29,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
-- 🔥🧠 AnyMoE: Build a memory-efficient MoE model quickly from anything, quickly
+- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
     ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
@@ -87,7 +87,7 @@ Mistal.rs supports several model categories:
 - First X-LoRA inference platform with first class support.
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
-- AnyMoE: Build a memory-efficient MoE model from anything, quickly
+- AnyMoE: Build a memory-efficient MoE model from anything, in seconds
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
 

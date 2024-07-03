@@ -1,10 +1,11 @@
-# AnyMoE: Build an MoE model from anything, quickly
+# Build a memory-efficient MoE model from anything, in seconds
 
 AnyMoE is technique to dynamically and efficiently create MoE models. By providing a set of experts and a small pretraining dataset, you can create an MoE locally!
 
 It has the following features:
 - Apply AnyMoE to any supported model
     - `plain`
+    - `vision-plain`
 - Specify the layers to apply AnyMoE to for efficient training
 
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
