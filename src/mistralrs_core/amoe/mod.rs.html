@@ -315,6 +315,9 @@
 <a href="#315" id="315">315</a>
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -468,6 +471,9 @@
     <span class="kw">pub </span>gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(default = <span class="string">"default_true"</span>)]
     </span><span class="kw">pub </span>training: bool,
+    <span class="doccomment">/// If `training == true`, `loss_svg` will not save anything.
+    /// Otherwise, this will save a .svg file here.
+    </span><span class="kw">pub </span>loss_svg: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone)]
