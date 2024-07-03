@@ -11,7 +11,7 @@ impl MemoryUsage {
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu();
-                Ok(sys.free_memory() as usize * KB_TO_BYTES)
+                Ok(usize::try_from(sys.free_memory())? * KB_TO_BYTES)
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(_) => candle_core::cuda::cudarc::driver::result::mem_get_info().0,
