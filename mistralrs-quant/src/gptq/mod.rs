@@ -1,12 +1,10 @@
 use candle_core::{
     cuda::{
-        cudarc::{cublas::sys::cublasHandle_t, driver::DevicePtr},
-        CudaStorageSlice, WrapErr,
+        cudarc::{cublas::sys::cublasHandle_t, driver::{CudaSlice, DevicePtr}}, CudaDType, CudaStorageSlice, WrapErr
     },
     from_storage_no_op, CudaDevice, CudaStorage, Device, Result, Shape, Storage, Tensor, WithDType,
     D,
 };
-use cudarc::driver::CudaSlice;
 use ffi::gemm_half_q_half_cuda;
 use half::f16;
 
@@ -21,9 +19,9 @@ pub struct GptQMatMul {
     bit: i32,
 }
 
-fn get_cuda_slice<T: WithDType>(x: &Tensor) -> *const T {
+fn get_cuda_slice<T: WithDType + CudaDType>(x: &Tensor) -> *const T {
     match &*x.storage_and_layout().0 {
-        Storage::Cuda(a_storage) => a_storage
+        Storage::Cuda(a_storage) => *a_storage
             .as_cuda_slice::<T>()
             .expect("DType is not T")
             .device_ptr() as *const T,
@@ -31,9 +29,9 @@ fn get_cuda_slice<T: WithDType>(x: &Tensor) -> *const T {
     }
 }
 
-fn get_cuda_slice_mut<T: WithDType>(x: &mut Tensor) -> *mut T {
+fn get_cuda_slice_mut<T: WithDType + CudaDType>(x: &mut Tensor) -> *mut T {
     match &*x.storage_and_layout().0 {
-        Storage::Cuda(a_storage) => a_storage
+        Storage::Cuda(a_storage) => *a_storage
             .as_cuda_slice::<T>()
             .expect("DType is not T")
             .device_ptr() as *mut T,
@@ -70,7 +68,7 @@ impl GptQMatMul {
         let a_ptr = get_cuda_slice::<f16>(&a);
         let b_q_weight = get_cuda_slice::<u32>(&self.q_weight);
         let b_gptq_qzeros = get_cuda_slice::<u32>(&self.gptq_qzeros);
-        let b_q_scales = get_cuda_slice::<f16>(&self.q_weight);
+        let b_gptq_scales = get_cuda_slice::<f16>(&self.q_weight);
         let b_g_idx = get_cuda_slice::<i64>(&self.g_idx) as *const i32;
 
         let dev = get_cuda_device(&a);
@@ -78,14 +76,14 @@ impl GptQMatMul {
         let c_shape = Shape::from_dims(&[a.dims()[0] * self.q_weight.dims()[1]]);
         let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
 
-        let c_ptr = c.device_ptr() as *mut f16;
+        let c_ptr = *c.device_ptr() as *mut f16;
 
         let temp_dq = unsafe {
-            dev.alloc::<f16>((self.q_weight.dims()[0] / 32 * self.bit) * self.q_weight.dims()[1])
+            dev.alloc::<f16>((self.q_weight.dims()[0] / 32 * self.bit as usize) * self.q_weight.dims()[1])
                 .w()?
         };
 
-        let temp_dq_ptr = temp_dq.device_ptr() as *mut f16;
+        let temp_dq_ptr = *temp_dq.device_ptr() as *mut f16;
         unsafe {
             gemm_half_q_half_cuda(
                 gemm_handle,
@@ -101,7 +99,7 @@ impl GptQMatMul {
                 k,
                 groups,
                 use_exllama,
-                bit,
+                self.bit,
             )
         };
 

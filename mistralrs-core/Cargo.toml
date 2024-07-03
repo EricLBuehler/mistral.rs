@@ -72,6 +72,7 @@ plotly = { version = "0.9.0", features = ["kaleido"] }
 half.workspace = true
 
 [features]
+default = ["cuda"]
 pyo3_macros = ["pyo3"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle-core/cudnn"]
