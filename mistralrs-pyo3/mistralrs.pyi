@@ -65,6 +65,7 @@ class Architecture(Enum):
     Phi2 = "phi2"
     Qwen2 = "qwen2"
     Gemma2 = "gemma2"
+    Starcoder2 = "starcoder2"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -251,7 +252,7 @@ class AnyMoeConfig:
     def __init__(
         self,
         hidden_size: str,
-        dataset_csv: str,
+        dataset_json: str,
         prefix: str,
         mlp: str,
         model_ids: list[str],
@@ -259,6 +260,9 @@ class AnyMoeConfig:
         lr: float = 1e-3,
         epochs: int = 100,
         batch_size: int = 4,
+        gate_model_id: str | None = None,
+        training: bool = False,
+        loss_svg: str | None = None,
     ) -> None:
         """
         Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
@@ -271,6 +275,11 @@ class AnyMoeConfig:
         To find the hidden size:
 
             - Can be found at `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`
+
+        > Note: `gate_model_id` specifies the gating model ID. If `training == True`, then safetensors will be written here.
+            Otherwise, the pretrained safetensors will be loaded and no training occurs.
+
+        > Note: if `training == True`, `loss_svg` has no effect. Otherwise, an SVG image will be saved here.
         """
         ...
 

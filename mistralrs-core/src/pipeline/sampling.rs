@@ -74,10 +74,14 @@ pub async fn sample_sequence(
     if add_to_trie {
         match seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
-                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+                tok_trie
+                    .append_token(rx.as_mut(), second_logprobs_response.token)
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
-                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+                tok_trie
+                    .append_token(cfg.as_mut(), second_logprobs_response.token)
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
             SequenceRecognizer::None => {}
         }

@@ -3,11 +3,9 @@ use std::fmt::Debug;
 
 pub trait FunctionalRecognizer<S: Copy> {
     /// Initial state
-    fn initial(&self) -> Result<S, anyhow::Error>;
-    /// Extend the recognizer with given byte.
-    fn append(&self, state: S, byte: u8) -> S;
-    /// Check if given byte is allowed in given state.
-    fn byte_allowed(&self, state: S, byte: u8) -> bool;
+    fn initial(&self) -> S;
+    /// Extend the recognizer with given byte if allowed.
+    fn try_append(&self, state: S, byte: u8) -> Option<S>;
     /// Check if given special token is allowed in given state.
     fn special_allowed(&self, state: S, tok: SpecialToken) -> bool;
 }
@@ -20,20 +18,26 @@ pub struct StackRecognizer<S: Copy, R: FunctionalRecognizer<S>> {
 }
 
 impl<S: Copy, R: FunctionalRecognizer<S>> StackRecognizer<S, R> {
-    pub fn from(rec: R) -> anyhow::Result<Self> {
-        let stack = vec![rec.initial()?; 130];
-        let rec = StackRecognizer {
+    pub fn from(rec: R) -> Self {
+        let stack = vec![rec.initial(); 300];
+        StackRecognizer {
             rec,
             stack,
             stack_ptr: 0,
-        };
-        Ok(rec)
+        }
     }
 
-    pub fn reset(&mut self) -> anyhow::Result<()> {
+    pub fn reset(&mut self) {
         self.stack_ptr = 0;
-        self.stack[0] = self.rec.initial()?;
-        Ok(())
+        self.stack[0] = self.rec.initial();
+    }
+
+    pub fn recognizer(&self) -> &R {
+        &self.rec
+    }
+
+    pub fn recognizer_mut(&mut self) -> &mut R {
+        &mut self.rec
     }
 }
 
@@ -47,24 +51,12 @@ impl<S: Copy + Debug, R: FunctionalRecognizer<S>> Debug for StackRecognizer<S, R
 
 impl<S: Copy + Debug, R: FunctionalRecognizer<S>> Recognizer for StackRecognizer<S, R> {
     #[inline(always)]
-    fn push_byte(&mut self, byte: u8) {
-        let state = self.stack[self.stack_ptr];
-        let state = self.rec.append(state, byte);
-        self.stack_ptr += 1;
-        self.stack[self.stack_ptr] = state;
-    }
-
-    #[inline(always)]
     fn pop_bytes(&mut self, num: usize) {
         self.stack_ptr -= num;
     }
 
-    #[inline(always)]
-    fn byte_allowed(&mut self, byte: u8) -> bool {
-        self.rec.byte_allowed(self.stack[self.stack_ptr], byte)
-    }
-
     fn trie_finished(&mut self) {
+        // println!("{:?}", &self.stack[0..=self.stack_ptr]);
         assert!(self.stack_ptr == 0);
     }
 
@@ -79,11 +71,28 @@ impl<S: Copy + Debug, R: FunctionalRecognizer<S>> Recognizer for StackRecognizer
 
     #[inline(always)]
     fn try_push_byte(&mut self, byte: u8) -> bool {
-        if self.rec.byte_allowed(self.stack[self.stack_ptr], byte) {
-            self.push_byte(byte);
-            true
-        } else {
-            false
+        match self.rec.try_append(self.stack[self.stack_ptr], byte) {
+            Some(state) => {
+                self.stack_ptr += 1;
+                self.stack[self.stack_ptr] = state;
+                true
+            }
+            None => false,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct AnythingGoes {}
+
+impl FunctionalRecognizer<()> for AnythingGoes {
+    fn initial(&self) {}
+
+    fn try_append(&self, state: (), _byte: u8) -> Option<()> {
+        Some(state)
+    }
+
+    fn special_allowed(&self, _state: (), _tok: SpecialToken) -> bool {
+        true
     }
 }

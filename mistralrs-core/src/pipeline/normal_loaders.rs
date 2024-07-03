@@ -73,6 +73,8 @@ pub enum NormalLoaderType {
     Qwen2,
     #[serde(rename = "gemma2")]
     Gemma2,
+    #[serde(rename = "starcoder2")]
+    Starcoder2,
 }
 
 impl FromStr for NormalLoaderType {
@@ -87,6 +89,7 @@ impl FromStr for NormalLoaderType {
             "phi3" => Ok(Self::Phi3),
             "qwen2" => Ok(Self::Qwen2),
             "gemma2" => Ok(Self::Gemma2),
+            "starcoder2" => Ok(Self::Starcoder2),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -802,6 +805,97 @@ impl NormalModelLoader for Gemma2Loader {
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
         Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+            config,
+        )?))
+    }
+}
+
+// ======================== Starcoder2 loader
+
+#[derive(Deserialize, Debug)]
+struct Starcoder2BasicConfig {
+    vocab_size: usize,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    hidden_act: candle_nn::Activation,
+    max_position_embeddings: usize,
+    norm_epsilon: f64,
+    rope_theta: f64,
+    use_bias: bool,
+    sliding_window: Option<usize>,
+}
+
+impl Starcoder2BasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::starcoder2::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::starcoder2::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rope_theta: basic_config.rope_theta,
+            sliding_window: basic_config.sliding_window,
+            use_flash_attn,
+            norm_epsilon: basic_config.norm_epsilon,
+            use_bias: basic_config.use_bias,
+        })
+    }
+}
+
+/// [`NormalLoader`] for a Starcoder2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Starcoder2Loader;
+
+impl NormalModelLoader for Starcoder2Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::starcoder2::Model::new(
+            &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(xlora_models::XLoraStarcoder2::new(
+            &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
         )?))
     }

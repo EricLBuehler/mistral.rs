@@ -36,13 +36,14 @@ pub struct AnyMoeConfig {
     pub(crate) epochs: usize,
     pub(crate) batch_size: usize,
     pub(crate) expert_type: AnyMoeExpertType,
-    pub(crate) dataset_csv: String,
+    pub(crate) dataset_json: String,
     pub(crate) prefix: String,
     pub(crate) mlp: String,
     pub(crate) model_ids: Vec<String>,
     pub(crate) layers: Vec<usize>,
     pub(crate) gate_model_id: Option<String>,
     pub(crate) training: bool,
+    pub(crate) loss_svg: Option<String>,
 }
 
 #[pymethods]
@@ -50,7 +51,7 @@ impl AnyMoeConfig {
     #[new]
     #[pyo3(signature = (
         hidden_size,
-        dataset_csv,
+        dataset_json,
         prefix,
         mlp,
         model_ids,
@@ -61,10 +62,11 @@ impl AnyMoeConfig {
         batch_size = 4,
         gate_model_id = None,
         training = true,
+        loss_svg = None,
     ))]
     fn new(
         hidden_size: usize,
-        dataset_csv: String,
+        dataset_json: String,
         prefix: String,
         mlp: String,
         model_ids: Vec<String>,
@@ -75,6 +77,7 @@ impl AnyMoeConfig {
         batch_size: usize,
         gate_model_id: Option<String>,
         training: bool,
+        loss_svg: Option<String>,
     ) -> Self {
         Self {
             hidden_size,
@@ -82,13 +85,14 @@ impl AnyMoeConfig {
             epochs,
             batch_size,
             expert_type,
-            dataset_csv,
+            dataset_json,
             prefix,
             mlp,
             model_ids,
             layers,
             gate_model_id,
             training,
+            loss_svg,
         }
     }
 }

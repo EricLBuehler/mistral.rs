@@ -3,14 +3,16 @@ model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 
 [anymoe]
-dataset_csv = "examples/amoe.csv"
+dataset_json = "examples/amoe.json"
 prefix = "model.layers"
 mlp = "mlp"
 model_ids = ["typeof/zephyr-7b-beta-lora"]
 
 [anymoe.config]
 hidden_size = 4096
+epochs = 25
 gate_model_id = "saved_gate"
+loss_svg = "loss.svg"
 
 [anymoe.config.expert_type.lora_adapter]
 rank = 64
