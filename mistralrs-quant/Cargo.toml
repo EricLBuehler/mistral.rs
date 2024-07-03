@@ -18,6 +18,7 @@ half.workspace = true
 serde.workspace = true
 
 [features]
+default = ["cuda"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
