@@ -63,6 +63,7 @@ buildstructor = "0.5.4"
 tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
+sysinfo = "0.30.12"
 mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
 csv = "1.3.0"
 reqwest.workspace = true
@@ -80,7 +81,6 @@ metal = ["candle-core/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
-profile = []
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
