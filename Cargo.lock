@@ -2392,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.1.22"
+version = "0.1.25"
 dependencies = [
  "bindgen_cuda",
  "candle-core",
