@@ -489,7 +489,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             let path = Path::new(&loss_svg);
             if !path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy().to_string() == "svg".to_string())
+                .is_some_and(|e| e.to_string_lossy() == *"svg")
             {
                 candle_core::bail!("`loss_svg` must have an extension `svg`.");
             }
