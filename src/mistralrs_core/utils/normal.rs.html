@@ -198,6 +198,7 @@
 <a href="#198" id="198">198</a>
 <a href="#199" id="199">199</a>
 <a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -296,6 +297,7 @@
         .unwrap();
     <span class="macro">info!</span>(<span class="string">"Detected minimum CUDA compute capability {min_cc}"</span>);
     <span class="comment">// 7.5 -&gt; 750
+    </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
     </span><span class="kw">let </span>min_cc = (min_cc * <span class="number">100.</span>) <span class="kw">as </span>usize;
 
     <span class="kw">let </span><span class="kw-2">mut </span>dtypes = Vec::new();
