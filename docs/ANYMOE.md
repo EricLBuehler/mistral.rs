@@ -7,6 +7,8 @@ It has the following features:
     - `plain`
 - Specify the layers to apply AnyMoE to for efficient training
 
+https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
+
 ## Dataset
 Currently, AnyMoE expects a JSON dataset with one top-level key `row`, which is an array of objects with keys `prompt` (string), `expert` (integer), and `image_urls` (optional array of strings). For example:
 ```json
