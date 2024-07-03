@@ -530,8 +530,9 @@ impl AnyMoeBaseModelMixin for Llama {
                 let hidden_size = self.blocks[layer].mlp.get_params()[0];
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
+                        let (dtype, device) = self.blocks[layer].mlp.dtype_device();
                         row.push(Box::new(Mlp::load(
-                            vb.pp(layer).pp(&mlp),
+                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                             &Config {
                                 intermediate_size: self.blocks[layer].mlp.get_params()[1],
                                 hidden_size: self.blocks[layer].mlp.get_params()[0],

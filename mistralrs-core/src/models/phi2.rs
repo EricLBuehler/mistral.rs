@@ -551,13 +551,14 @@ impl AnyMoeBaseModelMixin for Model {
                 let hidden_size = self.layers[layer].mlp.get_params()[0];
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
+                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
                         row.push(Box::new(MLP::new(
                             &Config {
                                 intermediate_size: self.layers[layer].mlp.get_params()[1],
                                 hidden_size: self.layers[layer].mlp.get_params()[0],
                                 ..Default::default()
                             },
-                            vb.pp(layer).pp(&mlp),
+                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {
