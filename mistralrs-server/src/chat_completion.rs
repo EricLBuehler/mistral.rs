@@ -3,6 +3,8 @@ use std::{
     collections::HashMap,
     env,
     error::Error,
+    fs::{self, File},
+    io::Read,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -37,6 +39,7 @@ impl std::fmt::Display for ModelErrorMessage {
     }
 }
 impl std::error::Error for ModelErrorMessage {}
+
 pub struct Streamer {
     rx: Receiver<Response>,
     is_done: bool,
@@ -76,6 +79,7 @@ impl futures::Stream for Streamer {
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -256,15 +260,21 @@ async fn parse_request(
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
                 for url in image_urls {
-                    let bytes = match reqwest::get(url.clone()).await {
-                        Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-                        Err(e) => {
-                            if e.status().is_some_and(|code| code == StatusCode::NOT_FOUND) {
-                                general_purpose::STANDARD.decode(url)?
-                            } else {
-                                anyhow::bail!(e)
-                            }
+                    let bytes = if url.contains("http") {
+                        // Read from http
+                        match reqwest::get(url.clone()).await {
+                            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
+                            Err(e) => anyhow::bail!(e),
                         }
+                    } else if let Ok(mut f) = File::open(&url) {
+                        // Read from local file
+                        let metadata = fs::metadata(&url)?;
+                        let mut buffer = vec![0; metadata.len() as usize];
+                        f.read_exact(&mut buffer)?;
+                        buffer
+                    } else {
+                        // Decode with base64
+                        general_purpose::STANDARD.decode(url)?
                     };
                     images.push(image::load_from_memory(&bytes)?);
                 }
@@ -336,7 +346,7 @@ pub async fn chatcompletions(
             return ChatCompletionResponder::InternalError(e.into());
         }
     };
-    let sender = state.get_sender();
+    let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());
@@ -390,6 +400,7 @@ pub async fn chatcompletions(
             Response::Chunk(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
+            Response::CompletionChunk(_) => unreachable!(),
         }
     }
 }

@@ -80,6 +80,7 @@ impl<'a> Adapter<'a> {
             candle_core::DType::F32,
             device,
             silent,
+            |_| true,
         )?;
 
         Ok(Self {

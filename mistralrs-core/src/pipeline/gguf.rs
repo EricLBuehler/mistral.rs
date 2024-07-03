@@ -5,23 +5,28 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
-use crate::gguf::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
+use crate::gguf::{
+    get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
+};
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
-use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
+    TryIntoDType, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
@@ -64,9 +69,10 @@ pub struct GGUFPipeline {
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     non_granular_state: Option<NonGranularState>,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
+/// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
     config: GGUFSpecificConfig,
@@ -201,8 +207,6 @@ impl GGUFLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         Box::new(GGUFLoader {
             model_id: self.model_id,
             config: self.config,
@@ -232,8 +236,6 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        setup_logger_and_debug();
-
         let model_id = if let Some(id) = model_id {
             Some(id)
         } else if let Some(xlora_order) = xlora_order.clone() {
@@ -288,7 +290,7 @@ impl Loader for GGUFLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -303,14 +305,14 @@ impl Loader for GGUFLoader {
             self.quantized_filename.clone(),
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        _: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -323,7 +325,11 @@ impl Loader for GGUFLoader {
         }
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!("Loading model `{}` on {device:?}...", self.get_id());
+            info!(
+                "Loading model `{}` on {}.",
+                self.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -377,6 +383,14 @@ impl Loader for GGUFLoader {
             }
         };
 
+        // Only load gguf chat template if there is nothing else
+        let gguf_chat_template =
+            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
+                get_gguf_chat_template(&model)?
+            } else {
+                None
+            };
+
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -420,7 +434,7 @@ impl Loader for GGUFLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let mut chat_template = get_chat_template(paths, &self.chat_template);
+        let mut chat_template = get_chat_template(paths, &self.chat_template, gguf_chat_template);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
@@ -465,7 +479,7 @@ impl Loader for GGUFLoader {
                     tgt_non_granular_index,
                 }
             }),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -474,7 +488,8 @@ impl Loader for GGUFLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: DType::F32,
+            }),
         })))
     }
 
@@ -508,13 +523,13 @@ impl IsqPipelineMixin for GGUFPipeline {
 }
 
 impl CacheManagerMixin for GGUFPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -572,14 +587,14 @@ impl MetadataMixin for GGUFPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -591,14 +606,14 @@ impl Pipeline for GGUFPipeline {
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
+            Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::Phi2(ref mut model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
-            Model::XLoraLlama(ref mut model) => model.forward(
+            Model::Phi2(ref model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
+            Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -609,8 +624,8 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Phi3(ref mut model) => model.forward(&input_ids, &seqlen_offsets),
-            Model::XLoraPhi3(ref mut model) => model.forward(
+            Model::Phi3(ref model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -637,3 +652,6 @@ impl Pipeline for GGUFPipeline {
         ModelCategory::Text
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for GGUFPipeline {}

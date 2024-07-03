@@ -3,9 +3,10 @@ use std::fs::File;
 use serde::Deserialize;
 
 use crate::{
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig,
 };
 
 fn default_repeat_last_n() -> usize {
@@ -16,9 +17,17 @@ fn default_one() -> usize {
     1
 }
 
+fn default_dtype() -> ModelDType {
+    ModelDType::Auto
+}
+
+fn default_empty_vec_usize() -> Vec<usize> {
+    Vec::new()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-enum TomlModelSelected {
+pub enum TomlModelSelected {
     /// Select a plain model, without quantization or adapters
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
@@ -26,6 +35,10 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
     },
 
     /// Select an X-LoRA architecture
@@ -45,6 +58,10 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
     },
 
     /// Select a LoRA architecture
@@ -60,6 +77,10 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: NormalLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
     },
 
     /// Select a GGUF model.
@@ -199,6 +220,10 @@ enum TomlModelSelected {
 
         /// The architecture of the model.
         arch: VisionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
     },
 }
 
@@ -209,6 +234,28 @@ pub struct SpeculativeTomlModelSelected {
 
     /// Base model
     draft_model: TomlModelSelected,
+}
+
+#[derive(Deserialize)]
+pub struct AnyMoeTomlModelSelected {
+    /// Config
+    config: AnyMoeConfig,
+
+    /// Base model
+    dataset_json: String,
+
+    /// Prefix of the mlp key (the part before the layer number: "a.b.c" in "a.b.c.0.mlp")
+    prefix: String,
+
+    /// Name of the mlp key (the part before the layer number: "mlp" in "a.b.c.0.mlp")
+    mlp: String,
+
+    /// Expert model ids
+    model_ids: Vec<String>,
+
+    /// Layer ids (zero indexed) of layers to apply AnyMoE to, if empty will use all
+    #[serde(default = "default_empty_vec_usize")]
+    layers: Vec<usize>,
 }
 
 #[derive(Deserialize)]
@@ -225,6 +272,9 @@ pub struct TomlSelector {
 
     /// Speculative model selector
     speculative: Option<SpeculativeTomlModelSelected>,
+
+    /// AnyMoE config
+    anymoe: Option<AnyMoeTomlModelSelected>,
 }
 
 #[derive(Clone)]
@@ -242,13 +292,32 @@ pub struct TomlLoaderArgs {
     pub no_kv_cache: bool,
 }
 
+pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
+    match model.model {
+        TomlModelSelected::Plain { dtype, .. }
+        | TomlModelSelected::Lora { dtype, .. }
+        | TomlModelSelected::XLora { dtype, .. }
+        | TomlModelSelected::VisionPlain { dtype, .. } => dtype,
+        TomlModelSelected::GGUF { .. }
+        | TomlModelSelected::LoraGGUF { .. }
+        | TomlModelSelected::GGML { .. }
+        | TomlModelSelected::LoraGGML { .. }
+        | TomlModelSelected::XLoraGGUF { .. }
+        | TomlModelSelected::XLoraGGML { .. } => ModelDType::Auto,
+    }
+}
+
 fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
 ) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match model {
-        TomlModelSelected::Plain { model_id, arch } => NormalLoaderBuilder::new(
+        TomlModelSelected::Plain {
+            model_id,
+            arch,
+            dtype: _,
+        } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 repeat_last_n: args.repeat_last_n,
@@ -264,6 +333,7 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -288,6 +358,7 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             arch,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -440,7 +511,11 @@ fn loader_from_selected(
             )?,
         )
         .build(),
-        TomlModelSelected::VisionPlain { model_id, arch } => VisionLoaderBuilder::new(
+        TomlModelSelected::VisionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 repeat_last_n: args.repeat_last_n,
@@ -474,6 +549,27 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
                 config: SpeculativeConfig {
                     gamma: speculative.gamma,
                 },
+            })
+        } else {
+            loader
+        };
+        let loader = if let Some(AnyMoeTomlModelSelected {
+            config,
+            dataset_json,
+            prefix,
+            mlp,
+            model_ids,
+            layers,
+        }) = selector.anymoe
+        {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config,
+                path: dataset_json,
+                prefix,
+                mlp,
+                model_ids,
+                layers,
             })
         } else {
             loader

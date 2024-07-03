@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::QMatMul;
 use candle_core::quantized::{ggml_file, gguf_file};
+use candle_core::quantized::{QMatMul, QTensor};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 
@@ -10,6 +10,7 @@ use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductA
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
+use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 
 const MAX_SEQ_LEN: u32 = 4096;
@@ -127,7 +128,7 @@ struct LayerWeights {
 
 impl LayerWeights {
     fn forward_attn(
-        &mut self,
+        &self,
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
@@ -142,21 +143,34 @@ impl LayerWeights {
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+        } else {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+        };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 {
+        if q.rank() == 3 && seq_len != 1 {
             q = q
                 .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
                 .transpose(1, 2)?
                 .contiguous()?;
             k = k
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?;
+                .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+                .contiguous()?;
         }
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
@@ -211,7 +225,9 @@ impl ModelConfig::FromGGML for ModelWeights {
         let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in 0..ct.hparams.n_layer {
+        for layer_idx in
+            NiceProgressBar::<_, 'b'>(0..ct.hparams.n_layer, "Loading repeating layers")
+        {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
@@ -345,8 +361,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
+
         let mapper = mapper.into_mapper(block_count, device)?;
-        for layer_idx in 0..block_count {
+
+        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = RotaryEmbedding::new_partial(
@@ -380,18 +398,69 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 let feed_forward_gate_inp =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
-                for i in 0..n_expert {
-                    let feed_forward_w1 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
-                    let feed_forward_w2 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"), device)?;
-                    let feed_forward_w3 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
-                    experts.push(Mlp {
-                        feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                        feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                        feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
-                    })
+                match ct.tensor(reader, &format!("{prefix}.ffn_gate_exps.weight"), device) {
+                    Ok(feed_forward_gate_exps) => {
+                        let feed_forward_down_exps =
+                            ct.tensor(reader, &format!("{prefix}.ffn_down_exps.weight"), device)?;
+                        let feed_forward_up_exps =
+                            ct.tensor(reader, &format!("{prefix}.ffn_up_exps.weight"), device)?;
+
+                        let dequant_ffn_gate = feed_forward_gate_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+                        let dequant_ffn_down = feed_forward_down_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+                        let dequant_ffn_up = feed_forward_up_exps
+                            .dequantize(device)?
+                            .chunk(n_expert, 0)?;
+
+                        assert_eq!(dequant_ffn_up.len(), dequant_ffn_down.len());
+                        assert_eq!(dequant_ffn_gate.len(), dequant_ffn_down.len());
+                        assert_eq!(dequant_ffn_gate.len(), n_expert);
+
+                        let gate_type = feed_forward_gate_exps.dtype();
+                        let down_type = feed_forward_down_exps.dtype();
+                        let up_type = feed_forward_up_exps.dtype();
+
+                        for (ff_w1, (ff_w2, ff_w3)) in dequant_ffn_gate
+                            .into_iter()
+                            .zip(dequant_ffn_down.into_iter().zip(dequant_ffn_up))
+                        {
+                            experts.push(Mlp {
+                                feed_forward_w1: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w1, gate_type,
+                                )?)?,
+                                feed_forward_w2: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w2, down_type,
+                                )?)?,
+                                feed_forward_w3: QMatMul::from_qtensor(QTensor::quantize(
+                                    &ff_w3, up_type,
+                                )?)?,
+                            })
+                        }
+                    }
+                    Err(_) => {
+                        for i in 0..n_expert {
+                            let feed_forward_w1 = ct.tensor(
+                                reader,
+                                &format!("{prefix}.ffn_gate.{i}.weight"),
+                                device,
+                            )?;
+                            let feed_forward_w2 = ct.tensor(
+                                reader,
+                                &format!("{prefix}.ffn_down.{i}.weight"),
+                                device,
+                            )?;
+                            let feed_forward_w3 =
+                                ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                            experts.push(Mlp {
+                                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
+                                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
+                                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                            })
+                        }
+                    }
                 }
                 MlpOrMoe::MoE {
                     n_expert_used,
@@ -431,7 +500,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
 impl ModelWeights {
     pub fn forward(
-        &mut self,
+        &self,
         x: &Tensor,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -445,7 +514,7 @@ impl ModelWeights {
             DType::F32,
             self.layers[0].n_head,
         )?;
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
             }

@@ -1,0 +1,45 @@
+{
+    "rows": [
+        {
+          "prompt": "Discuss the impact of Renaissance art on modern aesthetics",
+          "expert": 0
+        },
+        {
+          "prompt": "Explain the significance of the theory of relativity in modern physics",
+          "expert": 1
+        },
+        {
+          "prompt": "Analyze the themes of existentialism in 20th-century literature",
+          "expert": 0
+        },
+        {
+          "prompt": "Describe the process of photosynthesis and its importance to ecosystems",
+          "expert": 1
+        },
+        {
+          "prompt": "Evaluate the role of classical music in contemporary film scores",
+          "expert": 0
+        },
+        {
+          "prompt": "Outline the steps of the scientific method and their importance in experiments",
+          "expert": 1
+        },
+        {
+          "prompt": "Compare and contrast the philosophies of Socrates and Nietzsche",
+          "expert": 0
+        },
+        {
+          "prompt": "Discuss the ethical implications of artificial intelligence in society",
+          "expert": 1
+        },
+        {
+          "prompt": "Interpret the symbolism in Salvador Dalí's paintings",
+          "expert": 0
+        },
+        {
+          "prompt": "Describe the function and structure of DNA in genetic inheritance",
+          "expert": 1
+        }
+    ]
+}
+  

@@ -33,6 +33,7 @@ pub enum RequestMessage {
 }
 
 #[derive(Clone)]
+/// A normal request request to the `MistralRs`
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,

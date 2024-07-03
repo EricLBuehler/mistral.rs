@@ -1,6 +1,7 @@
 mod classifier;
 mod config;
 mod gemma;
+mod gemma2;
 mod llama;
 mod mistral;
 mod mixtral;
@@ -8,6 +9,7 @@ mod phi2;
 mod phi3;
 mod quantized_llama;
 mod quantized_phi3;
+mod starcoder2;
 
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ use crate::lora::Ordering;
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
+pub(crate) use gemma2::Model as XLoraGemma2;
 pub(crate) use llama::XLoraLlama;
 pub(crate) use mistral::XLoraModel as XLoraMistral;
 pub(crate) use mixtral::XLoraModel as XLoraMixtral;
@@ -22,6 +25,7 @@ pub(crate) use phi2::Model as XLoraPhi2;
 pub(crate) use phi3::Model as XLoraPhi3;
 pub(crate) use quantized_llama::ModelWeights as XLoraQLlama;
 pub(crate) use quantized_phi3::ModelWeights as XLoraQPhi3;
+pub(crate) use starcoder2::Model as XLoraStarcoder2;
 use tokio::sync::Mutex;
 
 use crate::{get_mut_arcmutex, pipeline::Cache};
@@ -39,7 +43,7 @@ trait ScalingsMaker {
     fn dtype(&self) -> DType;
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -53,7 +57,7 @@ trait ScalingsMaker {
 
     #[allow(clippy::too_many_arguments)]
     fn get_scalings(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],

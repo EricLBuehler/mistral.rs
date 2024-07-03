@@ -1,12 +1,11 @@
-// Originally from https://github.com/microsoft/aici/blob/64f0b551dee49e320e9b3b92289f3d6f2e888276/aicirt/src/bintokens.rs
-// Licensed under the MIT license
-
-use crate::aici::{bytes::TokRxInfo, toktree::TokTrie};
+use crate::aici::bytes::TokRxInfo;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use tokenizers::{normalizers::Sequence, NormalizerWrapper, Tokenizer};
-use tracing::{error, warn};
+use tracing::warn;
+
+use super::toktree::TokTrie;
 
 #[derive(Serialize, Deserialize)]
 pub struct ByteTokenizer {
@@ -17,9 +16,13 @@ pub struct ByteTokenizer {
     token_bytes: Vec<Vec<u8>>,
     pub special: BTreeMap<String, u32>,
 }
-fn is_self_mapped(c: char) -> bool {
+
+// useful when debugging this: https://www.cogsci.ed.ac.uk/~richard/utf-8.cgi
+
+const fn is_self_mapped(c: char) -> bool {
     matches!(c, '!'..='~' | '\u{00A1}'..='\u{00AC}' | '\u{00AE}'..='\u{00FF}')
 }
+
 fn build_char_map() -> HashMap<char, u8> {
     let mut res = HashMap::default();
     let mut k = 0x100u32;
@@ -88,7 +91,6 @@ impl ByteTokenizer {
             bail!("can't determine decoder type: {:?}", hft.get_decoder());
         }
 
-        #[allow(clippy::cast_possible_truncation)]
         let vocab_size = hft.get_vocab_size(true) as u32;
         let added = hft.get_added_tokens_decoder();
 
@@ -145,7 +147,7 @@ impl ByteTokenizer {
                     let bytes = match bytes {
                         Ok(b) => b,
                         Err(e) => {
-                            error!("error: {} for {:?}", e, tok_name);
+                            println!("error: {} for {:?}", e, tok_name);
                             continue;
                         }
                     };

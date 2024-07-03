@@ -70,7 +70,7 @@ pub struct Sampler {
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-// Top-n logprobs element
+/// Top-n logprobs element
 pub struct TopLogprob {
     pub token: u32,
     pub logprob: f32,

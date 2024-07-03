@@ -10,6 +10,31 @@ pub struct ToTensor;
 
 impl ToTensor {
     fn to_tensor(device: &Device, channels: usize, data: Vec<Vec<Vec<u8>>>) -> Result<Tensor> {
+        ToTensorNoNorm::to_tensor(device, channels, data)? / 255.0f64
+    }
+}
+
+impl ImageTransform for ToTensor {
+    type Input = DynamicImage;
+    type Output = Tensor;
+    fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {
+        let num_channels = n_channels(x);
+        let data = get_pixel_data(
+            num_channels,
+            x.to_rgba8(),
+            x.dimensions().1 as usize,
+            x.dimensions().0 as usize,
+        );
+        Self::to_tensor(device, num_channels, data)
+    }
+}
+
+/// Convert an image to a tensor without normalizing to `[0.0, 1.0]`.
+/// The tensor's shape is (channels, height, width).
+pub struct ToTensorNoNorm;
+
+impl ToTensorNoNorm {
+    fn to_tensor(device: &Device, channels: usize, data: Vec<Vec<Vec<u8>>>) -> Result<Tensor> {
         let mut accum = Vec::new();
         for row in data {
             let mut row_accum = Vec::new();
@@ -22,13 +47,11 @@ impl ToTensor {
             let row = Tensor::cat(&row_accum, 0)?;
             accum.push(row.t()?.unsqueeze(1)?);
         }
-        let t = Tensor::cat(&accum, 1)?.to_device(device)?;
-        // Rescale to between 0 and 1
-        t / 255.0f64
+        Tensor::cat(&accum, 1)?.to_device(device)
     }
 }
 
-impl ImageTransform for ToTensor {
+impl ImageTransform for ToTensorNoNorm {
     type Input = DynamicImage;
     type Output = Tensor;
     fn map(&self, x: &Self::Input, device: &Device) -> Result<Self::Output> {
@@ -72,8 +95,7 @@ impl ImageTransform for Normalize {
     }
 }
 
-/// Do what `ToTensor` does, but also resize the image without preserving
-/// aspect ratio.
+/// Resize the image via nearest interpolation.
 pub struct InterpolateResize {
     pub target_w: usize,
     pub target_h: usize,
@@ -87,6 +109,39 @@ impl ImageTransform for InterpolateResize {
         x.unsqueeze(0)?
             .interpolate2d(self.target_h, self.target_w)?
             .squeeze(0)
+    }
+}
+
+impl<T: ImageTransform<Input = E, Output = E>, E: Clone> ImageTransform for Option<T> {
+    type Input = T::Input;
+    type Output = T::Output;
+
+    fn map(&self, x: &T::Input, dev: &Device) -> Result<T::Output> {
+        if let Some(this) = self {
+            this.map(x, dev)
+        } else {
+            Ok(x.clone())
+        }
+    }
+}
+
+/// Multiply the pixe values by the provided factor.
+///
+/// Each pixel value is calculated as follows: x = x * factor
+pub struct Rescale {
+    pub factor: Option<f64>,
+}
+
+impl ImageTransform for Rescale {
+    type Input = Tensor;
+    type Output = Self::Input;
+
+    fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
+        if let Some(factor) = self.factor {
+            x * factor
+        } else {
+            Ok(x.clone())
+        }
     }
 }
 

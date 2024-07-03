@@ -3,11 +3,13 @@ pub(crate) mod gguf_metadata;
 #[cfg(feature = "memory_usage")]
 pub(crate) mod memory_usage;
 pub(crate) mod model_config;
+pub(crate) mod normal;
 pub(crate) mod progress;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod varbuilder_utils;
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! get_mut_arcmutex {
     ($thing:expr) => {
@@ -19,6 +21,7 @@ macro_rules! get_mut_arcmutex {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! handle_seq_error {
     ($fallible:expr, $response:expr) => {
@@ -36,6 +39,7 @@ macro_rules! handle_seq_error {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! handle_seq_error_ok {
     ($fallible:expr, $response:expr) => {
@@ -53,6 +57,7 @@ macro_rules! handle_seq_error_ok {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! handle_seq_error_stateaware_ok {
     ($fallible:expr, $seq:expr) => {
@@ -72,6 +77,7 @@ macro_rules! handle_seq_error_stateaware_ok {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
     ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr) => {
@@ -166,7 +172,7 @@ macro_rules! handle_pipeline_forward_error {
                     seq.set_state(SequenceState::Error);
                 }
 
-                let mut p = get_mut_arcmutex!($pipeline);
+                let p = get_mut_arcmutex!($pipeline);
                 // Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
@@ -179,6 +185,7 @@ macro_rules! handle_pipeline_forward_error {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! get_mut_group {
     ($this:expr) => {
@@ -190,6 +197,7 @@ macro_rules! get_mut_group {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! get_bias_if_not_allowed {
     ($tok_trie:expr, $rx:expr, $next_token_id:expr) => {
@@ -203,6 +211,7 @@ macro_rules! get_bias_if_not_allowed {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! sample_async {
     (
@@ -237,6 +246,7 @@ macro_rules! sample_async {
     };
 }
 
+#[doc(hidden)]
 #[macro_export]
 macro_rules! serde_default_fn {
     ($t:ty, $name:ident, $v:expr) => {

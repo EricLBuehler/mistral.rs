@@ -5,8 +5,8 @@ use super::{
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -16,11 +16,13 @@ use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
-use crate::{do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, DEBUG};
+use crate::{
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+};
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
@@ -37,9 +39,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 enum Model {
     Llama(QLlama),
@@ -54,9 +54,10 @@ pub struct GGMLPipeline {
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     non_granular_state: Option<NonGranularState>,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
+/// A loader for a GGML model.
 pub struct GGMLLoader {
     model_id: String,
     config: GGMLSpecificConfig,
@@ -166,8 +167,6 @@ impl GGMLLoaderBuilder {
     }
 
     pub fn build(self) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         Box::new(GGMLLoader {
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -199,8 +198,6 @@ impl GGMLLoader {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
-        setup_logger_and_debug();
-
         let model_id = if let Some(id) = model_id {
             id
         } else {
@@ -231,26 +228,12 @@ impl Loader for GGMLLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        _: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let is_debug = std::env::var("MISTRALRS_DEBUG")
-            .unwrap_or_default()
-            .contains('1');
-        DEBUG.store(is_debug, std::sync::atomic::Ordering::Relaxed);
-
-        let filter = EnvFilter::builder()
-            .with_default_directive(if is_debug {
-                LevelFilter::INFO.into()
-            } else {
-                LevelFilter::DEBUG.into()
-            })
-            .from_env_lossy();
-        tracing_subscriber::fmt().with_env_filter(filter).init();
-
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
@@ -259,7 +242,11 @@ impl Loader for GGMLLoader {
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
-        info!("Loading model `{}` on {device:?}...", self.get_id());
+        info!(
+            "Loading model `{}` on {}.",
+            self.get_id(),
+            device.device_pretty_repr()
+        );
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
         let model = ggml_file::Content::read(&mut file, device)
@@ -319,7 +306,7 @@ impl Loader for GGMLLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template);
+        let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
@@ -344,7 +331,7 @@ impl Loader for GGMLLoader {
                     tgt_non_granular_index,
                 }
             }),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -353,7 +340,8 @@ impl Loader for GGMLLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: DType::F32,
+            }),
         })))
     }
 
@@ -362,7 +350,7 @@ impl Loader for GGMLLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -377,7 +365,7 @@ impl Loader for GGMLLoader {
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     fn get_id(&self) -> String {
@@ -410,13 +398,13 @@ impl IsqPipelineMixin for GGMLPipeline {
 }
 
 impl CacheManagerMixin for GGMLPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -465,14 +453,14 @@ impl MetadataMixin for GGMLPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -484,13 +472,13 @@ impl Pipeline for GGMLPipeline {
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
-            Model::Llama(ref mut model) => model.forward(
+            Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
             ),
-            Model::XLoraLlama(ref mut model) => model.forward(
+            Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -517,3 +505,6 @@ impl Pipeline for GGMLPipeline {
         ModelCategory::Text
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for GGMLPipeline {}

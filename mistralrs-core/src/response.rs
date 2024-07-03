@@ -23,6 +23,7 @@ macro_rules! generate_repr {
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion response message.
 pub struct ResponseMessage {
     pub content: String,
     pub role: String,
@@ -33,6 +34,7 @@ generate_repr!(ResponseMessage);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Delta in content for streaming response.
 pub struct Delta {
     pub content: String,
     pub role: String,
@@ -43,6 +45,7 @@ generate_repr!(Delta);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// A logprob with the top logprobs for this token.
 pub struct ResponseLogprob {
     pub token: String,
     pub logprob: f32,
@@ -55,6 +58,7 @@ generate_repr!(ResponseLogprob);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Logprobs per token.
 pub struct Logprobs {
     pub content: Option<Vec<ResponseLogprob>>,
 }
@@ -64,6 +68,7 @@ generate_repr!(Logprobs);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion choice.
 pub struct Choice {
     pub finish_reason: String,
     pub index: usize,
@@ -76,6 +81,7 @@ generate_repr!(Choice);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
     pub index: usize,
@@ -84,6 +90,19 @@ pub struct ChunkChoice {
 }
 
 generate_repr!(ChunkChoice);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+/// Chat completion streaming chunk choice.
+pub struct CompletionChunkChoice {
+    pub text: String,
+    pub index: usize,
+    pub logprobs: Option<ResponseLogprob>,
+    pub finish_reason: Option<String>,
+}
+
+generate_repr!(CompletionChunkChoice);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
@@ -122,6 +141,7 @@ generate_repr!(ChatCompletionResponse);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Chat completion streaming request chunk.
 pub struct ChatCompletionChunkResponse {
     pub id: String,
     pub choices: Vec<ChunkChoice>,
@@ -136,6 +156,7 @@ generate_repr!(ChatCompletionChunkResponse);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// Completion request choice.
 pub struct CompletionChoice {
     pub finish_reason: String,
     pub index: usize,
@@ -161,18 +182,34 @@ pub struct CompletionResponse {
 
 generate_repr!(CompletionResponse);
 
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+/// Completion request choice.
+pub struct CompletionChunkResponse {
+    pub id: String,
+    pub choices: Vec<CompletionChunkChoice>,
+    pub created: u128,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+}
+
+generate_repr!(CompletionChunkResponse);
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
-/// - Chat (no suffix or prefix)
+/// - Chat (no prefix)
 /// - Completion (Completion- prefix)
 pub enum Response {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
-    ModelError(String, ChatCompletionResponse),
     // Chat
+    ModelError(String, ChatCompletionResponse),
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
     // Completion
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkResponse),
 }

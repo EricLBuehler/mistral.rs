@@ -1,14 +1,16 @@
 #![allow(clippy::too_many_arguments)]
 
+use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
 use candle_core::{quantized::GgmlDType, Result};
 use either::Either;
 use indexmap::IndexMap;
-use reqwest::StatusCode;
 use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::Debug,
+    fs,
+    io::Read,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -17,8 +19,9 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    ChatCompletionResponse, CompletionResponse, Constraint, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
+    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
     Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
     TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
@@ -29,6 +32,7 @@ use pyo3::{
     types::{PyList, PyString},
 };
 use std::fs::File;
+mod anymoe;
 mod stream;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
@@ -335,6 +339,7 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
+    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -346,7 +351,8 @@ impl Runner {
         which_draft = None,
         chat_template = None,
         num_device_layers = None,
-        in_situ_quant = None
+        in_situ_quant = None,
+        anymoe_config = None,
     ))]
     fn new(
         which: Which,
@@ -357,8 +363,9 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<usize>,
+        num_device_layers: Option<Either<usize, Vec<String>>>,
         in_situ_quant: Option<String>,
+        anymoe_config: Option<AnyMoeConfig>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -400,6 +407,28 @@ impl Runner {
         } else {
             loader
         };
+        let loader = if let Some(amoe_conf) = anymoe_config {
+            Box::new(AnyMoeLoader {
+                target: loader,
+                config: mistralrs_core::AnyMoeConfig {
+                    hidden_size: amoe_conf.hidden_size,
+                    lr: amoe_conf.lr,
+                    epochs: amoe_conf.epochs,
+                    batch_size: amoe_conf.batch_size,
+                    expert_type: amoe_conf.expert_type.into(),
+                    gate_model_id: amoe_conf.gate_model_id.clone(),
+                    training: amoe_conf.training,
+                    loss_svg: amoe_conf.loss_svg.clone(),
+                },
+                path: amoe_conf.dataset_json,
+                prefix: amoe_conf.prefix,
+                mlp: amoe_conf.mlp,
+                model_ids: amoe_conf.model_ids,
+                layers: amoe_conf.layers,
+            })
+        } else {
+            loader
+        };
 
         let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
         let isq = if let Some(isq) = in_situ_quant {
@@ -407,17 +436,59 @@ impl Runner {
         } else {
             None
         };
+
+        let mapper = match num_device_layers {
+            Some(Either::Right(device_layers)) => {
+                if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
+                    let layers = device_layers[0].parse::<usize>().unwrap();
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ])
+                } else {
+                    let mut mapping = Vec::new();
+                    for layer in device_layers {
+                        let split = layer.splitn(2, ':').collect::<Vec<_>>();
+                        if split.len() < 2 {
+                            panic!("Expected layer to be of format ORD:NUM, got {layer}");
+                        }
+                        let ord = split[0]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[0]));
+                        let num = split[1]
+                            .parse::<usize>()
+                            .unwrap_or_else(|_| panic!("Failed to parse {} as integer.", split[1]));
+                        for DeviceLayerMapMetadata { ordinal, layers: _ } in &mapping {
+                            if *ordinal == ord {
+                                panic!("Duplicate ordinal {ord}");
+                            }
+                        }
+                        mapping.push(DeviceLayerMapMetadata {
+                            ordinal: ord,
+                            layers: num,
+                        });
+                    }
+                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                }
+            }
+            Some(Either::Left(n_device_layers)) => {
+                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
+                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                    ordinal: 0,
+                    layers: n_device_layers,
+                }])
+            }
+            None => DeviceMapMetadata::dummy(),
+        };
+
         let pipeline = loader
             .load_model_from_hf(
                 None,
                 TokenSource::from_str(token_source)
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                None,
+                &ModelDType::Auto,
                 &device,
                 true, // Silent for jupyter
-                num_device_layers
-                    .map(DeviceMapMetadata::from_num_device_layers)
-                    .unwrap_or(DeviceMapMetadata::dummy()),
+                mapper,
                 isq,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -603,22 +674,29 @@ impl Runner {
                         if !image_urls.is_empty() {
                             let mut images = Vec::new();
                             for url in image_urls {
-                                let bytes = match reqwest::blocking::get(url.clone()) {
-                                    Ok(http_resp) => http_resp
-                                        .bytes()
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        .to_vec(),
-                                    Err(e) => {
-                                        if e.status()
-                                            .is_some_and(|code| code == StatusCode::NOT_FOUND)
-                                        {
-                                            general_purpose::STANDARD
-                                                .decode(url)
-                                                .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        } else {
-                                            return Err(PyValueError::new_err(e.to_string()));
+                                let bytes = if url.contains("http") {
+                                    // Read from http
+                                    match reqwest::blocking::get(url.clone()) {
+                                        Ok(http_resp) => http_resp
+                                            .bytes()
+                                            .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                            .to_vec(),
+                                        Err(e) => {
+                                            return Err(PyValueError::new_err(format!("{e}")))
                                         }
                                     }
+                                } else if let Ok(mut f) = File::open(&url) {
+                                    // Read from local file
+                                    let metadata = fs::metadata(&url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                                    let mut buffer = vec![0; metadata.len() as usize];
+                                    f.read_exact(&mut buffer)?;
+                                    buffer
+                                } else {
+                                    // Decode with base64
+                                    general_purpose::STANDARD
+                                        .decode(url)
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
                                 };
                                 images.push(
                                     image::load_from_memory(&bytes)
@@ -666,7 +744,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
 
             if request.stream {
@@ -683,6 +761,7 @@ impl Runner {
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
                 }
             }
         })
@@ -755,7 +834,7 @@ impl Runner {
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
-            let sender = self.runner.get_sender();
+            let sender = self.runner.get_sender()?;
             sender.blocking_send(model_request).unwrap();
             let response = rx.blocking_recv().unwrap();
 
@@ -770,6 +849,7 @@ impl Runner {
                 Response::Chunk(_) => unreachable!(),
                 Response::Done(_) => unreachable!(),
                 Response::ModelError(_, _) => unreachable!(),
+                Response::CompletionChunk(_) => unreachable!(),
             }
         })
     }
@@ -779,14 +859,18 @@ impl Runner {
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
         let request =
             _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
 
     /// Send a request to make the specified adapters the active adapters for the model.
     fn activate_adapters(&self, adapter_names: Vec<String>) {
         let request = _Request::ActivateAdapters(adapter_names);
-        self.runner.get_sender().blocking_send(request).unwrap();
+        self.runner
+            .get_sender()
+            .unwrap()
+            .blocking_send(request)
+            .unwrap();
     }
 }
 
@@ -1021,12 +1105,16 @@ impl ChatCompletionRequest {
 
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    initialize_logging();
+
     m.add_class::<Runner>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<VisionArchitecture>()?;
+    m.add_class::<AnyMoeConfig>()?;
+    m.add_class::<AnyMoeExpertType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

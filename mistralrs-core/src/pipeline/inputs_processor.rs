@@ -47,6 +47,8 @@ pub mod text_models_inputs_processor {
 
     use super::{InputsProcessor, InputsProcessorType};
 
+    const VIA_F16_TOK_THRESHOLD: usize = 512;
+
     pub struct InputMetadata {
         pub input: Tensor,
         pub positions: Vec<usize>,
@@ -73,12 +75,8 @@ pub mod text_models_inputs_processor {
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
-            let offset = if let Some((_, offset)) = last_n_context_len {
-                offset
-            } else {
-                0
-            };
-            seqlen_offsets.push(offset);
+            let offset = last_n_context_len.unwrap_or_default();
+            seqlen_offsets.push(offset.1);
 
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
             context_lens.push((
@@ -112,8 +110,8 @@ pub mod text_models_inputs_processor {
         }
         let positions_kernel = Tensor::cat(&tmp, 0)?;
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
-        // Only use matmul via f16 if prompt and seqlen > 32
-        if input.dim(1)? > 32 {
+        // Only use matmul via f16 if prompt and seqlen > 512
+        if input.dim(1)? > VIA_F16_TOK_THRESHOLD {
             set_use_matmul_via_f16(true);
         } else {
             set_use_matmul_via_f16(false);

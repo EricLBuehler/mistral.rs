@@ -1,11 +1,21 @@
-use std::sync::atomic::Ordering;
+// https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
+
+use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Content;
+use itertools::Itertools;
 use tokenizers::{
-    decoders::{self, byte_fallback::ByteFallback, fuse::Fuse, strip::Strip},
-    models::unigram::Unigram,
+    decoders::{
+        self, byte_fallback::ByteFallback, byte_level::ByteLevel, fuse::Fuse, strip::Strip,
+    },
+    models::{bpe::BpeBuilder, unigram::Unigram},
     normalizers::{self, Prepend, Replace},
+    pre_tokenizers,
+    processors::{
+        self,
+        template::{self, TemplateProcessing},
+    },
     AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
 use tracing::info;
@@ -13,7 +23,7 @@ use tracing::info;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 
-pub struct GgufTokenizerConversion {
+pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
     pub bos: Option<String>,
     pub eos: Option<String>,
@@ -29,6 +39,7 @@ struct PropsGGUF {
     unk: Option<u32>,
     eos: u32,
     bos: u32,
+    add_bos_token: Option<bool>,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -47,10 +58,17 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             unk: c.get_value("unknown_token_id").ok(),
             eos: c.get_value("eos_token_id")?,
             bos: c.get_value("bos_token_id")?,
+            add_bos_token: c.get_value("add_bos_token").ok(),
         };
 
         Ok(props)
     }
+}
+
+struct AddedTokensCollection {
+    bos: String,
+    eos: String,
+    unk: Option<String>,
 }
 
 pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
@@ -62,6 +80,7 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
 
     let (tokenizer, kind, special_tokens) = match props.model.as_str() {
         "llama" | "replit" => unigram_tokenizer(&props)?,
+        "gpt2" => bpe_tokenizer(&props)?,
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
@@ -79,26 +98,55 @@ pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerCo
         info!("Tokenizer: {tokenizer:?}");
     }
 
-    let [bos_str, eos_str, unk_str] = special_tokens
-        .try_into()
-        .or_else(|_| anyhow::bail!("Tokenizer is missing required special tokens"))?;
+    let AddedTokensCollection { bos, eos, unk } = special_tokens;
 
     Ok(GgufTokenizerConversion {
         tokenizer,
-        bos: Some(bos_str),
-        eos: Some(eos_str),
-        unk: Some(unk_str),
+        bos: Some(bos),
+        eos: Some(eos),
+        unk,
     })
 }
 
-// TODO: Add support for additional tokenizer models: BPE, WordPiece, WordLevel
+// TODO: Add support for additional tokenizer models: WordPiece, WordLevel
 // https://docs.rs/tokenizers/latest/tokenizers/models/enum.ModelWrapper.html
 #[derive(Debug)]
 enum TokenizerKind {
     Unigram,
+    Bpe,
 }
 
-fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<String>)> {
+/// Add the special tokens and return their string representations
+fn add_special_tokens(
+    p: &PropsGGUF,
+    tokenizer: &mut Tokenizer,
+    bos: u32,
+    eos: u32,
+    unk: Option<u32>,
+) -> AddedTokensCollection {
+    // Add special tokens (bos, eos, unk):
+    let mut special_tokens: [Option<String>; 3] = Default::default();
+
+    // A little bit awkward here since eos/bos are assumed not options so we need to handle an Option
+    for (i, token_id) in [Some(bos), Some(eos), unk].into_iter().enumerate() {
+        if let Some(token_id) = token_id {
+            let token = p.tokens[token_id as usize].as_str();
+            special_tokens[i] = Some(token.to_string());
+            tokenizer.add_special_tokens(&[AddedToken::from(token.to_string(), true)]);
+        }
+    }
+
+    // Destructure array of options:
+    let [bos_str, eos_str, unk_str] = special_tokens;
+    // Would need to unwrap bos/eos here, or change the struct types
+    AddedTokensCollection {
+        bos: bos_str.unwrap(),
+        eos: eos_str.unwrap(),
+        unk: unk_str,
+    }
+}
+
+fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
     let PropsGGUF { unk, eos, bos, .. } = *p;
     // Unigram (SentencePiece) default UNK is 0
     let unk = unk.unwrap_or(0);
@@ -140,15 +188,84 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, Vec<Str
         .build()?;
 
     // Add special tokens (bos, eos, unk):
-    let mut special_tokens = Vec::<String>::new();
-    for token_id in [bos, eos, unk] {
-        let token = p.tokens[token_id as usize].as_str();
-
-        special_tokens.push(token.to_owned());
-        tokenizer.add_special_tokens(&[AddedToken::from(token.to_owned(), true)]);
-    }
+    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, Some(unk));
 
     Ok((tokenizer, TokenizerKind::Unigram, special_tokens))
+}
+
+fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokensCollection)> {
+    // BPE merges have each string item as a space-delimited pair:
+    // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
+    let merges = p
+        .merges
+        .as_ref()
+        .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
+        .iter()
+        .map(|merge| {
+            let split: (&str, &str) = merge
+                .splitn(2, ' ')
+                .collect_tuple()
+                .expect("Failed to convert split into 2-tuple");
+            (split.0.to_string(), split.1.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let mut vocab = HashMap::new();
+    for (i, token) in p.tokens.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        vocab.insert(token.clone(), i as u32);
+    }
+
+    let PropsGGUF {
+        eos,
+        bos,
+        unk,
+        add_bos_token,
+        ..
+    } = *p;
+
+    let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
+    if let Some(unk) = unk {
+        bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
+    };
+
+    let bpe = bpe.build().map_err(anyhow::Error::msg)?;
+
+    let mut tokenizer = TokenizerX::try_builder()
+        .with_model(bpe)
+        .with_decoder(Decoder::ByteLevel(true, true, true))
+        .build()?;
+    tokenizer.with_pre_tokenizer(pre_tokenizers::byte_level::ByteLevel::new(
+        false, true, true,
+    ));
+    if add_bos_token.is_some_and(|x| x) {
+        let mut special_toks = HashMap::new();
+        special_toks.insert(
+            p.tokens[bos as usize].clone(),
+            template::SpecialToken::new(
+                p.tokens[bos as usize].clone(),
+                vec![bos],
+                vec![p.tokens[bos as usize].clone()],
+            )
+            .unwrap(),
+        );
+        tokenizer.with_post_processor(
+            TemplateProcessing::builder()
+                .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
+                .unwrap()
+                .try_pair(format!("{}:0 $A:0 $B:1", p.tokens[bos as usize]))
+                .unwrap()
+                .special_tokens(special_toks)
+                .build()
+                .unwrap(),
+        );
+    } else {
+        tokenizer.with_post_processor(processors::byte_level::ByteLevel::new(true, false, true));
+    }
+
+    let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
+
+    Ok((tokenizer, TokenizerKind::Bpe, special_tokens))
 }
 
 // This is a workaround to have a better builder API.
@@ -187,6 +304,7 @@ enum Decoder<'a> {
     Replace(&'a str, &'a str),
     Strip(char, usize, usize),
     Sequence(Vec<Self>),
+    ByteLevel(bool, bool, bool),
 }
 
 // Convert into upstream type wrapped enum variants:
@@ -208,6 +326,9 @@ impl TryFrom<Decoder<'_>> for DecoderWrapper {
                     .collect::<Result<Vec<DecoderWrapper>>>()?;
 
                 decoders::sequence::Sequence::new(seq).into()
+            }
+            Decoder::ByteLevel(add_prefix_space, trim_offsets, use_regex) => {
+                ByteLevel::new(add_prefix_space, trim_offsets, use_regex).into()
             }
         };
 
@@ -248,6 +369,8 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use anyhow::Result;
     use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -276,14 +399,42 @@ mod tests {
                 ));
 
                 let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
-                let mut file = std::fs::File::open(&filename)?;
-                convert_gguf_to_hf_tokenizer(
-                    &Content::read(&mut file)
-                        .map_err(|e| e.with_path(filename))
-                        .map_err(anyhow::Error::msg)?,
-                )
-                .map_err(anyhow::Error::msg)
-                .map(|res| res.tokenizer)
+                let tokenizer = {
+                    let mut file = std::fs::File::open(&filename)?;
+                    convert_gguf_to_hf_tokenizer(
+                        &Content::read(&mut file)
+                            .map_err(|e| e.with_path(filename.clone()))
+                            .map_err(anyhow::Error::msg)?,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .map(|res| res.tokenizer)?
+                };
+                // So that CI doesn't fail
+                fs::remove_file(&filename)?;
+                Ok(tokenizer)
+            }
+            TokenizerType::Gpt2 => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let filename = api.get("Meta-Llama-3-8B-Instruct.Q2_K.gguf").unwrap();
+                let tokenizer = {
+                    let mut file = std::fs::File::open(&filename)?;
+                    convert_gguf_to_hf_tokenizer(
+                        &Content::read(&mut file)
+                            .map_err(|e| e.with_path(filename.clone()))
+                            .map_err(anyhow::Error::msg)?,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .map(|res| res.tokenizer)?
+                };
+                // So that CI doesn't fail
+                fs::remove_file(&filename)?;
+                Ok(tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
         }
@@ -300,6 +451,17 @@ mod tests {
                 ));
 
                 let tokenizer_filename = api.get("tokenizer.json").unwrap();
+                Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
+            }
+            TokenizerType::Gpt2 => {
+                let api = ApiBuilder::new().with_progress(true).build().unwrap();
+                let api = api.repo(Repo::with_revision(
+                    "EricB/mistralrs_tests".to_string(),
+                    RepoType::Model,
+                    "main".to_string(),
+                ));
+
+                let tokenizer_filename = api.get("tokenizer_gpt2.json").unwrap();
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),
@@ -338,7 +500,10 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_llama() -> Result<()> {
+    fn test_encode_decode_llama() -> Result<()> {
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+
         let passage = get_test_passage();
         let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
         let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
@@ -359,16 +524,47 @@ mod tests {
         assert_eq!(hf_decoded, gguf_decoded);
         */
 
+        #[allow(clippy::cast_possible_truncation)]
+        let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();
+        tokens.shuffle(&mut thread_rng());
+
+        // Without skipping special tokens
+        let hf_decoded = decode(&hf_tokenizer, &tokens, false)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
+        // With skipping special tokens
+        let hf_decoded = decode(&hf_tokenizer, &tokens, true)?;
+        let gguf_decoded = decode(&gguf_tokenizer, &tokens, true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+
         Ok(())
     }
 
     #[test]
-    fn test_decode_llama() -> Result<()> {
+    fn test_encode_decode_gpt2() -> Result<()> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 
-        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)?;
-        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Llama)?;
+        let passage = get_test_passage();
+        let hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)?;
+        let gguf_tokenizer = get_gguf_tokenizer(TokenizerType::Gpt2)?;
+
+        // Without adding special tokens
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), false)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), false)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        assert_eq!(passage, gguf_decoded);
+
+        // With special tokens added
+        // SKIPPED:
+        // - Bugged the GGUF tokenizer does not prepend `<s> `
+        // - Due to HF tokenizer using BPE (tokenizer.json) while GGUF tokenizer uses Unigram (metadata)?
+        /*
+        let hf_decoded = codec_roundtrip(&hf_tokenizer, passage.as_str(), true)?;
+        let gguf_decoded = codec_roundtrip(&gguf_tokenizer, passage.as_str(), true)?;
+        assert_eq!(hf_decoded, gguf_decoded);
+        */
 
         #[allow(clippy::cast_possible_truncation)]
         let mut tokens = (0..hf_tokenizer.get_vocab_size(false) as u32).collect::<Vec<_>>();

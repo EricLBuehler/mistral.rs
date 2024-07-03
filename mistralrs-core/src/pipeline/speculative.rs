@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 
@@ -17,15 +17,17 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource,
+    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource, TryIntoDType,
 };
 
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheInstruction, CacheManager, CacheManagerMixin,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
+/// A loader for a speculative pipeline using 2 [`Loader`]s.
 pub struct SpeculativeLoader {
     pub target: Box<dyn Loader>,
     pub draft: Box<dyn Loader>,
@@ -38,7 +40,7 @@ impl Loader for SpeculativeLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -73,7 +75,7 @@ impl Loader for SpeculativeLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -132,12 +134,12 @@ pub struct SpeculativePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
-    metadata: GeneralMetadata,
-    latest_logit_cache: Option<Tensor>,
+    metadata: Arc<GeneralMetadata>,
     category: ModelCategory,
 }
 
 #[derive(Copy, Clone)]
+/// Metadata for a speculative pipeline
 pub struct SpeculativeConfig {
     /// γ completions to run of the draft model
     pub gamma: usize,
@@ -152,7 +154,7 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
             != get_mut_arcmutex!(draft).tokenizer().get_vocab(true)
         {
-            candle_core::bail!("Target and draft models' tokenzier vocab do not match. This is required for speculative decoding.");
+            candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
             candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
@@ -176,7 +178,6 @@ impl SpeculativePipeline {
             draft,
             gamma: config.gamma,
             metadata,
-            latest_logit_cache: None,
             category,
         })
     }
@@ -199,29 +200,28 @@ impl IsqPipelineMixin for SpeculativePipeline {
 }
 
 impl CacheManagerMixin for SpeculativePipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(
-            &mut *get_mut_arcmutex!(self.draft),
+            &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_in_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(
-            &mut *get_mut_arcmutex!(self.draft),
+            &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
         );
-        DefaultCacheManager.clone_out_cache(&mut *get_mut_arcmutex!(self.target), seqs, false);
+        DefaultCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(&mut *get_mut_arcmutex!(self.target), false);
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
+        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.draft), modify_draft_cache);
+        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.target), false);
         if reset_non_granular {
             self.reset_non_granular_state()
         }
-        self.latest_logit_cache = None;
     }
     fn cache(&self) -> &Cache {
         unreachable!()
@@ -257,14 +257,14 @@ impl MetadataMixin for SpeculativePipeline {
         get_mut_arcmutex!(self.target).reset_non_granular_state();
         get_mut_arcmutex!(self.draft).reset_non_granular_state();
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<Tensor> {
+    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<Tensor> {
         unreachable!()
     }
     async fn sample(
@@ -376,10 +376,7 @@ impl Pipeline for SpeculativePipeline {
             )
             .await?;
             seq.add_tmp_tok(sample.token);
-            draft_samples.push(SpeculativeSample {
-                sample,
-                distribution: logits.clone(),
-            });
+            draft_samples.push(SpeculativeSample { sample });
         }
         seq.remove_tmp_tok(self.gamma);
 
@@ -516,13 +513,15 @@ impl Pipeline for SpeculativePipeline {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(rx.as_mut(), accepted.token);
+                        .append_token(rx.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::Cfg(ref mut cfg) => {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(cfg.as_mut(), accepted.token);
+                        .append_token(cfg.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::None => {}
             }
@@ -575,3 +574,6 @@ impl Pipeline for SpeculativePipeline {
         self.category
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for SpeculativePipeline {}

@@ -74,10 +74,14 @@ pub async fn sample_sequence(
     if add_to_trie {
         match seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
-                tok_trie.append_token(rx.as_mut(), second_logprobs_response.token);
+                tok_trie
+                    .append_token(rx.as_mut(), second_logprobs_response.token)
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
-                tok_trie.append_token(cfg.as_mut(), second_logprobs_response.token);
+                tok_trie
+                    .append_token(cfg.as_mut(), second_logprobs_response.token)
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
             SequenceRecognizer::None => {}
         }
@@ -87,7 +91,6 @@ pub async fn sample_sequence(
 
 #[derive(Clone)]
 pub struct SpeculativeSample {
-    pub distribution: Tensor,
     pub sample: Logprobs,
 }
 
@@ -104,7 +107,6 @@ pub async fn sample_target_sequence_speculative(
     let mut sampled = Vec::new();
     for chunk in logits.chunk(n_toks, 1)? {
         sampled.push(SpeculativeSample {
-            distribution: chunk.clone(),
             sample: sample_sequence(
                 chunk,
                 seq,

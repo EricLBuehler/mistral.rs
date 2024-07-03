@@ -1,3 +1,4 @@
+mod amoe;
 mod cache_manager;
 pub mod chat_template;
 mod ggml;
@@ -14,10 +15,15 @@ mod speculative;
 mod vision;
 mod vision_loaders;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::{
+    AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
+    AnyMoeTrainingResult,
+};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
-use crate::DeviceMapMetadata;
+use crate::{DeviceMapMetadata, TryIntoDType};
+pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
@@ -28,9 +34,12 @@ pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
     NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
+    Starcoder2Loader,
 };
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
-pub(crate) use processing::{BasicProcessor, MessagesAction, Processor, ProcessorCreator};
+pub(crate) use processing::{
+    apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
+};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
@@ -40,10 +49,10 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{VisionLoaderType, VisionModelLoader};
+pub use vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor, Var};
 
 use crate::{
     sequence::Sequence,
@@ -71,8 +80,8 @@ pub trait ModelPaths {
     /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
-    /// Content expected to deserialize to [`ChatTemplate`].
-    fn get_template_filename(&self) -> &PathBuf;
+    /// File where the content is expected to deserialize to [`ChatTemplate`].
+    fn get_template_filename(&self) -> &Option<PathBuf>;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
@@ -103,10 +112,11 @@ pub trait ModelPaths {
 }
 
 #[derive(Clone)]
+/// All local paths and metadata necessary to load a model.
 pub struct LocalModelPaths<P> {
     tokenizer_filename: P,
     config_filename: P,
-    template_filename: P,
+    template_filename: Option<P>,
     filenames: Vec<P>,
     xlora_adapter_filenames: Option<Vec<(String, P)>>,
     xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -139,7 +149,7 @@ impl<P> LocalModelPaths<P> {
         Self {
             tokenizer_filename,
             config_filename,
-            template_filename,
+            template_filename: Some(template_filename),
             filenames,
             xlora_adapter_filenames,
             xlora_adapter_configs,
@@ -179,7 +189,7 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_ordering(&self) -> &Option<Ordering> {
         &self.xlora_ordering
     }
-    fn get_template_filename(&self) -> &PathBuf {
+    fn get_template_filename(&self) -> &Option<PathBuf> {
         &self.template_filename
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
@@ -269,6 +279,9 @@ pub enum ModelKind {
         target: Box<ModelKind>,
         draft: Box<ModelKind>,
     },
+
+    #[strum(to_string = "anymoe: target: `{target}`")]
+    AnyMoe { target: Box<ModelKind> },
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -326,6 +339,7 @@ impl ModelKind {
 
                 [t.quantized_kind(), d.quantized_kind()].concat()
             }
+            AnyMoe { target } => target.quantized_kind(),
         }
     }
 
@@ -350,6 +364,7 @@ impl ModelKind {
 
                 [t.adapted_kind(), d.adapted_kind()].concat()
             }
+            AnyMoe { target } => target.adapted_kind(),
         }
     }
 }
@@ -359,14 +374,14 @@ impl ModelKind {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model_from_hf(
 ///     None,
 ///     TokenSource::CacheToken,
-///     None,
+///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
 ///     DeviceMapMetadata::dummy(),
@@ -382,7 +397,7 @@ pub trait Loader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -399,7 +414,7 @@ pub trait Loader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -421,6 +436,7 @@ pub struct GeneralMetadata {
     pub kind: ModelKind,
     // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
+    pub activation_dtype: DType,
 }
 
 pub enum AdapterInstruction {
@@ -453,14 +469,14 @@ pub trait IsqPipelineMixin {
 pub trait CacheManagerMixin {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool);
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
     fn cache(&self) -> &Cache;
 }
 
@@ -474,7 +490,61 @@ pub trait MetadataMixin {
     fn tokenizer(&self) -> Arc<Tokenizer>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
-    fn get_metadata(&self) -> &GeneralMetadata;
+    fn get_metadata(&self) -> Arc<GeneralMetadata>;
+}
+
+/// Implemented by the base model of an AnyMoe.
+pub trait AnyMoePipelineMixin {
+    /// Get vars for each gating layer
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
+        unreachable!()
+    }
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
+        unreachable!()
+    }
+    fn amoe_base_model_trainable_params(&self) -> usize {
+        unreachable!()
+    }
+    fn amoe_supported(&self) -> bool {
+        false
+    }
+    /// Per-layer cached outputs.
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        unreachable!()
+    }
+    /// Inject the MoE layers
+    #[allow(clippy::too_many_arguments)]
+    fn amoe_create_layers(
+        &mut self,
+        _model_ids: Vec<String>,
+        _token: &TokenSource,
+        _revision: Option<String>,
+        _match_regex: &str,
+        _config: AnyMoeConfig,
+        _dtype: DType,
+        _dev: &Device,
+        (_prefix, _mlp): (String, String),
+        _layers: Vec<usize>,
+        _expert_type: AnyMoeExpertType,
+        _silent: bool,
+        _gate_model_id: Option<String>,
+    ) -> candle_core::Result<()> {
+        unreachable!()
+    }
+    /// Pre-train the gating layers
+    #[allow(clippy::too_many_arguments)]
+    fn amoe_pre_train(
+        &self,
+        _inputs: AnyMoeTrainingInputs,
+        (_prefix, _mlp): (String, String),
+        _model_ids: Vec<String>,
+        _token: TokenSource,
+        _revision: Option<String>,
+        _layers: Vec<usize>,
+        _silent: bool,
+    ) -> Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
+        unreachable!()
+    }
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -492,8 +562,9 @@ pub trait Pipeline:
     + CacheManagerMixin
     + AdapterActivationMixin
     + MetadataMixin
+    + AnyMoePipelineMixin
 {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
 
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -519,7 +590,7 @@ pub trait Pipeline:
                 None,
                 self.get_input_processor_config(),
             )
-            .unwrap();
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         match pre_op {
             CacheInstruction::In(adapter_inst) => {
@@ -595,9 +666,9 @@ pub trait Pipeline:
     fn category(&self) -> ModelCategory;
 }
 
-pub trait NormalModel: IsqModel {
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
@@ -606,7 +677,7 @@ pub trait NormalModel: IsqModel {
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
@@ -630,11 +701,11 @@ pub trait NormalModel: IsqModel {
     }
 }
 
-pub trait VisionModel: IsqModel {
+pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     #[allow(clippy::too_many_arguments)]
     fn forward(
-        &mut self,
+        &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],

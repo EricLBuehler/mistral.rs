@@ -15,7 +15,7 @@ use crate::{
     response::CompletionChoice,
     CompletionResponse, RequestMessage, Response, DEBUG,
 };
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -245,7 +245,7 @@ impl Engine {
     fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
         let recognizer = match constraint {
             Constraint::Regex(rx) => {
-                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx)?)?.into())
+                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, None)?).into())
             }
             Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
             Constraint::None => SequenceRecognizer::None,
@@ -254,7 +254,6 @@ impl Engine {
     }
 
     fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
-        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
         let vocab_size = tokenizer.get_vocab_size(true);
 
@@ -264,7 +263,11 @@ impl Engine {
                 for (k, v) in bias {
                     logits_bias[k as usize] = v;
                 }
-                Ok(Some(Tensor::from_vec(logits_bias, vocab_size, &device)?))
+                Ok(Some(Tensor::from_vec(
+                    logits_bias,
+                    vocab_size,
+                    &Device::Cpu,
+                )?))
             }
             None => Ok(None),
         }
@@ -340,7 +343,7 @@ impl Engine {
             RequestMessage::Completion { text, .. } => {
                 let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
-                    .encode(text, false)
+                    .encode(text, true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 handle_seq_error!(prompt, request.response)
                     .get_ids()
@@ -433,7 +436,7 @@ impl Engine {
                 };
 
                 for stop_txt in s {
-                    let encoded = tokenizer.encode(stop_txt.to_string(), false);
+                    let encoded = tokenizer.encode(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();

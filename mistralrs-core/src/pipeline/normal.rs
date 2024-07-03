@@ -1,7 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
 use super::normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader,
-    Phi3Loader, Qwen2Loader,
+    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
 };
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -9,33 +9,35 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::setup_logger_and_debug;
+use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapMetadata, Pipeline,
+    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
+use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -50,7 +52,7 @@ pub struct NormalPipeline {
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
     model_id: String,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -154,8 +156,6 @@ impl NormalLoaderBuilder {
     }
 
     pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
-        setup_logger_and_debug();
-
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
@@ -164,6 +164,8 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Phi2 => Box::new(Phi2Loader),
             NormalLoaderType::Phi3 => Box::new(Phi3Loader),
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
+            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
+            NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
         };
         Box::new(NormalLoader {
             inner: loader,
@@ -186,7 +188,7 @@ impl Loader for NormalLoader {
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        _dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -201,30 +203,28 @@ impl Loader for NormalLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, _dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        dtype: Option<DType>,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let default_dtype = if device.is_cuda() && mapper.is_dummy() {
-            DType::BF16
-        } else if !mapper.is_dummy() {
-            DType::F16
-        } else {
-            DType::F32
-        };
+        let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
-            info!("Loading model `{}` on {device:?}...", self.get_id());
+            info!(
+                "Loading model `{}` on {}.",
+                self.get_id(),
+                device.device_pretty_repr()
+            );
         }
 
         info!(
@@ -245,7 +245,6 @@ impl Loader for NormalLoader {
             ModelKind::Normal => normal_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,
@@ -260,7 +259,6 @@ impl Loader for NormalLoader {
             } => xlora_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,
@@ -275,7 +273,6 @@ impl Loader for NormalLoader {
             } => lora_model_loader!(
                 paths,
                 dtype,
-                default_dtype,
                 &load_device,
                 config,
                 self.inner,
@@ -292,7 +289,7 @@ impl Loader for NormalLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template);
+        let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
@@ -315,7 +312,7 @@ impl Loader for NormalLoader {
                 }
             }),
             model_id: self.model_id.clone(),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -324,7 +321,8 @@ impl Loader for NormalLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: dtype,
+            }),
         })))
     }
 
@@ -359,13 +357,13 @@ impl IsqPipelineMixin for NormalPipeline {
 }
 
 impl CacheManagerMixin for NormalPipeline {
-    fn clone_in_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
-    fn clone_out_cache(&mut self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&mut self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
         DefaultCacheManager.set_none_cache(self, modify_draft_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -400,14 +398,14 @@ impl MetadataMixin for NormalPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -452,5 +450,128 @@ impl Pipeline for NormalPipeline {
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
+    }
+}
+
+impl AnyMoePipelineMixin for NormalPipeline {
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+        self.model.finish_training(gate_model_id)
+    }
+    fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
+        self.model.get_vars()
+    }
+    fn amoe_base_model_trainable_params(&self) -> usize {
+        self.model.trainable_params()
+    }
+    fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
+        self.model.take_cached_gating_outputs()
+    }
+    fn amoe_create_layers(
+        &mut self,
+        model_ids: Vec<String>,
+        token: &TokenSource,
+        revision: Option<String>,
+        match_regex: &str,
+        config: crate::amoe::AnyMoeConfig,
+        dtype: candle_core::DType,
+        dev: &Device,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        silent: bool,
+        gate_model_id: Option<String>,
+    ) -> candle_core::Result<()> {
+        let mut vbs = Vec::new();
+        // Precompile regex here
+        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        for model_id in model_ids {
+            let model_id_str = &model_id;
+            let model_id = Path::new(&model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+
+            let regex = regex.clone();
+            let match_regex_clone = match_regex.to_string();
+            let layers_clone = layers.clone();
+            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
+                if regex.is_match(&key) {
+                    // Idx of the last char of the layer id, +1
+                    // Assumes N.MLP
+                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                        .parse::<usize>()
+                        .unwrap();
+                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                } else {
+                    false
+                }
+            })?;
+            vbs.push(vb);
+        }
+
+        let gate_vb = if let Some(gate_model_id) = gate_model_id {
+            let model_id_str = &gate_model_id;
+            let model_id = Path::new(&gate_model_id);
+
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .build()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            let revision = revision.clone().unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id_str.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            let mut gate_filenames = vec![];
+            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+            }
+            assert_eq!(
+                gate_filenames.len(),
+                1,
+                "Gate model ID must contain only one .safetensors file"
+            );
+
+            let vb = from_mmaped_safetensors(
+                gate_filenames.clone(),
+                vec![],
+                dtype,
+                dev,
+                silent,
+                |_| true,
+            )?;
+            info!(
+                "Loaded gating layers from `{}`",
+                gate_filenames[0].display()
+            );
+            Some(vb)
+        } else {
+            None
+        };
+
+        self.model
+            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
+    }
+    fn amoe_supported(&self) -> bool {
+        self.model.amoe_supported()
     }
 }

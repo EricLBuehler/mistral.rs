@@ -7,9 +7,8 @@ use cfgrammar::{
 };
 use lrtable::{from_yacc, Action, Minimiser, StIdx, StateTable};
 use rustc_hash::FxHashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use std::vec;
-use tracing::debug;
 use vob::{vob, Vob};
 
 type StorageT = u32;
@@ -24,15 +23,14 @@ enum ParseResult {
     Continue,
 }
 
-#[derive(Clone)]
 struct CfgStats {
     yacc_actions: usize,
     states_pushed: usize,
 }
 
 pub struct CfgParser {
-    grm: Arc<YaccGrammar<StorageT>>,
-    stable: Arc<StateTable<StorageT>>,
+    grm: YaccGrammar<StorageT>,
+    stable: StateTable<StorageT>,
     lexer: Lexer,
     byte_states: Vec<ByteState>,
     pat_idx_to_tidx: Vec<TIdx<u32>>,
@@ -131,10 +129,10 @@ impl CfgParser {
         };
 
         if false {
-            debug!("core\n{}\n\n", sgraph.pp(&grm, true));
+            println!("core\n{}\n\n", sgraph.pp(&grm, true));
             for pidx in grm.iter_pidxs() {
                 let prod = grm.prod(pidx);
-                debug!("{:?} -> {}", prod, prod.len());
+                println!("{:?} -> {}", prod, prod.len());
             }
         }
 
@@ -170,8 +168,8 @@ impl CfgParser {
             .collect::<Vec<_>>();
 
         for ridx in grm.iter_rules() {
-            let rname = grm.rule_name_str(ridx);
-            if rname.to_uppercase() != rname {
+            let rule_name = grm.rule_name_str(ridx);
+            if rule_name.to_uppercase() != rule_name {
                 continue;
             }
             for pidx in grm.rule_to_prods(ridx) {
@@ -179,20 +177,20 @@ impl CfgParser {
                 if let [Symbol::Token(tidx)] = toks {
                     let idx = *tidx_to_pat_idx.get(tidx).unwrap();
                     // this doesn't seem very useful
-                    // friendly_pattern_names[idx] = rname.to_string();
-                    if rname == "SKIP" {
+                    // friendly_pattern_names[idx] = rule_name.to_string();
+                    if rule_name == "SKIP" {
                         skip_patterns.set(idx, true);
                     }
                 }
             }
         }
 
-        debug!("patterns: {:?}", friendly_pattern_names);
+        println!("patterns: {:?}", friendly_pattern_names);
 
         let mut vobset = VobSet::new();
         // all-zero has to be inserted first
-        let _all0 = vobset.get(&vob![false; patterns.len()]);
-        let all1 = vobset.get(&vob![true; patterns.len()]);
+        let _all0 = vobset.insert_or_get(&vob![false; patterns.len()]);
+        let all1 = vobset.insert_or_get(&vob![true; patterns.len()]);
 
         // TIME: 27ms
         let dfa = Lexer::from(patterns, &mut vobset);
@@ -225,13 +223,13 @@ impl CfgParser {
                     }
                 }
 
-                vobset.get(&r)
+                vobset.insert_or_get(&r)
             })
             .collect::<Vec<_>>();
 
         let mut cfg = CfgParser {
-            grm: grm.into(),
-            stable: stable.into(),
+            grm,
+            stable,
             lexer: dfa,
             byte_states: vec![byte_state],
             pat_idx_to_tidx,
@@ -252,7 +250,7 @@ impl CfgParser {
         // compute viable set of initial tokens
         cfg.byte_states[0].viable = cfg.viable_vobidx(cfg_start);
         if LOG_PARSER {
-            debug!(
+            println!(
                 "initial viable: {:?}",
                 cfg.vobset.resolve(cfg.byte_states[0].viable)
             );
@@ -283,7 +281,7 @@ impl CfgParser {
             let act = self.stable.action(stidx, lexeme);
 
             if LOG_PARSER {
-                debug!(
+                println!(
                     "parse: {:?} {:?} -> {:?}",
                     pstack,
                     self.friendly_token_name(lexeme),
@@ -316,10 +314,10 @@ impl CfgParser {
 
     #[allow(dead_code)]
     fn print_viable(&self, lbl: &str, vob: &Vob) {
-        debug!("viable tokens {}:", lbl);
+        println!("viable tokens {}:", lbl);
         for (idx, b) in vob.iter().enumerate() {
             if b {
-                debug!("  {}: {}", idx, self.friendly_pattern_names[idx]);
+                println!("  {}: {}", idx, self.friendly_pattern_names[idx]);
             }
         }
     }
@@ -348,7 +346,7 @@ impl CfgParser {
             Some((ls, Some(pat_idx))) => ("parse", self.run_parser(pat_idx, &top, ls)),
         };
         if LOG_PARSER {
-            debug!(
+            println!(
                 " -> {} {}",
                 info,
                 if res.is_none() { "error" } else { "ok" }
@@ -375,14 +373,16 @@ impl CfgParser {
             let mut s = self.stats.write().unwrap();
             s.yacc_actions += 1;
         }
-
+        if LOG_PARSER {
+            println!();
+        }
         let pstack = self.pstack_for(top);
         if self.skip_patterns[pat_idx] {
             let stidx = *pstack.last().unwrap();
             let viable = self.viable_vobidx(stidx);
             //self.print_viable("reset", &viable);
             if LOG_PARSER {
-                debug!("parse: {:?} skip", pstack);
+                println!("parse: {:?} skip", pstack);
             }
             // reset viable states - they have been narrowed down to SKIP
             self.mk_byte_state(ls, top.parse_stack_idx, viable)

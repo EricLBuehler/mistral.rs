@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    ops::{BitAnd, Mul},
+    ops::Mul,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,14 +12,12 @@ use std::{
 
 use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Shape, Tensor, WithDType, D,
+    DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
-
 use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
@@ -86,7 +84,7 @@ impl FromStr for ScaledRopeType {
     type Err = candle_core::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "su" => Ok(Self::Su),
+            "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
@@ -97,8 +95,8 @@ impl FromStr for ScaledRopeType {
 
 #[derive(Debug, Clone)]
 struct ScaledRopeParams {
-    short_factor: Vec<f32>,
-    long_factor: Vec<f32>,
+    short_factor: Vec<f64>,
+    long_factor: Vec<f64>,
     scaling_type: ScaledRopeType,
 }
 
@@ -137,22 +135,26 @@ impl PhiRotaryEmbedding {
             };
 
             // Calculate inv freqs for short, long
-            let inv_freq_long: Vec<_> = (0..dim)
+            let inv_freq_long = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / (scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    (1f64
+                        / (scaled_params.long_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
-                .collect();
-            let inv_freq_short: Vec<_> = (0..dim)
+                .collect::<Vec<_>>();
+            let inv_freq_short = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f32 / (scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    (1f64
+                        / (scaled_params.short_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
-                .collect();
+                .collect::<Vec<_>>();
             let inv_freq_len = inv_freq_long.len();
 
             let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
@@ -166,7 +168,8 @@ impl PhiRotaryEmbedding {
             let long_cos = freqs_long.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
 
             // Calculate sin,cos for short
-            let inv_freq_short = Tensor::from_vec(inv_freq_short, (1, inv_freq_len), dev)?;
+            let inv_freq_short =
+                Tensor::from_vec(inv_freq_short, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
             let freqs_short = t.matmul(&inv_freq_short)?;
             let short_sin = freqs_short.sin()?.mul(scaling_factor)?.to_dtype(dtype)?;
             let short_cos = freqs_short.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
@@ -510,8 +513,20 @@ impl QLinear {
         }
     }
 
+    pub fn from_old_and_qmatmul(inner: QMatMul, old: &Self) -> Self {
+        Self {
+            inner,
+            bias: old.bias.clone(),
+            dtype: old.dtype,
+        }
+    }
+
     pub fn inner(&mut self) -> &mut QMatMul {
         &mut self.inner
+    }
+
+    pub fn inner_ref(&self) -> &QMatMul {
+        &self.inner
     }
 
     pub fn is_quant(&self) -> bool {
@@ -530,7 +545,7 @@ impl Module for QLinear {
         } else {
             xs.clone()
         };
-        let forward_fn = if get_use_matmul_via_f16() {
+        let forward_fn = if !get_use_matmul_via_f16() {
             QMatMul::forward
         } else {
             QMatMul::forward_via_f16
@@ -545,73 +560,57 @@ impl Module for QLinear {
     }
 }
 
-/// Equivalent functions to `torch.nonzero`
-pub struct Nonzero;
+#[derive(Debug, Clone)]
+pub struct RotaryEmbedding(candle_nn::RotaryEmbedding);
 
-impl Nonzero {
-    /// Equivalent to: `torch.nonzero(lt & gt, as_tuple=False)`
-    ///
-    /// This performs the operation on the CPU and as such triggers a device synchronization.
-    /// The output tensor is `DType::U8` and the device will be the same as the input.
-    /// The input tensors must be of the same data type and on the same device.
-    pub fn nonzero_and<T: WithDType>(&self, lt: &Tensor, gt: &Tensor) -> Result<Tensor>
-    where
-        for<'a> &'a T: BitAnd<T, Output = T>,
-    {
-        let dev = lt.device();
-        let lt = lt.to_vec2::<T>()?;
-        let gt = gt.to_vec2::<T>()?;
-        // lt & gt
-        let res = lt
-            .par_iter()
-            .zip(gt)
-            .enumerate()
-            .flat_map(|(i, (lt_row, gt_row))| {
-                lt_row
-                    .par_iter()
-                    .zip(gt_row)
-                    .enumerate()
-                    .filter_map(|(j, (lt, gt))| {
-                        if (lt & gt) != T::zero() {
-                            Some(vec![i as u32, j as u32])
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
-            .collect::<Result<Vec<_>>>()?;
-        Tensor::stack(&res, 0)
+impl RotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new(
+            base,
+            head_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
     }
 
-    /// Equivalent to: `torch.nonzero(x, as_tuple=False)`
-    ///
-    /// This performs the operation on the CPU and as such triggers a device synchronization.
-    /// The output tensor is `DType::U8` and the device will be the same as the input.
-    pub fn nonzero<T: WithDType>(&self, x: &Tensor) -> Result<Tensor> {
-        let dev = x.device();
-        let x = x.to_vec2::<T>()?;
-        // lt & gt
-        let res = x
-            .par_iter()
-            .enumerate()
-            .flat_map(|(i, x_row)| {
-                x_row
-                    .par_iter()
-                    .enumerate()
-                    .filter_map(|(j, x)| {
-                        if *x != T::zero() {
-                            Some(vec![i as u32, j as u32])
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|x| Tensor::from_slice(&x, (x.len(),), dev))
-            .collect::<Result<Vec<_>>>()?;
-        Tensor::stack(&res, 0)
+    pub fn new_partial(
+        base: f32,
+        head_dim: usize,
+        rot_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new_partial(
+            base,
+            head_dim,
+            rot_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
+    }
+
+    pub fn forward(
+        &self,
+        positions: &[usize],
+        positions_kernel: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
+        b_sz: usize,
+    ) -> Result<()> {
+        self.0.forward(positions, positions_kernel, q, k, b_sz)
     }
 }
 
@@ -687,86 +686,5 @@ mod tests {
                     .to_vec2::<f32>()
             )
         }
-    }
-
-    #[test]
-    fn nonzero_and() {
-        use crate::layers::Nonzero;
-        use candle_core::{Device, Tensor};
-
-        let input1 = Tensor::from_vec(
-            vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input2 = Tensor::from_vec(
-            vec![-1i64, 2, 3, -1, 1, -1, -1, 4, 5, 7],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input = Tensor::stack(&[input1, input2], 0).unwrap();
-
-        let lt = input.lt(0.0).unwrap();
-        let gt = input.gt(-10.0).unwrap();
-        let res = Nonzero
-            .nonzero_and::<u8>(&lt, &gt)
-            .unwrap()
-            .to_vec2::<u32>()
-            .unwrap();
-
-        assert_eq!(
-            res,
-            [
-                [0, 3],
-                [0, 4],
-                [0, 5],
-                [0, 6],
-                [1, 0],
-                [1, 3],
-                [1, 5],
-                [1, 6]
-            ]
-        );
-    }
-
-    #[test]
-    fn nonzero() {
-        use crate::layers::Nonzero;
-        use candle_core::{Device, Tensor};
-
-        let input1 =
-            Tensor::from_vec(vec![1i64, 2, 0, -1, -1, 0, 0, 0, 5, 7], (10,), &Device::Cpu).unwrap();
-        let input2 = Tensor::from_vec(
-            vec![-1i64, 0, 3, -1, 1, -1, 0, 0, 0, 0],
-            (10,),
-            &Device::Cpu,
-        )
-        .unwrap();
-        let input = Tensor::stack(&[input1, input2], 0).unwrap();
-
-        let res = Nonzero
-            .nonzero::<i64>(&input)
-            .unwrap()
-            .to_vec2::<u32>()
-            .unwrap();
-
-        assert_eq!(
-            res,
-            [
-                [0, 0],
-                [0, 1],
-                [0, 3],
-                [0, 4],
-                [0, 8],
-                [0, 9],
-                [1, 0],
-                [1, 2],
-                [1, 3],
-                [1, 4],
-                [1, 5]
-            ]
-        );
     }
 }
