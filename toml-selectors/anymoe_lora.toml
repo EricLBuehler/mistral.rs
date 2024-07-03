@@ -10,6 +10,7 @@ model_ids = ["typeof/zephyr-7b-beta-lora"]
 
 [anymoe.config]
 hidden_size = 4096
+epochs = 25
 gate_model_id = "saved_gate"
 loss_svg = "loss.svg"
 
