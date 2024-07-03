@@ -468,16 +468,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             None
         };
 
-        self.model.create_anymoe_layers(
-            vbs,
-            config,
-            dtype,
-            dev,
-            (prefix, mlp),
-            layers,
-            expert_type,
-            gate_vb,
-        )
+        self.model
+            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
