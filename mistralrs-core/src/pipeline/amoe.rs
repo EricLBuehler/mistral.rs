@@ -447,7 +447,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                 let cached = target.amoe_take_cached_gating_outputs();
                 for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
-                    let loss = candle_nn::loss::cross_entropy(&output, &labels)?;
+                    let loss = candle_nn::loss::cross_entropy(
+                        &output,
+                        &labels.to_device(output.device())?,
+                    )?;
                     let gradstore = loss.backward()?;
                     optimizer.step(&gradstore)?;
                     latest_loss[layer] = loss.to_dtype(DType::F32)?.to_scalar::<f32>()?;
