@@ -1085,6 +1085,12 @@
 <a href="#1085" id="1085">1085</a>
 <a href="#1086" id="1086">1086</a>
 <a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a>
+<a href="#1090" id="1090">1090</a>
+<a href="#1091" id="1091">1091</a>
+<a href="#1092" id="1092">1092</a>
+<a href="#1093" id="1093">1093</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1417,6 +1423,13 @@
             i_size: <span class="self">self</span>.i_size,
             params: <span class="self">self</span>.params.clone(),
         }))
+    }
+
+    <span class="kw">fn </span>dtype_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.gate_up_proj {
+            QMatMul::QTensor(q) =&gt; (DType::F32, q.device()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) =&gt; (t.dtype(), t.device().clone()),
+        }
     }
 }
 
@@ -2080,8 +2093,6 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         additional_vbs: Vec&lt;VarBuilder&gt;,
         config: AnyMoeConfig,
-        dtype: DType,
-        dev: <span class="kw-2">&amp;</span>Device,
         (prefix, mlp): (String, String),
         <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
         expert_type: AnyMoeExpertType,
@@ -2157,11 +2168,12 @@
         <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
             <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
             experts_all.extend(expert);
+            <span class="kw">let </span>(dtype, device) = <span class="self">self</span>.layers[layer].mlp.dtype_device();
             <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
                 experts_all,
                 config.clone(),
                 dtype,
-                dev,
+                <span class="kw-2">&amp;</span>device,
                 layer,
                 gate_vb.as_ref(),
             )<span class="question-mark">?</span>);

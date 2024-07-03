@@ -599,6 +599,13 @@
 <a href="#599" id="599">599</a>
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -703,6 +710,13 @@
             act: <span class="self">self</span>.act,
             params: <span class="self">self</span>.params.clone(),
         }))
+    }
+
+    <span class="kw">fn </span>dtype_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.c_fc.inner_ref() {
+            QMatMul::QTensor(q) =&gt; (DType::F32, q.device()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) =&gt; (t.dtype(), t.device().clone()),
+        }
     }
 }
 
@@ -1109,8 +1123,6 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         additional_vbs: Vec&lt;VarBuilder&gt;,
         config: AnyMoeConfig,
-        dtype: DType,
-        dev: <span class="kw-2">&amp;</span>Device,
         (prefix, mlp): (String, String),
         <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
         expert_type: AnyMoeExpertType,
@@ -1134,13 +1146,14 @@
                 <span class="kw">let </span>hidden_size = <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>];
                 <span class="kw">match </span>expert_type {
                     AnyMoeExpertType::FineTuned =&gt; {
+                        <span class="kw">let </span>(dtype, device) = <span class="self">self</span>.layers[layer].mlp.dtype_device();
                         row.push(Box::new(MLP::new(
                             <span class="kw-2">&amp;</span>Config {
                                 intermediate_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">1</span>],
                                 hidden_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>],
                                 ..Default::default()
                             },
-                            vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp),
+                            vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp).set_dtype(dtype).set_device(device),
                         )<span class="question-mark">?</span>));
                     }
                     AnyMoeExpertType::LoraAdapter {
@@ -1185,11 +1198,12 @@
         <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
             <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
             experts_all.extend(expert);
+            <span class="kw">let </span>(dtype, device) = <span class="self">self</span>.layers[layer].mlp.dtype_device();
             <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
                 experts_all,
                 config.clone(),
                 dtype,
-                dev,
+                <span class="kw-2">&amp;</span>device,
                 layer,
                 gate_vb.as_ref(),
             )<span class="question-mark">?</span>);

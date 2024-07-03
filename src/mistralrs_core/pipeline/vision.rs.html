@@ -475,14 +475,6 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
-<a href="#480" id="480">480</a>
-<a href="#481" id="481">481</a>
-<a href="#482" id="482">482</a>
-<a href="#483" id="483">483</a>
-<a href="#484" id="484">484</a>
-<a href="#485" id="485">485</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use super</span>::{
@@ -953,16 +945,8 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="self">self</span>.model.create_anymoe_layers(
-            vbs,
-            config,
-            dtype,
-            dev,
-            (prefix, mlp),
-            layers,
-            expert_type,
-            gate_vb,
-        )
+        <span class="self">self</span>.model
+            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
     }
     <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="self">self</span>.model.amoe_supported()

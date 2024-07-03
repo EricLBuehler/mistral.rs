@@ -534,6 +534,9 @@
 <a href="#534" id="534">534</a>
 <a href="#535" id="535">535</a>
 <a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -983,7 +986,10 @@
 
                 <span class="kw">let </span>cached = target.amoe_take_cached_gating_outputs();
                 <span class="kw">for </span>(layer, (optimizer, output)) <span class="kw">in </span>optimizers.iter_mut().zip(cached).enumerate() {
-                    <span class="kw">let </span>loss = candle_nn::loss::cross_entropy(<span class="kw-2">&amp;</span>output, <span class="kw-2">&amp;</span>labels)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>loss = candle_nn::loss::cross_entropy(
+                        <span class="kw-2">&amp;</span>output,
+                        <span class="kw-2">&amp;</span>labels.to_device(output.device())<span class="question-mark">?</span>,
+                    )<span class="question-mark">?</span>;
                     <span class="kw">let </span>gradstore = loss.backward()<span class="question-mark">?</span>;
                     optimizer.step(<span class="kw-2">&amp;</span>gradstore)<span class="question-mark">?</span>;
                     latest_loss[layer] = loss.to_dtype(DType::F32)<span class="question-mark">?</span>.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>;
