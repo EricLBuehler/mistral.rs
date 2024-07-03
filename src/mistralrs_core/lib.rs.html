@@ -419,6 +419,7 @@
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
 <a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -491,6 +492,7 @@
 <span class="kw">use </span>tokio::runtime::Runtime;
 <span class="kw">use </span>toml_selector::{TomlLoaderArgs, TomlSelector};
 <span class="kw">pub use </span>utils::debug::initialize_logging;
+<span class="kw">pub use </span>utils::memory_usage::MemoryUsage;
 <span class="kw">pub use </span>utils::normal::{ModelDType, TryIntoDType};
 
 <span class="doccomment">/// `true` if `MISTRALRS_DEBUG=1`
