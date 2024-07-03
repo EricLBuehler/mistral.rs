@@ -458,7 +458,7 @@ Example:
 |Mistral|✅|✅| |
 |Gemma|✅| | |
 |Llama|✅|✅|✅|
-|Mixtral✅|✅| |
+|Mixtral|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Qwen 2| | | |
