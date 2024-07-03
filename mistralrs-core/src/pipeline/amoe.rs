@@ -458,14 +458,18 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
         let mut plot = Plot::new();
-        for (i, loss) in all_losses.into_iter().enumerate() {
+        for gate in 0..all_losses[0].len() {
+            let gate_loss = all_losses
+                .iter()
+                .map(|losses| losses[gate])
+                .collect::<Vec<_>>();
             plot.add_trace(Scatter::new(
-                (0..loss.len())
+                (0..gate_loss.len())
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|x| x as f32)
                     .collect::<Vec<_>>(),
-                loss,
+                gate_loss,
             ));
         }
 
