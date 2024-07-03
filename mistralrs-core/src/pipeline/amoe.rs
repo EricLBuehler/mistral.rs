@@ -463,6 +463,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 .iter()
                 .map(|losses| losses[gate])
                 .collect::<Vec<_>>();
+            #[allow(clippy::cast_precision_loss)]
             plot.add_trace(Scatter::new(
                 (0..gate_loss.len())
                     .collect::<Vec<_>>()
@@ -470,8 +471,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     .map(|x| x as f32)
                     .collect::<Vec<_>>(),
                 gate_loss,
-            ).legend_group(format!("Gating layer {gate}")));
+            ));
         }
+
+        plot.set_layout(plot.layout().clone().show_legend(false));
 
         plot.write_image("out.svg", ImageFormat::SVG, 800, 600, 1.0);
 
