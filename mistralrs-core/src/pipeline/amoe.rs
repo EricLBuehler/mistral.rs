@@ -470,7 +470,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     .map(|x| x as f32)
                     .collect::<Vec<_>>(),
                 gate_loss,
-            ));
+            ).legend_group(format!("Gating layer {gate}")));
         }
 
         plot.write_image("out.svg", ImageFormat::SVG, 800, 600, 1.0);
