@@ -183,6 +183,8 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.1.25)
+
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
 1) Install required packages
