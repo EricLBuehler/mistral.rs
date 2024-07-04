@@ -60,6 +60,8 @@ impl FromStr for VisionLoaderType {
         match s {
             "phi3v" => Ok(Self::Phi3V),
             "idefics2" => Ok(Self::Idefics2),
+            "llava_next" => Ok(Self::LLaVANext),
+            "llava" => Ok(Self::LLaVA),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`.")),
         }
     }
