@@ -21,7 +21,7 @@ use super::progress::{Joinable, NonThreadingHandle, Parellelize};
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
-    dtype: DType,
+    dtype: Option<DType>,
     device: &Device,
     silent: bool,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
@@ -61,7 +61,12 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    Ok(VarBuilder::from_tensors(ws, dtype, device))
+    // Unwrap to f32 doesn't matter, it's only if the tensor doesn't exist... which it does
+    Ok(VarBuilder::from_tensors(
+        ws,
+        dtype.unwrap_or(DType::F32),
+        device,
+    ))
 }
 
 pub(crate) fn load_preload_adapters<'a>(
@@ -75,7 +80,7 @@ pub(crate) fn load_preload_adapters<'a>(
         for (name, (path, config)) in paths {
             let loader = Common::new();
             let loaded_tensors =
-                loader.load_tensors_from_path(path, device, dtype, silent, |_| true)?;
+                loader.load_tensors_from_path(path, device, Some(dtype), silent, |_| true)?;
 
             map.insert(
                 name.clone(),
@@ -97,7 +102,7 @@ trait LoadTensors {
         &self,
         path: &PathBuf,
         device: &Device,
-        dtype: DType,
+        dtype: Option<DType>,
         is_silent: bool,
         predicate: impl Fn(String) -> bool,
     ) -> Result<HashMap<String, Tensor>> {
@@ -115,7 +120,10 @@ trait LoadTensors {
         let mut loaded_tensors = HashMap::new();
         if !iter.is_empty() {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
-                let tensor = tensors.load(&load_name, device)?.to_dtype(dtype)?;
+                let mut tensor = tensors.load(&load_name, device)?;
+                if let Some(dtype) = dtype {
+                    tensor = tensor.to_dtype(dtype)?;
+                }
 
                 loaded_tensors.insert(key_name, tensor);
             }

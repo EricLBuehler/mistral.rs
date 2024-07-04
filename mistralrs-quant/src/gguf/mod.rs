@@ -19,6 +19,7 @@ impl QuantMethod for GgufMatMul {
                 gptq_qzeros: _,
                 gptq_scales: _,
                 g_idx: _,
+                bias: _,
             } => unreachable!(),
         }
     }

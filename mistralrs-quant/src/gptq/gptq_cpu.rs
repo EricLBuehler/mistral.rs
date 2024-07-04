@@ -17,6 +17,7 @@ impl QuantMethod for GptQMatMul {
                 gptq_qzeros: _,
                 gptq_scales: _,
                 g_idx: _,
+                bias: _,
             } => todo!(),
             QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
         }

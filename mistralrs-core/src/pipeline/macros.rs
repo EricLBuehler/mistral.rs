@@ -406,7 +406,7 @@ macro_rules! lora_model_loader {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            $dtype,
+            Some($dtype),
             $device,
             $silent,
             |_| true,

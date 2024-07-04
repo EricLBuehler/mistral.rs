@@ -3,6 +3,7 @@ mod cache_manager;
 pub mod chat_template;
 mod ggml;
 mod gguf;
+mod gptq;
 mod inputs_processor;
 mod isq;
 mod macros;
@@ -291,6 +292,8 @@ pub enum QuantizationKind {
     Ggml,
     /// GGUF
     Gguf,
+    /// GPTQ
+    Gptq,
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]

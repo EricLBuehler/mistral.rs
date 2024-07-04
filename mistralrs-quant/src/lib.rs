@@ -1,12 +1,28 @@
 use std::sync::Arc;
 
-use candle_core::{quantized::QTensor, Result, Tensor};
+use candle_core::{quantized::QTensor, DType, Result, Tensor};
 
 mod gguf;
 mod gptq;
 
+use candle_nn::VarBuilder;
 pub use gguf::GgufMatMul;
 pub use gptq::GptQMatMul;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub enum QuantMethodEnum {
+    #[default]
+    #[serde(rename = "gptq")]
+    GptQ,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct QuantizedConfig {
+    pub bits: usize,
+    pub quant_method: QuantMethodEnum,
+    pub group_size: usize,
+}
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
@@ -17,6 +33,7 @@ pub enum QuantMethodConfig {
         gptq_qzeros: Tensor,
         gptq_scales: Tensor,
         g_idx: Tensor,
+        bias: Tensor,
     },
     Gguf {
         q_weight: Arc<QTensor>,
@@ -37,4 +54,57 @@ pub trait QuantMethod: Send + Sync {
     fn matmul_via_half(&self, a: &Tensor) -> Result<Tensor> {
         self.matmul(a)
     }
+}
+
+macro_rules! pack_factor {
+    ($bits:expr) => {
+        32 / $bits
+    };
+}
+
+pub fn gptq_linear_no_bias(
+    in_dim: usize,
+    out_dim: usize,
+    config: &QuantizedConfig,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let qweight = vb.get_with_hints_dtype(
+        (in_dim / pack_factor!(config.bits), out_dim),
+        "qweight",
+        Default::default(),
+        DType::I64,
+    )?;
+    let scale_and_zero_size = in_dim / config.group_size;
+    let qzeros = vb.get_with_hints_dtype(
+        (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
+        "qzeros",
+        Default::default(),
+        DType::I64,
+    )?;
+    let g_idx = vb.get_with_hints_dtype(
+        (0..in_dim)
+            .map(|i| i / config.group_size)
+            .collect::<Vec<_>>(),
+        "g_idx",
+        Default::default(),
+        DType::I64,
+    )?;
+    let scales = vb.get_with_hints_dtype(
+        (scale_and_zero_size, out_dim),
+        "scales",
+        Default::default(),
+        DType::F16,
+    )?;
+    let bias = vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16)?;
+
+    let config = QuantMethodConfig::GptQ {
+        bits: config.bits as i32,
+        use_exllama: false,
+        q_weight: qweight,
+        gptq_qzeros: qzeros,
+        gptq_scales: scales,
+        g_idx,
+        bias,
+    };
+    Ok(Arc::new(GptQMatMul::new(config)?))
 }

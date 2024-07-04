@@ -6,6 +6,7 @@ use candle_core::Device;
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
 
+use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -75,6 +76,8 @@ pub enum NormalLoaderType {
     Gemma2,
     #[serde(rename = "starcoder2")]
     Starcoder2,
+    #[serde(rename = "gptq_llama")]
+    GptqLlama,
 }
 
 impl FromStr for NormalLoaderType {
@@ -90,6 +93,7 @@ impl FromStr for NormalLoaderType {
             "qwen2" => Ok(Self::Qwen2),
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
+            "gptq_llama" => Ok(Self::GptqLlama),
             a => Err(format!("Unknown architecture `{a}`")),
         }
     }
@@ -897,6 +901,88 @@ impl NormalModelLoader for Starcoder2Loader {
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
+        )?))
+    }
+}
+
+// ======================== Gpt Q Llama loader
+
+#[derive(Deserialize)]
+struct GptqLlamaBasicConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+    vocab_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: Option<usize>,
+    rms_norm_eps: f64,
+    #[serde(default = "default_rope")]
+    rope_theta: f32,
+    max_position_embeddings: usize,
+    quantized_config: QuantizedConfig,
+}
+
+impl GptqLlamaBasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gptq_llama::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::gptq_llama::Config {
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            vocab_size: basic_config.vocab_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config
+                .num_key_value_heads
+                .unwrap_or(basic_config.num_attention_heads),
+            rms_norm_eps: basic_config.rms_norm_eps,
+            rope_theta: basic_config.rope_theta,
+            use_flash_attn,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            quantized_config: basic_config.quantized_config,
+        })
+    }
+}
+
+/// [`NormalLoader`] for a GPTQ Llama model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct GptqLlamaLoader;
+
+impl NormalModelLoader for GptqLlamaLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::gptq_llama::Llama::new(
+            &GptqLlamaBasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(GptqLlamaBasicConfig::deserialize(
+            config,
+            use_flash_attn,
         )?))
     }
 }

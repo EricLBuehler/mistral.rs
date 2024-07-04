@@ -26,6 +26,7 @@ pub struct GptQMatMul {
     q_weight: Tensor,    // u32
     gptq_qzeros: Tensor, // u32
     gptq_scales: Tensor, // f16
+    bias: Tensor,        // f16
     g_idx: Tensor,       // i64 (i32 by spec though)
     bits: i32,
     use_exllama: bool,
@@ -219,6 +220,7 @@ impl QuantMethod for GptQMatMul {
                 gptq_qzeros,
                 gptq_scales,
                 g_idx,
+                bias,
             } => Ok(Self {
                 q_weight,
                 gptq_qzeros,
@@ -226,6 +228,7 @@ impl QuantMethod for GptQMatMul {
                 g_idx,
                 bits,
                 use_exllama,
+                bias,
             }),
             QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
         }
@@ -249,6 +252,6 @@ impl QuantMethod for GptQMatMul {
             self.gptq_qzeros.dim(0)? as i32,
             self.use_exllama,
         )?;
-        out.reshape(out_shape)
+        out.reshape(out_shape)? + self.bias
     }
 }
