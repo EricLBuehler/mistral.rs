@@ -23,10 +23,10 @@ const MAX_ALT_GEMM_ROWS: i32 = 8;
 const BLOCK_M_SIZE_MAX: i32 = 8;
 
 pub struct GptQMatMul {
-    q_weight: Tensor,
-    gptq_qzeros: Tensor,
-    gptq_scales: Tensor,
-    g_idx: Tensor,
+    q_weight: Tensor,    // u32
+    gptq_qzeros: Tensor, // u32
+    gptq_scales: Tensor, // f16
+    g_idx: Tensor,       // i64 (i32 by spec though)
     bits: i32,
     use_exllama: bool,
 }

@@ -179,7 +179,7 @@ typedef void (*fp_gemm_half_q_half_gptq_kernel)(const half*, const uint32_t*,
                                                 const uint32_t*, const half*,
                                                 half*, const int, const int,
                                                 const int, const int,
-                                                const int*);
+                                                const int64_t*);
 
 template <bool first_block, int m_count>
 __global__ void gemm_half_q_half_gptq_4bit_kernel(
@@ -187,7 +187,7 @@ __global__ void gemm_half_q_half_gptq_4bit_kernel(
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, half* __restrict__ c,
     const int size_m, const int size_n, const int size_k, const int groups,
-    const int* __restrict__ b_q_perm) {
+    const int64_t* __restrict__ b_q_perm) {
   MatrixView_half a_(a, size_m, size_k);
   MatrixView_half_rw c_(c, size_m, size_n);
   MatrixView_q4_row b_gptq_qzeros_(b_gptq_qzeros, groups, size_n);
@@ -325,7 +325,7 @@ __global__ void gemm_half_q_half_gptq_2bit_kernel(
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, half* __restrict__ c,
     const int size_m, const int size_n, const int size_k, const int groups,
-    const int* __restrict__ b_q_perm) {
+    const int64_t* __restrict__ b_q_perm) {
   MatrixView_half a_(a, size_m, size_k);
   MatrixView_half_rw c_(c, size_m, size_n);
   MatrixView_q2_row b_gptq_qzeros_(b_gptq_qzeros, groups, size_n);
@@ -446,7 +446,7 @@ __global__ void gemm_half_q_half_gptq_3bit_kernel(
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, half* __restrict__ c,
     const int size_m, const int size_n, const int size_k, const int groups,
-    const int* __restrict__ b_q_perm) {
+    const int64_t* __restrict__ b_q_perm) {
   MatrixView_half a_(a, size_m, size_k);
   MatrixView_half_rw c_(c, size_m, size_n);
   MatrixView_q3_row b_gptq_qzeros_(b_gptq_qzeros, groups, size_n);
@@ -574,7 +574,7 @@ __global__ void gemm_half_q_half_gptq_8bit_kernel(
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, half* __restrict__ c,
     const int size_m, const int size_n, const int size_k, const int groups,
-    const int* __restrict__ b_q_perm) {
+    const int64_t* __restrict__ b_q_perm) {
   MatrixView_half a_(a, size_m, size_k);
   MatrixView_half_rw c_(c, size_m, size_n);
   MatrixView_q8_row b_gptq_qzeros_(b_gptq_qzeros, groups, size_n);
@@ -730,7 +730,7 @@ fp_gemm_half_q_half_gptq_kernel pick_gemm_half_q_half_gptq_kernel(
 
 extern "C" void gemm_half_q_half_cuda_part(const half* a, const uint32_t* b_q_weight,
                                 const uint32_t* b_gptq_qzeros,
-                                const half* b_gptq_scales, const int* b_q_perm,
+                                const half* b_gptq_scales, const int64_t* b_q_perm,
                                 half* c, int size_m, int size_n, int size_k,
                                 int m_count, int groups, int bit) {
   dim3 blockDim, gridDim;
@@ -750,7 +750,7 @@ extern "C" void gemm_half_q_half_cuda_part(const half* a, const uint32_t* b_q_we
 }
 
 __global__ void reconstruct_exllama_8bit_kernel(
-    const uint32_t* __restrict__ b_q_weight, const int* __restrict__ b_q_perm,
+    const uint32_t* __restrict__ b_q_weight, const int64_t* __restrict__ b_q_perm,
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, const int size_k, const int size_n,
     const int groups, half* __restrict__ b) {
@@ -847,7 +847,7 @@ __global__ void reconstruct_exllama_8bit_kernel(
 }
 
 __global__ void reconstruct_exllama_4bit_kernel(
-    const uint32_t* __restrict__ b_q_weight, const int* __restrict__ b_q_perm,
+    const uint32_t* __restrict__ b_q_weight, const int64_t* __restrict__ b_q_perm,
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, const int size_k, const int size_n,
     const int groups, half* __restrict__ b) {
@@ -952,7 +952,7 @@ __global__ void reconstruct_exllama_4bit_kernel(
 }
 
 __global__ void reconstruct_exllama_3bit_kernel(
-    const uint32_t* __restrict__ b_q_weight, const int* __restrict__ b_q_perm,
+    const uint32_t* __restrict__ b_q_weight, const int64_t* __restrict__ b_q_perm,
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, const int size_k, const int size_n,
     const int groups, half* __restrict__ b) {
@@ -1050,7 +1050,7 @@ __global__ void reconstruct_exllama_3bit_kernel(
 }
 
 __global__ void reconstruct_exllama_2bit_kernel(
-    const uint32_t* __restrict__ b_q_weight, const int* __restrict__ b_q_perm,
+    const uint32_t* __restrict__ b_q_weight, const int64_t* __restrict__ b_q_perm,
     const uint32_t* __restrict__ b_gptq_qzeros,
     const half* __restrict__ b_gptq_scales, const int size_k, const int size_n,
     const int groups, half* __restrict__ b) {
@@ -1142,7 +1142,7 @@ __global__ void reconstruct_exllama_2bit_kernel(
 
 extern "C" void reconstruct_exllama(const uint32_t* b_q_weight,
                          const uint32_t* b_gptq_qzeros,
-                         const half* b_gptq_scales, const int* b_q_perm,
+                         const half* b_gptq_scales, const int64_t* b_q_perm,
                          half* out, int height, int width, int groups,
                          int bit) {
   dim3 blockDim, gridDim;
@@ -1168,7 +1168,7 @@ extern "C" void reconstruct_exllama(const uint32_t* b_q_weight,
 __global__ void gemm_half_q_half_alt_4bit_kernel(
     const half2* __restrict__ vec, const uint32_t* __restrict__ mat,
     half* __restrict__ mul, const half* __restrict__ scales,
-    const uint32_t* __restrict__ zeros, const int* __restrict__ g_idx,
+    const uint32_t* __restrict__ zeros, const int64_t* __restrict__ g_idx,
     int batch, int height, int width) {
   int zero_width = width / 8;
   int vec_height = height * 4;
@@ -1267,7 +1267,7 @@ __global__ void gemm_half_q_half_alt_4bit_kernel(
 __global__ void gemm_half_q_half_alt_8bit_kernel(
     const half2* __restrict__ vec, const uint32_t* __restrict__ mat,
     half* __restrict__ mul, const half* __restrict__ scales,
-    const uint32_t* __restrict__ zeros, const int* __restrict__ g_idx,
+    const uint32_t* __restrict__ zeros, const int64_t* __restrict__ g_idx,
     int batch, int height, int width) {
   int zero_width = width / 4;
   int vec_height = height * 2;
@@ -1353,7 +1353,7 @@ __global__ void gemm_half_q_half_alt_8bit_kernel(
 
 extern "C" void gemm_half_q_half_alt(const half* a, const uint32_t* b_q_weight,
                           const uint32_t* b_gptq_qzeros,
-                          const half* b_gptq_scales, const int* b_g_idx,
+                          const half* b_gptq_scales, const int64_t* b_g_idx,
                           half* c, int size_m, int size_n, int size_k,
                           int bit) {
   dim3 blockDim, gridDim;
@@ -1378,7 +1378,7 @@ template <class T, int bit>
 __global__ void reconstruct_gptq_kernel(const uint32_t* __restrict__ w,
                                         const half* __restrict__ w_scales,
                                         const uint32_t* __restrict__ w_zeros,
-                                        const int* __restrict__ g_idx,
+                                        const int64_t* __restrict__ g_idx,
                                         const int height, const int width,
                                         const int group,
                                         half* __restrict__ out) {
@@ -1412,7 +1412,7 @@ __global__ void reconstruct_gptq_kernel(const uint32_t* __restrict__ w,
 
 __global__ void reconstruct_gptq_3bit_kernel(
     const uint32_t* __restrict__ w, const half* __restrict__ w_scales,
-    const uint32_t* __restrict__ w_zeros, const int* __restrict__ g_idx,
+    const uint32_t* __restrict__ w_zeros, const int64_t* __restrict__ g_idx,
     const int height, const int width, const int group,
     half* __restrict__ out) {
   // Start of block
@@ -1454,7 +1454,7 @@ __global__ void reconstruct_gptq_3bit_kernel(
 }
 
 extern"C" void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gptq_qzeros,
-                      const half* b_gptq_scales, const int* b_g_idx, half* out,
+                      const half* b_gptq_scales, const int64_t* b_g_idx, half* out,
                       int height, int width, int groups, int bit) {
   dim3 blockDim, gridDim;
   blockDim.x = BLOCK_KN_SIZE;
@@ -1481,7 +1481,7 @@ extern"C" void reconstruct_gptq(const uint32_t* b_q_weight, const uint32_t* b_gp
 extern "C" void gemm_half_q_half_cuda(cublasHandle_t cublas_handle, const half* a,
                            const uint32_t* b_q_weight,
                            const uint32_t* b_gptq_qzeros,
-                           const half* b_gptq_scales, const int* b_g_idx,
+                           const half* b_gptq_scales, const int64_t* b_g_idx,
                            half* c, half* temp_dq, int size_m, int size_n,
                            int size_k, int groups, bool use_exllama, int bit) {
   bool use_reconstruct;
@@ -1586,7 +1586,7 @@ __global__ void shuffle_3bit_kernel(uint32_t* __restrict__ b_q_weight,
 
 __global__ void make_sequential_4bit_kernel(const uint32_t* __restrict__ w,
                                             uint32_t* __restrict__ w_new,
-                                            const int* __restrict__ q_perm,
+                                            const int64_t* __restrict__ q_perm,
                                             const int w_width) {
   const uint64_t* w2 = (uint64_t*)w;
   uint64_t* w_new2 = (uint64_t*)w_new;
@@ -1617,7 +1617,7 @@ __global__ void make_sequential_4bit_kernel(const uint32_t* __restrict__ w,
 
 __global__ void make_sequential_2bit_kernel(const uint32_t* __restrict__ w,
                                             uint32_t* __restrict__ w_new,
-                                            const int* __restrict__ q_perm,
+                                            const int64_t* __restrict__ q_perm,
                                             const int w_width) {
   const uint64_t* w2 = (uint64_t*)w;
   uint64_t* w_new2 = (uint64_t*)w_new;
@@ -1648,7 +1648,7 @@ __global__ void make_sequential_2bit_kernel(const uint32_t* __restrict__ w,
 
 __global__ void make_sequential_3bit_kernel(const uint32_t* __restrict__ w,
                                             uint32_t* __restrict__ w_new,
-                                            const int* __restrict__ q_perm,
+                                            const int64_t* __restrict__ q_perm,
                                             const int w_width) {
   int w_column = THREADS_X * blockIdx.x + threadIdx.x;
   if (w_column >= w_width) return;
@@ -1731,7 +1731,7 @@ __global__ void make_sequential_3bit_kernel(const uint32_t* __restrict__ w,
 
 __global__ void make_sequential_8bit_kernel(const uint32_t* __restrict__ w,
                                             uint32_t* __restrict__ w_new,
-                                            const int* __restrict__ q_perm,
+                                            const int64_t* __restrict__ q_perm,
                                             const int w_width) {
   const uint64_t* w2 = (uint64_t*)w;
   uint64_t* w_new2 = (uint64_t*)w_new;
