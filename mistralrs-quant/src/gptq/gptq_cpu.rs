@@ -5,7 +5,7 @@ use crate::{QuantMethod, QuantMethodConfig};
 pub struct GptQMatMul;
 
 impl QuantMethod for GptQMatMul {
-    fn new(method: QuantMethodConfig) -> Self
+    fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
     {
@@ -18,6 +18,7 @@ impl QuantMethod for GptQMatMul {
                 gptq_scales: _,
                 g_idx: _,
             } => todo!(),
+            QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
         }
     }
 

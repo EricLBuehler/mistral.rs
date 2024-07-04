@@ -207,7 +207,7 @@ impl GptQMatMul {
 }
 
 impl QuantMethod for GptQMatMul {
-    fn new(method: QuantMethodConfig) -> Self
+    fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
     {
@@ -219,14 +219,15 @@ impl QuantMethod for GptQMatMul {
                 gptq_qzeros,
                 gptq_scales,
                 g_idx,
-            } => Self {
+            } => Ok(Self {
                 q_weight,
                 gptq_qzeros,
                 gptq_scales,
                 g_idx,
                 bits,
                 use_exllama,
-            },
+            }),
+            QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
         }
     }
 
