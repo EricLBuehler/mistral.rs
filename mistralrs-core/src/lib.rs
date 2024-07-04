@@ -71,6 +71,7 @@ use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use utils::debug::initialize_logging;
+pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 
 /// `true` if `MISTRALRS_DEBUG=1`

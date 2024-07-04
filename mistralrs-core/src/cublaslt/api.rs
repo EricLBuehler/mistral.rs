@@ -401,6 +401,7 @@ impl candle_core::CustomOp3 for CublasLTMatmul {
 /// * `cublaslt` - CublasLt handle
 ///
 /// The resulting tensor is of shape NxM
+#[allow(clippy::too_many_arguments)]
 pub fn fused_matmul(
     a: &Tensor,
     b: &Tensor,
@@ -832,6 +833,7 @@ impl candle_core::CustomOp3 for CublasLTBatchMatmul {
 /// * `cublaslt` - CublasLt handle
 ///
 /// The resulting tensor is of shape NxM
+#[allow(clippy::too_many_arguments)]
 pub fn fused_batch_matmul(
     a: &Tensor,
     b: &Tensor,

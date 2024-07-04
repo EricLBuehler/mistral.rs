@@ -103,6 +103,13 @@ impl MlpLayer for MLP {
             params: self.params.clone(),
         }))
     }
+
+    fn dtype_device(&self) -> (DType, Device) {
+        match &self.c_fc.inner_ref() {
+            QMatMul::QTensor(q) => (DType::F32, q.device()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -508,8 +515,6 @@ impl AnyMoeBaseModelMixin for Model {
         &mut self,
         additional_vbs: Vec<VarBuilder>,
         config: AnyMoeConfig,
-        dtype: DType,
-        dev: &Device,
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
@@ -533,13 +538,14 @@ impl AnyMoeBaseModelMixin for Model {
                 let hidden_size = self.layers[layer].mlp.get_params()[0];
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
+                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
                         row.push(Box::new(MLP::new(
                             &Config {
                                 intermediate_size: self.layers[layer].mlp.get_params()[1],
                                 hidden_size: self.layers[layer].mlp.get_params()[0],
                                 ..Default::default()
                             },
-                            vb.pp(layer).pp(&mlp),
+                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {
@@ -584,11 +590,12 @@ impl AnyMoeBaseModelMixin for Model {
         for (layer, expert) in layers.into_iter().zip(experts) {
             let mut experts_all = vec![self.layers[layer].mlp.clone()];
             experts_all.extend(expert);
+            let (dtype, device) = self.layers[layer].mlp.dtype_device();
             self.layers[layer].mlp = Box::new(MoeMlp::new(
                 experts_all,
                 config.clone(),
                 dtype,
-                dev,
+                &device,
                 layer,
                 gate_vb.as_ref(),
             )?);
