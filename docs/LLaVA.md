@@ -27,16 +27,17 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg" width = "1000" height = "666">
+<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
+<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
 **Prompt:**
 ```
-What is shown in this image?
+<image>What is shown in this image? 
 ```
 
 **Output:**
 ```
-The image depicts a group of orange ants climbing over a black pole. The ants are moving in the same direction, forming a line as they ascend the pole.
+Text: The image shows a steep, snow-covered hillside with a pine tree on the right side, close to the top. The landscape appears to be a mountainous area with winter conditions. There are no visible humans or permanent structures in the immediate vicinity that suggest this is a summer or recreational location. It's likely a cold, snowy day or season, and the slopes might be part of a mountainous region.
 ```
 
 ---
@@ -60,12 +61,12 @@ completion = openai.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image?",
+                    "text": "<image>What is shown in this image?",
                 },
             ],
         },
@@ -139,7 +140,7 @@ fn main() -> anyhow::Result<()> {
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("What is shown in this image?".to_string()),
+                    Either::Left("<image>What is shown in this image?".to_string()),
                 ),
             ])],
         },
@@ -192,12 +193,12 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
+                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                         },
                     },
                     {
                         "type": "text",
-                        "text": "What is shown in this image?",
+                        "text": "<image>What is shown in this image?",
                     },
                 ],
             },

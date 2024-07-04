@@ -78,5 +78,9 @@ name = "llava_next"
 required-features = []
 
 [[example]]
+name = "anymoe"
+required-features = []
+
+[[example]]
 name = "anymoe_lora"
 required-features = []

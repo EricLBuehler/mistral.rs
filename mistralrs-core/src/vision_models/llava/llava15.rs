@@ -181,10 +181,6 @@ impl Model {
             .nonzero()?
             .squeeze(1)?
             .to_vec1::<u32>()?;
-        let image_ids = image_indexes
-            .iter()
-            .map(|x| Ok(-(input_ids.i((0, *x as usize))?.to_scalar::<i64>()?)))
-            .collect::<Result<Vec<i64>>>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
         result = self.llm.embed(&result)?; //[seq_len,hidden_size]
         let image_features = self.encode_images(&images.to_dtype(self.dtype)?)?; //[num of images,patch_size*patch_size,hidden_size]
@@ -194,14 +190,13 @@ impl Model {
             image_features_vec.push(image_features.get(i)?.unsqueeze(0)?);
         }
         for (i, image_index) in image_indexes.iter().enumerate() {
-            let image_id = image_ids[i];
             result = result.slice_assign(
                 &[
                     &(0usize..1usize),
                     &(*image_index as usize..*image_index as usize + num_image_tokens),
                     &(..),
                 ],
-                &image_features_vec[(image_id - 1) as usize],
+                &image_features_vec[i],
             )?;
         }
         //truncate
@@ -250,7 +245,6 @@ impl Model {
 
 impl IsqModel for Model {
     fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        // I don't really get this part
         self.llm.get_tensors()
     }
 }
@@ -298,7 +292,6 @@ impl VisionModel for Model {
 }
 
 impl AnyMoeBaseModelMixin for Model {
-    //untested
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
         self.llm.get_mlps()
     }

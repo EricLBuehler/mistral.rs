@@ -45,8 +45,7 @@ impl LLaVANextProcessor {
     pub fn new(config: &str) -> Self {
         let model_config =
             serde_json::from_str::<LLaVANextConfig>(config).expect("Failed to parse model config.");
-        let image_tag_splitter =
-            Regex::new(r"<\|image_\d+\|>").expect("Failed to compile split regex.");
+        let image_tag_splitter = Regex::new(r"<image>").expect("Failed to compile split regex.");
         let inputs_processor = Arc::new(LLaVANextInputProcessor {
             image_tag_splitter,
             model_config: model_config.clone(),
@@ -103,7 +102,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             *config.crop_size.as_ref().unwrap().get("width").unwrap(),
             *config.crop_size.as_ref().unwrap().get("height").unwrap(),
         );
-        let (pixel_values, image_sizes, num_img_tokens, num_image_samples, n_images) = if is_prompt
+        let (pixel_values, image_sizes, num_img_tokens, num_image_samples) = if is_prompt
             && input_seqs
                 .iter()
                 .map(|seq| seq.images().is_some())
@@ -113,13 +112,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
             let mut num_image_samples_accum = Vec::new();
-            let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
                     .take_images()
                     .expect("Need to have images by this point.");
-                let imgs_len = imgs.len();
-                n_images.push(imgs_len);
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask: _,
@@ -145,7 +141,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
                 Some(num_image_samples_accum),
-                n_images,
             )
         } else {
             let text_models_inputs_processor::ModelInputs {
@@ -210,10 +205,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
             )
             .map_err(anyhow::Error::msg)?;
 
-        for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
+        for (detokenized, (seq, num_img_tokens)) in detokenized.into_iter().zip(
             input_seqs
                 .iter_mut()
-                .zip(num_img_tokens.unwrap().into_iter().zip(n_images)),
+                .zip(num_img_tokens.unwrap().into_iter()),
         ) {
             let splits = self
                 .image_tag_splitter
@@ -234,40 +229,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
                         .collect()
                 })
                 .collect::<Vec<Vec<_>>>();
-            let image_tags = self.image_tag_splitter.find_iter(&detokenized);
-            let image_ids = image_tags
-                .into_iter()
-                .map(|s| {
-                    let s = &detokenized[s.range()];
-                    s.split('|')
-                        .nth(1)
-                        .unwrap()
-                        .split('_')
-                        .nth(1)
-                        .unwrap()
-                        .parse::<u32>()
-                        .expect("Failed to parse image id to u32")
-                })
-                .collect::<Vec<_>>();
-            let unique_image_ids = image_ids
-                .iter()
-                .copied()
-                .unique()
-                .sorted()
-                .collect::<Vec<_>>();
-            // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
-            if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
-                anyhow::bail!("`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].");
-            }
-            // Total images must be the same as the number of image tags
-            if unique_image_ids.len() != n_images {
-                anyhow::bail!("Total images must be the same as the number of image tags.");
-            }
-            //only start position is -id, other positions are 0. This is for targeting image positions.
             let mut image_ids_pad = Vec::new();
-            for image_id in image_ids.iter() {
-                let mut image_id_pad = vec![0; num_img_tokens[*image_id as usize - 1]];
-                image_id_pad[0] = -(*image_id as i64);
+            for (i, num_img_token) in num_img_tokens.iter().enumerate() {
+                let mut image_id_pad = vec![0; *num_img_token];
+                image_id_pad[0] = -(i as i64 + 1);
                 image_ids_pad.push(image_id_pad);
             }
             let mut input_ids: Vec<i64> = Vec::new();
@@ -278,7 +243,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
             {
                 input_ids.extend(item);
             }
-
             // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
             seq.set_toks(
                 input_ids

@@ -216,7 +216,6 @@ impl Loader for VisionLoader {
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
-        println!("Chat template: {:?}", chat_template);
 
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
