@@ -51,7 +51,7 @@ fn parse_isq(s: &str) -> Result<GgmlDType, String> {
         "Q5K" => Ok(GgmlDType::Q5K),
         "Q6K" => Ok(GgmlDType::Q6K),
         "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown")),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
     }
 }
 
