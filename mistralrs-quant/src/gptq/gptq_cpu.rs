@@ -22,7 +22,7 @@ impl QuantMethod for GptQMatMul {
         }
     }
 
-    fn matmul(&mut self, _a: &Tensor) -> Result<Tensor> {
+    fn matmul(&self, _a: &Tensor) -> Result<Tensor> {
         todo!()
     }
 }

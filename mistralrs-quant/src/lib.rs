@@ -23,17 +23,18 @@ pub enum QuantMethodConfig {
     },
 }
 
-pub trait QuantMethod {
+/// Quantized method for a quantized matmul.
+pub trait QuantMethod: Send + Sync {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    fn matmul(&mut self, a: &Tensor) -> Result<Tensor>;
+    fn matmul(&self, a: &Tensor) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// This may go via half precision if it is supported.
-    fn matmul_via_half(&mut self, a: &Tensor) -> Result<Tensor> {
+    fn matmul_via_half(&self, a: &Tensor) -> Result<Tensor> {
         self.matmul(a)
     }
 }

@@ -23,11 +23,11 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn matmul(&mut self, a: &Tensor) -> Result<Tensor> {
+    fn matmul(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward(a)
     }
 
-    fn matmul_via_half(&mut self, a: &Tensor) -> Result<Tensor> {
+    fn matmul_via_half(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward_via_f16(a)
     }
 }

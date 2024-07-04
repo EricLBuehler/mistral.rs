@@ -2342,6 +2342,7 @@ dependencies = [
  "lrtable",
  "minijinja",
  "minijinja-contrib",
+ "mistralrs-quant",
  "mistralrs-vision",
  "once_cell",
  "plotly",

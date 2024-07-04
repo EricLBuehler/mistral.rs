@@ -15,6 +15,7 @@ use candle_core::{
     DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
+use mistralrs_quant::QuantMethod;
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
@@ -285,6 +286,15 @@ impl MatMul {
             matmul.forward_via_f16(x)
         } else {
             matmul.forward(x)
+        }
+    }
+
+    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
+        if get_use_matmul_via_f16() {
+            matmul.matmul_via_half(x)
+        } else {
+            matmul.matmul(x)
         }
     }
 }

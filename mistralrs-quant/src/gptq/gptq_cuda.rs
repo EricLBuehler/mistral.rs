@@ -51,7 +51,7 @@ fn get_cuda_device(x: &Tensor) -> &CudaDevice {
 impl GptQMatMul {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
-    fn gptq_gemm(&mut self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
+    fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
         let a_ptr = get_cuda_slice::<f16>(&a);
         let b_q_weight = get_cuda_slice::<u32>(&self.q_weight);
         let b_gptq_qzeros = get_cuda_slice::<u32>(&self.gptq_qzeros);
@@ -231,7 +231,7 @@ impl QuantMethod for GptQMatMul {
         }
     }
 
-    fn matmul(&mut self, a: &Tensor) -> Result<Tensor> {
+    fn matmul(&self, a: &Tensor) -> Result<Tensor> {
         // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
         let out_shape = Shape::from_dims(
             &[
