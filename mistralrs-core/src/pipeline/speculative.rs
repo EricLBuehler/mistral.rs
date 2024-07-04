@@ -22,8 +22,9 @@ use crate::{
 
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, CacheInstruction, CacheManager, CacheManagerMixin, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheInstruction, CacheManager, CacheManagerMixin,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -133,7 +134,7 @@ pub struct SpeculativePipeline {
     target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
     gamma: usize,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
     category: ModelCategory,
 }
 
@@ -256,8 +257,8 @@ impl MetadataMixin for SpeculativePipeline {
         get_mut_arcmutex!(self.target).reset_non_granular_state();
         get_mut_arcmutex!(self.draft).reset_non_granular_state();
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
@@ -512,13 +513,15 @@ impl Pipeline for SpeculativePipeline {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(rx.as_mut(), accepted.token);
+                        .append_token(rx.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::Cfg(ref mut cfg) => {
                     get_mut_arcmutex!(self.target)
                         .get_metadata()
                         .tok_trie
-                        .append_token(cfg.as_mut(), accepted.token);
+                        .append_token(cfg.as_mut(), accepted.token)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                 }
                 SequenceRecognizer::None => {}
             }
@@ -571,3 +574,6 @@ impl Pipeline for SpeculativePipeline {
         self.category
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for SpeculativePipeline {}

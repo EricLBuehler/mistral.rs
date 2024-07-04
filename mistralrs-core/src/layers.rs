@@ -18,7 +18,6 @@ use candle_nn::{Linear, Module, VarBuilder};
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
-
 use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
@@ -85,7 +84,7 @@ impl FromStr for ScaledRopeType {
     type Err = candle_core::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "su" => Ok(Self::Su),
+            "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
@@ -140,16 +139,20 @@ impl PhiRotaryEmbedding {
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f64 / (scaled_params.long_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64))
+                    (1f64
+                        / (scaled_params.long_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
                 .collect::<Vec<_>>();
             let inv_freq_short = (0..dim)
                 .step_by(2)
                 .enumerate()
                 .map(|(k, i)| {
-                    1f64 / (scaled_params.short_factor[k]
-                        * cfg.rope_theta.powf(i as f64 / dim as f64))
+                    (1f64
+                        / (scaled_params.short_factor[k]
+                            * cfg.rope_theta.powf(i as f64 / dim as f64)))
+                        as f32
                 })
                 .collect::<Vec<_>>();
             let inv_freq_len = inv_freq_long.len();
@@ -159,8 +162,7 @@ impl PhiRotaryEmbedding {
                 .reshape((max_seq_len, 1))?;
 
             // Calculate sin,cos for long
-            let inv_freq_long =
-                Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?.to_dtype(DType::F32)?;
+            let inv_freq_long = Tensor::from_vec(inv_freq_long, (1, inv_freq_len), dev)?;
             let freqs_long = t.matmul(&inv_freq_long)?;
             let long_sin = freqs_long.sin()?.mul(scaling_factor)?.to_dtype(dtype)?;
             let long_cos = freqs_long.cos()?.mul(scaling_factor)?.to_dtype(dtype)?;
@@ -511,8 +513,20 @@ impl QLinear {
         }
     }
 
+    pub fn from_old_and_qmatmul(inner: QMatMul, old: &Self) -> Self {
+        Self {
+            inner,
+            bias: old.bias.clone(),
+            dtype: old.dtype,
+        }
+    }
+
     pub fn inner(&mut self) -> &mut QMatMul {
         &mut self.inner
+    }
+
+    pub fn inner_ref(&self) -> &QMatMul {
+        &self.inner
     }
 
     pub fn is_quant(&self) -> bool {
@@ -543,6 +557,60 @@ impl Module for QLinear {
         } else {
             forward_fn(&self.inner, &xs)?.to_dtype(self.dtype)
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RotaryEmbedding(candle_nn::RotaryEmbedding);
+
+impl RotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new(
+            base,
+            head_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
+    }
+
+    pub fn new_partial(
+        base: f32,
+        head_dim: usize,
+        rot_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        is_gpt_neox: bool,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(Self(candle_nn::RotaryEmbedding::new_partial(
+            base,
+            head_dim,
+            rot_dim,
+            max_position_embeddings,
+            device,
+            is_gpt_neox,
+            dtype,
+        )?))
+    }
+
+    pub fn forward(
+        &self,
+        positions: &[usize],
+        positions_kernel: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
+        b_sz: usize,
+    ) -> Result<()> {
+        self.0.forward(positions, positions_kernel, q, k, b_sz)
     }
 }
 

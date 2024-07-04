@@ -231,10 +231,11 @@ macro_rules! do_sample {
         for (sampled, seq) in std::iter::zip(sampled_vec, $seqs.iter_mut()) {
             let next_token = $crate::handle_seq_error_stateaware_ok!(sampled, seq);
 
+            let metadata = $this.get_metadata();
             let eos_tok = if $disable_eos_stop {
                 None
             } else {
-                Some(&$this.get_metadata().eos_tok[..])
+                Some(&metadata.eos_tok[..])
             };
 
             $crate::finish_and_add_tokens_to_seq!(

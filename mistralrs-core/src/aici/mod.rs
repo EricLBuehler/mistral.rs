@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 pub(crate) mod bintokens;
 pub(crate) mod bytes;
 pub(crate) mod cfg;

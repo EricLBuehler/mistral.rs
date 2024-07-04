@@ -6,9 +6,21 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType, NormalRequest,
-    Request, RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource,
+    Request, RequestMessage, Response, Result, SamplingParams, SchedulerMethod, TokenSource,
     VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
+
+/// Gets the best device, cpu, cuda if compiled with CUDA
+pub(crate) fn best_device() -> Result<Device> {
+    #[cfg(not(feature = "metal"))]
+    {
+        Device::cuda_if_available(0)
+    }
+    #[cfg(feature = "metal")]
+    {
+        Device::new_metal(0)
+    }
+}
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
@@ -27,7 +39,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         TokenSource::CacheToken,
         &ModelDType::Auto,
-        &Device::cuda_if_available(0)?,
+        &best_device()?,
         false,
         DeviceMapMetadata::dummy(),
         None,
@@ -64,7 +76,20 @@ fn main() -> anyhow::Result<()> {
 
     let response = rx.blocking_recv().unwrap();
     match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content),
+        Response::Done(c) => println!(
+            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
+            c.choices[0].message.content,
+            c.usage.avg_prompt_tok_per_sec,
+            c.usage.avg_compl_tok_per_sec
+        ),
+        Response::InternalError(e) => panic!("Internal error: {e}"),
+        Response::ValidationError(e) => panic!("Validation error: {e}"),
+        Response::ModelError(e, c) => panic!(
+            "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
+            c.choices[0].message.content,
+            c.usage.avg_prompt_tok_per_sec,
+            c.usage.avg_compl_tok_per_sec
+        ),
         _ => unreachable!(),
     }
     Ok(())

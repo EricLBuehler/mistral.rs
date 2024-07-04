@@ -96,6 +96,7 @@ fn get_dtypes() -> Vec<DType> {
         .unwrap();
     info!("Detected minimum CUDA compute capability {min_cc}");
     // 7.5 -> 750
+    #[allow(clippy::cast_possible_truncation)]
     let min_cc = (min_cc * 100.) as usize;
 
     let mut dtypes = Vec::new();
@@ -134,6 +135,8 @@ fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
                 // Accelerate backend doesn't support f16/bf16
                 // Metal backend doesn't support f16
                 candle_core::Error::Msg(_) => continue,
+                // This is when the metal backend doesn't support bf16
+                candle_core::Error::Metal(_) => continue,
                 other => return Err(other),
             },
         }

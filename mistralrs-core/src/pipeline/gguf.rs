@@ -5,8 +5,8 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, CacheManagerMixin, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -39,7 +39,7 @@ use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
 };
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
@@ -69,7 +69,7 @@ pub struct GGUFPipeline {
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     non_granular_state: Option<NonGranularState>,
-    metadata: GeneralMetadata,
+    metadata: Arc<GeneralMetadata>,
 }
 
 /// Loader for a GGUF model.
@@ -480,7 +480,7 @@ impl Loader for GGUFLoader {
                     tgt_non_granular_index,
                 }
             }),
-            metadata: GeneralMetadata {
+            metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
@@ -489,7 +489,8 @@ impl Loader for GGUFLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-            },
+                activation_dtype: DType::F32,
+            }),
         })))
     }
 
@@ -587,8 +588,8 @@ impl MetadataMixin for GGUFPipeline {
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
-    fn get_metadata(&self) -> &GeneralMetadata {
-        &self.metadata
+    fn get_metadata(&self) -> Arc<GeneralMetadata> {
+        self.metadata.clone()
     }
 }
 
@@ -652,3 +653,6 @@ impl Pipeline for GGUFPipeline {
         ModelCategory::Text
     }
 }
+
+// TODO
+impl AnyMoePipelineMixin for GGUFPipeline {}

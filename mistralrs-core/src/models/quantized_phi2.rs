@@ -229,7 +229,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
-        for layer_idx in NiceProgressBar(0..block_count, "Loading repeating layers") {
+        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
