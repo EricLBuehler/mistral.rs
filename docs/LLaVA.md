@@ -114,7 +114,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("llava-hf/llava-v1.6-mistral-7b-hf".to_string()),
     )
-    .build(VisionLoaderType::Idefics2);
+    .build(VisionLoaderType::LLaVANext);
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
@@ -179,7 +179,7 @@ runner = Runner(
         model_id="llava-hf/llava-v1.6-mistral-7b-hf",
         tokenizer_json=None,
         repeat_last_n=64,
-        arch=VisionArchitecture.Idefics2,
+        arch=VisionArchitecture.LLaVANext,
     ),
 )
 
