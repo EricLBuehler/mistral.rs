@@ -29,7 +29,7 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
-    pub quantized_config: QuantizedConfig,
+    pub quantization_config: QuantizedConfig,
 }
 
 #[derive(Clone)]
@@ -120,10 +120,14 @@ impl CausalSelfAttention {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = gptq_linear_no_bias(size_in, size_q, &cfg.quantized_config, vb.pp("q_proj"))?;
-        let k_proj = gptq_linear_no_bias(size_in, size_kv, &cfg.quantized_config, vb.pp("k_proj"))?;
-        let v_proj = gptq_linear_no_bias(size_in, size_kv, &cfg.quantized_config, vb.pp("v_proj"))?;
-        let o_proj = gptq_linear_no_bias(size_q, size_in, &cfg.quantized_config, vb.pp("o_proj"))?;
+        let q_proj =
+            gptq_linear_no_bias(size_in, size_q, &cfg.quantization_config, vb.pp("q_proj"))?;
+        let k_proj =
+            gptq_linear_no_bias(size_in, size_kv, &cfg.quantization_config, vb.pp("k_proj"))?;
+        let v_proj =
+            gptq_linear_no_bias(size_in, size_kv, &cfg.quantization_config, vb.pp("v_proj"))?;
+        let o_proj =
+            gptq_linear_no_bias(size_q, size_in, &cfg.quantization_config, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -150,10 +154,12 @@ impl Mlp {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = gptq_linear_no_bias(h_size, i_size, &cfg.quantized_config, vb.pp("gate_proj"))?;
-        let c_fc2 = gptq_linear_no_bias(h_size, i_size, &cfg.quantized_config, vb.pp("up_proj"))?;
+        let c_fc1 =
+            gptq_linear_no_bias(h_size, i_size, &cfg.quantization_config, vb.pp("gate_proj"))?;
+        let c_fc2 =
+            gptq_linear_no_bias(h_size, i_size, &cfg.quantization_config, vb.pp("up_proj"))?;
         let c_proj =
-            gptq_linear_no_bias(i_size, h_size, &cfg.quantized_config, vb.pp("down_proj"))?;
+            gptq_linear_no_bias(i_size, h_size, &cfg.quantization_config, vb.pp("down_proj"))?;
         Ok(Self {
             c_fc1,
             c_fc2,

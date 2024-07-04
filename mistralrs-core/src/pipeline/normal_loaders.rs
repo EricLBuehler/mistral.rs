@@ -919,7 +919,7 @@ struct GptqLlamaBasicConfig {
     #[serde(default = "default_rope")]
     rope_theta: f32,
     max_position_embeddings: usize,
-    quantized_config: QuantizedConfig,
+    quantization_config: QuantizedConfig,
 }
 
 impl GptqLlamaBasicConfig {
@@ -938,7 +938,7 @@ impl GptqLlamaBasicConfig {
             rope_theta: basic_config.rope_theta,
             use_flash_attn,
             max_position_embeddings: basic_config.max_position_embeddings,
-            quantized_config: basic_config.quantized_config,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
