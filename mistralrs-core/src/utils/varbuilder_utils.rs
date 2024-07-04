@@ -61,10 +61,11 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    // Unwrap to f32 doesn't matter, it's only if the tensor doesn't exist... which it does
+    // TODO(EricLBuehler): seperation of concerns.
+    // This is to have WNA16 for GPTQ
     Ok(VarBuilder::from_tensors(
         ws,
-        dtype.unwrap_or(DType::F32),
+        dtype.unwrap_or(DType::F16),
         device,
     ))
 }
