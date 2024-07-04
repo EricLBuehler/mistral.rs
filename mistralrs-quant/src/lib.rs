@@ -81,14 +81,7 @@ pub fn gptq_linear_no_bias(
         Default::default(),
         DType::I64,
     )?;
-    let g_idx = vb.get_with_hints_dtype(
-        (0..in_dim)
-            .map(|i| i / config.group_size)
-            .collect::<Vec<_>>(),
-        "g_idx",
-        Default::default(),
-        DType::I64,
-    )?;
+    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I64)?;
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),
         "scales",
