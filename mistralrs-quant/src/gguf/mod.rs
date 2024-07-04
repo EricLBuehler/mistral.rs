@@ -12,7 +12,7 @@ impl QuantMethod for GgufMatMul {
     {
         match method {
             QuantMethodConfig::Gguf { q_weight } => Ok(Self(QMatMul::from_arc(q_weight)?)),
-            QuantMethodConfig::GptQ {
+            QuantMethodConfig::Gptq {
                 bits: _,
                 use_exllama: _,
                 q_weight: _,

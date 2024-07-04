@@ -6,8 +6,8 @@ use crate::{
         GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
         NormalSpecificConfig,
     },
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
-    VisionLoaderBuilder, VisionSpecificConfig,
+    GptqLoaderBuilder, GptqSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder,
+    TomlLoaderArgs, TomlSelector, VisionLoaderBuilder, VisionSpecificConfig,
 };
 
 /// A builder for a loader using the selected model.
@@ -55,7 +55,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::Toml { .. }
-        | ModelSelected::VisionPlain { .. } => None,
+        | ModelSelected::VisionPlain { .. }
+        | ModelSelected::Gptq { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -82,7 +83,8 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::XLoraGGUF { .. }
-        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
+        | ModelSelected::XLoraGGML { .. }
+        | ModelSelected::Gptq { .. } => Ok(ModelDType::Auto),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -123,7 +125,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             Some(model_id),
         )
-        .build(arch),
+        .build(arch)?,
         ModelSelected::XLora {
             model_id,
             xlora_model_id,
@@ -151,7 +153,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch),
+        .build(arch)?,
         ModelSelected::Lora {
             model_id,
             tokenizer_json,
@@ -176,7 +178,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
         )
-        .build(arch),
+        .build(arch)?,
         ModelSelected::GGUF {
             tok_model_id,
             quantized_model_id,
@@ -322,6 +324,21 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(model_id),
         )
         .build(arch),
+        ModelSelected::Gptq {
+            model_id,
+            repeat_last_n,
+            tokenizer_json,
+            arch,
+        } => GptqLoaderBuilder::new(
+            GptqSpecificConfig {
+                use_flash_attn,
+                repeat_last_n,
+            },
+            args.chat_template,
+            tokenizer_json,
+            Some(model_id),
+        )
+        .build(arch)?,
     };
     Ok(loader)
 }

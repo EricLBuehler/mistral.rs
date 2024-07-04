@@ -22,7 +22,7 @@ const MAX_Q_GEMM_ROWS: i32 = 50;
 const MAX_ALT_GEMM_ROWS: i32 = 8;
 const BLOCK_M_SIZE_MAX: i32 = 8;
 
-pub struct GptQMatMul {
+pub struct GptqMatMul {
     q_weight: Tensor,    // u32
     gptq_qzeros: Tensor, // u32
     gptq_scales: Tensor, // f16
@@ -49,7 +49,7 @@ fn get_cuda_device(x: &Tensor) -> &CudaDevice {
     }
 }
 
-impl GptQMatMul {
+impl GptqMatMul {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
     fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
@@ -207,13 +207,13 @@ impl GptQMatMul {
     }
 }
 
-impl QuantMethod for GptQMatMul {
+impl QuantMethod for GptqMatMul {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::GptQ {
+            QuantMethodConfig::Gptq {
                 bits,
                 use_exllama,
                 q_weight,
@@ -245,13 +245,13 @@ impl QuantMethod for GptQMatMul {
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
         if !reshaped_a.device().is_cuda() {
-            candle_core::bail!("Expected CUDA input to GptQMatMul");
+            candle_core::bail!("Expected CUDA input to GptqMatMul");
         }
         let out = self.gptq_gemm(
             reshaped_a,
             self.gptq_qzeros.dim(0)? as i32,
             self.use_exllama,
         )?;
-        out.reshape(out_shape)? + self.bias
+        out.reshape(out_shape)? + &self.bias
     }
 }

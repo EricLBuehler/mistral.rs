@@ -41,7 +41,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             false,
             None,
         )
-        .build(NormalLoaderType::Mistral);
+        .build(NormalLoaderType::Mistral)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

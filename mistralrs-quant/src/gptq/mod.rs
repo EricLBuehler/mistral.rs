@@ -6,6 +6,6 @@ mod gptq_cpu;
 mod gptq_cuda;
 
 #[cfg(not(feature = "cuda"))]
-pub use gptq_cpu::GptQMatMul;
+pub use gptq_cpu::GptqMatMul;
 #[cfg(feature = "cuda")]
-pub use gptq_cuda::GptQMatMul;
+pub use gptq_cuda::GptqMatMul;

@@ -7,14 +7,14 @@ mod gptq;
 
 use candle_nn::VarBuilder;
 pub use gguf::GgufMatMul;
-pub use gptq::GptQMatMul;
+pub use gptq::GptqMatMul;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub enum QuantMethodEnum {
     #[default]
     #[serde(rename = "gptq")]
-    GptQ,
+    Gptq,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -26,7 +26,7 @@ pub struct QuantizedConfig {
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
-    GptQ {
+    Gptq {
         bits: i32,
         use_exllama: bool,
         q_weight: Tensor,
@@ -97,7 +97,7 @@ pub fn gptq_linear_no_bias(
     )?;
     let bias = vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16)?;
 
-    let config = QuantMethodConfig::GptQ {
+    let config = QuantMethodConfig::Gptq {
         bits: config.bits as i32,
         use_exllama: false,
         q_weight: qweight,
@@ -106,5 +106,5 @@ pub fn gptq_linear_no_bias(
         g_idx,
         bias,
     };
-    Ok(Arc::new(GptQMatMul::new(config)?))
+    Ok(Arc::new(GptqMatMul::new(config)?))
 }

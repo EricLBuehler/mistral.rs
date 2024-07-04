@@ -2,15 +2,15 @@ use candle_core::{Result, Tensor};
 
 use crate::{QuantMethod, QuantMethodConfig};
 
-pub struct GptQMatMul;
+pub struct GptqMatMul;
 
-impl QuantMethod for GptQMatMul {
+impl QuantMethod for GptqMatMul {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::GptQ {
+            QuantMethodConfig::Gptq {
                 bits: _,
                 use_exllama: _,
                 q_weight: _,

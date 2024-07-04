@@ -33,7 +33,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(NormalLoaderType::Mistral);
+    .build(NormalLoaderType::Mistral)?;
     let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
         target: loader,
         config: AnyMoeConfig {

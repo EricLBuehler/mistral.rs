@@ -155,7 +155,7 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
+    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
@@ -166,9 +166,11 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
-            NormalLoaderType::GptqLlama => unreachable!(),
+            NormalLoaderType::GptqLlama => {
+                anyhow::bail!("GPTQ architecture must *not* be one of `gptq_llama`.")
+            }
         };
-        Box::new(NormalLoader {
+        Ok(Box::new(NormalLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -179,7 +181,7 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-        })
+        }))
     }
 }
 

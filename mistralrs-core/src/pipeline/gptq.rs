@@ -39,7 +39,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::info;
 
-pub struct GPTQPipeline {
+pub struct GptqPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
     tok_trie: Arc<TokTrie>,
@@ -51,10 +51,10 @@ pub struct GPTQPipeline {
 }
 
 /// A loader for a "normal" (non-quantized) model.
-pub struct GPTQLoader {
+pub struct GptqLoader {
     inner: Box<dyn NormalModelLoader>,
     model_id: String,
-    config: GPTQSpecificConfig,
+    config: GptqSpecificConfig,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -66,9 +66,9 @@ pub struct GPTQLoader {
 
 #[derive(Default)]
 /// A builder for a loader for a "normal" (non-quantized) model.
-pub struct GPTQLoaderBuilder {
+pub struct GptqLoaderBuilder {
     model_id: Option<String>,
-    config: GPTQSpecificConfig,
+    config: GptqSpecificConfig,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -80,14 +80,14 @@ pub struct GPTQLoaderBuilder {
 
 #[derive(Clone, Copy, Default)]
 /// Config specific to loading a normal model.
-pub struct GPTQSpecificConfig {
+pub struct GptqSpecificConfig {
     pub use_flash_attn: bool,
     pub repeat_last_n: usize,
 }
 
-impl GPTQLoaderBuilder {
+impl GptqLoaderBuilder {
     pub fn new(
-        config: GPTQSpecificConfig,
+        config: GptqSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
@@ -154,7 +154,7 @@ impl GPTQLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
+    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::GptqLlama => Box::new(GptqLlamaLoader),
             NormalLoaderType::Llama
@@ -165,9 +165,11 @@ impl GPTQLoaderBuilder {
             | NormalLoaderType::Phi2
             | NormalLoaderType::Phi3
             | NormalLoaderType::Qwen2
-            | NormalLoaderType::Starcoder2 => unreachable!(),
+            | NormalLoaderType::Starcoder2 => {
+                anyhow::bail!("GPTQ architecture must be one of `gptq_llama`.")
+            }
         };
-        Box::new(GPTQLoader {
+        Ok(Box::new(GptqLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -178,11 +180,11 @@ impl GPTQLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-        })
+        }))
     }
 }
 
-impl Loader for GPTQLoader {
+impl Loader for GptqLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -281,7 +283,7 @@ impl Loader for GPTQLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
-        Ok(Arc::new(Mutex::new(GPTQPipeline {
+        Ok(Arc::new(Mutex::new(GptqPipeline {
             model,
             tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
@@ -320,7 +322,7 @@ impl Loader for GPTQLoader {
     }
 }
 
-impl PreProcessingMixin for GPTQPipeline {
+impl PreProcessingMixin for GptqPipeline {
     fn get_chat_template(&self) -> Arc<ChatTemplate> {
         self.chat_template.clone()
     }
@@ -329,7 +331,7 @@ impl PreProcessingMixin for GPTQPipeline {
     }
 }
 
-impl IsqPipelineMixin for GPTQPipeline {
+impl IsqPipelineMixin for GptqPipeline {
     fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
         let device = self.device().clone();
         self.model
@@ -338,7 +340,7 @@ impl IsqPipelineMixin for GPTQPipeline {
     }
 }
 
-impl CacheManagerMixin for GPTQPipeline {
+impl CacheManagerMixin for GptqPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
@@ -356,7 +358,7 @@ impl CacheManagerMixin for GPTQPipeline {
     }
 }
 
-impl AdapterActivationMixin for GPTQPipeline {
+impl AdapterActivationMixin for GptqPipeline {
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
         self.model
             .activate_adapters(adapter_names)
@@ -364,7 +366,7 @@ impl AdapterActivationMixin for GPTQPipeline {
     }
 }
 
-impl MetadataMixin for GPTQPipeline {
+impl MetadataMixin for GptqPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
@@ -386,7 +388,7 @@ impl MetadataMixin for GPTQPipeline {
 }
 
 #[async_trait::async_trait]
-impl Pipeline for GPTQPipeline {
+impl Pipeline for GptqPipeline {
     fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -435,4 +437,4 @@ impl Pipeline for GPTQPipeline {
     }
 }
 
-impl AnyMoePipelineMixin for GPTQPipeline {}
+impl AnyMoePipelineMixin for GptqPipeline {}

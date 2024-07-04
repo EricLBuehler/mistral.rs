@@ -32,7 +32,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("google/gemma-2-9b-it".to_string()),
     )
-    .build(NormalLoaderType::Gemma2);
+    .build(NormalLoaderType::Gemma2)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

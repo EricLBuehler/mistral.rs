@@ -58,9 +58,9 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
-        let q = self.q_proj.matmul(&x)?;
-        let k = self.k_proj.matmul(&x)?;
-        let v = self.v_proj.matmul(&x)?;
+        let q = self.q_proj.matmul(x)?;
+        let k = self.k_proj.matmul(x)?;
+        let v = self.v_proj.matmul(x)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
