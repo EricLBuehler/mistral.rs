@@ -72,16 +72,16 @@ pub fn gptq_linear_no_bias(
         (in_dim / pack_factor!(config.bits), out_dim),
         "qweight",
         Default::default(),
-        DType::I64,
+        DType::I64, // u32
     )?;
     let scale_and_zero_size = in_dim / config.group_size;
     let qzeros = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
         "qzeros",
         Default::default(),
-        DType::I64,
+        DType::I64, // u32
     )?;
-    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I64)?;
+    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I64)?; // i32
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),
         "scales",
