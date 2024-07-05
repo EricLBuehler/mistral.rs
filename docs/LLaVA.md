@@ -45,6 +45,8 @@ Text: The image shows a steep, snow-covered hillside with a pine tree on the rig
 1) Start the server
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf -a llava_next
+//or 
+cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_templates/vicuna.json vision-plain -m /root/autodl-tmp/llava-v1.6-vicuna-7b-hf -a llava_next // if use vicuna as backend llm, then we need to specific the chat-template
 ```
 
 2) Send a request
