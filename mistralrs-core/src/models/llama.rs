@@ -291,12 +291,12 @@ impl Block {
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("input_layernorm"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), loading_isq),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             rms_1,
