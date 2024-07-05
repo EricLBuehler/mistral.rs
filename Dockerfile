@@ -1,4 +1,4 @@
-FROM rust:latest as builder
+FROM rust:latest AS builder
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
@@ -9,7 +9,7 @@ COPY . .
 
 RUN cargo build --release --workspace --exclude mistralrs-pyo3
 
-FROM debian:bookworm-slim as base
+FROM debian:bookworm-slim AS base
 
 ENV HUGGINGFACE_HUB_CACHE=/data \
     PORT=80 \
