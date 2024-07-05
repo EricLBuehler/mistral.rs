@@ -90,7 +90,7 @@ impl FromStr for NormalLoaderType {
             "qwen2" => Ok(Self::Qwen2),
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
-            a => Err(format!("Unknown architecture `{a}`")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`.")),
         }
     }
 }

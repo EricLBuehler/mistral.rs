@@ -112,10 +112,12 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
 |Qwen 2|✅| |✅|✅|
-|Phi 3 Vision|✅| |✅| |
-|Idefics 2|✅| |✅| |
+|Phi 3 Vision|✅| |✅|✅|
+|Idefics 2|✅| |✅|✅|
 |Gemma 2|✅|✅|✅|✅|
 |Starcoder 2|✅|✅|✅|✅|
+|LLaVa Next|✅| |✅|✅|
+|LLaVa|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -356,6 +358,8 @@ Additionally, for models without quantization, the model architecture should be 
 
 - `phi3v`
 - `idefics2`
+- `llava_next`
+- `llava`
 
 **Interactive mode:**
 
@@ -443,6 +447,8 @@ Example:
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
 |Starcoder 2| | |✅|
+|LLaVa Next| | |✅|
+|LLaVa| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -466,6 +472,8 @@ Example:
 |Idefics 2| | | |
 |Gemma 2|✅| | |
 |Starcoder 2|✅| | |
+|LLaVa Next| | | |
+|LLaVa| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -481,6 +489,8 @@ Example:
 |Idefics 2| |
 |Gemma 2|✅|
 |Starcoder 2|✅|
+|LLaVa Next|✅|
+|LLaVa|✅|
 
 
 ### Using derivative model
