@@ -7,6 +7,9 @@ members = [
     "mistralrs-bench",
     "mistralrs-vision",
 ]
+exclude = [
+    "mistralrs-paged_attn",
+]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,18 @@
+[package]
+name = "mistralrs-paged-attn"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[build-dependencies]
+bindgen_cuda = {git = "https://github.com/guoqingbao/bindgen_cuda.git", version= "0.1.6"}
+anyhow.workspace = true
