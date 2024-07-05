@@ -34,11 +34,12 @@ pub struct MMProjector {
 }
 
 impl MMProjector {
-    pub fn new(vb: &VarBuilder, config: &Config) -> Result<Self> {
+    pub fn new(vb: &VarBuilder, config: &Config, device: &Device) -> Result<Self> {
         let linear_1 = linear(
             config.vision_config.hidden_size,
             config.text_config.hidden_size,
-            vb.pp("multi_modal_projector.linear_1"),
+            vb.pp("multi_modal_projector.linear_1")
+                .set_device(device.clone()),
         )?;
         let activation = match config.projector_hidden_act.as_str() {
             "gelu" => Activation::Gelu,
@@ -52,7 +53,8 @@ impl MMProjector {
         let linear_2 = linear(
             config.text_config.hidden_size,
             config.text_config.hidden_size,
-            vb.pp("multi_modal_projector.linear_2"),
+            vb.pp("multi_modal_projector.linear_2")
+                .set_device(device.clone()),
         )?;
         Ok(Self {
             linear_1,
@@ -127,9 +129,10 @@ impl Model {
         let device = normal_loading_metadata.real_device.clone();
         let dtype = vb.dtype();
         let clip_config = config.to_clip_config();
-        let mm_projector = MMProjector::new(&vb, config)?;
+        let mm_projector = MMProjector::new(&vb, config, &device)?;
         let clip_vision_tower = ClipVisionTower::new(
-            vb.pp("vision_tower.vision_model"),
+            vb.pp("vision_tower.vision_model")
+                .set_device(device.clone()),
             config.vision_feature_layer,
             &config.vision_feature_select_strategy,
             &clip_config,
