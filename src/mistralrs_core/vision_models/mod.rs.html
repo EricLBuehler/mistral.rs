@@ -20,6 +20,12 @@
 <a href="#20" id="20">20</a>
 <a href="#21" id="21">21</a>
 <a href="#22" id="22">22</a>
+<a href="#23" id="23">23</a>
+<a href="#24" id="24">24</a>
+<a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
+<a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -28,10 +34,16 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2_input_processor;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>image_processor;
+
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llava;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>preprocessor_config;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>processor_config;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava15;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_inputs_processor;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next_inputs_processor;
 
 <span class="kw">pub struct </span>ModelInputs {
     <span class="kw">pub </span>input_ids: Tensor,

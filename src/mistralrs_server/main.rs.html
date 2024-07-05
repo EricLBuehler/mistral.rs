@@ -418,7 +418,7 @@
         <span class="string">"Q5K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5K),
         <span class="string">"Q6K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q6K),
         <span class="string">"Q8K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8K),
-        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown"</span>)),
+        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`."</span>)),
     }
 }
 

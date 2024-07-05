@@ -41,6 +41,8 @@
 <a href="#41" id="41">41</a>
 <a href="#42" id="42">42</a>
 <a href="#43" id="43">43</a>
+<a href="#44" id="44">44</a>
+<a href="#45" id="45">45</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::Result;
@@ -56,11 +58,13 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) do_pad: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) do_rescale: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) do_resize: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) do_center_crop: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) image_mean: <span class="prelude-ty">Option</span>&lt;[f64; <span class="number">3</span>]&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) image_std: <span class="prelude-ty">Option</span>&lt;[f64; <span class="number">3</span>]&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rescale_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) resampling: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) crop_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_crops: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }

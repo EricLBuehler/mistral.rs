@@ -992,7 +992,7 @@
             <span class="string">"qwen2" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Qwen2),
             <span class="string">"gemma2" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Gemma2),
             <span class="string">"starcoder2" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Starcoder2),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`"</span>)),
+            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`."</span>)),
         }
     }
 }

@@ -475,8 +475,12 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
-<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
+<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -574,6 +578,8 @@
         <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>VisionModelLoader&gt; = <span class="kw">match </span>loader {
             VisionLoaderType::Phi3V =&gt; Box::new(Phi3VLoader),
             VisionLoaderType::Idefics2 =&gt; Box::new(Idefics2Loader),
+            VisionLoaderType::LLaVANext =&gt; Box::new(LLaVANextLoader),
+            VisionLoaderType::LLaVA =&gt; Box::new(LLaVALoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -661,7 +667,6 @@
             ),
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
-
         <span class="kw">let </span>preprocessor_config: PreProcessorConfig = serde_json::from_str(
             <span class="kw-2">&amp;</span>fs::read_to_string(
                 paths
@@ -677,11 +682,11 @@
             .as_ref()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
 
-        <span class="kw">let </span>processor = <span class="self">self
-            </span>.inner
-            .get_processor(processor_config, preprocessor_config.clone());
+        <span class="kw">let </span>processor =
+            <span class="self">self</span>.inner
+                .get_processor(<span class="kw-2">&amp;</span>config, processor_config, preprocessor_config.clone()); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
 
-        <span class="kw">let </span>tokenizer = get_tokenizer(
+        </span><span class="kw">let </span>tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
             <span class="prelude-val">Some</span>(processor.get_special_tokens()),
         )<span class="question-mark">?</span>;
@@ -824,9 +829,8 @@
         <span class="macro">do_sample!</span>(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
-        ModelCategory::Vision {
-            has_conv2d: <span class="self">self</span>.model.has_conv2d(),
-        }
+        <span class="kw">let </span>has_conv2d = <span class="self">self</span>.model.has_conv2d();
+        ModelCategory::Vision { has_conv2d }
     }
 }
 
