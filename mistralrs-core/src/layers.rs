@@ -245,7 +245,7 @@ impl PhiRotaryEmbedding {
     }
 }
 
-/// Matrix multiplcation, configurable to be via f16 (to use the faster GEMM kernels) optionally.
+/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
 pub struct MatMul;
 
 /// Set the matmuls to go via f16
