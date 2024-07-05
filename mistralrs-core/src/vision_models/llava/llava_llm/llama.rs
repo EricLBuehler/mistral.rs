@@ -1,38 +1,26 @@
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+//LLaMA without fused RoPE
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments
+)]
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{
-    embedding, linear_no_bias as linear, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
-use serde::Deserialize;
-use std::sync::Arc;
+use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
 
 use crate::{
-    amoe::{
-        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
-        MoeMlp,
-    },
+    amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     merge_delta,
+    models::llama::Config,
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct Config {
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub use_flash_attn: bool,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f32,
-    pub max_position_embeddings: usize,
-}
+use super::{LLaVALLM, OrdinaryRoPE};
 
 #[derive(Debug, Clone)]
 struct CausalSelfAttention {
@@ -44,7 +32,6 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc<RotaryEmbedding>,
     max_seq_len: usize,
 }
 
@@ -54,9 +41,10 @@ impl CausalSelfAttention {
         x: &Tensor,
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
+        _start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
+        rope_parameter: (&Tensor, &Tensor),
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -73,38 +61,19 @@ impl CausalSelfAttention {
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
-
-        let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = if seq_len != 1 {
-            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-                .transpose(1, 2)?
-        } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
-        };
-
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && seq_len != 1 {
-            q = q
-                .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
-                .contiguous()?;
-        }
+        let mut q = q
+            .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let mut k = k
+            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        q = OrdinaryRoPE::forward(&q, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
+        k = OrdinaryRoPE::forward(&k, seqlen_offsets[0], rope_parameter.0, rope_parameter.1)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+            .transpose(1, 2)?;
 
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
@@ -135,7 +104,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -152,7 +121,6 @@ impl CausalSelfAttention {
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             use_flash_attn: cfg.use_flash_attn,
-            rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
         })
     }
@@ -258,19 +226,21 @@ impl Block {
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
+        rope_parameters: (&Tensor, &Tensor),
     ) -> Result<Tensor> {
         let residual = x;
-        let x = self.rms_1.forward(x)?;
-        let x = (self.attn.forward(
+        let mut x = self.rms_1.forward(x)?;
+        x = (self.attn.forward(
             &x,
             attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
             block_idx,
             kv_cache,
+            rope_parameters,
         )? + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 
@@ -280,12 +250,10 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
-            rope,
         )?;
         let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
         let rms_1 = RmsNorm::new(
@@ -315,10 +283,11 @@ pub struct Llama {
     pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    rope_parameters: (Tensor, Tensor),
 }
 
 impl Llama {
-    pub fn forward(
+    pub fn forward_input(
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
@@ -342,10 +311,11 @@ impl Llama {
                 start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
+                (&self.rope_parameters.0, &self.rope_parameters.1),
             )?;
         }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
+        x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
             x = x.to_dtype(DType::F32)?;
         }
@@ -356,14 +326,13 @@ impl Llama {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        is_gptx: bool,
+        _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
-
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -380,35 +349,28 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+
         let blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
-                    let rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
-                            mapper
-                                .device_for(i, false)
-                                .unwrap_or(&normal_loading_metadata.real_device),
-                            is_gptx,
-                            vb.dtype(),
-                        )
-                        .expect("Failed to create RoPE"),
-                    );
                     Block::load(
                         vb.pp(&format!("model.layers.{i}")),
                         cfg,
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
-                        rotary_emb,
                     )
                     .expect("Failed to load block.")
                 })
                 .collect();
-
+        let rope_parameters = OrdinaryRoPE::create_parameters(
+            head_dim,
+            cfg.max_position_embeddings,
+            cfg.rope_theta,
+            vb.dtype(),
+            &normal_loading_metadata.real_device,
+        )?;
         Ok(Self {
             wte,
             blocks,
@@ -417,6 +379,7 @@ impl Llama {
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,
+            rope_parameters,
         })
     }
 }
@@ -443,6 +406,47 @@ impl IsqModel for Llama {
     }
 }
 
+impl LLaVALLM for Llama {
+    fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.wte.forward(input_ids)
+    }
+    fn forward_input_embed(
+        &self,
+        input_ids: &Tensor,
+        input_embed: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let mut x = input_embed;
+        let mut cache = self.kv_cache.lock();
+        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+            input_ids,
+            &cache,
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
+            x = block.forward(
+                &x,
+                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                seqlen_offsets,
+                start_offsets_kernel.clone(),
+                block_idx,
+                &mut cache,
+                (&self.rope_parameters.0, &self.rope_parameters.1),
+            )?;
+        }
+        x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            x = x.to_dtype(DType::F32)?;
+        }
+        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
+        extract_logits(&logits, context_lens)
+    }
+}
 impl NormalModel for Llama {
     fn forward(
         &self,
@@ -452,7 +456,7 @@ impl NormalModel for Llama {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
     ) -> Result<Tensor> {
-        self.forward(
+        self.forward_input(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,

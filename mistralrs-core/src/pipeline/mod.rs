@@ -51,7 +51,9 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType, VisionModelLoader};
+pub use vision_loaders::{
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModelLoader,
+};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor, Var};

@@ -27,6 +27,8 @@ Additionally, for models without quantization, the model architecture should be 
 ### Architecture for vision models
 - `Phi3V`
 - `Idefics2`
+- `LLaVaNext`
+- `LLaVa`
 
 ```py
 class Which(Enum):

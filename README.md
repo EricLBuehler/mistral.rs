@@ -112,10 +112,12 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
 |Qwen 2|✅| |✅|✅|
-|Phi 3 Vision|✅| |✅| |
-|Idefics 2|✅| |✅| |
+|Phi 3 Vision|✅| |✅|✅|
+|Idefics 2|✅| |✅|✅|
 |Gemma 2|✅|✅|✅|✅|
 |Starcoder 2|✅|✅|✅|✅|
+|LLaVa Next|✅| |✅|✅|
+|LLaVa|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -175,6 +177,7 @@ Enabling features is done by passing `--features ...` to the build system. When 
 |Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
 |A100 GPU, CUDA|119|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A6000 GPU, CUDA|115|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
 Please submit more benchmarks via raising an issue!
 
@@ -356,6 +359,8 @@ Additionally, for models without quantization, the model architecture should be 
 
 - `phi3v`
 - `idefics2`
+- `llava_next`
+- `llava`
 
 **Interactive mode:**
 
@@ -443,6 +448,8 @@ Example:
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
 |Starcoder 2| | |✅|
+|LLaVa Next| | |✅|
+|LLaVa| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -466,6 +473,8 @@ Example:
 |Idefics 2| | | |
 |Gemma 2|✅| | |
 |Starcoder 2|✅| | |
+|LLaVa Next| | | |
+|LLaVa| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -481,6 +490,8 @@ Example:
 |Idefics 2| |
 |Gemma 2|✅|
 |Starcoder 2|✅|
+|LLaVa Next|✅|
+|LLaVa|✅|
 
 
 ### Using derivative model
