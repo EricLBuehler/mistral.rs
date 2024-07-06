@@ -38,7 +38,7 @@ pub fn get_or_load_func(
         spec.to_owned()
     };
     let kernel = kernel_base.to_owned() + &spec;
-    Ok(device.get_or_load_func(&kernel, ptx_file)?)
+    device.get_or_load_func(&kernel, ptx_file)
 }
 
 #[repr(transparent)]

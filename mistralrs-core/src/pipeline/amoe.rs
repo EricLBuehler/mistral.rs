@@ -334,8 +334,13 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
         let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0);
+        // TODO EVAL SEQ GROUP FOR PA
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
-            1, false, false, 0,
+            1,
+            false,
+            false,
+            0,
+            vec![],
         )));
 
         // Clear KV cache in prep for training

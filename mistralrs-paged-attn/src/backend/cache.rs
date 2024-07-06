@@ -138,7 +138,7 @@ pub fn copy_blocks(
         COPY_BLOCKS_KERNEL_NAME,
         key_caches.first().unwrap().dtype(),
         None,
-        &dev,
+        dev,
     )?;
 
     unsafe {

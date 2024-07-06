@@ -215,7 +215,7 @@ impl BlockEngine {
         for _logcical_idx in 0..seq_group.get_total_logical_token_blocks() {
             block_table.push(self.gpu_allocator.allocate());
         }
-        for seq_id in seq_group.get_seqs().keys() {
+        for seq_id in seq_group.seq_ids() {
             self.block_tables.insert(*seq_id, block_table.clone());
         }
     }
@@ -245,7 +245,7 @@ impl BlockEngine {
         let blocks_required: usize = self
             .block_tables
             .iter()
-            .filter(|(id, _)| seq_group.get_seqs().contains_key(id))
+            .filter(|(id, _)| seq_group.seq_ids().contains(id))
             .map(|(_, table)| table.len())
             .sum();
         blocks_required <= self.cpu_allocator.free_blocks.len()
@@ -256,7 +256,7 @@ impl BlockEngine {
     pub fn swap_out(&mut self, seq_group: &impl BlockEngineSequenceGroup) -> HashMap<usize, usize> {
         // GPU block to a CPU block
         let mut new_mapping = HashMap::new();
-        for seq_id in seq_group.get_seqs().keys() {
+        for seq_id in seq_group.seq_ids() {
             let mut new_block_table = Vec::new();
             let block_table = self.block_tables.get(seq_id).unwrap();
 
@@ -326,7 +326,7 @@ impl BlockEngine {
         let blocks_required: usize = self
             .block_tables
             .iter()
-            .filter(|(id, _)| seq_group.get_seqs().contains_key(id))
+            .filter(|(id, _)| seq_group.seq_ids().contains(id))
             .map(|(_, table)| table.len())
             .sum();
         blocks_required <= self.gpu_allocator.free_blocks.len()
@@ -337,7 +337,7 @@ impl BlockEngine {
     pub fn swap_in(&mut self, seq_group: &impl BlockEngineSequenceGroup) -> HashMap<usize, usize> {
         // CPU block to a GPU block
         let mut new_mapping = HashMap::new();
-        for seq_id in seq_group.get_seqs().keys() {
+        for seq_id in seq_group.seq_ids() {
             let mut new_block_table = Vec::new();
             let block_table = self.block_tables.get(seq_id).unwrap();
 

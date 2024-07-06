@@ -461,6 +461,7 @@ impl Engine {
             request.is_streaming,
             is_chat,
             best_of,
+            (self.id..self.id + request.sampling_params.n_choices).collect::<Vec<_>>(),
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

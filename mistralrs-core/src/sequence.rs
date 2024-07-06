@@ -11,7 +11,7 @@ use tokio::sync::{
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    paged_attention::{BlockEngineSequence, BlockEngineSequenceGroup, LogicalTokenBlock},
     response::CompletionChoice,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
@@ -69,8 +69,22 @@ enum SequenceCustomMetadata {
     PagedAttention {
         logical_token_blocks: Vec<LogicalTokenBlock>,
         block_size: usize,
+        // Don't love this but we can't access the seq from here otherwise
+        group: Arc<Mutex<SequenceGroup>>,
     },
     None,
+}
+
+macro_rules! blocks_to_add_new_tok {
+    ($logical_token_blocks:expr) => {{
+        let last = $logical_token_blocks.last();
+        if !last.is_some_and(|last| last.is_full()) {
+            // If we have space
+            0
+        } else {
+            1
+        }
+    }};
 }
 
 impl SequenceCustomMetadata {
@@ -79,7 +93,13 @@ impl SequenceCustomMetadata {
             Self::PagedAttention {
                 logical_token_blocks,
                 block_size,
+                group,
             } => {
+                // Take it out so we can add it back
+                group.blocking_lock().total_blocks_to_add_new_tok -=
+                    blocks_to_add_new_tok!(logical_token_blocks);
+                group.blocking_lock().total_logical_token_blocks -= logical_token_blocks.len();
+
                 let last = logical_token_blocks.last_mut();
                 if last.is_some() && !last.as_ref().is_some_and(|last| last.is_full()) {
                     // If we have space
@@ -92,6 +112,11 @@ impl SequenceCustomMetadata {
                         .unwrap()
                         .append_token_id(tok);
                 }
+
+                // Add it back. No need for critical section no errors possible.
+                group.blocking_lock().total_blocks_to_add_new_tok +=
+                    blocks_to_add_new_tok!(logical_token_blocks);
+                group.blocking_lock().total_logical_token_blocks += logical_token_blocks.len();
             }
             Self::None => (),
         }
@@ -158,16 +183,9 @@ impl BlockEngineSequence for Sequence {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
                 block_size: _,
+                group: _,
             } => {
-                if !logical_token_blocks
-                    .last()
-                    .is_some_and(|last| last.is_full())
-                {
-                    // If we have space
-                    0
-                } else {
-                    1
-                }
+                blocks_to_add_new_tok!(logical_token_blocks)
             }
             SequenceCustomMetadata::None => unreachable!(),
         }
@@ -598,10 +616,33 @@ pub struct SequenceGroup {
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
     pub is_streaming: bool,
     pub is_chat: bool,
+    seq_ids: Vec<usize>,
+
+    // PA tracking metadata
+    total_logical_token_blocks: usize,
+    total_blocks_to_add_new_tok: usize,
+}
+
+impl BlockEngineSequenceGroup for SequenceGroup {
+    fn get_total_logical_token_blocks(&self) -> usize {
+        self.total_logical_token_blocks
+    }
+    fn seq_ids(&self) -> &[usize] {
+        &self.seq_ids
+    }
+    fn total_blocks_to_add_new_tok(&self) -> usize {
+        self.total_blocks_to_add_new_tok
+    }
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
+    pub fn new(
+        n_choices: usize,
+        is_streaming: bool,
+        is_chat: bool,
+        best_of: usize,
+        seq_ids: Vec<usize>,
+    ) -> Self {
         Self {
             choices: Vec::new(),
             completion_choices: Vec::new(),
@@ -616,6 +657,9 @@ impl SequenceGroup {
             is_streaming,
             is_chat,
             best_of,
+            seq_ids,
+            total_blocks_to_add_new_tok: 0,
+            total_logical_token_blocks: 0,
         }
     }
 

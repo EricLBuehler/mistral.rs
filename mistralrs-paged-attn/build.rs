@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::fs;
 use std::fs::read_to_string;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
     bindings.write("src/lib.rs").unwrap();
 
     let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
-    let absolute_kernel_dir = std::fs::canonicalize(&kernel_dir).unwrap();
+    let absolute_kernel_dir = std::fs::canonicalize(kernel_dir).unwrap();
 
     println!(
         "cargo:rustc-link-search=native={}",
@@ -49,16 +50,14 @@ fn main() -> Result<()> {
             return Ok(());
         }
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .open("src/lib.rs")
-        .unwrap();
+    let ct = fs::read_to_string("src/lib.rs")?;
+    if !ct.contains(OTHER_CONTENT) {
+        let mut file = OpenOptions::new().append(true).open("src/lib.rs").unwrap();
 
-    // Add the other stuff back
-    if let Err(e) = writeln!(file, "{OTHER_CONTENT}") {
-        anyhow::bail!("Error while building dependencies: {:?}\n", e)
-    } else {
-        Ok(())
+        // Add the other stuff back
+        if let Err(e) = writeln!(file, "{OTHER_CONTENT}") {
+            anyhow::bail!("Error while building dependencies: {:?}\n", e)
+        }
     }
+    Ok(())
 }
