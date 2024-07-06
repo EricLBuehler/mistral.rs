@@ -38,6 +38,7 @@ pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
+#[cfg(feature = "cuda")]
 mod paged_attention;
 mod pipeline;
 mod prefix_cacher;

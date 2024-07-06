@@ -6,6 +6,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use super::sequence::{Sequence, SequenceGroup};
+
 pub struct LogicalTokenBlock {
     tokens: Vec<usize>,
     block_size: usize,
@@ -195,7 +197,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_allocate(&self, seq_group: &SequenceGroup) -> AllocStatus {
+    pub fn can_allocate(&self, seq_group: &impl SequenceGroup) -> AllocStatus {
         let num_required_blocks = seq_group.get_total_logical_token_blocks();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
@@ -208,7 +210,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn allocate(&mut self, seq_group: &SequenceGroup) {
+    pub fn allocate(&mut self, seq_group: &impl SequenceGroup) {
         let mut block_table = Vec::new();
         for _logcical_idx in 0..seq_group.get_total_logical_token_blocks() {
             block_table.push(self.gpu_allocator.allocate());
@@ -218,17 +220,14 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_append_token_to_seq(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_append_token_to_seq(&self, seq_group: &impl SequenceGroup) -> bool {
         let free_blocks = self.gpu_allocator.get_num_free_blocks();
         // Physical blocks = logical blocks
         seq_group.total_blocks_to_add_new_tok() <= *free_blocks
     }
 
-    pub fn free_sequence(&mut self, sequence: &Sequence) {
-        let block_table = self
-            .block_tables
-            .get(&sequence.deref_mut().get_id())
-            .unwrap();
+    pub fn free_sequence(&mut self, sequence: &impl Sequence) {
+        let block_table = self.block_tables.get(&sequence.get_id()).unwrap();
 
         // Free from block table
         for block in block_table {
@@ -239,10 +238,10 @@ impl BlockEngine {
             }
         }
 
-        self.block_tables.remove(&sequence.deref_mut().get_id());
+        self.block_tables.remove(&sequence.get_id());
     }
 
-    pub fn can_swap_out_seq_group(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_swap_out_seq_group(&self, seq_group: &impl SequenceGroup) -> bool {
         let blocks_required: usize = self
             .block_tables
             .iter()
@@ -254,7 +253,7 @@ impl BlockEngine {
 
     /// Update the block table so that the sequence does no longer reserve any GPU
     /// physical blocks, and only has CPU physical blocks.
-    pub fn swap_out(&mut self, seq_group: &SequenceGroup) -> HashMap<usize, usize> {
+    pub fn swap_out(&mut self, seq_group: &impl SequenceGroup) -> HashMap<usize, usize> {
         // GPU block to a CPU block
         let mut new_mapping = HashMap::new();
         for seq_id in seq_group.get_seqs().keys() {
@@ -291,13 +290,10 @@ impl BlockEngine {
 
     // Returns the COW mapping (src, dst).
     // COW is performed if there are multiple references to the last physical block.
-    pub fn append_token_slot_to_seq(&mut self, sequence: &Sequence) -> Option<(usize, usize)> {
-        let table = self
-            .block_tables
-            .get_mut(&sequence.deref_mut().get_id())
-            .unwrap();
+    pub fn append_token_slot_to_seq(&mut self, sequence: &impl Sequence) -> Option<(usize, usize)> {
+        let table = self.block_tables.get_mut(&sequence.get_id()).unwrap();
 
-        match sequence.deref_mut().blocks_to_add_new_tok() {
+        match sequence.blocks_to_add_new_tok() {
             1 => {
                 table.push(self.gpu_allocator.allocate());
                 None
@@ -323,7 +319,7 @@ impl BlockEngine {
         }
     }
 
-    pub fn can_swap_in_seq_group(&self, seq_group: &SequenceGroup) -> bool {
+    pub fn can_swap_in_seq_group(&self, seq_group: &impl SequenceGroup) -> bool {
         let blocks_required: usize = self
             .block_tables
             .iter()
@@ -335,7 +331,7 @@ impl BlockEngine {
 
     /// Update the block table so that the sequence does no longer reserve any CPU
     /// physical blocks, and only has GPU physical blocks.
-    pub fn swap_in(&mut self, seq_group: &SequenceGroup) -> HashMap<usize, usize> {
+    pub fn swap_in(&mut self, seq_group: &impl SequenceGroup) -> HashMap<usize, usize> {
         // CPU block to a GPU block
         let mut new_mapping = HashMap::new();
         for seq_id in seq_group.get_seqs().keys() {
