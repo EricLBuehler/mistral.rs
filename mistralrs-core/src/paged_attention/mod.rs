@@ -15,3 +15,6 @@ pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
 pub use config::ModelConfigLike;
 pub use layers::{InputMetadata, PagedAttention};
+pub use scheduler::{
+    PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
+};

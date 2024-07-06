@@ -68,7 +68,7 @@ pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMes
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
-pub use scheduler::SchedulerMethod;
+pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -96,7 +96,7 @@ pub struct MistralRs {
 #[derive(Clone)]
 struct RebootState {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     truncate_sequence: bool,
     no_kv_cache: bool,
     no_prefix_cache: bool,
@@ -130,7 +130,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     log: Option<String>,
     truncate_sequence: Option<bool>,
     no_kv_cache: Option<bool>,
@@ -141,7 +141,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerConfig) -> Self {
         Self {
             pipeline,
             method,

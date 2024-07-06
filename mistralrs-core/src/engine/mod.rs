@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -13,7 +13,8 @@ use crate::{
     pipeline::{AdapterInstruction, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage, Response, DEBUG,
+    scheduler::{Scheduler, SchedulerOutput},
+    CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
 use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
@@ -27,7 +28,6 @@ use crate::{
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
-    scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState},
     Constraint, StopTokens,
 };
@@ -39,7 +39,7 @@ pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 pub struct Engine {
     rx: Receiver<Request>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    scheduler: Scheduler<VecDeque<Sequence>>,
+    scheduler: Box<dyn Scheduler>,
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
@@ -53,7 +53,7 @@ impl Engine {
     pub fn new(
         rx: Receiver<Request>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
-        method: SchedulerMethod,
+        config: SchedulerConfig,
         truncate_sequence: bool,
         no_kv_cache: bool,
         no_prefix_cache: bool,
@@ -65,7 +65,7 @@ impl Engine {
         Self {
             rx,
             pipeline,
-            scheduler: Scheduler::new(method),
+            scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
             no_kv_cache,
@@ -88,155 +88,166 @@ impl Engine {
                 self.handle_request(request).await;
             }
             let run_start = Instant::now();
-            let mut scheduled = self.scheduler.schedule();
+            let scheduled = self.scheduler.schedule();
 
-            if scheduled.completion.len() > 0 {
-                let current_completion_ids: Vec<usize> =
-                    scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                let res = {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    let pre_op =
-                        if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                            CacheInstruction::In(
-                                scheduled.completion[0]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
-                        } else {
-                            CacheInstruction::Nothing(
-                                scheduled.completion[0]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
+            match scheduled {
+                SchedulerOutput::DefaultScheduler {
+                    output: mut scheduled,
+                } => {
+                    if scheduled.completion.len() > 0 {
+                        let current_completion_ids: Vec<usize> =
+                            scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        let res = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                            let pre_op = if !self.no_kv_cache
+                                && last_completion_ids != current_completion_ids
+                            {
+                                CacheInstruction::In(
+                                    scheduled.completion[0]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            } else {
+                                CacheInstruction::Nothing(
+                                    scheduled.completion[0]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            };
+                            let post_op = if !self.no_kv_cache {
+                                CacheInstruction::Out
+                            } else {
+                                CacheInstruction::Reset {
+                                    reset_non_granular: false,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
+
+                            pipeline
+                                .step(
+                                    &mut scheduled.completion,
+                                    false,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    pre_op,
+                                    post_op,
+                                )
+                                .await
                         };
-                    let post_op = if !self.no_kv_cache {
-                        CacheInstruction::Out
-                    } else {
-                        CacheInstruction::Reset {
-                            reset_non_granular: false,
-                            adapter_inst: AdapterInstruction::None,
-                        }
-                    };
 
-                    pipeline
-                        .step(
+                        handle_pipeline_forward_error!(
+                            "completion step",
+                            res,
                             &mut scheduled.completion,
-                            false,
-                            &mut self.prefix_cacher,
-                            self.disable_eos_stop,
-                            rng.clone(),
-                            pre_op,
-                            post_op,
-                        )
-                        .await
-                };
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
 
-                handle_pipeline_forward_error!(
-                    "completion step",
-                    res,
-                    &mut scheduled.completion,
-                    self.pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                        last_completion_ids = current_completion_ids;
+                    }
 
-                last_completion_ids = current_completion_ids;
-            }
+                    if scheduled.prompt.len() > 0 {
+                        let logits = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-            if scheduled.prompt.len() > 0 {
-                let logits = {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                            // Run the prompt seqs
+                            let post_op = if !self.no_kv_cache {
+                                CacheInstruction::Out
+                            } else {
+                                CacheInstruction::Reset {
+                                    reset_non_granular: false,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
+                            let adapter_inst = scheduled.prompt[0]
+                                .get_adapters()
+                                .map(AdapterInstruction::Activate)
+                                .unwrap_or(AdapterInstruction::None);
 
-                    // Run the prompt seqs
-                    let post_op = if !self.no_kv_cache {
-                        CacheInstruction::Out
-                    } else {
-                        CacheInstruction::Reset {
-                            reset_non_granular: false,
-                            adapter_inst: AdapterInstruction::None,
-                        }
-                    };
-                    let adapter_inst = scheduled.prompt[0]
-                        .get_adapters()
-                        .map(AdapterInstruction::Activate)
-                        .unwrap_or(AdapterInstruction::None);
+                            // Reset non granular state because the old sequence must be dead.
+                            // Technically we don't need to do this but it is better to be safe.
+                            pipeline
+                                .step(
+                                    &mut scheduled.prompt,
+                                    true,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheInstruction::Reset {
+                                        reset_non_granular: false,
+                                        adapter_inst,
+                                    },
+                                    post_op,
+                                )
+                                .await
+                        };
 
-                    // Reset non granular state because the old sequence must be dead.
-                    // Technically we don't need to do this but it is better to be safe.
-                    pipeline
-                        .step(
+                        handle_pipeline_forward_error!(
+                            "prompt step",
+                            logits,
                             &mut scheduled.prompt,
-                            true,
-                            &mut self.prefix_cacher,
-                            self.disable_eos_stop,
-                            rng.clone(),
-                            CacheInstruction::Reset {
-                                reset_non_granular: false,
-                                adapter_inst,
-                            },
-                            post_op,
-                        )
-                        .await
-                };
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
 
-                handle_pipeline_forward_error!(
-                    "prompt step",
-                    logits,
-                    &mut scheduled.prompt,
-                    self.pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.set_state(SequenceState::RunningCompletion);
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time travel has occurred!")
+                                .as_millis();
+                            #[allow(clippy::cast_precision_loss)]
+                            let prompt_tok_per_sec =
+                                seq.len() as f32 / (now - seq.timestamp()) as f32;
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                            seq.prompt_timestamp = Some(now);
+                        }
+                        last_completion_ids = vec![];
+                    }
 
-                for seq in scheduled.prompt.iter_mut() {
-                    seq.set_state(SequenceState::RunningCompletion);
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis();
-                    #[allow(clippy::cast_precision_loss)]
-                    let prompt_tok_per_sec = seq.len() as f32 / (now - seq.timestamp()) as f32;
-                    seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                    seq.prompt_timestamp = Some(now);
+                    if self.is_debug {
+                        let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                        let total_len = scheduled.prompt.len() + scheduled.completion.len();
+                        if total_len > 0 {
+                            let prompt_lengths = scheduled
+                                .prompt
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            let completion_lengths = scheduled
+                                .completion
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            tracing::info!(
+                                "Prompt[{}] Completion[{}] - {}ms",
+                                prompt_lengths,
+                                completion_lengths,
+                                ms_from_last_run * 1000.,
+                            );
+                        }
+                    }
+                    if scheduled.prompt.len() == 0
+                        && scheduled.completion.len() == 0
+                        && self.scheduler.waiting_len() == 0
+                    {
+                        // If there is nothing to do, sleep until a request comes in
+                        if let Some(request) = self.rx.recv().await {
+                            self.handle_request(request).await;
+                        }
+                    }
                 }
-                last_completion_ids = vec![];
-            }
-
-            if self.is_debug {
-                let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                let total_len = scheduled.prompt.len() + scheduled.completion.len();
-                if total_len > 0 {
-                    let prompt_lengths = scheduled
-                        .prompt
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    let completion_lengths = scheduled
-                        .completion
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    tracing::info!(
-                        "Prompt[{}] Completion[{}] - {}ms",
-                        prompt_lengths,
-                        completion_lengths,
-                        ms_from_last_run * 1000.,
-                    );
-                }
-            }
-            if scheduled.prompt.len() == 0
-                && scheduled.completion.len() == 0
-                && self.scheduler.waiting_len() == 0
-            {
-                // If there is nothing to do, sleep until a request comes in
-                if let Some(request) = self.rx.recv().await {
-                    self.handle_request(request).await;
+                SchedulerOutput::PagedAttention { output } => {
+                    todo!()
                 }
             }
         }

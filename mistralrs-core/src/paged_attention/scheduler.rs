@@ -18,32 +18,34 @@ use tracing::warn;
 
 use crate::{
     paged_attention::BlockEngine,
+    scheduler::{Scheduler, SchedulerOutput},
     sequence::{Sequence, SequenceState},
 };
 
 use super::{block_engine::AllocStatus, BlockEngineSequence, CacheConfig};
 
-pub struct SchedulerOutput {
+pub struct PagedAttentionSchedulerOutput {
+    /// Either ALL prompt or ALL completion.
     pub scheduled: Vec<Arc<Sequence>>,
     pub blocks_to_swap_in: HashMap<CPUBlockFrom, GPUBlockTo>,
     pub blocks_to_swap_out: HashMap<GPUBlockFrom, CPUBlockTo>,
     pub blocks_to_copy: HashMap<SrcBlockFrom, DstBlocksTo>,
 }
 
-pub struct SchedulerConfig {
+pub struct PagedAttentionSchedulerConfig {
     pub max_num_seqs: usize,
 }
 
-pub struct Scheduler {
+pub struct PagedAttentionScheduler {
     waiting: VecDeque<Arc<Sequence>>,
     running: VecDeque<Arc<Sequence>>,
     swapped_out: VecDeque<Arc<Sequence>>,
-    config: SchedulerConfig,
+    config: PagedAttentionSchedulerConfig,
     pub block_engine: BlockEngine,
 }
 
-impl Scheduler {
-    pub fn new(config: SchedulerConfig, cache_config: &CacheConfig) -> Self {
+impl PagedAttentionScheduler {
+    pub fn new(config: PagedAttentionSchedulerConfig, cache_config: &CacheConfig) -> Self {
         assert!(cache_config.fully_init);
         Self {
             waiting: VecDeque::new(),
@@ -58,11 +60,7 @@ impl Scheduler {
         }
     }
 
-    pub fn add_sequence(&mut self, seq: Sequence) {
-        self.waiting.push_back(Arc::new(seq));
-    }
-
-    pub fn schedule(&mut self) -> SchedulerOutput {
+    pub fn schedule(&mut self) -> PagedAttentionSchedulerOutput {
         // If there are no swapped seqs (they have higher priority), add seqs that are in the
         // waiting queue to the running queue.
         if self.swapped_out.is_empty() {
@@ -100,7 +98,7 @@ impl Scheduler {
 
             // If we did schedule, or we ignored sequences.
             if !scheduled.is_empty() || did_ignore {
-                return SchedulerOutput {
+                return PagedAttentionSchedulerOutput {
                     scheduled: scheduled.into(),
                     blocks_to_swap_in: HashMap::new(),
                     blocks_to_copy: HashMap::new(),
@@ -179,7 +177,13 @@ impl Scheduler {
             }
         }
 
-        SchedulerOutput {
+        let _ = self
+            .running
+            .iter()
+            .map(|seq| seq.set_state(SequenceState::RunningCompletion))
+            .collect::<Vec<_>>();
+
+        PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into(), // Clone should be cheap.
             blocks_to_swap_in,
             blocks_to_copy,
@@ -207,7 +211,7 @@ impl Scheduler {
     }
 }
 
-impl Scheduler {
+impl PagedAttentionScheduler {
     fn remove_seq(&mut self, seq: &Sequence) {
         // Remove it if it is in waiting
         if let Some(idx) = self
@@ -303,5 +307,19 @@ impl Scheduler {
             .make_contiguous()
             .sort_by_key(|seq| seq.timestamp());
         self.swapped_out.make_contiguous().reverse();
+    }
+}
+
+impl Scheduler for PagedAttentionScheduler {
+    fn add_seq(&mut self, seq: Sequence) {
+        self.waiting.push_back(Arc::new(seq));
+    }
+    fn schedule(&mut self) -> SchedulerOutput<'_> {
+        SchedulerOutput::PagedAttention {
+            output: self.schedule(),
+        }
+    }
+    fn waiting_len(&self) -> usize {
+        self.waiting.len()
     }
 }
