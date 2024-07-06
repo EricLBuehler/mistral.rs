@@ -945,6 +945,7 @@
 <a href="#945" id="945">945</a>
 <a href="#946" id="946">946</a>
 <a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1195,9 +1196,10 @@
             rotary_emb,
             query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
-            use_sliding_window: layer_idx % <span class="number">2 </span>!= <span class="number">0</span>,
-            sliding_window: <span class="kw">if </span>layer_idx % <span class="number">2 </span>!= <span class="number">0 </span>{
-                <span class="prelude-val">Some</span>(cfg.sliding_window)
+            use_sliding_window: layer_idx % <span class="number">2 </span>== <span class="number">0</span>, <span class="comment">// Order is SWA, global, SWA
+            </span>sliding_window: <span class="kw">if </span>layer_idx % <span class="number">2 </span>== <span class="number">0 </span>{
+                <span class="comment">// ^ Order is SWA, global, SWA
+                </span><span class="prelude-val">Some</span>(cfg.sliding_window)
             } <span class="kw">else </span>{
                 <span class="prelude-val">None
             </span>},
