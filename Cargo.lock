@@ -2387,6 +2387,8 @@ version = "0.1.26"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
+ "candle-core",
+ "half",
 ]
 
 [[package]]

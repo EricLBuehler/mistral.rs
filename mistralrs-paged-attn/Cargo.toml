@@ -12,7 +12,9 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
+candle-core.workspace = true
+half.workspace = true
 
 [build-dependencies]
-bindgen_cuda = {git = "https://github.com/guoqingbao/bindgen_cuda.git", version= "0.1.6"}
+bindgen_cuda = {git = "https://github.com/guoqingbao/bindgen_cuda.git", version = "0.1.6"}
 anyhow.workspace = true

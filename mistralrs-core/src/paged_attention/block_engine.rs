@@ -6,8 +6,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use super::sequence::{Sequence, SequenceGroup};
-
 pub struct LogicalTokenBlock {
     tokens: Vec<usize>,
     block_size: usize,

@@ -5,9 +5,10 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 
 const OTHER_CONTENT: &str = r#"
-r#"mod backend;
+mod ffi;
+mod backend;
 
-pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}}
+pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}};
 "#;
 
 fn read_lines(filename: &str) -> Vec<String> {

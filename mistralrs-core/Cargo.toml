@@ -29,7 +29,7 @@ minijinja = "2.0.2"
 minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
-half = "2.4.0"
+half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
