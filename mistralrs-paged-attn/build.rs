@@ -4,6 +4,12 @@ use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::path::PathBuf;
 
+const OTHER_CONTENT: &str = r#"
+r#"mod backend;
+
+pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}}
+"#;
+
 fn read_lines(filename: &str) -> Vec<String> {
     let mut result = Vec::new();
 
@@ -26,7 +32,7 @@ fn main() -> Result<()> {
     let bindings = builder.build_ptx().unwrap();
     bindings.write("src/lib.rs").unwrap();
 
-    let kernel_dir = PathBuf::from("../kernels/");
+    let kernel_dir = PathBuf::from("../mistralrs-paged-attn");
     let absolute_kernel_dir = std::fs::canonicalize(&kernel_dir).unwrap();
 
     println!(
@@ -47,9 +53,10 @@ fn main() -> Result<()> {
         .append(true)
         .open("src/lib.rs")
         .unwrap();
-    //Expose paged attention interface to Rust
-    if let Err(e) = writeln!(file, "pub mod ffi;") {
-        anyhow::bail!("error while building dependencies: {:?}\n", e,)
+
+    // Add the other stuff back
+    if let Err(e) = writeln!(file, "{OTHER_CONTENT}") {
+        anyhow::bail!("Error while building dependencies: {:?}\n", e)
     } else {
         Ok(())
     }
