@@ -67,7 +67,7 @@ impl CacheEngine {
         for _ in 0..model_config.num_layers() {
             let key_blocks = Tensor::zeros(
                 (
-                    cache_config.num_gpu_blocks.unwrap(),
+                    cache_config.num_gpu_blocks,
                     key_block_shape.0,
                     key_block_shape.1,
                     key_block_shape.2,
@@ -78,7 +78,7 @@ impl CacheEngine {
             )?;
             let value_blocks = Tensor::zeros(
                 (
-                    cache_config.num_gpu_blocks.unwrap(),
+                    cache_config.num_gpu_blocks,
                     value_block_shape.0,
                     value_block_shape.1,
                     value_block_shape.2,
@@ -107,7 +107,7 @@ impl CacheEngine {
         for _ in 0..model_config.num_layers() {
             let key_blocks = Tensor::zeros(
                 (
-                    cache_config.num_cpu_blocks.unwrap(),
+                    cache_config.num_cpu_blocks,
                     key_block_shape.0,
                     key_block_shape.1,
                     key_block_shape.2,
@@ -118,7 +118,7 @@ impl CacheEngine {
             )?;
             let value_blocks = Tensor::zeros(
                 (
-                    cache_config.num_cpu_blocks.unwrap(),
+                    cache_config.num_cpu_blocks,
                     value_block_shape.0,
                     value_block_shape.1,
                     value_block_shape.2,
