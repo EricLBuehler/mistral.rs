@@ -10,6 +10,7 @@ use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    paged_attention::PagedAttentionSchedulerOutput,
     pipeline::{AdapterInstruction, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
@@ -236,6 +237,7 @@ impl Engine {
                             );
                         }
                     }
+
                     if scheduled.prompt.len() == 0
                         && scheduled.completion.len() == 0
                         && self.scheduler.waiting_len() == 0
@@ -247,6 +249,7 @@ impl Engine {
                     }
                 }
                 SchedulerOutput::PagedAttention { output } => {
+                    let is_prompt = output.scheduled[0].is_prompt();
                     todo!()
                 }
             }
