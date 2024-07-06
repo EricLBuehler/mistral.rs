@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -10,6 +11,7 @@ use tokio::sync::{
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
@@ -63,6 +65,45 @@ pub enum SequenceRecognizer {
     None,
 }
 
+enum SequenceCustomMetadata {
+    PagedAttention {
+        logical_token_blocks: Vec<LogicalTokenBlock>,
+        block_size: usize,
+    },
+    None,
+}
+
+impl SequenceCustomMetadata {
+    fn append_token_to_blocks(&mut self, tok: usize) {
+        match self {
+            Self::PagedAttention {
+                logical_token_blocks,
+                block_size,
+            } => {
+                let last = logical_token_blocks.last_mut();
+                if last.is_some() && !last.as_ref().is_some_and(|last| last.is_full()) {
+                    // If we have space
+                    let last = last.unwrap();
+                    last.append_token_id(tok);
+                } else {
+                    logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
+                    logical_token_blocks
+                        .last_mut()
+                        .unwrap()
+                        .append_token_id(tok);
+                }
+            }
+            Self::None => (),
+        }
+    }
+
+    fn append_tokens_to_blocks(&mut self, toks: Vec<usize>) {
+        for tok in toks {
+            self.append_token_to_blocks(tok);
+        }
+    }
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -106,6 +147,35 @@ pub struct Sequence {
     pub prompt_timestamp: Option<u128>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
+
+    // Custom backend metadata
+    custom_metadata: SequenceCustomMetadata,
+}
+
+impl BlockEngineSequence for Sequence {
+    fn blocks_to_add_new_tok(&self) -> usize {
+        match &self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                if !logical_token_blocks
+                    .last()
+                    .is_some_and(|last| last.is_full())
+                {
+                    // If we have space
+                    0
+                } else {
+                    1
+                }
+            }
+            SequenceCustomMetadata::None => unreachable!(),
+        }
+    }
+
+    fn get_id(&self) -> usize {
+        self.id
+    }
 }
 
 impl Sequence {
@@ -172,6 +242,7 @@ impl Sequence {
             scheduling_urgency: 0,
             adapters,
             input_images,
+            custom_metadata: SequenceCustomMetadata::None,
         }
     }
 
@@ -263,6 +334,7 @@ impl Sequence {
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens = toks;
         self.prompt_len = self.tokens.len();
+        // TODO: HANDLE BLOCK ENGINE
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -307,12 +379,14 @@ impl Sequence {
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
         self.is_tmp = true;
         self.tokens.push(tok);
+        // TODO: HANDLE BLOCK ENGINE
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
         self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
+        // TODO: HANDLE BLOCK ENGINE
     }
 
     pub fn add_token(
@@ -334,6 +408,9 @@ impl Sequence {
         }
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
+
+        self.custom_metadata
+            .append_token_to_blocks(tok.token as usize);
 
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
