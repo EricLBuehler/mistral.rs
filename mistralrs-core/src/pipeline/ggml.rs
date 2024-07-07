@@ -11,6 +11,7 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
+use crate::paged_attention::CacheConfig;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -233,6 +234,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -341,6 +343,7 @@ impl Loader for GGMLLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: DType::F32,
+                sliding_window: None,
             }),
         })))
     }
@@ -355,6 +358,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -365,7 +369,15 @@ impl Loader for GGMLLoader {
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            cache_config,
+        )
     }
 
     fn get_id(&self) -> String {

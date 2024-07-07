@@ -16,6 +16,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
+use crate::paged_attention::CacheConfig;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -193,6 +194,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -203,7 +205,15 @@ impl Loader for NormalLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            cache_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -215,6 +225,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -322,6 +333,7 @@ impl Loader for NormalLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
+                sliding_window: todo!(),
             }),
         })))
     }

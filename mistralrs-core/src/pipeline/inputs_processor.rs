@@ -76,9 +76,9 @@ pub mod text_models_inputs_processor {
 
     #[derive(Clone)]
     pub struct PagedAttentionMeta<'a> {
-        block_tables: &'a BlockTables,
-        sliding_window: Option<usize>,
-        block_size: usize,
+        pub block_tables: &'a BlockTables,
+        pub sliding_window: Option<usize>,
+        pub block_size: usize,
     }
 
     #[derive(Default, Clone)]

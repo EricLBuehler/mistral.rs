@@ -19,7 +19,7 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
-use crate::paged_attention::{BlockTables, PhysicalTokenBlock};
+use crate::paged_attention::{BlockTables, CacheConfig, PhysicalTokenBlock};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -406,6 +406,7 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// Load a model from the specified paths.
@@ -423,6 +424,7 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     fn get_id(&self) -> String;
@@ -441,6 +443,7 @@ pub struct GeneralMetadata {
     // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
     pub activation_dtype: DType,
+    pub sliding_window: Option<usize>,
 }
 
 pub enum AdapterInstruction {
@@ -563,7 +566,7 @@ pub enum CacheBackendMetadata<'a> {
         post_op: CacheInstruction,
     },
     PagedAttention {
-        block_tables: Option<PagedAttentionMeta<'a>>,
+        metadata: PagedAttentionMeta<'a>,
     },
 }
 
@@ -675,7 +678,7 @@ pub trait Pipeline:
                     .await?;
                 Ok(())
             }
-            CacheBackendMetadata::PagedAttention { block_tables } => {
+            CacheBackendMetadata::PagedAttention { metadata } => {
                 let inputs = self
                     .get_processor()
                     .inputs_processor()
@@ -688,7 +691,7 @@ pub trait Pipeline:
                         self.get_metadata().has_no_kv_cache,
                         None,
                         self.get_input_processor_config(),
-                        block_tables,
+                        Some(metadata),
                     )
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 

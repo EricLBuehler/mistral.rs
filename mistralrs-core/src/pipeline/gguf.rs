@@ -14,6 +14,7 @@ use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::lora::Ordering;
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
@@ -35,6 +36,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Context, Result};
+use candle_core::quantized::gguf_file::Content;
 use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
@@ -284,6 +286,33 @@ fn parse_gguf_value(value: &GgufValue) -> String {
     }
 }
 
+impl ModelConfigLike for Content {
+    fn hidden_size(&self) -> usize {
+        let arch = self.metadata["general.architecture"].to_string().unwrap();
+        self.metadata[&format!("{arch}.embedding_length")]
+            .to_u64()
+            .unwrap() as usize
+    }
+    fn num_attn_heads(&self) -> usize {
+        let arch = self.metadata["general.architecture"].to_string().unwrap();
+        self.metadata[&format!("{arch}.attention.head_count")]
+            .to_u64()
+            .unwrap() as usize
+    }
+    fn num_kv_heads(&self) -> usize {
+        let arch = self.metadata["general.architecture"].to_string().unwrap();
+        self.metadata[&format!("{arch}.attention.head_count_kv")]
+            .to_u64()
+            .unwrap() as usize
+    }
+    fn num_layers(&self) -> usize {
+        let arch = self.metadata["general.architecture"].to_string().unwrap();
+        self.metadata[&format!("{arch}.block_count")]
+            .to_u64()
+            .unwrap() as usize
+    }
+}
+
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -295,6 +324,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
@@ -305,7 +335,15 @@ impl Loader for GGUFLoader {
             self.quantized_filename.clone(),
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            cache_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -317,6 +355,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -348,6 +387,11 @@ impl Loader for GGUFLoader {
                 let value = parse_gguf_value(&model.metadata[name]);
                 println!("{name}: {}", value);
             }
+        }
+
+        if let Some(cache_config) = cache_config {
+            let model_config: &dyn ModelConfigLike = &model;
+            let cache_engine = CacheEngine::new(model_config, cache_config, DType::F32, device)?;
         }
 
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
@@ -489,6 +533,7 @@ impl Loader for GGUFLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: DType::F32,
+                sliding_window: None,
             }),
         })))
     }

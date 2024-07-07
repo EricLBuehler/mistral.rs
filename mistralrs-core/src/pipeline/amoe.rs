@@ -20,6 +20,7 @@ use tracing::info;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
+    paged_attention::CacheConfig,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
@@ -59,6 +60,7 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -68,6 +70,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            cache_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -92,6 +95,7 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_path(
             paths,
@@ -100,6 +104,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            cache_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,

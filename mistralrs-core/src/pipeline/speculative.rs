@@ -11,6 +11,7 @@ use tokenizers::Tokenizer;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
+    paged_attention::CacheConfig,
     pipeline::{
         sampling::{sample_sequence, sample_target_sequence_speculative},
         AdapterInstruction, Cache,
@@ -45,6 +46,7 @@ impl Loader for SpeculativeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -54,6 +56,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            cache_config,
         )?;
         let draft = self.draft.load_model_from_hf(
             revision,
@@ -63,6 +66,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper,
             in_situ_quant,
+            cache_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(SpeculativePipeline::new(
             target,
@@ -80,6 +84,7 @@ impl Loader for SpeculativeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        cache_config: Option<&CacheConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_path(
             paths,
@@ -88,6 +93,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            cache_config,
         )?;
         let draft = self.draft.load_model_from_path(
             paths,
@@ -96,6 +102,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            cache_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(SpeculativePipeline::new(
             target,
@@ -587,7 +594,7 @@ impl Pipeline for SpeculativePipeline {
 
                 Ok(())
             }
-            CacheBackendMetadata::PagedAttention { block_tables } => todo!(),
+            CacheBackendMetadata::PagedAttention { metadata } => todo!(),
         }
     }
     fn category(&self) -> ModelCategory {

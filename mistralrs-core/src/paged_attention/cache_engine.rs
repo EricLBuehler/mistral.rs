@@ -13,7 +13,6 @@ pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub num_cpu_blocks: usize,
-    pub fully_init: bool,
 }
 
 pub type KVCache = (Tensor, Tensor);
@@ -27,7 +26,7 @@ pub struct CacheEngine {
 impl CacheEngine {
     pub fn new(
         model_config: &dyn ModelConfigLike,
-        cache_config: CacheConfig,
+        cache_config: &CacheConfig,
         dtype: DType,
         device: &Device,
     ) -> Result<Self> {
@@ -57,8 +56,6 @@ impl CacheEngine {
         dtype: DType,
         device: &Device,
     ) -> Result<Vec<KVCache>> {
-        assert!(cache_config.fully_init);
-
         let key_block_shape =
             Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
         let value_block_shape =
@@ -97,8 +94,6 @@ impl CacheEngine {
         dtype: DType,
         device: &Device,
     ) -> Result<Vec<KVCache>> {
-        assert!(cache_config.fully_init);
-
         let key_block_shape =
             Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
         let value_block_shape =

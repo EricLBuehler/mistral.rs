@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     engine::TERMINATE_ALL_NEXT_STEP,
+    paged_attention::BlockTables,
     sequence::{Sequence, SequenceState, StopReason},
 };
 use range_checked::UsizeBounded;
@@ -324,5 +325,11 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
         } else {
             self.waiting.add(seq);
         }
+    }
+    fn block_tables(&self) -> Option<&BlockTables> {
+        None
+    }
+    fn block_size(&self) -> Option<usize> {
+        None
     }
 }
