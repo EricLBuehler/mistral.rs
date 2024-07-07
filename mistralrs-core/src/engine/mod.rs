@@ -11,7 +11,7 @@ use tokio::sync::{mpsc::Receiver, Mutex};
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     paged_attention::PagedAttentionSchedulerOutput,
-    pipeline::{AdapterInstruction, CacheInstruction},
+    pipeline::{AdapterInstruction, CacheBackendMetadata, CacheInstruction},
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
@@ -133,8 +133,7 @@ impl Engine {
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    pre_op,
-                                    post_op,
+                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
                                 )
                                 .await
                         };
@@ -178,11 +177,13 @@ impl Engine {
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    CacheInstruction::Reset {
-                                        reset_non_granular: false,
-                                        adapter_inst,
+                                    CacheBackendMetadata::DefaultInstructions {
+                                        pre_op: CacheInstruction::Reset {
+                                            reset_non_granular: false,
+                                            adapter_inst,
+                                        },
+                                        post_op,
                                     },
-                                    post_op,
                                 )
                                 .await
                         };

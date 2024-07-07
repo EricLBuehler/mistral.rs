@@ -19,6 +19,7 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
+use crate::paged_attention::{BlockTables, PhysicalTokenBlock};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -65,6 +66,7 @@ pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
+use self::text_models_inputs_processor::PagedAttentionMeta;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -555,6 +557,16 @@ pub enum ModelCategory {
     Vision { has_conv2d: bool },
 }
 
+pub enum CacheBackendMetadata<'a> {
+    DefaultInstructions {
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
+    },
+    PagedAttention {
+        block_tables: Option<PagedAttentionMeta<'a>>,
+    },
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -576,84 +588,117 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        pre_op: CacheInstruction,
-        post_op: CacheInstruction,
+        backend_metadata: CacheBackendMetadata<'_>,
     ) -> Result<(), candle_core::Error> {
-        let inputs = self
-            .get_processor()
-            .inputs_processor()
-            .process_inputs(
-                self.tokenizer(),
-                input_seqs,
-                is_prompt,
-                self.get_metadata().is_xlora,
-                &self.device(),
-                self.get_metadata().has_no_kv_cache,
-                None,
-                self.get_input_processor_config(),
-            )
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        match backend_metadata {
+            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().has_no_kv_cache,
+                        None,
+                        self.get_input_processor_config(),
+                        None,
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        match pre_op {
-            CacheInstruction::In(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                match pre_op {
+                    CacheInstruction::In(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.clone_in_cache(input_seqs, false)
                     }
-                    AdapterInstruction::None => 0,
-                };
-                self.clone_in_cache(input_seqs, false)
-            }
-            CacheInstruction::Nothing(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                    CacheInstruction::Nothing(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
                     }
-                    AdapterInstruction::None => 0,
-                };
-            }
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst,
-            } => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst,
+                    } => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.set_none_cache(reset_non_granular, false)
                     }
-                    AdapterInstruction::None => 0,
-                };
-                self.set_none_cache(reset_non_granular, false)
+                    _ => unreachable!("Unreachable PRE cache op."),
+                }
+
+                let logits = self.forward_inputs(inputs)?;
+
+                match post_op {
+                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst: _,
+                    } => self.set_none_cache(reset_non_granular, false),
+                    _ => unreachable!("Unreachable POST cache op."),
+                }
+
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .await?;
+                Ok(())
             }
-            _ => unreachable!("Unreachable PRE cache op."),
+            CacheBackendMetadata::PagedAttention { block_tables } => {
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().has_no_kv_cache,
+                        None,
+                        self.get_input_processor_config(),
+                        block_tables,
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+                let logits = self.forward_inputs(inputs)?;
+
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .await?;
+                Ok(())
+            }
         }
-
-        let logits = self.forward_inputs(inputs)?;
-
-        match post_op {
-            CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-            CacheInstruction::Nothing(_) => (),
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst: _,
-            } => self.set_none_cache(reset_non_granular, false),
-            _ => unreachable!("Unreachable POST cache op."),
-        }
-
-        self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-            .await?;
-        Ok(())
     }
 
     async fn sample(

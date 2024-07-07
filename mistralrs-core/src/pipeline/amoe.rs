@@ -422,6 +422,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         metadata.has_no_kv_cache,
                         None,
                         input_processor_cfg.clone(),
+                        None, // TODO: get block tables/handle it
                     )
                     .unwrap();
 

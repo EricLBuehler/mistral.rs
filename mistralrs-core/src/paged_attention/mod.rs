@@ -10,7 +10,9 @@ mod config;
 mod layers;
 mod scheduler;
 
-pub use block_engine::{BlockEngine, LogicalTokenBlock};
+pub const _PAD_SLOT_ID: i64 = -1;
+
+pub use block_engine::{BlockEngine, BlockTables, LogicalTokenBlock, PhysicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
 pub use config::ModelConfigLike;

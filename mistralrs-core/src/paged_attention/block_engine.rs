@@ -186,6 +186,8 @@ pub struct BlockEngine {
     pub block_tables: HashMap<SeqID, BlockTable>,
 }
 
+pub type BlockTables = HashMap<usize, BlockTable>;
+
 impl BlockEngine {
     #[must_use]
     pub fn new(block_size: usize, num_gpu_blocks: usize, num_cpu_blocks: usize) -> Self {

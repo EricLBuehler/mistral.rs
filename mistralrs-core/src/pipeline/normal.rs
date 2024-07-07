@@ -415,6 +415,8 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
+            paged_attn_meta,
+            paged_attn_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(

@@ -12,7 +12,9 @@ use tokenizers::Tokenizer;
 
 use super::llava15::LLaVAVisionSpecificArgs;
 use super::utils::{expand2square, LLaVAImageProcessor};
-use crate::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
+use crate::pipeline::text_models_inputs_processor::{
+    get_completion_input, get_prompt_input, PagedAttentionMeta,
+};
 use crate::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
@@ -79,6 +81,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
+        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
     ) -> anyhow::Result<Box<dyn Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
@@ -126,6 +129,8 @@ impl InputsProcessor for LLaVAInputProcessor {
                 seqlen_offsets_kernel_full: _,
                 context_lens,
                 position_ids,
+                paged_attn_meta,
+                paged_attn_meta_full,
             } = *text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -136,6 +141,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                     no_kv_cache,
                     last_n_context_len,
                     other_config,
+                    paged_attn_metadata,
                 )?
                 .downcast::<text_models_inputs_processor::ModelInputs>()
                 .expect("Downcast failed.");
@@ -147,6 +153,8 @@ impl InputsProcessor for LLaVAInputProcessor {
                 position_ids,
                 pixel_values: None,
                 model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                paged_attn_meta,
+                paged_attn_meta_full,
             }));
         };
 
@@ -216,10 +224,24 @@ impl InputsProcessor for LLaVAInputProcessor {
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = if is_prompt {
-            get_prompt_input(toks, input_seqs, device, last_n_context_len)?
+            get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )?
         } else {
-            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
+            get_completion_input(
+                toks,
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata,
+            )?
         };
         Ok(Box::new(ModelInputs {
             input_ids: input,
@@ -229,6 +251,8 @@ impl InputsProcessor for LLaVAInputProcessor {
             position_ids,
             pixel_values,
             model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+            paged_attn_meta,
+            paged_attn_meta_full: None,
         }))
     }
 }

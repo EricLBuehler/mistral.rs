@@ -22,9 +22,9 @@ use crate::{
 
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheInstruction, CacheManager, CacheManagerMixin,
-    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
-    PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
+    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
+    ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -284,291 +284,311 @@ impl Pipeline for SpeculativePipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
-        pre_op: CacheInstruction,
-        post_op: CacheInstruction,
+        backend_metadata: CacheBackendMetadata<'_>,
     ) -> Result<()> {
-        match pre_op {
-            CacheInstruction::In(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+        match backend_metadata {
+            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                match pre_op {
+                    CacheInstruction::In(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.clone_in_cache(input_seqs, false)
                     }
-                    AdapterInstruction::None => 0,
-                };
-                self.clone_in_cache(input_seqs, false)
-            }
-            CacheInstruction::Nothing(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                    CacheInstruction::Nothing(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
                     }
-                    AdapterInstruction::None => 0,
-                };
-            }
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst,
-            } => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst,
+                    } => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.set_none_cache(reset_non_granular, false)
                     }
-                    AdapterInstruction::None => 0,
+                    _ => unreachable!("Unreachable PRE cache op."),
+                }
+
+                assert_eq!(input_seqs.len(), 1);
+
+                let seq = &mut input_seqs[0];
+
+                // ======================= Run draft model gamma times producing tokens ============================
+                // ======================= Sample the `gamma` logits. ============================
+                let mut draft_samples = Vec::new();
+                let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
+                for i in 0..self.gamma {
+                    let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
+                    let device = get_mut_arcmutex!(self.draft).device();
+                    let has_no_kv_cache =
+                        get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
+                    let inputs = self
+                        .get_processor()
+                        .inputs_processor()
+                        .process_inputs(
+                            self.tokenizer(),
+                            &mut [seq],
+                            is_prompt && i == 0, // Only prompt (no kv cache) if first
+                            is_xlora,
+                            &device,
+                            has_no_kv_cache,
+                            None,
+                            None,
+                            None, // TODO: get block tables/handle it
+                        )
+                        .unwrap();
+                    let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
+
+                    let sample = sample_sequence(
+                        logits.clone(),
+                        seq,
+                        seq.return_logprobs(),
+                        repeat_last_n,
+                        get_mut_arcmutex!(self.draft)
+                            .get_metadata()
+                            .tok_trie
+                            .clone(),
+                        rng.clone(),
+                        false, // todo tune
+                        false, // do not add to tok trie yet
+                        true,
+                    )
+                    .await?;
+                    seq.add_tmp_tok(sample.token);
+                    draft_samples.push(SpeculativeSample { sample });
+                }
+                seq.remove_tmp_tok(self.gamma);
+
+                // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
+                let mut draft_prefill_tokens = if is_prompt {
+                    seq.get_toks().to_vec()
+                } else {
+                    vec![*seq.get_toks().last().unwrap()]
                 };
-                self.set_none_cache(reset_non_granular, false)
-            }
-            _ => unreachable!("Unreachable PRE cache op."),
-        }
+                for (i, sample) in draft_samples.iter().enumerate() {
+                    if i == draft_samples.len() - 1 {
+                        continue;
+                    }
+                    draft_prefill_tokens.push(sample.sample.token);
+                }
+                seq.set_prefill_toks(draft_prefill_tokens);
 
-        assert_eq!(input_seqs.len(), 1);
+                // ======================= Run the model with all draft tokens. ============================
 
-        let seq = &mut input_seqs[0];
+                let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
+                    .as_ref()
+                    .map(|(k, _)| k.dims()[2])
+                    .unwrap_or(0);
 
-        // ======================= Run draft model gamma times producing tokens ============================
-        // ======================= Sample the `gamma` logits. ============================
-        let mut draft_samples = Vec::new();
-        let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
-        for i in 0..self.gamma {
-            let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
-            let device = get_mut_arcmutex!(self.draft).device();
-            let has_no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
-            let inputs = self
-                .get_processor()
-                .inputs_processor()
-                .process_inputs(
-                    self.tokenizer(),
-                    &mut [seq],
-                    is_prompt && i == 0, // Only prompt (no kv cache) if first
-                    is_xlora,
-                    &device,
-                    has_no_kv_cache,
-                    None,
-                    None,
-                )
-                .unwrap();
-            let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
-
-            let sample = sample_sequence(
-                logits.clone(),
-                seq,
-                seq.return_logprobs(),
-                repeat_last_n,
-                get_mut_arcmutex!(self.draft)
+                // ========= Run the model ============
+                let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
+                let device = get_mut_arcmutex!(self.target).device();
+                let has_no_kv_cache = get_mut_arcmutex!(self.target)
                     .get_metadata()
-                    .tok_trie
-                    .clone(),
-                rng.clone(),
-                false, // todo tune
-                false, // do not add to tok trie yet
-                true,
-            )
-            .await?;
-            seq.add_tmp_tok(sample.token);
-            draft_samples.push(SpeculativeSample { sample });
-        }
-        seq.remove_tmp_tok(self.gamma);
+                    .has_no_kv_cache;
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        &mut [seq],
+                        true, // use the "prefill" tokens
+                        is_xlora,
+                        &device,
+                        has_no_kv_cache,
+                        Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
+                        None,
+                        None, // TODO: get block tables/handle it
+                    )
+                    .unwrap();
 
-        // ======================= Add all draft tokens but the last one. Add the last from the seq. ============================
-        let mut draft_prefill_tokens = if is_prompt {
-            seq.get_toks().to_vec()
-        } else {
-            vec![*seq.get_toks().last().unwrap()]
-        };
-        for (i, sample) in draft_samples.iter().enumerate() {
-            if i == draft_samples.len() - 1 {
-                continue;
-            }
-            draft_prefill_tokens.push(sample.sample.token);
-        }
-        seq.set_prefill_toks(draft_prefill_tokens);
+                let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
 
-        // ======================= Run the model with all draft tokens. ============================
+                // Reset the prefill tokens
+                seq.reset_prefill_toks();
 
-        let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
-            .as_ref()
-            .map(|(k, _)| k.dims()[2])
-            .unwrap_or(0);
-
-        // ========= Run the model ============
-        let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
-        let device = get_mut_arcmutex!(self.target).device();
-        let has_no_kv_cache = get_mut_arcmutex!(self.target)
-            .get_metadata()
-            .has_no_kv_cache;
-        let inputs = self
-            .get_processor()
-            .inputs_processor()
-            .process_inputs(
-                self.tokenizer(),
-                &mut [seq],
-                true, // use the "prefill" tokens
-                is_xlora,
-                &device,
-                has_no_kv_cache,
-                Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
-                None,
-            )
-            .unwrap();
-
-        let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
-
-        // Reset the prefill tokens
-        seq.reset_prefill_toks();
-
-        // ======================= Rejection sampling. ============================
-        // Map from each target sample to corresponding in draft sample
-        let samples = sample_target_sequence_speculative(
-            logits.clone(),
-            seq,
-            seq.return_logprobs(),
-            repeat_last_n,
-            get_mut_arcmutex!(self.draft)
-                .get_metadata()
-                .tok_trie
-                .clone(),
-            rng.clone(),
-            self.gamma,
-        )
-        .await?;
-
-        let mut accepted_tokens = Vec::new();
-        for (target_sample, draft_sample) in zip(samples, draft_samples) {
-            let tok = target_sample.sample.token;
-            accepted_tokens.push(target_sample.sample);
-            if draft_sample.sample.token != tok {
-                break;
-            }
-        }
-
-        // ======================= Narrow caches to account for rejections ============================
-        let n_not_accepted = self.gamma - accepted_tokens.len();
-        for (k, v) in get_mut_arcmutex!(self.draft)
-            .cache()
-            .lock()
-            .iter_mut()
-            .flatten()
-        {
-            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-        }
-        if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-            for (k, v) in get_mut_arcmutex!(self.draft)
-                .cache()
-                .xlora_lock()
-                .iter_mut()
-                .flatten()
-            {
-                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-            }
-        }
-        for (k, v) in get_mut_arcmutex!(self.target)
-            .cache()
-            .lock()
-            .iter_mut()
-            .flatten()
-        {
-            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-        }
-        if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-            for (k, v) in get_mut_arcmutex!(self.target)
-                .cache()
-                .xlora_lock()
-                .iter_mut()
-                .flatten()
-            {
-                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-            }
-        }
-
-        let eos_owned = get_mut_arcmutex!(self.target)
-            .get_metadata()
-            .eos_tok
-            .clone();
-        let eos_tok = if disable_eos_stop {
-            None
-        } else {
-            Some(&eos_owned[..])
-        };
-        // Add the tokens to the seq and the trie
-        for accepted in accepted_tokens {
-            // Do not use the prefix cacher
-            finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, accepted, eos_tok, false);
-            match seq.recognizer {
-                SequenceRecognizer::Regex(ref mut rx) => {
-                    get_mut_arcmutex!(self.target)
+                // ======================= Rejection sampling. ============================
+                // Map from each target sample to corresponding in draft sample
+                let samples = sample_target_sequence_speculative(
+                    logits.clone(),
+                    seq,
+                    seq.return_logprobs(),
+                    repeat_last_n,
+                    get_mut_arcmutex!(self.draft)
                         .get_metadata()
                         .tok_trie
-                        .append_token(rx.as_mut(), accepted.token)
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                        .clone(),
+                    rng.clone(),
+                    self.gamma,
+                )
+                .await?;
+
+                let mut accepted_tokens = Vec::new();
+                for (target_sample, draft_sample) in zip(samples, draft_samples) {
+                    let tok = target_sample.sample.token;
+                    accepted_tokens.push(target_sample.sample);
+                    if draft_sample.sample.token != tok {
+                        break;
+                    }
                 }
-                SequenceRecognizer::Cfg(ref mut cfg) => {
-                    get_mut_arcmutex!(self.target)
+
+                // ======================= Narrow caches to account for rejections ============================
+                let n_not_accepted = self.gamma - accepted_tokens.len();
+                for (k, v) in get_mut_arcmutex!(self.draft)
+                    .cache()
+                    .lock()
+                    .iter_mut()
+                    .flatten()
+                {
+                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                }
+                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+                    for (k, v) in get_mut_arcmutex!(self.draft)
+                        .cache()
+                        .xlora_lock()
+                        .iter_mut()
+                        .flatten()
+                    {
+                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                    }
+                }
+                for (k, v) in get_mut_arcmutex!(self.target)
+                    .cache()
+                    .lock()
+                    .iter_mut()
+                    .flatten()
+                {
+                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                }
+                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+                    for (k, v) in get_mut_arcmutex!(self.target)
+                        .cache()
+                        .xlora_lock()
+                        .iter_mut()
+                        .flatten()
+                    {
+                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                    }
+                }
+
+                let eos_owned = get_mut_arcmutex!(self.target)
+                    .get_metadata()
+                    .eos_tok
+                    .clone();
+                let eos_tok = if disable_eos_stop {
+                    None
+                } else {
+                    Some(&eos_owned[..])
+                };
+                // Add the tokens to the seq and the trie
+                for accepted in accepted_tokens {
+                    // Do not use the prefix cacher
+                    finish_and_add_tokens_to_seq!(
+                        self,
+                        prefix_cacher,
+                        seq,
+                        accepted,
+                        eos_tok,
+                        false
+                    );
+                    match seq.recognizer {
+                        SequenceRecognizer::Regex(ref mut rx) => {
+                            get_mut_arcmutex!(self.target)
+                                .get_metadata()
+                                .tok_trie
+                                .append_token(rx.as_mut(), accepted.token)
+                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                        }
+                        SequenceRecognizer::Cfg(ref mut cfg) => {
+                            get_mut_arcmutex!(self.target)
+                                .get_metadata()
+                                .tok_trie
+                                .append_token(cfg.as_mut(), accepted.token)
+                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                        }
+                        SequenceRecognizer::None => {}
+                    }
+                }
+
+                // Trick to improve lower bounds. Sample last token in multinomial
+                /*
+                let sample = sample_sequence(
+                    logits.clone(),
+                    seq,
+                    seq.return_logprobs(),
+                    repeat_last_n,
+                    get_mut_arcmutex!(self.draft)
                         .get_metadata()
                         .tok_trie
-                        .append_token(cfg.as_mut(), accepted.token)
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                        .clone(),
+                    rng.clone(),
+                    false, // todo tune
+                    true, // do not add to tok trie yet
+                    true,
+                )
+                .await?;
+                finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, sample, eos_tok, false);
+                */
+
+                match post_op {
+                    CacheInstruction::Out => {
+                        self.clone_out_cache(input_seqs, true);
+                    }
+                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst: _,
+                    } => self.set_none_cache(reset_non_granular, true),
+                    _ => unreachable!("Unreachable pre cache op."),
                 }
-                SequenceRecognizer::None => {}
+
+                // Done! We have:
+                // - Run the draft model gamma times
+                // - Reset draft model cache fully
+                // - Sampled draft model's distributions
+                // - Run target model
+                // - Execute speculative decoding algorithm on the resulting distributions
+                // - Added the accepted tokens to buffer and trie
+                // - Maybe fixed up cache of base model based on accepted tokens.
+
+                Ok(())
             }
+            CacheBackendMetadata::PagedAttention { block_tables } => todo!(),
         }
-
-        // Trick to improve lower bounds. Sample last token in multinomial
-        /*
-        let sample = sample_sequence(
-            logits.clone(),
-            seq,
-            seq.return_logprobs(),
-            repeat_last_n,
-            get_mut_arcmutex!(self.draft)
-                .get_metadata()
-                .tok_trie
-                .clone(),
-            rng.clone(),
-            false, // todo tune
-            true, // do not add to tok trie yet
-            true,
-        )
-        .await?;
-        finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, sample, eos_tok, false);
-        */
-
-        match post_op {
-            CacheInstruction::Out => {
-                self.clone_out_cache(input_seqs, true);
-            }
-            CacheInstruction::Nothing(_) => (),
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst: _,
-            } => self.set_none_cache(reset_non_granular, true),
-            _ => unreachable!("Unreachable pre cache op."),
-        }
-
-        // Done! We have:
-        // - Run the draft model gamma times
-        // - Reset draft model cache fully
-        // - Sampled draft model's distributions
-        // - Run target model
-        // - Execute speculative decoding algorithm on the resulting distributions
-        // - Added the accepted tokens to buffer and trie
-        // - Maybe fixed up cache of base model based on accepted tokens.
-
-        Ok(())
     }
     fn category(&self) -> ModelCategory {
         self.category
