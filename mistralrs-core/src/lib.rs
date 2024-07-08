@@ -27,6 +27,7 @@ mod lora;
 mod model_loader;
 mod ops;
 pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
+
 mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
@@ -54,6 +55,7 @@ mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use paged_attention::PagedAttentionConfig;
 pub use pipeline::{
     chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,

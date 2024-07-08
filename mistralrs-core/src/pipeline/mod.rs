@@ -19,7 +19,9 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
-use crate::paged_attention::{BlockTables, CacheConfig, PhysicalTokenBlock};
+use crate::paged_attention::{
+    BlockTables, CacheConfig, CacheEngine, PagedAttentionConfig, PhysicalTokenBlock,
+};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -406,7 +408,7 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// Load a model from the specified paths.
@@ -424,14 +426,13 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     fn get_id(&self) -> String;
     fn get_kind(&self) -> ModelKind;
 }
 
-#[derive(Clone)]
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     pub repeat_last_n: usize,
@@ -444,6 +445,9 @@ pub struct GeneralMetadata {
     pub is_xlora: bool,
     pub activation_dtype: DType,
     pub sliding_window: Option<usize>,
+    // Paged Attention stuff
+    pub cache_config: Option<CacheConfig>,
+    pub cache_engine: Option<CacheEngine>,
 }
 
 pub enum AdapterInstruction {
@@ -567,6 +571,9 @@ pub enum CacheBackendMetadata<'a> {
     },
     PagedAttention {
         metadata: PagedAttentionMeta<'a>,
+        blocks_to_swap_in: HashMap<usize, usize>,
+        blocks_to_swap_out: HashMap<usize, usize>,
+        blocks_to_copy: HashMap<usize, Vec<usize>>,
     },
 }
 
@@ -678,7 +685,18 @@ pub trait Pipeline:
                     .await?;
                 Ok(())
             }
-            CacheBackendMetadata::PagedAttention { metadata } => {
+            CacheBackendMetadata::PagedAttention {
+                metadata,
+                blocks_to_copy,
+                blocks_to_swap_in,
+                blocks_to_swap_out,
+            } => {
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .expect("PagedAttention must have cache engine.")
+                    .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
+
                 let inputs = self
                     .get_processor()
                     .inputs_processor()

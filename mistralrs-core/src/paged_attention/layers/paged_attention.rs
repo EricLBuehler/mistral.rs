@@ -2,7 +2,7 @@ use candle_core::{Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
-use super::input_metadata::InputMetadata;
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 
 const _PARTITION_SIZE: usize = 512;
 
@@ -63,15 +63,15 @@ impl PagedAttention {
         attention_mask: Option<&Tensor>,
         mut key_cache: Option<Tensor>,
         mut value_cache: Option<Tensor>,
-        input_metadata: &mut InputMetadata,
+        input_metadata: &mut PagedAttentionInputMetadata,
     ) -> Result<Tensor> {
-        let dims = input_metadata.slot_mapping.dims();
-        let slot_mapping = if dims.len() > 1 {
+        let dims = input_metadata.slot_mappings.dims();
+        let slot_mappings = if dims.len() > 1 {
             input_metadata
-                .slot_mapping
-                .flatten(0, input_metadata.slot_mapping.dims().len())?
+                .slot_mappings
+                .flatten(0, input_metadata.slot_mappings.dims().len())?
         } else {
-            input_metadata.slot_mapping.clone()
+            input_metadata.slot_mappings.clone()
         };
 
         let att = match attention_mask {
@@ -111,14 +111,14 @@ impl PagedAttention {
         // value: Tensor,            // [num_tokens, num_heads, head_size]
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
         // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
-        // slot_mapping: Tensor,     // [num_tokens]
+        // slot_mappings: Tensor,     // [num_tokens]
         if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let _ = reshape_and_cache(
                 &key,
                 &value,
                 &key_cache.as_mut().unwrap(),
                 &value_cache.as_mut().unwrap(),
-                &slot_mapping,
+                &slot_mappings,
             )?;
         }
 

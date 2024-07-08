@@ -28,7 +28,8 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -194,7 +195,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -212,7 +213,7 @@ impl Loader for NormalLoader {
             silent,
             mapper,
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )
     }
 
@@ -225,7 +226,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -334,6 +335,8 @@ impl Loader for NormalLoader {
                 is_xlora,
                 activation_dtype: dtype,
                 sliding_window: todo!(),
+                cache_config: None, // TODO
+                cache_engine: None, // TODO
             }),
         })))
     }

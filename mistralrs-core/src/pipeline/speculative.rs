@@ -18,7 +18,8 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, Pipeline, TokenSource, TryIntoDType,
+    DeviceMapMetadata, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource,
+    TryIntoDType,
 };
 
 use super::{
@@ -46,7 +47,7 @@ impl Loader for SpeculativeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -56,7 +57,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         let draft = self.draft.load_model_from_hf(
             revision,
@@ -66,7 +67,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper,
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(SpeculativePipeline::new(
             target,
@@ -84,7 +85,7 @@ impl Loader for SpeculativeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_path(
             paths,
@@ -93,7 +94,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         let draft = self.draft.load_model_from_path(
             paths,
@@ -102,7 +103,7 @@ impl Loader for SpeculativeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(SpeculativePipeline::new(
             target,
@@ -594,7 +595,12 @@ impl Pipeline for SpeculativePipeline {
 
                 Ok(())
             }
-            CacheBackendMetadata::PagedAttention { metadata } => todo!(),
+            CacheBackendMetadata::PagedAttention {
+                metadata,
+                blocks_to_copy,
+                blocks_to_swap_in,
+                blocks_to_swap_out,
+            } => todo!(),
         }
     }
     fn category(&self) -> ModelCategory {

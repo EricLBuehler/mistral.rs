@@ -22,7 +22,8 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
@@ -234,7 +235,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -344,6 +345,8 @@ impl Loader for GGMLLoader {
                 is_xlora,
                 activation_dtype: DType::F32,
                 sliding_window: None,
+                cache_config: None, // TODO
+                cache_engine: None, // TODO
             }),
         })))
     }
@@ -358,7 +361,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -376,7 +379,7 @@ impl Loader for GGMLLoader {
             silent,
             mapper,
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )
     }
 

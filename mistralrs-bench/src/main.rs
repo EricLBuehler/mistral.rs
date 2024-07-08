@@ -2,9 +2,10 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    initialize_logging, Constraint, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
-    LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
+    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
+    SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -361,16 +362,20 @@ fn main() -> anyhow::Result<()> {
         false,
         mapper,
         None,
+        None, // TODO
     )?;
     info!("Model loaded.");
 
     let mistralrs = MistralRsBuilder::new(
         pipeline,
-        SchedulerMethod::Fixed(
-            (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                .try_into()
-                .unwrap(),
-        ),
+        SchedulerConfig::DefaultScheduler {
+            // TODO
+            method: DefaultSchedulerMethod::Fixed(
+                (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                    .try_into()
+                    .unwrap(),
+            ),
+        },
     )
     .with_no_prefix_cache(true)
     .with_disable_eos_stop(true)

@@ -159,9 +159,12 @@ pub fn copy_blocks(
     Ok(())
 }
 
-pub fn swap_blocks(
+// `dst` REALLY should be &mut. That's the only reason this is unsafe.
+/// # SAFETY
+/// `dst` is the only shared reference and tha `&mut` aliasing guarantee.
+pub unsafe fn swap_blocks(
     src: Tensor,
-    dst: &mut Tensor,
+    dst: &Tensor,
     block_mapping: HashMap<usize, usize>,
 ) -> Result<()> {
     let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
@@ -247,7 +250,7 @@ pub fn swap_blocks(
             }
         }
         (src, dst) => {
-            candle_core::bail!("Tensors must be on either the GPU or CPU to swap,, got {src:?} (src) and {dst:?} (dst).");
+            candle_core::bail!("Tensors must be on either the GPU or CPU to swap, got {src:?} (src) and {dst:?} (dst).");
         }
     }
 

@@ -96,7 +96,7 @@ impl SequenceCustomMetadata {
             Self::PagedAttention {
                 logical_token_blocks,
                 block_size,
-                group,
+                group: _,
             } => {
                 let last = logical_token_blocks.last_mut();
                 if last.is_some() && !last.as_ref().is_some_and(|last| last.is_full()) {
@@ -638,13 +638,7 @@ pub struct SequenceGroup {
 }
 
 impl SequenceGroup {
-    pub fn new(
-        n_choices: usize,
-        is_streaming: bool,
-        is_chat: bool,
-        best_of: usize,
-        seq_ids: Vec<usize>,
-    ) -> Self {
+    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
         Self {
             choices: Vec::new(),
             completion_choices: Vec::new(),

@@ -278,7 +278,12 @@ impl Engine {
                             &mut self.prefix_cacher,
                             self.disable_eos_stop,
                             rng.clone(),
-                            CacheBackendMetadata::PagedAttention { metadata },
+                            CacheBackendMetadata::PagedAttention {
+                                metadata,
+                                blocks_to_copy: output.blocks_to_copy,
+                                blocks_to_swap_in: output.blocks_to_swap_in,
+                                blocks_to_swap_out: output.blocks_to_swap_out,
+                            },
                         )
                         .await;
 
@@ -514,7 +519,6 @@ impl Engine {
             request.is_streaming,
             is_chat,
             best_of,
-            (self.id..self.id + request.sampling_params.n_choices).collect::<Vec<_>>(),
         )));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

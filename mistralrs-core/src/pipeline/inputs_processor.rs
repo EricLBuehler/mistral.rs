@@ -81,11 +81,11 @@ pub mod text_models_inputs_processor {
         pub block_size: usize,
     }
 
-    #[derive(Default, Clone)]
+    #[derive(Clone)]
     pub struct PagedAttentionInputMetadata {
         pub block_tables: Option<Tensor>,
         pub context_lens: Option<Tensor>,
-        pub slot_mappings: Option<Tensor>,
+        pub slot_mappings: Tensor,
         pub max_context_len: Option<usize>,
     }
 
@@ -212,8 +212,10 @@ pub mod text_models_inputs_processor {
                 &device,
             )?;
             Some(PagedAttentionInputMetadata {
-                slot_mappings: Some(slot_mappings),
-                ..Default::default()
+                slot_mappings,
+                block_tables: None,
+                context_lens: None,
+                max_context_len: None,
             })
         } else {
             None
@@ -340,7 +342,7 @@ pub mod text_models_inputs_processor {
             )?;
 
             Some(PagedAttentionInputMetadata {
-                slot_mappings: Some(slot_mappings),
+                slot_mappings,
                 block_tables: Some(block_tables),
                 context_lens: Some(context_lens),
                 max_context_len: Some(*max_context_len),

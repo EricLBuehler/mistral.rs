@@ -14,7 +14,7 @@ use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::lora::Ordering;
-use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
+use crate::paged_attention::{calculate_cache_config, CacheConfig, CacheEngine, ModelConfigLike};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
@@ -25,8 +25,8 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
-    TryIntoDType, DEBUG,
+    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths,
+    PagedAttentionConfig, Pipeline, TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -324,7 +324,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
@@ -342,7 +342,7 @@ impl Loader for GGUFLoader {
             silent,
             mapper,
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )
     }
 
@@ -355,7 +355,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -389,10 +389,20 @@ impl Loader for GGUFLoader {
             }
         }
 
-        if let Some(cache_config) = cache_config {
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let model_config: &dyn ModelConfigLike = &model;
-            let cache_engine = CacheEngine::new(model_config, cache_config, DType::F32, device)?;
-        }
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                DType::F32,
+                model_config,
+            )?;
+            let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
 
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let mut tensors = Vec::new();
@@ -534,6 +544,8 @@ impl Loader for GGUFLoader {
                 is_xlora,
                 activation_dtype: DType::F32,
                 sliding_window: None,
+                cache_config,
+                cache_engine,
             }),
         })))
     }

@@ -9,8 +9,8 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request,
-    SchedulerMethod, TokenSource,
+    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -319,6 +319,13 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
+    // TODO
+    let config = PagedAttentionConfig {
+        block_size: Some(16),
+        mem_cpu: 1024,
+        mem_gpu: 4096,
+    };
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -327,18 +334,28 @@ async fn main() -> Result<()> {
         false,
         mapper,
         args.in_situ_quant,
+        Some(config),
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    )
-    .with_opt_log(args.log)
-    .with_truncate_sequence(args.truncate_sequence)
-    .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    // SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+    let scheduler_config = SchedulerConfig::PagedAttentionMeta {
+        // TODO
+        max_num_seqs: args.max_seqs.try_into().unwrap(),
+        config: pipeline
+            .blocking_lock()
+            .get_metadata()
+            .cache_config
+            .as_ref()
+            .unwrap()
+            .clone(),
+    };
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_opt_log(args.log)
+        .with_truncate_sequence(args.truncate_sequence)
+        .with_no_kv_cache(args.no_kv_cache)
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");

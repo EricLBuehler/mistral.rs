@@ -20,11 +20,11 @@ use tokio::sync::mpsc::channel;
 use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, SpeculativeConfig,
+    SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -490,16 +490,20 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
+                None, // TODO
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let mistralrs = MistralRsBuilder::new(
             pipeline,
-            SchedulerMethod::Fixed(
-                max_seqs
-                    .try_into()
-                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
-            ),
+            SchedulerConfig::DefaultScheduler {
+                // TODO
+                method: DefaultSchedulerMethod::Fixed(
+                    max_seqs
+                        .try_into()
+                        .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                ),
+            },
         )
         .with_no_kv_cache(no_kv_cache)
         .with_prefix_cache_n(prefix_cache_n)

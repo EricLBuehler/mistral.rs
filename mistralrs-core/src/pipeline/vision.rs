@@ -23,7 +23,7 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, Pipeline, TryIntoDType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -127,7 +127,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -145,7 +145,7 @@ impl Loader for VisionLoader {
             silent,
             mapper,
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )
     }
 
@@ -158,7 +158,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -253,6 +253,8 @@ impl Loader for VisionLoader {
                 has_no_kv_cache: false,
                 activation_dtype: dtype,
                 sliding_window: todo!(),
+                cache_config: None, // TODO
+                cache_engine: None, // TODO
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),

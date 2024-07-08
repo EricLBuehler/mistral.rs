@@ -25,8 +25,8 @@ use crate::{
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, Pipeline, Response,
-    TokenSource, TryIntoDType,
+    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
+    Pipeline, Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -60,7 +60,7 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -70,7 +70,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -95,7 +95,7 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        cache_config: Option<&CacheConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let target = self.target.load_model_from_path(
             paths,
@@ -104,7 +104,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
-            cache_config,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -341,11 +341,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0);
         // TODO EVAL SEQ GROUP FOR PA
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
-            1,
-            false,
-            false,
-            0,
-            vec![],
+            1, false, false, 0,
         )));
 
         // Clear KV cache in prep for training
