@@ -77,7 +77,7 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
         "Q5K" => Ok(GgmlDType::Q5K),
         "Q6K" => Ok(GgmlDType::Q6K),
         "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown")),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
     }
 }
 
@@ -400,8 +400,9 @@ impl Runner {
                     expert_type: amoe_conf.expert_type.into(),
                     gate_model_id: amoe_conf.gate_model_id.clone(),
                     training: amoe_conf.training,
+                    loss_svg: amoe_conf.loss_svg.clone(),
                 },
-                path: amoe_conf.dataset_csv,
+                path: amoe_conf.dataset_json,
                 prefix: amoe_conf.prefix,
                 mlp: amoe_conf.mlp,
                 model_ids: amoe_conf.model_ids,

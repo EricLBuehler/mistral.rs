@@ -72,8 +72,6 @@ pub trait AnyMoeBaseModelMixin {
         &mut self,
         _additional_vbs: Vec<VarBuilder>,
         _config: AnyMoeConfig,
-        _dtype: DType,
-        _dev: &Device,
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
@@ -106,6 +104,7 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     /// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
     fn new_added_delta(&self, _deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>>;
+    fn dtype_device(&self) -> (DType, Device);
 }
 
 pub trait AnyMoeTrainableLayer {
@@ -151,6 +150,9 @@ pub struct AnyMoeConfig {
     pub gate_model_id: Option<String>,
     #[serde(default = "default_true")]
     pub training: bool,
+    /// If `training == true`, `loss_svg` will not save anything.
+    /// Otherwise, this will save a .svg file here.
+    pub loss_svg: Option<String>,
 }
 
 #[derive(Clone)]
@@ -194,7 +196,11 @@ impl MoeMlp {
         let inference = gate_vb.is_some();
         let empty_map = VarBuilder::from_varmap(&var_map, dtype, dev);
         let vb = gate_vb.unwrap_or(&empty_map);
-        let vb = vb.pp("moe_gate").pp(layer);
+        let vb = vb
+            .pp("moe_gate")
+            .pp(layer)
+            .set_device(dev.clone())
+            .set_dtype(dtype);
 
         let lin = linear(config.hidden_size, n_experts, vb)?;
 
@@ -313,5 +319,12 @@ impl MlpLayer for MoeMlp {
 
     fn new_added_delta(&self, _deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         unreachable!()
+    }
+
+    fn dtype_device(&self) -> (DType, Device) {
+        (
+            self.gate.lin.weight().dtype(),
+            self.gate.lin.weight().device().clone(),
+        )
     }
 }

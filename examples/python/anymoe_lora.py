@@ -16,7 +16,7 @@ runner = Runner(
     ),
     anymoe_config=AnyMoeConfig(
         hidden_size=4096,
-        dataset_csv="examples/amoe.csv",
+        dataset_json="examples/amoe.json",
         prefix="model.layers",
         mlp="mlp",
         expert_type=AnyMoeExpertType.LoraAdapter(
@@ -26,6 +26,8 @@ runner = Runner(
         epochs=100,
         batch_size=4,
         model_ids=["typeof/zephyr-7b-beta-lora"],
+        # For inference (use a pretrained gating layer) see `anymoe_inference.py`
+        loss_svg="loss.svg",
     ),
 )
 

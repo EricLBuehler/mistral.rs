@@ -96,6 +96,7 @@ fn get_dtypes() -> Vec<DType> {
         .unwrap();
     info!("Detected minimum CUDA compute capability {min_cc}");
     // 7.5 -> 750
+    #[allow(clippy::cast_possible_truncation)]
     let min_cc = (min_cc * 100.) as usize;
 
     let mut dtypes = Vec::new();

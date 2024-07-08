@@ -16,7 +16,7 @@ runner = Runner(
     ),
     anymoe_config=AnyMoeConfig(
         hidden_size=4096,
-        dataset_csv="examples/amoe.csv",
+        dataset_json="examples/amoe.json",
         prefix="model.layers",
         mlp="mlp",
         expert_type=AnyMoeExpertType.FineTuned(),
@@ -25,6 +25,7 @@ runner = Runner(
         batch_size=4,
         model_ids=["HuggingFaceH4/zephyr-7b-beta"],
         layers=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        loss_svg="loss.svg",
     ),
 )
 

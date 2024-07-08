@@ -84,7 +84,7 @@ impl FromStr for ScaledRopeType {
     type Err = candle_core::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "su" => Ok(Self::Su),
+            "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
@@ -245,7 +245,7 @@ impl PhiRotaryEmbedding {
     }
 }
 
-/// Matrix multiplcation, configurable to be via f16 (to use the faster GEMM kernels) optionally.
+/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
 pub struct MatMul;
 
 /// Set the matmuls to go via f16

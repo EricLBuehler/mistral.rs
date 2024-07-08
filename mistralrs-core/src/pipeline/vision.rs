@@ -1,5 +1,7 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{Idefics2Loader, Phi3VLoader, VisionLoaderType};
+use super::vision_loaders::{
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
@@ -97,6 +99,8 @@ impl VisionLoaderBuilder {
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
+            VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
+            VisionLoaderType::LLaVA => Box::new(LLaVALoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -184,7 +188,6 @@ impl Loader for VisionLoader {
             ),
             _ => unreachable!(),
         };
-
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
             &fs::read_to_string(
                 paths
@@ -200,9 +203,9 @@ impl Loader for VisionLoader {
             .as_ref()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
-        let processor = self
-            .inner
-            .get_processor(processor_config, preprocessor_config.clone());
+        let processor =
+            self.inner
+                .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
 
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
@@ -347,9 +350,8 @@ impl Pipeline for VisionPipeline {
         do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Vision {
-            has_conv2d: self.model.has_conv2d(),
-        }
+        let has_conv2d = self.model.has_conv2d();
+        ModelCategory::Vision { has_conv2d }
     }
 }
 
@@ -468,16 +470,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             None
         };
 
-        self.model.create_anymoe_layers(
-            vbs,
-            config,
-            dtype,
-            dev,
-            (prefix, mlp),
-            layers,
-            expert_type,
-            gate_vb,
-        )
+        self.model
+            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
