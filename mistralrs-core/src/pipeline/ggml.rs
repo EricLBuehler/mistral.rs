@@ -494,6 +494,7 @@ impl Pipeline for GGMLPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                None, // TODO
             ),
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,

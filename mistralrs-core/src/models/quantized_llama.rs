@@ -7,7 +7,9 @@ use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -135,6 +137,7 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
@@ -174,22 +177,46 @@ impl LayerWeights {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let y = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
+                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let y = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.n_head,
-            self.head_dim,
-            mask,
-            false,
-            b_sz,
-            seq_len,
-        )?;
+                dbg!(&q, &k, &v);
+                dbg!(&key_cache, &value_cache);
+                paged_attn
+                    .forward(
+                        &q,
+                        &k,
+                        &v,
+                        mask,
+                        Some(key_cache),
+                        Some(value_cache),
+                        input_metadata,
+                    )
+                    .unwrap()
+            }
+            None => {
+                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+
+                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
+
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.n_head,
+                    self.head_dim,
+                    mask,
+                    false,
+                    b_sz,
+                    seq_len,
+                )?
+            }
+        };
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = MatMul.qmatmul(&y, &self.attention_wo)?;
@@ -520,12 +547,16 @@ impl ModelWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             x,
-            &cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             DType::F32,
             self.layers[0].n_head,
         )?;
@@ -544,6 +575,9 @@ impl ModelWeights {
                 start_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), metadata)),
             )?;
             let x = (attn + residual)?;
 

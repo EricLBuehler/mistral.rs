@@ -660,14 +660,14 @@ impl Model {
         };
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
         let sliding_attention_mask = CausalMasker
             .make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
-                &cache,
+                &*cache,
                 Some(self.sliding_window),
                 xs.dtype(),
                 self.layers[0].self_attn.num_heads,

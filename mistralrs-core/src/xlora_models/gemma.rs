@@ -612,7 +612,7 @@ impl XLoraModel {
         let xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;

@@ -329,7 +329,7 @@ impl Llama {
         let mut cache = self.kv_cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;

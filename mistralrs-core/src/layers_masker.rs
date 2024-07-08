@@ -32,6 +32,52 @@ fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Ten
     Ok(res)
 }
 
+pub trait PastKvLenCache {
+    fn get_past_kv_len(&self) -> Result<usize>;
+}
+
+impl<'a> PastKvLenCache for &'a [Option<(Tensor, Tensor)>] {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        let kv_cache_1 = &self[0];
+        if kv_cache_1.is_none() {
+            return Ok(0);
+        }
+        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
+        return Ok(k_cache_1.dims()[2]);
+    }
+}
+
+impl<'a> PastKvLenCache for &'a [usize] {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        if self.windows(2).all(|w| w[0] == w[1]) {
+            return Ok(self[0]);
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+impl PastKvLenCache for Vec<Option<(Tensor, Tensor)>> {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        let kv_cache_1 = &self[0];
+        if kv_cache_1.is_none() {
+            return Ok(0);
+        }
+        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
+        return Ok(k_cache_1.dims()[2]);
+    }
+}
+
+impl<'a> PastKvLenCache for Option<&'a [(Tensor, Tensor)]> {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        match self {
+            None => Ok(0),
+            Some([(k_cache_1, _), ..]) => Ok(k_cache_1.dims()[2]),
+            _ => candle_core::bail!("Unreachable"),
+        }
+    }
+}
+
 impl CausalMasker {
     fn make_mask(&self, tgt_len: usize, past_kv_len: usize, device: &Device) -> Result<Tensor> {
         let offset = tgt_len + past_kv_len;
@@ -79,11 +125,11 @@ impl CausalMasker {
     pub fn make_causal_mask_as_attn_bias(
         &self,
         input_ids: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
+        cache: &dyn PastKvLenCache,
         dtype: DType,
         n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
-        let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let past_kv_len = cache.get_past_kv_len()?;
         let (b_sz, tgt_len) = input_ids.dims2()?;
         if tgt_len == 1 {
             return Ok(None);
@@ -121,7 +167,7 @@ impl CausalMasker {
     pub fn make_causal_mask_with_sliding_window_as_attn_bias(
         &self,
         input_ids: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
+        cache: &dyn PastKvLenCache,
         sliding_window: Option<usize>,
         dtype: DType,
         n_attn_heads: usize,
@@ -130,7 +176,7 @@ impl CausalMasker {
             return self.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
         }
         let sliding_window = sliding_window.unwrap();
-        let past_kv_len = self.calculate_past_kv_len(cache)?;
+        let past_kv_len = cache.get_past_kv_len()?;
         let (b_sz, tgt_len) = input_ids.dims2()?;
         if tgt_len == 1 {
             return Ok(None);

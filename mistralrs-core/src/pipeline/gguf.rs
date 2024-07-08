@@ -671,7 +671,7 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-            paged_attn_meta,
+            mut paged_attn_meta,
             paged_attn_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
@@ -680,6 +680,12 @@ impl Pipeline for GGUFPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
             Model::Phi2(ref model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
             Model::XLoraLlama(ref model) => model.forward(

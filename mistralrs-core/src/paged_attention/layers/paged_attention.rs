@@ -56,7 +56,7 @@ impl PagedAttention {
     ///     block_size]
     /// input_metadata: metadata for paged attention.
     pub fn forward(
-        &mut self,
+        &self,
         query: &Tensor,
         key: &Tensor,
         value: &Tensor,
@@ -107,6 +107,7 @@ impl PagedAttention {
             (q, k, v)
         };
 
+        dbg!(&key, &key_cache);
         // key: Tensor,              // [num_tokens, num_heads, head_size]
         // value: Tensor,            // [num_tokens, num_heads, head_size]
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
