@@ -423,9 +423,10 @@ impl Runner {
             Some(Either::Right(device_layers)) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
-                        DeviceLayerMapMetadata { ordinal: 0, layers },
-                    ])
+                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
+                        ordinal: 0,
+                        layers,
+                    }])
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -449,12 +450,12 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                    DeviceMapMetadata::from_num_device_layers(mapping)
                 }
             }
             Some(Either::Left(n_device_layers)) => {
                 // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+                DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
                     ordinal: 0,
                     layers: n_device_layers,
                 }])

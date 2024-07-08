@@ -20,19 +20,7 @@ pub struct DeviceMapMetadata {
 }
 
 impl DeviceMapMetadata {
-    #[deprecated(note = "This will be replaced by a more general API to handle multi-GPU.")]
-    pub fn from_num_device_layers(device_layers: usize) -> Self {
-        // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-        Self {
-            device_layers: Some(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers: device_layers,
-            }]),
-            host_layers: None,
-        }
-    }
-    // TODO(EricLBuehler): For version 0.2.0, replace `from_num_device_layers` with this.
-    pub fn from_num_device_layers_multi_gpu(device_layers: Vec<DeviceLayerMapMetadata>) -> Self {
+    pub fn from_num_device_layers(device_layers: Vec<DeviceLayerMapMetadata>) -> Self {
         Self {
             device_layers: Some(device_layers),
             host_layers: None,
