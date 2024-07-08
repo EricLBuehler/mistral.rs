@@ -274,7 +274,25 @@ pub fn get_model_paths(
         }
         None => {
             let mut filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+            let listing = api_dir_list!(api, model_id);
+            let safetensors = listing
+                .clone()
+                .filter(|x| x.ends_with(".safetensors"))
+                .collect::<Vec<_>>();
+            let pickles = listing
+                .clone()
+                .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
+                .collect::<Vec<_>>();
+            let files = if !safetensors.is_empty() {
+                // Always prefer safetensors
+                safetensors
+            } else if !pickles.is_empty() {
+                // Fall back to pickle
+                pickles
+            } else {
+                anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
+            };
+            for rfilename in files {
                 filenames.push(api_get_file!(api, &rfilename, model_id));
             }
             Ok(filenames)

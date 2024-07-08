@@ -2,7 +2,9 @@
 
 use std::{collections::HashMap, path::PathBuf, thread::JoinHandle};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{
+    pickle::PthTensors, safetensors::MmapedSafetensors, DType, Device, Result, Tensor,
+};
 use candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
@@ -14,6 +16,43 @@ use crate::utils::progress::IterWithProgress;
 use derive_new::new;
 
 use super::progress::{Joinable, NonThreadingHandle, Parellelize};
+
+trait TensorLoaderBackend {
+    fn get_names(&self) -> Vec<String>;
+    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor>;
+}
+
+struct SafetensorBackend(MmapedSafetensors);
+
+impl TensorLoaderBackend for SafetensorBackend {
+    fn get_names(&self) -> Vec<String> {
+        self.0
+            .tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>()
+    }
+    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
+        self.0.load(name, device)?.to_dtype(dtype)
+    }
+}
+
+struct PickleBackend(PthTensors);
+
+impl TensorLoaderBackend for PickleBackend {
+    fn get_names(&self) -> Vec<String> {
+        self.0.tensor_infos().keys().cloned().collect::<Vec<_>>()
+    }
+    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
+        self.0
+            .get(name)?
+            .ok_or(candle_core::Error::Msg(format!(
+                "Could not load tensor {name}"
+            )))?
+            .to_device(device)?
+            .to_dtype(dtype)
+    }
+}
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
@@ -101,13 +140,25 @@ trait LoadTensors {
         is_silent: bool,
         predicate: impl Fn(String) -> bool,
     ) -> Result<HashMap<String, Tensor>> {
-        let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(path)? };
+        let tensors: Box<dyn TensorLoaderBackend> = match path
+            .extension()
+            .expect("Expected extension")
+            .to_str()
+            .expect("Expected to convert")
+        {
+            "safetensors" => Box::new(SafetensorBackend(unsafe {
+                candle_core::safetensors::MmapedSafetensors::new(path)?
+            })),
+            "pth" | "pt" | "bin" => Box::new(PickleBackend(
+                candle_core::pickle::PthTensors::new(path, None)?
+            )),
+            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
+        };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
         let names_only = tensors
-            .tensors()
+            .get_names()
             .into_iter()
-            .map(|(name, _)| name)
             .filter(|x| predicate(x.to_string()));
         let iter = self.get_name_key_pairs(names_only).collect::<Vec<_>>();
 
@@ -115,7 +166,7 @@ trait LoadTensors {
         let mut loaded_tensors = HashMap::new();
         if !iter.is_empty() {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
-                let tensor = tensors.load(&load_name, device)?.to_dtype(dtype)?;
+                let tensor = tensors.load_name(&load_name, device, dtype)?;
 
                 loaded_tensors.insert(key_name, tensor);
             }
