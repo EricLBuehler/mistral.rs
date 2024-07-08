@@ -44,12 +44,6 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-lib=pagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
-    let contents = read_lines("src/lib.rs");
-    for line in contents {
-        if line == "pub mod ffi;" {
-            return Ok(());
-        }
-    }
     let ct = fs::read_to_string("src/lib.rs")?;
     if !ct.contains(OTHER_CONTENT) {
         let mut file = OpenOptions::new().append(true).open("src/lib.rs").unwrap();
