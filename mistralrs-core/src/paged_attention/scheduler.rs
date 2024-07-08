@@ -70,7 +70,6 @@ impl PagedAttentionScheduler {
             let mut did_ignore = false;
             while !self.waiting.is_empty() {
                 let seq = self.waiting.front().unwrap().clone();
-                dbg!(&seq.lock().unwrap().get_id());
 
                 // If adding this seq means we will have too many, stop as no more could be added.
                 if self.config.max_num_seqs == self.running.iter().count() + 1 {
@@ -97,6 +96,7 @@ impl PagedAttentionScheduler {
                 self._allocate(&*seq_handle);
 
                 let seq = self.waiting.pop_front().unwrap();
+                self.running.push_back(seq.clone());
                 scheduled.push_back(seq);
             }
 
@@ -109,9 +109,6 @@ impl PagedAttentionScheduler {
                     blocks_to_swap_out: HashMap::new(),
                 };
             }
-
-            // Add them to the running otherwise
-            self.running.extend(scheduled);
         }
 
         let mut blocks_to_swap_out = HashMap::new();
@@ -346,5 +343,8 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn block_size(&self) -> Option<usize> {
         Some(self.block_size)
+    }
+    fn free_finished_sequence_groups(&mut self) {
+        self.free_finished_sequence_groups()
     }
 }

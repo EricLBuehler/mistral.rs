@@ -332,4 +332,5 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
     fn block_size(&self) -> Option<usize> {
         None
     }
+    fn free_finished_sequence_groups(&mut self) {}
 }

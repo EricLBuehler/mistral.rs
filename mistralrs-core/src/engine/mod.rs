@@ -76,7 +76,7 @@ impl Engine {
                 device,
                 prefix_cache_n,
                 is_xlora,
-                no_prefix_cache,
+                true, // TODO no_prefix_cache,
             ),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
@@ -296,9 +296,23 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+
+                        for mut seq in guards {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time travel has occurred!")
+                                .as_millis();
+                            #[allow(clippy::cast_precision_loss)]
+                            let prompt_tok_per_sec =
+                                seq.len() as f32 / (now - seq.timestamp()) as f32;
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                            seq.prompt_timestamp = Some(now);
+                        }
                     }
                 }
             }
+
+            self.scheduler.free_finished_sequence_groups();
         }
     }
 
@@ -579,6 +593,11 @@ impl Engine {
                 }
             };
 
+            let block_size = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .cache_config
+                .clone()
+                .map(|conf| conf.block_size);
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -608,11 +627,7 @@ impl Engine {
                 },
                 request.adapters.clone(),
                 images.clone(),
-                get_mut_arcmutex!(self.pipeline)
-                    .get_metadata()
-                    .cache_config
-                    .clone()
-                    .map(|conf| conf.block_size),
+                block_size,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

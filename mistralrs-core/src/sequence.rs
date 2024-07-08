@@ -48,7 +48,7 @@ impl Display for StopReason {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SequenceState {
     Done(StopReason),
     RunningPrompt,
@@ -226,7 +226,7 @@ impl Sequence {
         block_size: Option<usize>,
     ) -> Self {
         let prompt_len = tokens.len();
-        let custom_metadata = if let Some(block_size) = block_size {
+        let mut custom_metadata = if let Some(block_size) = block_size {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: Vec::new(),
                 block_size,
@@ -235,6 +235,8 @@ impl Sequence {
         } else {
             SequenceCustomMetadata::None
         };
+        custom_metadata
+            .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
         Self {
             tokens,
             logprobs: Vec::new(),
@@ -367,7 +369,9 @@ impl Sequence {
     pub fn is_finished_paged_attn(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
-            SequenceState::FinishedAborted | SequenceState::FinishedIgnored
+            SequenceState::FinishedAborted
+                | SequenceState::FinishedIgnored
+                | SequenceState::Done(_)
         )
     }
 
@@ -479,6 +483,10 @@ impl Sequence {
             get_mut_group!(self).n_choices -= 1;
         }
         *self.state.write().unwrap() = state;
+    }
+
+    pub fn getstate(&self) -> SequenceState {
+        *self.state.read().unwrap()
     }
 
     pub fn is_done(

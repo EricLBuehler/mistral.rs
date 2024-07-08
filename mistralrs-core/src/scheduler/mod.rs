@@ -49,6 +49,8 @@ pub trait Scheduler {
     fn schedule(&mut self) -> SchedulerOutput<'_>;
     fn waiting_len(&self) -> usize;
     fn add_seq(&mut self, seq: Sequence);
+    /// This may do nothing. It depends on the implementation
+    fn free_finished_sequence_groups(&mut self);
 
     // Paged Attention metadata
     fn block_tables(&self) -> Option<&BlockTables>;
