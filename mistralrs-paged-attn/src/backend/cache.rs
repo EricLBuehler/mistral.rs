@@ -161,7 +161,7 @@ pub fn copy_blocks(
 
 // `dst` REALLY should be &mut. That's the only reason this is unsafe.
 /// # SAFETY
-/// `dst` is the only shared reference and tha `&mut` aliasing guarantee.
+/// `dst` is the only shared reference and upholds the `&mut` aliasing guarantee.
 pub unsafe fn swap_blocks(
     src: Tensor,
     dst: &Tensor,
