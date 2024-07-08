@@ -252,49 +252,51 @@ impl Engine {
                     }
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    if output.scheduled.len() > 0 {
+                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                    let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
+                        let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
-                    let block_tables = self.scheduler.block_tables().unwrap();
-                    let block_size = self.scheduler.block_size().unwrap();
+                        let block_tables = self.scheduler.block_tables().unwrap();
+                        let block_size = self.scheduler.block_size().unwrap();
 
-                    let metadata = PagedAttentionMeta {
-                        block_tables,
-                        block_size,
-                        sliding_window: pipeline.get_metadata().sliding_window,
-                    };
+                        let metadata = PagedAttentionMeta {
+                            block_tables,
+                            block_size,
+                            sliding_window: pipeline.get_metadata().sliding_window,
+                        };
 
-                    let mut guards = output
-                        .scheduled
-                        .iter_mut()
-                        .map(|seq| seq.lock().unwrap())
-                        .collect::<Vec<_>>();
+                        let mut guards = output
+                            .scheduled
+                            .iter_mut()
+                            .map(|seq| seq.lock().unwrap())
+                            .collect::<Vec<_>>();
 
-                    let res = pipeline
-                        .step(
+                        let res = pipeline
+                            .step(
+                                &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
+                                is_prompt,
+                                &mut self.prefix_cacher,
+                                self.disable_eos_stop,
+                                rng.clone(),
+                                CacheBackendMetadata::PagedAttention {
+                                    metadata,
+                                    blocks_to_copy: output.blocks_to_copy,
+                                    blocks_to_swap_in: output.blocks_to_swap_in,
+                                    blocks_to_swap_out: output.blocks_to_swap_out,
+                                },
+                            )
+                            .await;
+
+                        handle_pipeline_forward_error!(
+                            "step",
+                            res,
                             &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
-                            is_prompt,
-                            &mut self.prefix_cacher,
-                            self.disable_eos_stop,
-                            rng.clone(),
-                            CacheBackendMetadata::PagedAttention {
-                                metadata,
-                                blocks_to_copy: output.blocks_to_copy,
-                                blocks_to_swap_in: output.blocks_to_swap_in,
-                                blocks_to_swap_out: output.blocks_to_swap_out,
-                            },
-                        )
-                        .await;
-
-                    handle_pipeline_forward_error!(
-                        "step",
-                        res,
-                        &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
-                        self.pipeline,
-                        'lp,
-                        self.prefix_cacher
-                    );
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
+                    }
                 }
             }
         }
@@ -606,6 +608,11 @@ impl Engine {
                 },
                 request.adapters.clone(),
                 images.clone(),
+                get_mut_arcmutex!(self.pipeline)
+                    .get_metadata()
+                    .cache_config
+                    .clone()
+                    .map(|conf| conf.block_size),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

@@ -542,5 +542,6 @@ fn new_dummy_seq(
         None,
         None,
         images,
+        None, // TODO incorrect
     )
 }

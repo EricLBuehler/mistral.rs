@@ -70,6 +70,7 @@ impl PagedAttentionScheduler {
             let mut did_ignore = false;
             while !self.waiting.is_empty() {
                 let seq = self.waiting.front().unwrap().clone();
+                dbg!(&seq.lock().unwrap().get_id());
 
                 // If adding this seq means we will have too many, stop as no more could be added.
                 if self.config.max_num_seqs == self.running.iter().count() + 1 {

@@ -222,8 +222,19 @@ impl Sequence {
         prefix: Option<String>,
         adapters: Option<Vec<String>>,
         input_images: Option<Vec<image::DynamicImage>>,
+        // Paged attention
+        block_size: Option<usize>,
     ) -> Self {
         let prompt_len = tokens.len();
+        let custom_metadata = if let Some(block_size) = block_size {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks: Vec::new(),
+                block_size,
+                group: group.clone(),
+            }
+        } else {
+            SequenceCustomMetadata::None
+        };
         Self {
             tokens,
             logprobs: Vec::new(),
@@ -264,7 +275,7 @@ impl Sequence {
             scheduling_urgency: 0,
             adapters,
             input_images,
-            custom_metadata: SequenceCustomMetadata::None,
+            custom_metadata,
         }
     }
 

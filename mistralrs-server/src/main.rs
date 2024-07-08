@@ -343,7 +343,8 @@ async fn main() -> Result<()> {
         // TODO
         max_num_seqs: args.max_seqs.try_into().unwrap(),
         config: pipeline
-            .blocking_lock()
+            .lock()
+            .await
             .get_metadata()
             .cache_config
             .as_ref()
