@@ -321,7 +321,6 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
-    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
