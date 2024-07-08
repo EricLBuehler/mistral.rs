@@ -185,6 +185,7 @@ impl LayerWeights {
                 let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
                 dbg!(&q, &k, &v);
+                dbg!(self.n_head, self.n_kv_head);
                 dbg!(&key_cache, &value_cache);
                 paged_attn
                     .forward(

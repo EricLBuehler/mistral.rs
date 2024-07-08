@@ -77,10 +77,10 @@ impl PagedAttention {
         let att = match attention_mask {
             None => None,
             Some(mask) => {
-                let att = (query.matmul(&key.t()?)? * self.scale as f64)?;
+                let att = (query.contiguous()?.matmul(&key.t()?.contiguous()?).unwrap() * self.scale as f64)?;
                 let att = att.broadcast_add(mask)?;
                 let att = candle_nn::ops::softmax_last_dim(&att)?;
-                Some(att.matmul(&value)?)
+                Some(att.matmul(&value.contiguous()?).unwrap())
             }
         };
 
