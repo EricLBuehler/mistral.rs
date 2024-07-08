@@ -107,7 +107,7 @@ impl PagedAttention {
             (q, k, v)
         };
 
-        dbg!(&key, &key_cache);
+        //dbg!(&key, &key_cache);
         // key: Tensor,              // [num_tokens, num_heads, head_size]
         // value: Tensor,            // [num_tokens, num_heads, head_size]
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8

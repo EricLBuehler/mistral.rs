@@ -330,6 +330,7 @@ pub mod text_models_inputs_processor {
                 0,
                 &device,
             )?;
+            let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
             let max_context_len = paged_attn_context_lens.iter().max().unwrap();
             let context_lens = Tensor::from_vec(
