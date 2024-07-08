@@ -2,6 +2,7 @@
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention};
+use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -223,6 +224,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {

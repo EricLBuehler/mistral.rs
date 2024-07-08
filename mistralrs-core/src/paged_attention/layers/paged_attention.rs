@@ -24,13 +24,13 @@ impl PagedAttention {
         scale: f32,
         num_key_value_heads: Option<usize>,
         sliding_window: Option<usize>,
-        device: Device,
+        device: &Device,
         alibi_slopes: Option<Vec<f64>>,
     ) -> Result<Self> {
         let num_key_value_heads = num_key_value_heads.unwrap_or(num_attention_heads);
         let num_queries_per_kv = num_attention_heads / num_key_value_heads;
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
-            Some(Tensor::new(alibi_slopes, &device)?)
+            Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };

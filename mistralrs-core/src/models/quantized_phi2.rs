@@ -8,6 +8,7 @@ use candle_nn::{Embedding, LayerNorm};
 use crate::device_map::DeviceMapper;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
+use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -199,6 +200,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {

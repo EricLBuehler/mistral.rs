@@ -30,6 +30,11 @@ pub struct PagedAttentionConfig {
     pub mem_gpu: usize,
 }
 
+pub enum AttentionImplementation {
+    Eager,
+    PagedAttention,
+}
+
 // See `pagedattention.cu` CALL_V1_LAUNCHER_BLOCK_SIZE
 const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
 

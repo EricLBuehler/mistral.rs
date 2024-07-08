@@ -7,6 +7,7 @@ use candle_nn::{Embedding, Module, RotaryEmbedding};
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -111,7 +112,6 @@ impl MlpOrMoe {
     }
 }
 
-#[derive(Debug, Clone)]
 struct LayerWeights {
     attention_wq: QMatMul,
     attention_wk: QMatMul,
@@ -124,6 +124,7 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl LayerWeights {
@@ -196,7 +197,6 @@ impl LayerWeights {
     }
 }
 
-#[derive(Debug)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
@@ -257,6 +257,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rotary: rotary.clone(),
+                paged_attn: None, // TODO
             })
         }
         Ok(Self {
@@ -333,6 +334,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -471,6 +473,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let attention_norm =
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    head_count,
+                    head_dim,
+                    (1.0 / (head_dim as f64).sqrt()) as f32,
+                    Some(head_count_kv),
+                    None, // TODO
+                    device,
+                    None,
+                )?),
+            };
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
@@ -483,6 +497,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary: rotary.clone(),
+                paged_attn,
             })
         }
         Ok(Self {

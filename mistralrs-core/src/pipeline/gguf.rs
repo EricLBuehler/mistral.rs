@@ -14,7 +14,9 @@ use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::lora::Ordering;
-use crate::paged_attention::{calculate_cache_config, CacheConfig, CacheEngine, ModelConfigLike};
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
+};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
@@ -450,7 +452,15 @@ impl Loader for GGUFLoader {
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGUF((model, &mut file).into(), (device, mapper).into());
+            let quant = ModelConfig::ParamsGGUF(
+                (model, &mut file).into(),
+                (device, mapper).into(),
+                if cache_config.is_some() {
+                    AttentionImplementation::PagedAttention
+                } else {
+                    AttentionImplementation::Eager
+                },
+            );
 
             // With optional adapter config:
             let mut adapter = None;
