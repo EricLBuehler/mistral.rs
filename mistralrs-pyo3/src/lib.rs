@@ -345,7 +345,7 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<Either<usize, Vec<String>>>,
+        num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
     ) -> PyResult<Self> {
@@ -420,7 +420,7 @@ impl Runner {
         };
 
         let mapper = match num_device_layers {
-            Some(Either::Right(device_layers)) => {
+            Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
                     DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
@@ -452,13 +452,6 @@ impl Runner {
                     }
                     DeviceMapMetadata::from_num_device_layers(mapping)
                 }
-            }
-            Some(Either::Left(n_device_layers)) => {
-                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-                DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                    ordinal: 0,
-                    layers: n_device_layers,
-                }])
             }
             None => DeviceMapMetadata::dummy(),
         };
