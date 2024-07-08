@@ -122,7 +122,6 @@ pub trait DeviceMapper: Debug {
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
 
-    // TODO(EricLBuehler): when 0.2.0, replace this with param in `into_mapper`.
     // === IMMEDIATELY AFTER INIT ===
     fn get_min_dtype(&self) -> Result<DType>;
 }
