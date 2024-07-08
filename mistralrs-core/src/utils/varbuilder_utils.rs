@@ -149,7 +149,7 @@ trait LoadTensors {
             "safetensors" => Box::new(SafetensorBackend(unsafe {
                 candle_core::safetensors::MmapedSafetensors::new(path)?
             })),
-            ".pth" | ".pt" | ".bin" => Box::new(PickleBackend(
+            "pth" | "pt" | "bin" => Box::new(PickleBackend(
                 candle_core::pickle::PthTensors::new(path, None)?
             )),
             other => candle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
