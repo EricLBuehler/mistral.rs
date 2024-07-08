@@ -520,7 +520,7 @@ impl Model {
             norm,
             lm_head,
             sliding_window: cfg.sliding_window,
-            device: vb.device().clone(),
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, true),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
