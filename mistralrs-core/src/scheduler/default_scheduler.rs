@@ -48,6 +48,7 @@ pub struct DefaultSchedulerOutput<'a> {
 /// step of the engine. For each scheduling step, the scheduler method is used if there
 /// are not only running, only waiting sequences, or none. If is it used, then it
 /// is used to allow waiting sequences to run.
+#[derive(Clone)]
 pub enum DefaultSchedulerMethod {
     Fixed(NonZeroUsize),
 }
@@ -296,32 +297,6 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
             DefaultSchedulerMethod::Fixed(n) => (running.len() + 1) <= (*n).into(),
         }
     }
-}
-
-impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
-    fn schedule(&mut self) -> SchedulerOutput<'_> {
-        SchedulerOutput::DefaultScheduler {
-            output: self.schedule(),
-        }
-    }
-    fn waiting_len(&self) -> usize {
-        self.waiting.len()
-    }
-    fn add_seq(&mut self, seq: Sequence) {
-        if seq.is_running() {
-            // prefill case
-            self.running.push(seq);
-        } else {
-            self.waiting.add(seq);
-        }
-    }
-    fn block_tables(&self) -> Option<&BlockTables> {
-        None
-    }
-    fn block_size(&self) -> Option<usize> {
-        None
-    }
-    fn free_finished_sequence_groups(&mut self) {}
 }
 
 impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
