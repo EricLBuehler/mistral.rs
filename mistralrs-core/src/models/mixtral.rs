@@ -497,7 +497,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -513,6 +513,9 @@ impl IsqModel for Model {
             }
         }
         (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
     }
 }
 

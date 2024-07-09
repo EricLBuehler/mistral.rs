@@ -721,7 +721,7 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -751,6 +751,49 @@ impl IsqModel for XLoraModel {
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner(),
+                Some(i),
+            ));
+        }
+        (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((self.lm_head.bias_mut(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().bias_mut(),
                 Some(i),
             ));
         }
