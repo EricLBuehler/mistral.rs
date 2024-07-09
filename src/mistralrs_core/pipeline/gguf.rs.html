@@ -655,6 +655,19 @@
 <a href="#655" id="655">655</a>
 <a href="#656" id="656">656</a>
 <a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -688,6 +701,7 @@
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
     models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
+    models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
@@ -716,6 +730,7 @@
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
+    Starcoder2(QStarcoder2),
 }
 
 <span class="kw">pub struct </span>GGUFPipeline {
@@ -757,6 +772,7 @@
     Rwkv,
     Phi2,
     Phi3,
+    Starcoder2,
 }
 
 <span class="comment">// Wraps from_str() for some convenience:
@@ -1075,6 +1091,9 @@
                 GGUFArchitecture::Llama =&gt; Model::Llama(QLlama::try_from(model_config)<span class="question-mark">?</span>),
                 GGUFArchitecture::Phi2 =&gt; Model::Phi2(QPhi::try_from(model_config)<span class="question-mark">?</span>),
                 GGUFArchitecture::Phi3 =&gt; Model::Phi3(QPhi3::try_from(model_config)<span class="question-mark">?</span>),
+                GGUFArchitecture::Starcoder2 =&gt; {
+                    Model::Starcoder2(QStarcoder2::try_from(model_config)<span class="question-mark">?</span>)
+                }
                 a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture `{a:?}` for GGUF"</span>),
             },
             ModelKind::AdapterQuantized { adapter, .. } =&gt; <span class="kw">match </span>arch {
@@ -1099,6 +1118,7 @@
             Model::XLoraLlama(<span class="kw-2">ref </span>xl) =&gt; xl.max_seq_len,
             Model::Phi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
             Model::XLoraPhi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
+            Model::Starcoder2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
         };
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
@@ -1107,6 +1127,7 @@
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
         };
 
         <span class="kw">if </span>chat_template.bos_token.is_none() &amp;&amp; bos.is_some() {
@@ -1199,6 +1220,7 @@
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
 }
@@ -1230,6 +1252,7 @@
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
         }
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
@@ -1293,6 +1316,9 @@
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
             ),
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, seqlen_offsets_kernel)
+            }
         }
     }
     <span class="kw">async fn </span>sample(

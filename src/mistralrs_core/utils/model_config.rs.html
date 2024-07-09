@@ -322,6 +322,7 @@
 <a href="#322" id="322">322</a>
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
@@ -599,6 +600,7 @@
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
     models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
+    models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 <span class="kw">use </span>akin::akin;
@@ -622,7 +624,7 @@
 }
 
 <span class="macro">akin!</span> {
-    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3];
+    <span class="kw">let </span><span class="kw-2">&amp;</span>models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2];
 
     <span class="kw">impl </span>TryFrom&lt;ModelParams&lt;<span class="lifetime">'_</span>, ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;&gt;&gt; <span class="kw">for </span><span class="kw-2">*</span>models_gguf {
         <span class="kw">type </span>Error = candle_core::Error;
