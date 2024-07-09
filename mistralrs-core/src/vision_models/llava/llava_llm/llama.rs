@@ -170,6 +170,9 @@ impl MlpLayer for Mlp {
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
         vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
     }
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        vec![None, None, None]
+    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -385,7 +388,7 @@ impl Llama {
 }
 
 impl IsqModel for Llama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
@@ -403,6 +406,9 @@ impl IsqModel for Llama {
             );
         }
         (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
     }
 }
 

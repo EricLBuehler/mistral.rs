@@ -140,6 +140,13 @@ impl MlpLayer for MLP {
             self.down_proj.inner(),
         ]
     }
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        vec![
+            self.gate_proj.bias_mut(),
+            self.up_proj.bias_mut(),
+            self.down_proj.bias_mut(),
+        ]
+    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -575,7 +582,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -589,6 +596,24 @@ impl IsqModel for Model {
                     .get_isq_tensors()
                     .into_iter()
                     .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.o_proj.bias_mut(), Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_biases()
+                    .into_iter()
+                    .map(|b| (b, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }

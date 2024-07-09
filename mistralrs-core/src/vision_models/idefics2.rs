@@ -1053,8 +1053,11 @@ impl Idefics2 {
 }
 
 impl IsqModel for Idefics2 {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.text_model.get_tensors()
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_matmuls()
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_biases()
     }
 }
 

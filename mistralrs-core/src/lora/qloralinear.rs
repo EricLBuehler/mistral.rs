@@ -232,6 +232,9 @@ impl LinearLayerLike for QLoraLinear {
     fn bias(&self) -> Option<&Tensor> {
         None
     }
+    fn bias_mut(&mut self) -> Option<&mut Tensor> {
+        None
+    }
     fn weight(&self) -> &Tensor {
         unimplemented!()
     }
