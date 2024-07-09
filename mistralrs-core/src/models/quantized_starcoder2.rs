@@ -142,7 +142,6 @@ pub(crate) struct PropsGGUF {
     pub head_count_kv: usize,
     pub block_count: usize,
     pub embedding_length: usize,
-    pub rope_dim: usize,
     pub layer_norm_epsilon: f64,
     pub context_window: usize,
     pub rope_freq_base: f32,
@@ -152,14 +151,13 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     type Error = anyhow::Error;
 
     fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
-        c.verify_arch("phi3")?;
+        c.verify_arch("starcoder2")?;
 
         let required = [
             "attention.head_count",
             "attention.head_count_kv",
             "block_count",
             "embedding_length",
-            "rope.dimension_count",
             "attention.layer_norm_epsilon",
             "context_length",
         ];
@@ -172,7 +170,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
             block_count: c.get_value::<u32>("block_count")? as usize,
             embedding_length: c.get_value::<u32>("embedding_length")? as usize,
-            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
             layer_norm_epsilon: c.get_value::<f32>("attention.layer_norm_epsilon")? as f64,
             context_window: c.get_value::<u32>("context_length")? as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(100_000_f32),
@@ -199,7 +196,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
             head_count_kv,
             block_count,
             embedding_length,
-            rope_dim,
             layer_norm_epsilon,
             context_window,
             rope_freq_base,
@@ -221,13 +217,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new_partial(
+            let rotary = RotaryEmbedding::new(
                 rope_freq_base,
                 head_dim,
-                rope_dim,
                 context_window,
                 device,
-                false,
+                true,
                 DType::F32,
             )?;
 
@@ -235,13 +230,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
             let mlp = Mlp { ffn_up, ffn_down };
             let attn_norm = layer_norm(
-                ct.tensor(reader, "attn_norm.weight", device)?,
-                ct.tensor(reader, "attn_norm.bias", device)?,
+                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
             let ffn_norm = layer_norm(
-                ct.tensor(reader, "ffn_norm.weight", device)?,
-                ct.tensor(reader, "ffn_norm.bias", device)?,
+                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(reader, &format!("{prefix}.ffn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
             let attn_q = QLinear::new(&ct, reader, &format!("{prefix}.attn_q"), device)?;
