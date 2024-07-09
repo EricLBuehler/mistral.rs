@@ -66,7 +66,7 @@ impl PagedAttention {
         input_metadata: &mut PagedAttentionInputMetadata,
     ) -> Result<Tensor> {
         let dims = input_metadata.slot_mappings.dims();
-        let slot_mappings = if dims.len() > 1 {
+        let slot_mapping = if dims.len() > 1 {
             input_metadata
                 .slot_mappings
                 .flatten(0, input_metadata.slot_mappings.dims().len())?
@@ -74,18 +74,41 @@ impl PagedAttention {
             input_metadata.slot_mappings.clone()
         };
 
+        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
+        let (_, key_value_heads, _, _) = key.shape().dims4()?;
+
         let att = match attention_mask {
             None => None,
             Some(mask) => {
-                let att = (query.contiguous()?.matmul(&key.t()?.contiguous()?).unwrap() * self.scale as f64)?;
+                //Only perform key/value repeat in prefiling stage, this will reduce kvcache
+                //and remove redundant repeat_kv in decoding stage
+                let att = if key_value_heads != attention_heads {
+                    let key_repeat = if key_value_heads == 1 {
+                        key.broadcast_as((batch_size, attention_heads, seq_len, head_size))?
+                    } else {
+                        Tensor::cat(&vec![&key; attention_heads / key_value_heads], 2)?
+                            .reshape((batch_size, attention_heads, seq_len, head_size))?
+                    };
+                    (query.matmul(&key_repeat.t()?.contiguous()?)? * self.scale as f64)?
+                } else {
+                    (query.matmul(&key.t()?)? * self.scale as f64)?
+                };
+
                 let att = att.broadcast_add(mask)?;
                 let att = candle_nn::ops::softmax_last_dim(&att)?;
-                Some(att.matmul(&value.contiguous()?).unwrap())
+                if key_value_heads != attention_heads {
+                    let value_repeat = if key_value_heads == 1 {
+                        value.broadcast_as((batch_size, attention_heads, seq_len, head_size))?
+                    } else {
+                        Tensor::cat(&vec![&value; attention_heads / key_value_heads], 2)?
+                            .reshape((batch_size, attention_heads, seq_len, head_size))?
+                    };
+                    Some(att.matmul(&value_repeat.contiguous()?)?)
+                } else {
+                    Some(att.matmul(&value)?)
+                }
             }
         };
-
-        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
-        let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
         // // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
         let (query, key, value) = if seq_len > 1 {
@@ -94,10 +117,10 @@ impl PagedAttention {
                 .reshape(((), attention_heads, head_size))?;
             let k = key
                 .transpose(1, 2)?
-                .reshape(((), attention_heads, head_size))?;
+                .reshape(((), key_value_heads, head_size))?;
             let v = value
                 .transpose(1, 2)?
-                .reshape(((), attention_heads, head_size))?;
+                .reshape(((), key_value_heads, head_size))?;
             (q, k, v)
         } else {
             //avoid unnecessary transpose for decoding
@@ -107,19 +130,18 @@ impl PagedAttention {
             (q, k, v)
         };
 
-        //dbg!(&key, &key_cache);
         // key: Tensor,              // [num_tokens, num_heads, head_size]
         // value: Tensor,            // [num_tokens, num_heads, head_size]
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
         // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
-        // slot_mappings: Tensor,     // [num_tokens]
+        // slot_mapping: Tensor,     // [num_tokens]
         if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let _ = reshape_and_cache(
                 &key,
                 &value,
                 &key_cache.as_mut().unwrap(),
                 &value_cache.as_mut().unwrap(),
-                &slot_mappings,
+                &slot_mapping,
             )?;
         }
 
