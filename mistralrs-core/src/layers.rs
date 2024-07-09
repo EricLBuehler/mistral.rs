@@ -536,6 +536,10 @@ impl QLinear {
     pub fn bias(&self) -> Option<&Tensor> {
         self.bias.as_ref()
     }
+
+    pub fn bias_mut(&mut self) -> Option<&mut Tensor> {
+        self.bias.as_mut()
+    }
 }
 
 impl Module for QLinear {

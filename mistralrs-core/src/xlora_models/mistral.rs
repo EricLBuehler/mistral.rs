@@ -687,7 +687,7 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -721,6 +721,9 @@ impl IsqModel for XLoraModel {
             ));
         }
         (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
     }
 }
 

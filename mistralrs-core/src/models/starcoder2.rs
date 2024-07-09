@@ -77,6 +77,9 @@ impl MlpLayer for MLP {
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
         vec![self.c_fc.inner(), self.c_proj.inner()]
     }
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        vec![self.c_fc.bias_mut(), self.c_proj.bias_mut()]
+    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -386,7 +389,7 @@ impl Model {
             norm,
             lm_head,
             sliding_window: cfg.sliding_window,
-            device: vb.device().clone(),
+            device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -424,13 +427,16 @@ impl Model {
                 &mut cache[i],
             )?
         }
-        let xs = xs.to_device(&self.device)?;
-        extract_logits(&xs.apply(&self.norm)?.apply(&self.lm_head)?, context_lens)
+        let mut xs = xs.to_device(&self.device)?.apply(&self.norm)?;
+        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            xs = xs.to_dtype(DType::F32)?;
+        }
+        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
     }
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -444,6 +450,24 @@ impl IsqModel for Model {
                     .get_isq_tensors()
                     .into_iter()
                     .map(|m| (m, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        (tensors, &*self.mapper)
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.o_proj.bias_mut(), Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_biases()
+                    .into_iter()
+                    .map(|b| (b, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }
