@@ -297,16 +297,18 @@ impl Engine {
                             self.prefix_cacher
                         );
 
-                        for mut seq in guards {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            #[allow(clippy::cast_precision_loss)]
-                            let prompt_tok_per_sec =
-                                seq.len() as f32 / (now - seq.timestamp()) as f32;
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                            seq.prompt_timestamp = Some(now);
+                        if is_prompt {
+                            for mut seq in guards {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .expect("Time travel has occurred!")
+                                    .as_millis();
+                                #[allow(clippy::cast_precision_loss)]
+                                let prompt_tok_per_sec =
+                                    seq.len() as f32 / (now - seq.timestamp()) as f32;
+                                seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                seq.prompt_timestamp = Some(now);
+                            }
                         }
                     }
                 }
