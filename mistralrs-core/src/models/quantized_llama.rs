@@ -181,9 +181,9 @@ impl LayerWeights {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
 
-                dbg!(&q, &k, &v);
-                dbg!(self.n_head, self.n_kv_head);
-                dbg!(&key_cache, &value_cache);
+                //dbg!(&q, &k, &v);
+                //dbg!(self.n_head, self.n_kv_head);
+                //dbg!(&key_cache, &value_cache);
                 paged_attn
                     .forward(
                         &q,

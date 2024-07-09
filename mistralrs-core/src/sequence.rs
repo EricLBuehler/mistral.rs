@@ -458,7 +458,7 @@ impl Sequence {
             self.completion_bytes.extend_from_slice(&completion_bytes);
             self.last_completion_bytes_len = completion_bytes.len();
         }
-        dbg!(&String::from_utf8(completion_bytes.clone()));
+        //dbg!(&String::from_utf8(completion_bytes.clone()));
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
