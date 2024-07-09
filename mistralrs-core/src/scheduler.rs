@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    num::NonZeroUsize,
     sync::atomic::Ordering,
 };
 
@@ -7,7 +8,6 @@ use crate::{
     engine::TERMINATE_ALL_NEXT_STEP,
     sequence::{Sequence, SequenceState, StopReason},
 };
-use range_checked::UsizeBounded;
 
 pub trait FcfsBacker: Default {
     fn new() -> Self;
@@ -45,19 +45,9 @@ pub struct SchedulerOutput<'a> {
 /// step of the engine. For each scheduling step, the scheduler method is used if there
 /// are not only running, only waiting sequences, or none. If is it used, then it
 /// is used to allow waiting sequences to run.
+#[derive(Clone)]
 pub enum SchedulerMethod {
-    Fixed(UsizeBounded<1, { usize::MAX }, false>),
-}
-
-impl Clone for SchedulerMethod {
-    fn clone(&self) -> Self {
-        match self {
-            SchedulerMethod::Fixed(val) => {
-                let v = **val;
-                SchedulerMethod::Fixed(v.try_into().unwrap())
-            }
-        }
-    }
+    Fixed(NonZeroUsize),
 }
 
 pub struct BucketedSeqs<Backer: FcfsBacker> {
@@ -314,7 +304,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     fn sequence_fits(&self, running: &[Sequence], _seq: &Sequence) -> bool {
         match &self.method {
-            SchedulerMethod::Fixed(n) => (running.len() + 1) <= **n,
+            SchedulerMethod::Fixed(n) => (running.len() + 1) <= (*n).into(),
         }
     }
 }
