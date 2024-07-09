@@ -308,18 +308,9 @@
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
 <a href="#310" id="310">310</a>
-<a href="#311" id="311">311</a>
-<a href="#312" id="312">312</a>
-<a href="#313" id="313">313</a>
-<a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a>
-<a href="#316" id="316">316</a>
-<a href="#317" id="317">317</a>
-<a href="#318" id="318">318</a>
-<a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
+    num::NonZeroUsize,
     sync::atomic::Ordering,
 };
 
@@ -327,7 +318,6 @@
     engine::TERMINATE_ALL_NEXT_STEP,
     sequence::{Sequence, SequenceState, StopReason},
 };
-<span class="kw">use </span>range_checked::UsizeBounded;
 
 <span class="kw">pub trait </span>FcfsBacker: Default {
     <span class="kw">fn </span>new() -&gt; <span class="self">Self</span>;
@@ -365,19 +355,9 @@
 /// step of the engine. For each scheduling step, the scheduler method is used if there
 /// are not only running, only waiting sequences, or none. If is it used, then it
 /// is used to allow waiting sequences to run.
+</span><span class="attr">#[derive(Clone)]
 </span><span class="kw">pub enum </span>SchedulerMethod {
-    Fixed(UsizeBounded&lt;<span class="number">1</span>, { usize::MAX }, <span class="bool-val">false</span>&gt;),
-}
-
-<span class="kw">impl </span>Clone <span class="kw">for </span>SchedulerMethod {
-    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-        <span class="kw">match </span><span class="self">self </span>{
-            SchedulerMethod::Fixed(val) =&gt; {
-                <span class="kw">let </span>v = <span class="kw-2">**</span>val;
-                SchedulerMethod::Fixed(v.try_into().unwrap())
-            }
-        }
-    }
+    Fixed(NonZeroUsize),
 }
 
 <span class="kw">pub struct </span>BucketedSeqs&lt;Backer: FcfsBacker&gt; {
@@ -634,7 +614,7 @@
 
     <span class="kw">fn </span>sequence_fits(<span class="kw-2">&amp;</span><span class="self">self</span>, running: <span class="kw-2">&amp;</span>[Sequence], _seq: <span class="kw-2">&amp;</span>Sequence) -&gt; bool {
         <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.method {
-            SchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt;= <span class="kw-2">**</span>n,
+            SchedulerMethod::Fixed(n) =&gt; (running.len() + <span class="number">1</span>) &lt;= (<span class="kw-2">*</span>n).into(),
         }
     }
 }
