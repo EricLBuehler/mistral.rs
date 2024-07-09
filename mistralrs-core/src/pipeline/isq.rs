@@ -5,7 +5,7 @@ use std::{
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
-    Device, Tensor,
+    DType, Device, Tensor,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
@@ -188,7 +188,11 @@ pub trait IsqModel {
                     .progress_with(bar)
                     .for_each(|((tensor, _), device)| {
                         if let Some(tensor) = tensor {
-                            *tensor = tensor.to_device(&device).unwrap();
+                            *tensor = tensor
+                                .to_device(&device)
+                                .unwrap()
+                                .to_dtype(DType::F32)
+                                .unwrap();
                         }
                     });
             }
@@ -201,7 +205,13 @@ pub trait IsqModel {
                     .zip(devices)
                     .progress_with(bar)
                     .for_each(|((tensor, _), device)| {
-                        *tensor = tensor.to_device(&device).unwrap();
+                        if let Some(tensor) = tensor {
+                            *tensor = tensor
+                                .to_device(&device)
+                                .unwrap()
+                                .to_dtype(DType::F32)
+                                .unwrap();
+                        }
                     });
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
