@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    num::NonZeroUsize,
     sync::atomic::Ordering,
 };
 
@@ -8,7 +9,6 @@ use crate::{
     paged_attention::BlockTables,
     sequence::{Sequence, SequenceState, StopReason},
 };
-use range_checked::UsizeBounded;
 
 use super::{Scheduler, SchedulerOutput};
 
@@ -49,18 +49,7 @@ pub struct DefaultSchedulerOutput<'a> {
 /// are not only running, only waiting sequences, or none. If is it used, then it
 /// is used to allow waiting sequences to run.
 pub enum DefaultSchedulerMethod {
-    Fixed(UsizeBounded<1, { usize::MAX }, false>),
-}
-
-impl Clone for DefaultSchedulerMethod {
-    fn clone(&self) -> Self {
-        match self {
-            DefaultSchedulerMethod::Fixed(val) => {
-                let v = **val;
-                DefaultSchedulerMethod::Fixed(v.try_into().unwrap())
-            }
-        }
-    }
+    Fixed(NonZeroUsize),
 }
 
 pub struct BucketedSeqs<Backer: FcfsBacker> {
@@ -304,9 +293,35 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
 
     fn sequence_fits(&self, running: &[Sequence], _seq: &Sequence) -> bool {
         match &self.method {
-            DefaultSchedulerMethod::Fixed(n) => (running.len() + 1) <= **n,
+            DefaultSchedulerMethod::Fixed(n) => (running.len() + 1) <= (*n).into(),
         }
     }
+}
+
+impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
+    fn schedule(&mut self) -> SchedulerOutput<'_> {
+        SchedulerOutput::DefaultScheduler {
+            output: self.schedule(),
+        }
+    }
+    fn waiting_len(&self) -> usize {
+        self.waiting.len()
+    }
+    fn add_seq(&mut self, seq: Sequence) {
+        if seq.is_running() {
+            // prefill case
+            self.running.push(seq);
+        } else {
+            self.waiting.add(seq);
+        }
+    }
+    fn block_tables(&self) -> Option<&BlockTables> {
+        None
+    }
+    fn block_size(&self) -> Option<usize> {
+        None
+    }
+    fn free_finished_sequence_groups(&mut self) {}
 }
 
 impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
