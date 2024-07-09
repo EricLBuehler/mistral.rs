@@ -2349,7 +2349,6 @@ dependencies = [
  "radix_trie",
  "rand",
  "rand_isaac",
- "range-checked",
  "rayon",
  "regex-automata 0.4.7",
  "reqwest",
@@ -3219,11 +3218,6 @@ checksum = "fac4373cd91b4f55722c553fb0f286edbb81ef3ff6eec7b99d1898a4110a0b28"
 dependencies = [
  "rand_core",
 ]
-
-[[package]]
-name = "range-checked"
-version = "0.1.0"
-source = "git+https://github.com/EricLBuehler/range-checked.git#655349cc093fcd4965f35b25de394a24ff4b0c7b"
 
 [[package]]
 name = "raw-cpuid"
