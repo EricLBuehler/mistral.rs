@@ -248,8 +248,9 @@ impl Attention {
             rotary_emb,
             query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
-            use_sliding_window: layer_idx % 2 != 0,
-            sliding_window: if layer_idx % 2 != 0 {
+            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            sliding_window: if layer_idx % 2 == 0 {
+                // ^ Order is SWA, global, SWA
                 Some(cfg.sliding_window)
             } else {
                 None

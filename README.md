@@ -295,7 +295,7 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
   - `config.json`
   - `tokenizer_config.json`
   - `tokenizer.json` (if not specified separately)
-  - `.safetensors` files.
+  - `.safetensors`/`.bin`/`.pth`/`.pt` files (defaults to `.safetensors`)
   - `preprocessor_config.json` (required for vision models).
   - `processor_config.json` (optional for vision models).
 - `--quantized-model-id` (server) or `quantized_model_id` (python/rust):
