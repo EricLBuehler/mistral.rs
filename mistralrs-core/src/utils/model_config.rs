@@ -275,6 +275,7 @@ use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
+    models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use akin::akin;
@@ -298,7 +299,7 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 }
 
 akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3];
+    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2];
 
     impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf {
         type Error = candle_core::Error;
