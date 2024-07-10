@@ -15,7 +15,7 @@ use crate::gguf::{
 };
 use crate::lora::Ordering;
 use crate::paged_attention::{
-    calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
+    calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
 use crate::pipeline::ChatTemplate;
@@ -687,7 +687,17 @@ impl Pipeline for GGUFPipeline {
                     )
                 }),
             ),
-            Model::Phi2(ref model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
+            Model::Phi2(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                context_lens,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -699,7 +709,16 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Phi3(ref model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Phi3(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
             Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),

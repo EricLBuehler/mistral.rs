@@ -72,8 +72,6 @@ enum SequenceCustomMetadata {
     PagedAttention {
         logical_token_blocks: Vec<LogicalTokenBlock>,
         block_size: usize,
-        // Don't love this but we can't access the seq from here otherwise
-        group: Arc<Mutex<SequenceGroup>>,
     },
     None,
 }
@@ -96,7 +94,6 @@ impl SequenceCustomMetadata {
             Self::PagedAttention {
                 logical_token_blocks,
                 block_size,
-                group: _,
             } => {
                 let last = logical_token_blocks.last_mut();
                 if last.is_some() && !last.as_ref().is_some_and(|last| last.is_full()) {
@@ -176,7 +173,6 @@ impl BlockEngineSequence for Sequence {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
                 block_size: _,
-                group: _,
             } => {
                 blocks_to_add_new_tok!(logical_token_blocks)
             }
@@ -193,7 +189,6 @@ impl BlockEngineSequence for Sequence {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks,
                 block_size: _,
-                group: _,
             } => logical_token_blocks.len(),
             SequenceCustomMetadata::None => unreachable!(),
         }
@@ -230,7 +225,6 @@ impl Sequence {
             SequenceCustomMetadata::PagedAttention {
                 logical_token_blocks: Vec::new(),
                 block_size,
-                group: group.clone(),
             }
         } else {
             SequenceCustomMetadata::None

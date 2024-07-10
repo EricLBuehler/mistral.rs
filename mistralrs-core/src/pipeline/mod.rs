@@ -19,9 +19,7 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
-use crate::paged_attention::{
-    BlockTables, CacheConfig, CacheEngine, PagedAttentionConfig, PhysicalTokenBlock,
-};
+use crate::paged_attention::{CacheConfig, CacheEngine, PagedAttentionConfig};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};

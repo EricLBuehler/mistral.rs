@@ -32,12 +32,6 @@ impl LogicalTokenBlock {
         self.tokens[self.num_tokens] = token;
         self.num_tokens += 1;
     }
-
-    pub fn append_tokens(&mut self, tokens: &[usize]) {
-        for token in tokens {
-            self.append_token_id(*token);
-        }
-    }
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -241,6 +235,7 @@ impl BlockEngine {
         self.block_tables.remove(&id);
     }
 
+    #[allow(dead_code)]
     pub fn can_swap_out_seq(&self, seq: &impl BlockEngineSequence) -> bool {
         let blocks_required: usize = self
             .block_tables
@@ -253,6 +248,7 @@ impl BlockEngine {
 
     /// Update the block table so that the sequence does no longer reserve any GPU
     /// physical blocks, and only has CPU physical blocks.
+    #[allow(dead_code)]
     pub fn swap_out(&mut self, seq: &impl BlockEngineSequence) -> HashMap<usize, usize> {
         // GPU block to a CPU block
         let mut new_mapping = HashMap::new();

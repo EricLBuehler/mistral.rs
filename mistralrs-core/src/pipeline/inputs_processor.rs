@@ -5,10 +5,7 @@ use candle_core::Device;
 use text_models_inputs_processor::PagedAttentionMeta;
 use tokenizers::Tokenizer;
 
-use crate::{
-    paged_attention::{BlockTables, PhysicalTokenBlock},
-    sequence::Sequence,
-};
+use crate::sequence::Sequence;
 
 #[derive(PartialEq)]
 pub enum InputsProcessorType {

@@ -136,7 +136,7 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut &mut PagedAttentionInputMetadata)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
@@ -575,7 +575,7 @@ impl ModelWeights {
                 &mut cache[i],
                 metadata
                     .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), metadata)),
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?;
             let x = (attn + residual)?;
 

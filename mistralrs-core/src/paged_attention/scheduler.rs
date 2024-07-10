@@ -201,10 +201,6 @@ impl PagedAttentionScheduler {
         }
     }
 
-    pub fn has_unfinished_sequences(&self) -> bool {
-        !self.running.is_empty() || !self.waiting.is_empty()
-    }
-
     pub fn free_finished_sequence_groups(&mut self) {
         let mut to_free_ids = Vec::new();
         self.running.retain(|seq| {
@@ -222,6 +218,7 @@ impl PagedAttentionScheduler {
 }
 
 impl PagedAttentionScheduler {
+    #[allow(dead_code)]
     fn remove_seq(&mut self, seq_id: usize) -> Arc<Mutex<Sequence>> {
         // Remove it if it is in waiting
         if let Some(idx) = self
@@ -249,6 +246,7 @@ impl PagedAttentionScheduler {
         };
         panic!("Attempted to remove sequence id {seq_id} but it is not running, waiting, or swapped out.");
     }
+
     fn _append_token_slot_to_seq(
         &mut self,
         seq: &Sequence,
@@ -274,7 +272,7 @@ impl PagedAttentionScheduler {
     fn _preempt(
         &mut self,
         seq: Arc<Mutex<Sequence>>,
-        blocks_to_swap_out: &mut HashMap<usize, usize>,
+        _blocks_to_swap_out: &mut HashMap<usize, usize>,
     ) {
         self._preempt_by_recompute(seq)
     }
