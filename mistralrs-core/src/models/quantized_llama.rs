@@ -15,7 +15,6 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
-use std::iter::zip;
 const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -177,7 +176,7 @@ impl LayerWeights {
                     .forward(
                         &q,
                         &k,
-                        &v.contiguous()?,
+                        &v,
                         mask,
                         Some(key_cache),
                         Some(value_cache),
