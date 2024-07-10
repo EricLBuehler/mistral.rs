@@ -20,7 +20,6 @@ use tracing::info;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
-    paged_attention::CacheConfig,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},

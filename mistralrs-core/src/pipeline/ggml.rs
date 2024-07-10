@@ -11,7 +11,6 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
-use crate::paged_attention::CacheConfig;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -274,6 +273,11 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "PagedAttention is not supported for GGML"
+        );
+
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
@@ -345,8 +349,8 @@ impl Loader for GGMLLoader {
                 is_xlora,
                 activation_dtype: DType::F32,
                 sliding_window: None,
-                cache_config: None, // TODO
-                cache_engine: None, // TODO
+                cache_config: None,
+                cache_engine: None,
             }),
         })))
     }
@@ -484,8 +488,8 @@ impl Pipeline for GGMLPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-            position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-            paged_attn_meta,
+            position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
+            paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -493,7 +497,7 @@ impl Pipeline for GGMLPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
-                None, // TODO
+                None,
             ),
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,

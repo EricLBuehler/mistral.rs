@@ -11,7 +11,6 @@ use tokenizers::Tokenizer;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
-    paged_attention::CacheConfig,
     pipeline::{
         sampling::{sample_sequence, sample_target_sequence_speculative},
         AdapterInstruction, Cache,

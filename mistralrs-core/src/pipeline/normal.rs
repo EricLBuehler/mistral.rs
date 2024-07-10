@@ -16,7 +16,6 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
-use crate::paged_attention::CacheConfig;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};

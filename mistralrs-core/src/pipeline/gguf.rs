@@ -392,6 +392,10 @@ impl Loader for GGUFLoader {
         }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::AdapterQuantized { .. }),
+                "PagedAttention for GGUF does not support adapter models."
+            );
             let model_config: &dyn ModelConfigLike = &model;
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
