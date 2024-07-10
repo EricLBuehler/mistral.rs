@@ -259,7 +259,7 @@ impl Config<ParamsGGUF<'_>, Adapter<'_>> {
         let ParamsGGUF(
             FileGGUF { ct, reader },
             Device { device, mapper },
-            attention_implementation,
+            _attention_implementation,
         ) = self.quant;
 
         let Adapter {

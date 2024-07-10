@@ -130,7 +130,6 @@ impl InputsProcessor for LLaVAInputProcessor {
                 context_lens,
                 position_ids,
                 paged_attn_meta,
-                paged_attn_meta_full,
             } = *text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -154,7 +153,6 @@ impl InputsProcessor for LLaVAInputProcessor {
                 pixel_values: None,
                 model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
                 paged_attn_meta,
-                paged_attn_meta_full,
             }));
         };
 
@@ -252,7 +250,6 @@ impl InputsProcessor for LLaVAInputProcessor {
             pixel_values,
             model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
             paged_attn_meta,
-            paged_attn_meta_full: None,
         }))
     }
 }

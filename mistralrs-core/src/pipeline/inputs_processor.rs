@@ -370,7 +370,6 @@ pub mod text_models_inputs_processor {
         pub context_lens: Vec<(usize, usize)>,
         pub position_ids: Vec<usize>,
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
-        pub paged_attn_meta_full: Option<PagedAttentionInputMetadata>,
     }
 
     pub struct TextInputsProcessor;
@@ -395,7 +394,7 @@ pub mod text_models_inputs_processor {
                     positions_kernel: seqlen_offsets_kernel_full,
                     context_lens: _,
                     position_ids,
-                    paged_attn_meta: paged_attn_meta_full,
+                    paged_attn_meta: _,
                 } = get_prompt_input(
                     input_seqs
                         .iter()
@@ -434,7 +433,6 @@ pub mod text_models_inputs_processor {
                     context_lens,
                     position_ids,
                     paged_attn_meta,
-                    paged_attn_meta_full,
                 }))
             } else if is_xlora && is_prompt {
                 let InputMetadata {
@@ -464,7 +462,6 @@ pub mod text_models_inputs_processor {
                     context_lens,
                     position_ids,
                     paged_attn_meta,
-                    paged_attn_meta_full: None,
                 }))
             } else if is_prompt {
                 let InputMetadata {
@@ -494,7 +491,6 @@ pub mod text_models_inputs_processor {
                     context_lens,
                     position_ids,
                     paged_attn_meta,
-                    paged_attn_meta_full: None,
                 }))
             } else {
                 let InputMetadata {
@@ -525,7 +521,6 @@ pub mod text_models_inputs_processor {
                     context_lens,
                     position_ids,
                     paged_attn_meta,
-                    paged_attn_meta_full: None,
                 }))
             }
         }

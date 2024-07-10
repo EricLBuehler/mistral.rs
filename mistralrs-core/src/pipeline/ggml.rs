@@ -486,7 +486,6 @@ impl Pipeline for GGMLPipeline {
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta,
-            paged_attn_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(

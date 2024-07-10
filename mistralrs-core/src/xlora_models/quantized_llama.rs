@@ -164,7 +164,6 @@ impl MlpOrMoe {
     }
 }
 
-#[derive(Debug)]
 struct LayerWeights {
     attention_wq: QLoraLinear,
     attention_wk: QLoraLinear,
@@ -246,8 +245,8 @@ impl LayerWeights {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
+        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
         let y = ScaledDotProductAttention.run_attention(
             &q,
@@ -255,7 +254,7 @@ impl LayerWeights {
             &v,
             self.n_head,
             self.head_dim,
-            mask.clone().as_ref(),
+            mask.as_ref(),
             false,
             b_sz,
             seq_len,

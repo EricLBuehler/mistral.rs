@@ -343,7 +343,6 @@ impl Pipeline for VisionPipeline {
             pixel_values,
             model_specific_args,
             paged_attn_meta,
-            paged_attn_meta_full,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,

@@ -195,7 +195,6 @@ impl InputsProcessor for Idefics2ImageProcessor {
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
             paged_attn_meta,
-            paged_attn_meta_full: None,
         }))
     }
 }

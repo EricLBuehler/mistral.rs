@@ -28,5 +28,4 @@ pub struct ModelInputs {
     pub pixel_values: Option<Tensor>,
     pub model_specific_args: Box<dyn Any>,
     pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
-    pub paged_attn_meta_full: Option<PagedAttentionInputMetadata>,
 }

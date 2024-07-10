@@ -156,7 +156,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 context_lens,
                 position_ids,
                 paged_attn_meta,
-                paged_attn_meta_full,
             } = *text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -184,7 +183,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     num_image_samples: None,
                 }),
                 paged_attn_meta,
-                paged_attn_meta_full,
             }));
         };
 
@@ -300,7 +298,6 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 num_image_samples: Some(num_image_samples),
             }),
             paged_attn_meta,
-            paged_attn_meta_full: None,
         }))
     }
 }

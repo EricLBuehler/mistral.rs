@@ -133,7 +133,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                 context_lens,
                 position_ids,
                 paged_attn_meta,
-                paged_attn_meta_full,
             } = *text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -158,7 +157,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                 pixel_values: None,
                 model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None }),
                 paged_attn_meta,
-                paged_attn_meta_full,
             }));
         };
 
@@ -286,7 +284,6 @@ impl InputsProcessor for Phi3InputsProcessor {
             pixel_values,
             model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes }),
             paged_attn_meta,
-            paged_attn_meta_full: None,
         }))
     }
 }
