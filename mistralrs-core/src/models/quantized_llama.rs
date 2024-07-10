@@ -144,30 +144,37 @@ impl LayerWeights {
         let k = MatMul.qmatmul(x, &self.attention_wk)?;
         let v = MatMul.qmatmul(x, &self.attention_wv)?;
 
-        let (mut q, mut k, v) = if seq_len == 1 {
-            //no need transpose for seq_len == 1, change reshape dim
-            let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-            (q, k, v)
+        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
+        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
+        let v = if seq_len != 1 {
+            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
         } else {
-            let q = q
-                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            let k = k
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            let v = v
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            (q, k, v)
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
         };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
+
+        if q.rank() == 3 && seq_len != 1 {
+            q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        } else if q.rank() == 3 {
+            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
+            q = q
+                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
+                .contiguous()?;
+            k = k
+                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+                .contiguous()?;
+        }
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
