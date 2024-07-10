@@ -15,7 +15,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
-
+use std::iter::zip;
 const MAX_SEQ_LEN: u32 = 4096;
 
 #[derive(Debug, Clone)]
@@ -145,50 +145,39 @@ impl LayerWeights {
         let k = MatMul.qmatmul(x, &self.attention_wk)?;
         let v = MatMul.qmatmul(x, &self.attention_wv)?;
 
-        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = if seq_len != 1 {
-            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
+        let (mut q, mut k, v) = if seq_len == 1 {
+            //no need transpose for seq_len == 1, change reshape dim
+            let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+            let q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            let k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            let v = v
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            (q, k, v)
         };
 
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
-        if q.rank() == 3 && seq_len != 1 {
-            q = q
-                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
-                .contiguous()?;
-        }
-
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-
-                //dbg!(&q, &k, &v);
-                //dbg!(self.n_head, self.n_kv_head);
-                //dbg!(&key_cache, &value_cache);
                 paged_attn
                     .forward(
                         &q,
                         &k,
-                        &v,
+                        &v.contiguous()?,
                         mask,
                         Some(key_cache),
                         Some(value_cache),
@@ -216,7 +205,12 @@ impl LayerWeights {
             }
         };
 
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        let y = if mask.is_some() {
+            y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?
+        } else {
+            y.reshape(&[b_sz, seq_len, n_embd])?
+        };
+
         let y = MatMul.qmatmul(&y, &self.attention_wo)?;
         Ok(y)
     }

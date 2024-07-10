@@ -8,9 +8,9 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -319,13 +319,12 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
-    // TODO
-    let config = PagedAttentionConfig {
-        block_size: Some(16),
+    let cache_config = Some(PagedAttentionConfig {
+        block_size: Some(32),
         mem_cpu: 1024,
         mem_gpu: 4096,
-    };
-
+    });
+    // let cache_config = None;
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -334,22 +333,26 @@ async fn main() -> Result<()> {
         false,
         mapper,
         args.in_situ_quant,
-        Some(config),
+        cache_config,
     )?;
     info!("Model loaded.");
 
-    // SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    let scheduler_config = SchedulerConfig::PagedAttentionMeta {
-        // TODO
-        max_num_seqs: args.max_seqs.try_into().unwrap(),
-        config: pipeline
-            .lock()
-            .await
-            .get_metadata()
-            .cache_config
-            .as_ref()
-            .unwrap()
-            .clone(),
+    let scheduler_config = if cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: args.max_seqs.try_into().unwrap(),
+            config: pipeline
+                .lock()
+                .await
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } else {
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        }
     };
     let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
         .with_opt_log(args.log)
