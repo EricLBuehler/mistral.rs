@@ -258,17 +258,22 @@ pub fn get_model_paths(
             let mut files = Vec::new();
 
             for name in names {
-                let qapi = ApiBuilder::new()
-                    .with_progress(true)
-                    .with_token(get_token(token_source)?)
-                    .build()?;
-                let qapi = qapi.repo(Repo::with_revision(
-                    id.to_string(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = Path::new(&id);
-                files.push(api_get_file!(qapi, name, model_id));
+                if Path::new(&name).exists() {
+                    //local file
+                    files.push(PathBuf::from(name));
+                } else {
+                    let qapi = ApiBuilder::new()
+                        .with_progress(true)
+                        .with_token(get_token(token_source)?)
+                        .build()?;
+                    let qapi = qapi.repo(Repo::with_revision(
+                        id.to_string(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = Path::new(&id);
+                    files.push(api_get_file!(qapi, name, model_id));
+                }
             }
             Ok(files)
         }

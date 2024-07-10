@@ -433,8 +433,8 @@ impl Loader for GGUFLoader {
         } else {
             GgufTokenizerConversion {
                 tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
-                bos: None,
-                eos: None,
+                bos: Some("<s>".to_string()),
+                eos: Some("</s>".to_string()),
                 unk: None,
             }
         };
