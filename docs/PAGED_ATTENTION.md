@@ -6,6 +6,16 @@ Our paged attention implementation has 2 inputs: GPU KV cache memory size, and b
 
 > Note: The default block size if not specified is 16.
 
+**There are more features being added to this:**
+- Benchmarks
+- Vision model support
+- GGML model support 
+- Adapter model support
+
+**Supported models:**
+- Normal models
+- GGUF models
+
 ## Using the CLI
 
 Add the `--pa-gpu-mem` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.
