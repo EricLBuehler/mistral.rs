@@ -6,7 +6,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
@@ -385,6 +388,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     xlora_classifier: Option<XLoraClassifier>,
     sliding_window: Option<usize>,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -480,6 +484,13 @@ impl Model {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
             sliding_window: cfg.sliding_window,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -657,6 +668,7 @@ impl NormalModel for Model {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -719,6 +731,9 @@ impl NormalModel for Model {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

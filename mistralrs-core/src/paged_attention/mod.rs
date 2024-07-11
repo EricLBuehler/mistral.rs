@@ -15,7 +15,7 @@ pub use block_engine::{BlockEngine, BlockTables, LogicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
 use candle_core::DType;
-pub use config::ModelConfigLike;
+pub use config::{ModelConfigLike, ModelConfigMetadata};
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,

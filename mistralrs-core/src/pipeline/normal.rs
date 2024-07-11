@@ -16,6 +16,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -252,6 +253,12 @@ impl Loader for NormalLoader {
 
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
+        let attention_mechanism = if paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } else {
+            AttentionImplementation::Eager
+        };
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
@@ -263,7 +270,8 @@ impl Loader for NormalLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -296,6 +304,24 @@ impl Loader for NormalLoader {
             _ => unreachable!(),
         };
 
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::Adapter { .. }),
+                "PagedAttention does not support adapter models."
+            );
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
@@ -310,6 +336,7 @@ impl Loader for NormalLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -333,9 +360,9 @@ impl Loader for NormalLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
-                sliding_window: todo!(),
-                cache_config: None, // TODO
-                cache_engine: None, // TODO
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
         })))
     }
@@ -429,7 +456,7 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
-            paged_attn_meta,
+            mut paged_attn_meta,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
@@ -438,6 +465,12 @@ impl Pipeline for NormalPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
             true => self.model.xlora_forward(
                 &input_ids,

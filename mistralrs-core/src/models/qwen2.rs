@@ -12,8 +12,13 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear, RmsNorm, ScaledDotProductAttention},
+    layers_masker::PastKvLenCache,
     merge_delta,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -127,7 +132,6 @@ impl MlpLayer for MLP {
     }
 }
 
-#[derive(Debug, Clone)]
 struct Attention {
     q_proj: QLinear,
     k_proj: QLinear,
@@ -139,10 +143,16 @@ struct Attention {
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        paged_attn: Option<PagedAttention>,
+    ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -163,6 +173,7 @@ impl Attention {
             head_dim,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
+            paged_attn,
         })
     }
 
@@ -173,6 +184,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -222,30 +234,48 @@ impl Attention {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
+            }
+            None => {
+                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            attention_mask,
-            self.use_flash_attn,
-            b_sz,
-            q_len,
-        )?;
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.num_heads,
+                    self.head_dim,
+                    attention_mask,
+                    self.use_flash_attn,
+                    b_sz,
+                    q_len,
+                )?
+            }
+        };
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = MatMul.qmatmul(
-            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
-            &self.o_proj,
-        )?;
+        attn_output = if attention_mask.is_some() {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.reshape((b_sz, q_len, ()))?
+        };
+        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
         if self.q_proj.is_quant() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -268,11 +298,13 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = RmsNorm::new(
@@ -300,6 +332,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -309,6 +342,7 @@ impl DecoderLayer {
             seqlen_offsets,
             start_offsets_kernel,
             kv_cache,
+            metadata,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -329,6 +363,7 @@ pub struct Model {
     pub cache: Cache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -337,6 +372,7 @@ impl Model {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -355,16 +391,29 @@ impl Model {
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
             let rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta as f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
+                &device,
                 is_gptx,
                 vb.dtype(),
             )?);
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (1.0 / (head_dim as f64).sqrt()) as f32,
+                    Some(cfg.num_key_value_heads),
+                    Some(cfg.sliding_window),
+                    &device,
+                    None,
+                )?),
+            };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -372,6 +421,7 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
             )?;
             layers.push(layer)
         }
@@ -395,6 +445,13 @@ impl Model {
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: Some(cfg.sliding_window),
+            },
         })
     }
 
@@ -404,12 +461,16 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &*cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             Some(self.sliding_window),
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
@@ -425,6 +486,9 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -483,12 +547,14 @@ impl NormalModel for Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     fn xlora_forward(
@@ -517,6 +583,9 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

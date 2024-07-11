@@ -4,7 +4,8 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    paged_attention::ModelConfigMetadata,
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
@@ -423,6 +424,7 @@ pub struct XLoraLlama {
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraLlama {
@@ -664,6 +666,13 @@ impl XLoraLlama {
             }),
             dtype,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 }
@@ -711,6 +720,7 @@ impl NormalModel for XLoraLlama {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -781,6 +791,9 @@ impl NormalModel for XLoraLlama {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

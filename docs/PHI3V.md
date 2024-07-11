@@ -127,7 +127,9 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
     )?;
     // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+    Ok(MistralRsBuilder::new(pipeline, SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        }).build())
 }
 
 fn main() -> anyhow::Result<()> {

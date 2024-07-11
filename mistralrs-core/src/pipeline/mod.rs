@@ -19,7 +19,7 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
-use crate::paged_attention::{CacheConfig, CacheEngine, PagedAttentionConfig};
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -66,7 +66,7 @@ pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
-use self::text_models_inputs_processor::PagedAttentionMeta;
+use self::text_models_inputs_processor::{PagedAttentionInputMetadata, PagedAttentionMeta};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -740,6 +740,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -765,6 +766,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
             "Activating adapters is only supported for models fine-tuned with LoRA."
         );
     }
+    fn config(&self) -> &ModelConfigMetadata;
 }
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {

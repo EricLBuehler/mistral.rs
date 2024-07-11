@@ -15,8 +15,13 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers_masker::PastKvLenCache,
     merge_delta,
-    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -34,7 +39,6 @@ pub struct Config {
     pub max_position_embeddings: usize,
 }
 
-#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: QMatMul,
     k_proj: QMatMul,
@@ -46,6 +50,7 @@ struct CausalSelfAttention {
     use_flash_attn: bool,
     rotary_emb: Arc<RotaryEmbedding>,
     max_seq_len: usize,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl CausalSelfAttention {
@@ -57,6 +62,7 @@ impl CausalSelfAttention {
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -106,28 +112,50 @@ impl CausalSelfAttention {
                 .contiguous()?;
         }
 
-        let (k, v) =
-            crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+        let mut y = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask.clone().as_ref(),
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
+            }
+            None => {
+                let (k, v) =
+                    crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
+                let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?
+                    .contiguous()?;
+                let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?
+                    .contiguous()?;
 
-        let mut y = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_attention_heads,
-            self.head_dim,
-            attention_mask.clone().as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            seq_len,
-        )?;
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.num_attention_heads,
+                    self.head_dim,
+                    attention_mask.clone().as_ref(),
+                    self.use_flash_attn,
+                    b_sz,
+                    seq_len,
+                )?
+            }
+        };
 
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             y = y.to_dtype(DType::F32)?;
         }
-        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
+        y = if attention_mask.is_some() {
+            y.transpose(1, 2)?.reshape((b_sz, seq_len, hidden_size))?
+        } else {
+            y.reshape((b_sz, seq_len, hidden_size))?
+        };
         let mut y = MatMul.qmatmul(&y, &self.o_proj)?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             y = y.to_dtype(original_dtype)?;
@@ -135,7 +163,12 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, rope: Arc<RotaryEmbedding>) -> Result<Self> {
+    fn load(
+        vb: VarBuilder,
+        cfg: &Config,
+        rope: Arc<RotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+    ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -154,6 +187,7 @@ impl CausalSelfAttention {
             use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
+            paged_attn,
         })
     }
 }
@@ -261,6 +295,7 @@ impl Block {
         start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -271,6 +306,7 @@ impl Block {
             start_offsets_kernel,
             block_idx,
             kv_cache,
+            metadata,
         )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
@@ -284,11 +320,13 @@ impl Block {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
             rope,
+            paged_attn,
         )?;
         let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
         let rms_1 = RmsNorm::new(
@@ -318,6 +356,7 @@ pub struct Llama {
     pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl Llama {
@@ -327,12 +366,16 @@ impl Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
         let mut cache = self.kv_cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &*cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
@@ -345,6 +388,9 @@ impl Llama {
                 start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
             )?;
         }
         let x = x.to_device(&self.device)?;
@@ -361,6 +407,7 @@ impl Llama {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -387,19 +434,35 @@ impl Llama {
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
+                    let device = mapper
+                        .device_for(i, false)
+                        .unwrap_or(&normal_loading_metadata.real_device);
                     let rotary_emb = Arc::new(
                         RotaryEmbedding::new(
                             cfg.rope_theta,
                             head_dim,
                             cfg.max_position_embeddings,
-                            mapper
-                                .device_for(i, false)
-                                .unwrap_or(&normal_loading_metadata.real_device),
+                            &device,
                             is_gptx,
                             vb.dtype(),
                         )
                         .expect("Failed to create RoPE"),
                     );
+                    let paged_attn = match &attention_mechanism {
+                        AttentionImplementation::Eager => None,
+                        AttentionImplementation::PagedAttention => Some(
+                            PagedAttention::new(
+                                cfg.num_attention_heads,
+                                head_dim,
+                                (1.0 / (head_dim as f64).sqrt()) as f32,
+                                Some(cfg.num_key_value_heads),
+                                None,
+                                &device,
+                                None,
+                            )
+                            .expect("Failed to create PagedAttention"),
+                        ),
+                    };
                     Block::load(
                         vb.pp(&format!("model.layers.{i}")),
                         cfg,
@@ -407,6 +470,7 @@ impl Llama {
                         i,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
+                        paged_attn,
                     )
                     .expect("Failed to load block.")
                 })
@@ -420,6 +484,13 @@ impl Llama {
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 }
@@ -457,12 +528,14 @@ impl NormalModel for Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     fn xlora_forward(
@@ -491,6 +564,9 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

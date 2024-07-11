@@ -89,17 +89,15 @@ impl LayerWeights {
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn
-                    .forward(
-                        &q,
-                        &k,
-                        &v,
-                        mask,
-                        Some(key_cache),
-                        Some(value_cache),
-                        input_metadata,
-                    )
-                    .unwrap()
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;

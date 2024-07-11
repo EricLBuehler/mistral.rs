@@ -105,7 +105,7 @@ impl PagedAttention {
                     };
                     Some(att.matmul(&value_repeat.contiguous()?)?)
                 } else {
-                    Some(att.matmul(&value)?)
+                    Some(att.matmul(&value.contiguous()?).unwrap())
                 }
             }
         };
