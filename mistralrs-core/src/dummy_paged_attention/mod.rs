@@ -30,15 +30,6 @@ pub struct PagedAttentionConfig {
 }
 
 impl PagedAttentionConfig {
-    #[cfg(feature = "cuda")]
-    pub fn new(block_size: Option<usize>, mem_cpu: usize, mem_gpu: usize) -> anyhow::Result<Self> {
-        Self {
-            block_size,
-            mem_cpu,
-            mem_gpu,
-        }
-    }
-    #[cfg(not(feature = "cuda"))]
     pub fn new(
         _block_size: Option<usize>,
         _mem_cpu: usize,

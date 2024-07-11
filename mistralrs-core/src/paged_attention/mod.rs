@@ -24,9 +24,19 @@ pub use scheduler::{
 /// All memory counts in MB. Default for block size is 16.
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {
-    pub block_size: Option<usize>,
-    pub mem_cpu: usize,
-    pub mem_gpu: usize,
+    pub(crate) block_size: Option<usize>,
+    pub(crate) mem_cpu: usize,
+    pub(crate) mem_gpu: usize,
+}
+
+impl PagedAttentionConfig {
+    pub fn new(block_size: Option<usize>, mem_cpu: usize, mem_gpu: usize) -> anyhow::Result<Self> {
+        Self {
+            block_size,
+            mem_cpu,
+            mem_gpu,
+        }
+    }
 }
 
 pub enum AttentionImplementation {
