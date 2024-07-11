@@ -6,6 +6,8 @@ on:
   workflow_dispatch:
   release:
     types: [published]
+    tags:
+       - 'v*'
 
 permissions:
   contents: write
