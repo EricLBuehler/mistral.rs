@@ -362,6 +362,20 @@ Additionally, for models without quantization, the model architecture should be 
 - `llava_next`
 - `llava`
 
+### Supported GGUF architectures
+
+**Plain:**
+
+- `llama`
+- `phi2`
+- `phi3`
+- `starcoder2`
+
+**With adapters:**
+
+- `llama`
+- `phi3`
+
 **Interactive mode:**
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
@@ -447,7 +461,7 @@ Example:
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
-|Starcoder 2| | |✅|
+|Starcoder 2| |✅|✅|
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
 
