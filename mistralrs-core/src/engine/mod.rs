@@ -65,6 +65,10 @@ impl Engine {
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
+        // Prefix caching is always disabled if using PagedAttention for now.
+        // TODO
+        let no_prefix_cache =
+            matches!(config, SchedulerConfig::PagedAttentionMeta { .. }) || no_prefix_cache;
         Self {
             rx,
             pipeline,
@@ -76,7 +80,7 @@ impl Engine {
                 device,
                 prefix_cache_n,
                 is_xlora,
-                true, // TODO no_prefix_cache,
+                no_prefix_cache,
             ),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,

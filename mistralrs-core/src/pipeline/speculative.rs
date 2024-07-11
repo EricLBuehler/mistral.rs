@@ -48,6 +48,11 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "Speculative decoding does not currently support PagedAttention"
+        );
+
         let target = self.target.load_model_from_hf(
             revision.clone(),
             token_source.clone(),
@@ -86,6 +91,11 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "Speculative decoding does not currently support PagedAttention"
+        );
+
         let target = self.target.load_model_from_path(
             paths,
             dtype,
@@ -595,11 +605,11 @@ impl Pipeline for SpeculativePipeline {
                 Ok(())
             }
             CacheBackendMetadata::PagedAttention {
-                metadata,
-                blocks_to_copy,
-                blocks_to_swap_in,
-                blocks_to_swap_out,
-            } => todo!(),
+                metadata: _,
+                blocks_to_copy: _,
+                blocks_to_swap_in: _,
+                blocks_to_swap_out: _,
+            } => unreachable!(),
         }
     }
     fn category(&self) -> ModelCategory {

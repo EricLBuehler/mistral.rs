@@ -183,6 +183,11 @@ impl Loader for VisionLoader {
             Device::Cpu
         };
 
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "PagedAttention is not supported for vision models"
+        );
+
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -251,9 +256,9 @@ impl Loader for VisionLoader {
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
                 activation_dtype: dtype,
-                sliding_window: todo!(),
-                cache_config: None, // TODO
-                cache_engine: None, // TODO
+                sliding_window: None, // TODO
+                cache_config: None,   // TODO
+                cache_engine: None,   // TODO
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
@@ -341,7 +346,7 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
-            paged_attn_meta,
+            paged_attn_meta: _,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
