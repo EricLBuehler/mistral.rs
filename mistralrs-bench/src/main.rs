@@ -4,8 +4,8 @@ use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
-    ModelSelected, NormalRequest, Request, RequestMessage, Response, SamplingParams,
-    SchedulerConfig, TokenSource, Usage,
+    ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -277,6 +277,14 @@ struct Args {
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
+
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, then so must `pa_blk_size` be to use Paged Attention.
+    #[arg(long = "pa_gpu_mem")]
+    paged_attn_gpu_mem: Option<usize>,
+
+    /// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    #[arg(long = "pa_blk_size")]
+    paged_attn_block_size: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -354,6 +362,18 @@ fn main() -> anyhow::Result<()> {
         DeviceMapMetadata::dummy()
     };
 
+    let cache_config = if args.paged_attn_block_size.is_some() && args.paged_attn_gpu_mem.is_some()
+    {
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        Some(PagedAttentionConfig {
+            block_size: args.paged_attn_block_size,
+            mem_cpu: 512,
+            mem_gpu: args.paged_attn_gpu_mem.unwrap(),
+        })
+    } else {
+        None
+    };
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
@@ -362,7 +382,7 @@ fn main() -> anyhow::Result<()> {
         false,
         mapper,
         None,
-        None, // TODO
+        cache_config, // TODO
     )?;
     info!("Model loaded.");
 

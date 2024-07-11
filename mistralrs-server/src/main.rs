@@ -120,6 +120,14 @@ struct Args {
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
+
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, then so must `pa_blk_size` be to use Paged Attention.
+    #[arg(long = "pa_gpu_mem")]
+    paged_attn_gpu_mem: Option<usize>,
+
+    /// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    #[arg(long = "pa_blk_size")]
+    paged_attn_block_size: Option<usize>,
 }
 
 #[utoipa::path(
@@ -319,11 +327,18 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
-    let cache_config = Some(PagedAttentionConfig {
-        block_size: Some(32),
-        mem_cpu: 1024,
-        mem_gpu: 4096,
-    });
+    let cache_config = if args.paged_attn_block_size.is_some() && args.paged_attn_gpu_mem.is_some()
+    {
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        Some(PagedAttentionConfig {
+            block_size: args.paged_attn_block_size,
+            mem_cpu: 512,
+            mem_gpu: args.paged_attn_gpu_mem.unwrap(),
+        })
+    } else {
+        None
+    };
     // let cache_config = None;
     let pipeline = loader.load_model_from_hf(
         None,
