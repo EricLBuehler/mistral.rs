@@ -31,11 +31,11 @@ pub struct PagedAttentionConfig {
 
 impl PagedAttentionConfig {
     pub fn new(block_size: Option<usize>, mem_cpu: usize, mem_gpu: usize) -> anyhow::Result<Self> {
-        Self {
+        Ok(Self {
             block_size,
             mem_cpu,
             mem_gpu,
-        }
+        })
     }
 }
 
