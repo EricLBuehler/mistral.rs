@@ -278,7 +278,7 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, then so must `pa_blk_size` be to use Paged Attention.
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
@@ -362,8 +362,7 @@ fn main() -> anyhow::Result<()> {
         DeviceMapMetadata::dummy()
     };
 
-    let cache_config = if args.paged_attn_block_size.is_some() && args.paged_attn_gpu_mem.is_some()
-    {
+    let cache_config = if args.paged_attn_gpu_mem.is_some() {
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         Some(PagedAttentionConfig::new(
@@ -374,6 +373,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
@@ -382,24 +382,36 @@ fn main() -> anyhow::Result<()> {
         false,
         mapper,
         None,
-        cache_config, // TODO
+        cache_config,
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
+    let scheduler_config = if cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                .try_into()
+                .unwrap(),
+            config: pipeline
+                .blocking_lock()
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } else {
         SchedulerConfig::DefaultScheduler {
-            // TODO
             method: DefaultSchedulerMethod::Fixed(
                 (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
                     .try_into()
                     .unwrap(),
             ),
-        },
-    )
-    .with_no_prefix_cache(true)
-    .with_disable_eos_stop(true)
-    .build();
+        }
+    };
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_no_prefix_cache(true)
+        .with_disable_eos_stop(true)
+        .build();
 
     info!("Starting warmup run.");
     warmup_run(mistralrs.clone());

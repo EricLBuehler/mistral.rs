@@ -121,7 +121,7 @@ struct Args {
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, then so must `pa_blk_size` be to use Paged Attention.
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
@@ -327,8 +327,7 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
-    let cache_config = if args.paged_attn_block_size.is_some() && args.paged_attn_gpu_mem.is_some()
-    {
+    let cache_config = if args.paged_attn_gpu_mem.is_some() {
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         Some(PagedAttentionConfig::new(
@@ -339,7 +338,7 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    // let cache_config = None;
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
