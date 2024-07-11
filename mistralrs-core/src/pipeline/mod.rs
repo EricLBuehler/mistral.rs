@@ -390,6 +390,7 @@ impl ModelKind {
 ///     false,
 ///     DeviceMapMetadata::dummy(),
 ///     None,
+///     None,
 /// ).unwrap();
 /// ```
 pub trait Loader {
