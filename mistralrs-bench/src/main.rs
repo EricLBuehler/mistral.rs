@@ -366,11 +366,11 @@ fn main() -> anyhow::Result<()> {
     {
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        Some(PagedAttentionConfig {
-            block_size: args.paged_attn_block_size,
-            mem_cpu: 512,
-            mem_gpu: args.paged_attn_gpu_mem.unwrap(),
-        })
+        Some(PagedAttentionConfig::new(
+            args.paged_attn_block_size,
+            512,
+            args.paged_attn_gpu_mem.unwrap(),
+        )?)
     } else {
         None
     };

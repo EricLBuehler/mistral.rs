@@ -79,6 +79,7 @@ pub mod text_models_inputs_processor {
     }
 
     #[derive(Clone, Debug)]
+    #[allow(dead_code)]
     pub struct PagedAttentionInputMetadata {
         pub block_tables: Option<Tensor>,
         pub context_lens: Option<Tensor>,

@@ -1,28 +1,33 @@
 use anyhow::Result;
-use std::fs;
-use std::fs::read_to_string;
-use std::fs::OpenOptions;
-use std::io::prelude::*;
-use std::path::PathBuf;
 
-const OTHER_CONTENT: &str = r#"
+#[cfg(feature = "cuda")]
+fn main() -> Result<()> {
+    use std::fs;
+    use std::fs::read_to_string;
+    use std::fs::OpenOptions;
+    use std::io::prelude::*;
+    use std::path::PathBuf;
+
+    const OTHER_CONTENT: &str = r#"
+#[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "cuda")]
 mod backend;
 
+#[cfg(feature = "cuda")]
 pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}};
-"#;
+    "#;
 
-fn read_lines(filename: &str) -> Vec<String> {
-    let mut result = Vec::new();
+    fn read_lines(filename: &str) -> Vec<String> {
+        let mut result = Vec::new();
 
-    for line in read_to_string(filename).unwrap().lines() {
-        result.push(line.to_string())
+        for line in read_to_string(filename).unwrap().lines() {
+            result.push(line.to_string())
+        }
+
+        result
     }
 
-    result
-}
-
-fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/pagedattention.cu");
     println!("cargo:rerun-if-changed=src/copy_blocks_kernel.cu");
@@ -59,5 +64,10 @@ fn main() -> Result<()> {
             anyhow::bail!("Error while building dependencies: {:?}\n", e)
         }
     }
+    Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+fn main() -> Result<()> {
     Ok(())
 }
