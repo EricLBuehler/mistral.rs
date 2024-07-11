@@ -37,6 +37,8 @@ runner = Runner(
 ```
 
 ## Rust Example
+You can find this example [here](../mistralrs/examples/isq/main.rs).
+
 ```rust
 let pipeline = loader.load_model_from_hf(
     None,
@@ -46,6 +48,7 @@ let pipeline = loader.load_model_from_hf(
     false,
     DeviceMapMetadata::dummy(),
     Some(GgmlDType::Q4K),
+    None, // No Paged Attention yet
 )?;
 ```
 

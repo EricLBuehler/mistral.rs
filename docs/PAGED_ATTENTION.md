@@ -19,6 +19,8 @@ cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 ggu
 ```
 
 ## Using the Rust API
+You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
+
 ```rust
 use either::Either;
 use indexmap::IndexMap;
@@ -26,8 +28,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
+    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
     PagedAttentionConfig, Request, RequestMessage, Response, Result, SamplingParams,
     SchedulerConfig, TokenSource,
 };
@@ -67,11 +69,20 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some(PagedAttentionConfig::new(Some(32), 1024, 4096)?),
     )?;
-    let config = pipeline.blocking_lock().get_metadata().cache_config.as_ref().unwrap().clone();
+    let config = pipeline
+        .blocking_lock()
+        .get_metadata()
+        .cache_config
+        .as_ref()
+        .unwrap()
+        .clone();
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(
         pipeline,
-        SchedulerConfig::PagedAttentionMeta { max_num_seqs: 5, config },
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: 5,
+            config,
+        },
     )
     .build())
 }
