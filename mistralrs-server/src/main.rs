@@ -122,11 +122,11 @@ struct Args {
     in_situ_quant: Option<GgmlDType>,
 
     /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, then so must `pa_blk_size` be to use Paged Attention.
-    #[arg(long = "pa_gpu_mem")]
+    #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
     /// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
-    #[arg(long = "pa_blk_size")]
+    #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 }
 
