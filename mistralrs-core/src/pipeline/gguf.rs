@@ -288,6 +288,7 @@ fn parse_gguf_value(value: &GgufValue) -> String {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl ModelConfigLike for Content {
     fn hidden_size(&self) -> usize {
         let arch = self.metadata["general.architecture"].to_string().unwrap();

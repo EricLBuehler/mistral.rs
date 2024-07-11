@@ -455,7 +455,7 @@ impl Model {
                 cfg.rope_theta as f32,
                 cfg.head_dim,
                 cfg.max_position_embeddings,
-                &device,
+                device,
                 is_gptx,
                 vb_m.dtype(),
             )?);
@@ -467,7 +467,7 @@ impl Model {
                     (1.0 / (cfg.head_dim as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads),
                     None,
-                    &device,
+                    device,
                     None,
                 )?),
             };

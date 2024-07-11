@@ -339,7 +339,7 @@ async fn main() -> Result<()> {
 
     let scheduler_config = if cache_config.is_some() {
         SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: args.max_seqs.try_into().unwrap(),
+            max_num_seqs: args.max_seqs,
             config: pipeline
                 .lock()
                 .await

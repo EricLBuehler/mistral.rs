@@ -421,7 +421,7 @@ impl Model {
                 cfg.head_dim(),
                 (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
                 cfg.max_position_embeddings,
-                &device,
+                device,
                 is_gptx,
                 vb.dtype(),
             )?;
@@ -433,7 +433,7 @@ impl Model {
                     (1.0 / (cfg.head_dim() as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads()),
                     None,
-                    &device,
+                    device,
                     None,
                 )?),
             };

@@ -50,7 +50,7 @@ impl<'a> PastKvLenCache for &'a [Option<(Tensor, Tensor)>] {
 impl<'a> PastKvLenCache for &'a [usize] {
     fn get_past_kv_len(&self) -> Result<usize> {
         if self.windows(2).all(|w| w[0] == w[1]) {
-            return Ok(self[0]);
+            Ok(self[0])
         } else {
             Ok(0)
         }

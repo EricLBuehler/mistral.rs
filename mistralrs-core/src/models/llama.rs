@@ -54,6 +54,7 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
@@ -287,6 +288,7 @@ struct Block {
 }
 
 impl Block {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         x: &Tensor,
@@ -442,7 +444,7 @@ impl Llama {
                             cfg.rope_theta,
                             head_dim,
                             cfg.max_position_embeddings,
-                            &device,
+                            device,
                             is_gptx,
                             vb.dtype(),
                         )
@@ -457,7 +459,7 @@ impl Llama {
                                 (1.0 / (head_dim as f64).sqrt()) as f32,
                                 Some(cfg.num_key_value_heads),
                                 None,
-                                &device,
+                                device,
                                 None,
                             )
                             .expect("Failed to create PagedAttention"),

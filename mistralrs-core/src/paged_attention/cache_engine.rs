@@ -33,11 +33,11 @@ impl CacheEngine {
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
                 model_config,
-                &cache_config,
+                cache_config,
                 dtype,
                 device,
             )?)),
-            cpu_cache: Self::allocate_cpu_cache(model_config, &cache_config, dtype, device)?,
+            cpu_cache: Self::allocate_cpu_cache(model_config, cache_config, dtype, device)?,
             num_layers: model_config.num_layers(),
         })
     }

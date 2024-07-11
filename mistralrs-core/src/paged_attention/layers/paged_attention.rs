@@ -136,18 +136,18 @@ impl PagedAttention {
         // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
         // slot_mapping: Tensor,     // [num_tokens]
         if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let _ = reshape_and_cache(
+            reshape_and_cache(
                 &key,
                 &value,
-                &key_cache.as_mut().unwrap(),
-                &value_cache.as_mut().unwrap(),
+                key_cache.as_mut().unwrap(),
+                value_cache.as_mut().unwrap(),
                 &slot_mapping,
             )?;
         }
 
-        if att.is_some() {
-            //prefill result
-            return Ok(att.unwrap());
+        if let Some(att) = att {
+            // Return result in prefill
+            return Ok(att);
         }
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
@@ -165,10 +165,10 @@ impl PagedAttention {
         //  alibi_slopes: shape = [num_heads]
         paged_attention(
             &query,
-            &key_cache.as_ref().unwrap(),
-            &value_cache.as_ref().unwrap(),
-            &input_metadata.block_tables.as_ref().unwrap(),
-            &input_metadata.context_lens.as_ref().unwrap(),
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            input_metadata.block_tables.as_ref().unwrap(),
+            input_metadata.context_lens.as_ref().unwrap(),
             input_metadata.max_context_len.unwrap(),
             self.scale,
         )

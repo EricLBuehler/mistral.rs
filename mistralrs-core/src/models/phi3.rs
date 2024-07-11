@@ -408,7 +408,7 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), &device)?);
+            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?);
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -417,7 +417,7 @@ impl Model {
                     (1.0 / (cfg.head_dim() as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads),
                     cfg.sliding_window,
-                    &device,
+                    device,
                     None,
                 )?),
             };

@@ -252,7 +252,7 @@ impl Engine {
                     }
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
-                    if output.scheduled.len() > 0 {
+                    if !output.scheduled.is_empty() {
                         let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();

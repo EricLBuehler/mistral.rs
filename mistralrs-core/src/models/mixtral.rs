@@ -456,7 +456,7 @@ impl Model {
                 cfg.rope_theta as f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                &device,
+                device,
                 is_gptx,
                 vb_m.dtype(),
             )?);
@@ -468,7 +468,7 @@ impl Model {
                     (1.0 / (head_dim as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads),
                     Some(cfg.sliding_window),
-                    &device,
+                    device,
                     None,
                 )?),
             };

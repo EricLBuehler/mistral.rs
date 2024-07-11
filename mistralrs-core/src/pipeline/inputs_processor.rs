@@ -160,7 +160,7 @@ pub mod text_models_inputs_processor {
                     }
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
-                        table.get(table.len() - 1).unwrap() // Position exceeded, so use last pos
+                        table.last().unwrap() // Position exceeded, so use last pos
                     } else {
                         table.get(i / paged_attn_metadata.block_size).unwrap()
                     };
@@ -206,7 +206,7 @@ pub mod text_models_inputs_processor {
                 slot_mappings,
                 *position_ids.iter().max().unwrap(),
                 _PAD_SLOT_ID,
-                &device,
+                device,
             )?;
             Some(PagedAttentionInputMetadata {
                 slot_mappings,
@@ -272,7 +272,7 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let block_number = if start_pos / paged_attn_metadata.block_size >= table.len() {
-                    table.get(table.len() - 1).unwrap() //position exceed! use last position; TODO (bug fix)
+                    table.last().unwrap() //position exceed! use last position; TODO (bug fix)
                 } else {
                     table
                         .get(start_pos / paged_attn_metadata.block_size)
@@ -315,9 +315,10 @@ pub mod text_models_inputs_processor {
         set_use_matmul_via_f16(false);
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
-            let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, &device)?;
+            let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
             let block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
@@ -325,18 +326,19 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>(),
                 max_block_table_len,
                 0,
-                &device,
+                device,
             )?;
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
             let max_context_len = paged_attn_context_lens.iter().max().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
             let context_lens = Tensor::from_vec(
                 paged_attn_context_lens
                     .iter()
                     .map(|x| *x as u32)
                     .collect::<Vec<_>>(),
                 (paged_attn_context_lens.len(),),
-                &device,
+                device,
             )?;
 
             Some(PagedAttentionInputMetadata {

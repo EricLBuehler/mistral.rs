@@ -72,7 +72,7 @@ impl PagedAttentionScheduler {
                 let seq = self.waiting.front().unwrap().clone();
 
                 // If adding this seq means we will have too many, stop as no more could be added.
-                if self.config.max_num_seqs == self.running.iter().count() + 1 {
+                if self.config.max_num_seqs == self.running.len() + 1 {
                     break;
                 }
 
@@ -93,7 +93,7 @@ impl PagedAttentionScheduler {
 
                 get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                 let seq_handle = get_mut_arcmutex!(seq);
-                self._allocate(&*seq_handle);
+                self._allocate(&seq_handle);
 
                 let seq = self.waiting.pop_front().unwrap();
                 self.running.push_back(seq.clone());
@@ -152,7 +152,7 @@ impl PagedAttentionScheduler {
                     // If we need to, append physical blocks for a new token. We do not need to if there is enough space.
                     // If we just got preempted, there is no reason to allocate
                     let seq_handle = get_mut_arcmutex!(seq);
-                    self._append_token_slot_to_seq(&*seq_handle, &mut blocks_to_copy);
+                    self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
                 }
                 running.push_back(seq);
             }
@@ -181,7 +181,7 @@ impl PagedAttentionScheduler {
                 {
                     // Reserve a new slot
                     let seq_handle = get_mut_arcmutex!(seq);
-                    self._append_token_slot_to_seq(&*seq_handle, &mut blocks_to_copy);
+                    self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
                 }
                 self.running.push_back(seq);
             }
