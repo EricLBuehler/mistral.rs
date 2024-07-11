@@ -112,9 +112,28 @@ impl SequenceCustomMetadata {
         }
     }
 
+    fn pop_token_from_blocks(&mut self) {
+        match self {
+            Self::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                let last = logical_token_blocks.last_mut().unwrap();
+                last.pop_token();
+            }
+            Self::None => (),
+        }
+    }
+
     fn append_tokens_to_blocks(&mut self, toks: Vec<usize>) {
         for tok in toks {
             self.append_token_to_blocks(tok);
+        }
+    }
+
+    fn remove_tokens_from_blocks(&mut self, n: usize) {
+        for _ in 0..n {
+            self.pop_token_from_blocks();
         }
     }
 }
@@ -378,9 +397,20 @@ impl Sequence {
 
     /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
-        self.tokens = toks;
+        self.tokens = toks.clone();
         self.prompt_len = self.tokens.len();
-        // TODO: HANDLE BLOCK ENGINE
+        // Handle possible block engine
+        match &mut self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                logical_token_blocks.clear();
+            }
+            SequenceCustomMetadata::None => (),
+        }
+        self.custom_metadata
+            .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -425,14 +455,16 @@ impl Sequence {
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
         self.is_tmp = true;
         self.tokens.push(tok);
-        // TODO: HANDLE BLOCK ENGINE
+        // Handle possible block engine
+        self.custom_metadata.append_token_to_blocks(tok as usize);
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
         self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
-        // TODO: HANDLE BLOCK ENGINE
+        // Handle possible block engine
+        self.custom_metadata.remove_tokens_from_blocks(n);
     }
 
     pub fn add_token(

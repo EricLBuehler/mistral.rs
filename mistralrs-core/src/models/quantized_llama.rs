@@ -503,7 +503,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     head_dim,
                     (1.0 / (head_dim as f64).sqrt()) as f32,
                     Some(head_count_kv),
-                    None, // TODO
+                    None,
                     device,
                     None,
                 )?),

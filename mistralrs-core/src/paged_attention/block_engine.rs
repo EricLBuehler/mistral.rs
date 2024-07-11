@@ -32,6 +32,12 @@ impl LogicalTokenBlock {
         self.tokens[self.num_tokens] = token;
         self.num_tokens += 1;
     }
+
+    pub fn pop_token(&mut self) {
+        assert_ne!(self.num_tokens, 0);
+        self.tokens.pop();
+        self.num_tokens -= 1;
+    }
 }
 
 #[derive(Hash, PartialEq, Eq)]
