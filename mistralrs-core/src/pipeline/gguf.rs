@@ -744,9 +744,17 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Starcoder2(ref model) => {
-                model.forward(&input_ids, &seqlen_offsets, seqlen_offsets_kernel)
-            }
+            Model::Starcoder2(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
         }
     }
     async fn sample(
