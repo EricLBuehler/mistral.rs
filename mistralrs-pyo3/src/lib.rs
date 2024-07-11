@@ -512,9 +512,7 @@ impl Runner {
 
         let scheduler_config = if cache_config.is_some() {
             SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs: max_seqs
-                    .try_into()
-                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                max_num_seqs: max_seqs,
                 config: pipeline
                     .blocking_lock()
                     .get_metadata()

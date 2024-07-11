@@ -388,9 +388,7 @@ fn main() -> anyhow::Result<()> {
 
     let scheduler_config = if cache_config.is_some() {
         SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                .try_into()
-                .unwrap(),
+            max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
             config: pipeline
                 .blocking_lock()
                 .get_metadata()
