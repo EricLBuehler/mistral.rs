@@ -174,13 +174,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
 |-|-|-|-|-|
-|A10 GPU, CUDA|85|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
 |A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 
-> Note: All CUDA tests for mistral.rs conducted with PagedAttention, block size = 32
+> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
 
 Please submit more benchmarks via raising an issue!
 
