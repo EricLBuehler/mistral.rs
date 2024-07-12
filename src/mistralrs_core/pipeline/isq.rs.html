@@ -214,12 +214,6 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a>
-<a href="#218" id="218">218</a>
-<a href="#219" id="219">219</a>
-<a href="#220" id="220">220</a>
-<a href="#221" id="221">221</a>
-<a href="#222" id="222">222</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
@@ -332,12 +326,6 @@
             <span class="kw">let </span>t_start = Instant::now();
             <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
             </span>{
-                <span class="comment">// NOTE(EricLBuehler): On version 0.2.0, remove this
-                </span><span class="kw">let </span>isq_low_mem = std::env::var(<span class="string">"ISQ_LOW_MEMORY"</span>).is_ok();
-                <span class="kw">if </span>isq_low_mem {
-                    <span class="macro">warn!</span>(<span class="string">"ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant"</span>);
-                }
-
                 <span class="macro">info!</span>(<span class="string">"Applying ISQ on {} threads."</span>, rayon::current_num_threads());
 
                 <span class="kw">use </span>indicatif::ParallelProgressIterator;

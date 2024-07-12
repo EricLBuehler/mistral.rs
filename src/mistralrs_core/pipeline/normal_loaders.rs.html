@@ -981,8 +981,8 @@
     DeviceMapMetadata,
 };
 
-<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass)]
-#[derive(Clone, Debug, Deserialize)]
+<span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass(eq, eq_int))]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 </span><span class="doccomment">/// The architecture to load the normal model as.
 </span><span class="kw">pub enum </span>NormalLoaderType {
     <span class="attr">#[serde(rename = <span class="string">"mistral"</span>)]

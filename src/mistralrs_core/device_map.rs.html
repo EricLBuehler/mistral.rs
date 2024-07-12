@@ -222,19 +222,6 @@
 <a href="#222" id="222">222</a>
 <a href="#223" id="223">223</a>
 <a href="#224" id="224">224</a>
-<a href="#225" id="225">225</a>
-<a href="#226" id="226">226</a>
-<a href="#227" id="227">227</a>
-<a href="#228" id="228">228</a>
-<a href="#229" id="229">229</a>
-<a href="#230" id="230">230</a>
-<a href="#231" id="231">231</a>
-<a href="#232" id="232">232</a>
-<a href="#233" id="233">233</a>
-<a href="#234" id="234">234</a>
-<a href="#235" id="235">235</a>
-<a href="#236" id="236">236</a>
-<a href="#237" id="237">237</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
@@ -257,19 +244,7 @@
 }
 
 <span class="kw">impl </span>DeviceMapMetadata {
-    <span class="attr">#[deprecated(note = <span class="string">"This will be replaced by a more general API to handle multi-GPU."</span>)]
-    </span><span class="kw">pub fn </span>from_num_device_layers(device_layers: usize) -&gt; <span class="self">Self </span>{
-        <span class="comment">// TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-        </span><span class="self">Self </span>{
-            device_layers: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[DeviceLayerMapMetadata {
-                ordinal: <span class="number">0</span>,
-                layers: device_layers,
-            }]),
-            host_layers: <span class="prelude-val">None</span>,
-        }
-    }
-    <span class="comment">// TODO(EricLBuehler): For version 0.2.0, replace `from_num_device_layers` with this.
-    </span><span class="kw">pub fn </span>from_num_device_layers_multi_gpu(device_layers: Vec&lt;DeviceLayerMapMetadata&gt;) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>from_num_device_layers(device_layers: Vec&lt;DeviceLayerMapMetadata&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             device_layers: <span class="prelude-val">Some</span>(device_layers),
             host_layers: <span class="prelude-val">None</span>,
@@ -371,8 +346,7 @@
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
 
-    <span class="comment">// TODO(EricLBuehler): when 0.2.0, replace this with param in `into_mapper`.
-    // === IMMEDIATELY AFTER INIT ===
+    <span class="comment">// === IMMEDIATELY AFTER INIT ===
     </span><span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
 }
 

@@ -784,7 +784,7 @@
     </span><span class="kw">let </span>mapper = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_layers) = args.num_device_layers {
         <span class="kw">if </span>device_layers.len() == <span class="number">1 </span>&amp;&amp; device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().is_ok() {
             <span class="kw">let </span>layers = device_layers[<span class="number">0</span>].parse::&lt;usize&gt;().unwrap();
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(<span class="macro">vec!</span>[DeviceLayerMapMetadata {
+            DeviceMapMetadata::from_num_device_layers(<span class="macro">vec!</span>[DeviceLayerMapMetadata {
                 ordinal: <span class="number">0</span>,
                 layers,
             }])
@@ -811,7 +811,7 @@
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+            DeviceMapMetadata::from_num_device_layers(mapping)
         }
     } <span class="kw">else </span>{
         DeviceMapMetadata::dummy()
