@@ -65,7 +65,7 @@ Mistal.rs supports several model categories:
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Continuous batching.
+- Continuous batching and Paged Attention support.
 - Prefix caching.
 - [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
@@ -90,6 +90,7 @@ Mistal.rs supports several model categories:
 - AnyMoE: Build a memory-efficient MoE model from anything, in seconds
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
+- Paged Attention: [docs](docs/PAGED_ATTENTION.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -173,11 +174,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
 |-|-|-|-|-|
-|A10 GPU, CUDA|89|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|119|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|A6000 GPU, CUDA|115|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+
+> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
 
 Please submit more benchmarks via raising an issue!
 

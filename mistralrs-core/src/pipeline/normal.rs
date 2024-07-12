@@ -16,6 +16,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -27,7 +28,8 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -193,6 +195,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -203,7 +206,15 @@ impl Loader for NormalLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -215,6 +226,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -241,6 +253,12 @@ impl Loader for NormalLoader {
 
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
+        let attention_mechanism = if paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } else {
+            AttentionImplementation::Eager
+        };
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
@@ -252,7 +270,8 @@ impl Loader for NormalLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -285,6 +304,24 @@ impl Loader for NormalLoader {
             _ => unreachable!(),
         };
 
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::Adapter { .. }),
+                "PagedAttention does not support adapter models."
+            );
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
@@ -299,6 +336,7 @@ impl Loader for NormalLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -322,6 +360,9 @@ impl Loader for NormalLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
         })))
     }
@@ -415,6 +456,7 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
+            mut paged_attn_meta,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
@@ -423,6 +465,12 @@ impl Pipeline for NormalPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
             true => self.model.xlora_forward(
                 &input_ids,

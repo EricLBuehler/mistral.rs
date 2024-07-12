@@ -343,6 +343,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindgen_cuda"
+version = "0.1.6"
+source = "git+https://github.com/guoqingbao/bindgen_cuda.git#fb7ed75f3901b146aa1ba460baaeed5b494f2e0d"
+dependencies = [
+ "glob",
+ "num_cpus",
+ "rayon",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -488,7 +498,7 @@ version = "0.6.0"
 source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e3449a7928332ce5db8eb84b28b9133da4d2"
 dependencies = [
  "anyhow",
- "bindgen_cuda",
+ "bindgen_cuda 0.1.5",
  "candle-core",
  "half",
 ]
@@ -498,7 +508,7 @@ name = "candle-kernels"
 version = "0.6.0"
 source = "git+https://github.com/EricLBuehler/candle.git?rev=b7a3e344#b7a3e3449a7928332ce5db8eb84b28b9133da4d2"
 dependencies = [
- "bindgen_cuda",
+ "bindgen_cuda 0.1.5",
 ]
 
 [[package]]
@@ -2315,7 +2325,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "bindgen_cuda",
+ "bindgen_cuda 0.1.5",
  "buildstructor",
  "bytemuck",
  "bytemuck_derive",
@@ -2342,6 +2352,7 @@ dependencies = [
  "lrtable",
  "minijinja",
  "minijinja-contrib",
+ "mistralrs-paged-attn",
  "mistralrs-vision",
  "once_cell",
  "plotly",
@@ -2367,6 +2378,16 @@ dependencies = [
  "tracing-subscriber",
  "variantly",
  "vob",
+]
+
+[[package]]
+name = "mistralrs-paged-attn"
+version = "0.1.26"
+dependencies = [
+ "anyhow",
+ "bindgen_cuda 0.1.6",
+ "candle-core",
+ "half",
 ]
 
 [[package]]

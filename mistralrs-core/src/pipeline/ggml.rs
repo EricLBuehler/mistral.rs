@@ -21,7 +21,8 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
@@ -233,6 +234,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -270,6 +272,11 @@ impl Loader for GGMLLoader {
 
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
+
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "PagedAttention is not supported for GGML"
+        );
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
@@ -341,6 +348,9 @@ impl Loader for GGMLLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: DType::F32,
+                sliding_window: None,
+                cache_config: None,
+                cache_engine: None,
             }),
         })))
     }
@@ -355,6 +365,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -365,7 +376,15 @@ impl Loader for GGMLLoader {
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     fn get_id(&self) -> String {
@@ -469,7 +488,8 @@ impl Pipeline for GGMLPipeline {
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-            position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
+            position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
+            paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -477,6 +497,7 @@ impl Pipeline for GGMLPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                None,
             ),
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,

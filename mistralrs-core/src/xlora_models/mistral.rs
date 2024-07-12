@@ -4,7 +4,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 /// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -440,6 +443,7 @@ pub struct XLoraModel {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraModel {
@@ -548,6 +552,13 @@ impl XLoraModel {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -578,7 +589,7 @@ impl XLoraModel {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
@@ -735,6 +746,7 @@ impl NormalModel for XLoraModel {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -805,6 +817,9 @@ impl NormalModel for XLoraModel {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

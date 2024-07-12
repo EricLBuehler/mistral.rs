@@ -894,7 +894,7 @@ impl Model {
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,

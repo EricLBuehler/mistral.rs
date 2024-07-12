@@ -6,8 +6,11 @@ use std::{
 
 use crate::{
     engine::TERMINATE_ALL_NEXT_STEP,
+    paged_attention::BlockTables,
     sequence::{Sequence, SequenceState, StopReason},
 };
+
+use super::{Scheduler, SchedulerOutput};
 
 pub trait FcfsBacker: Default {
     fn new() -> Self;
@@ -36,7 +39,7 @@ impl FcfsBacker for VecDeque<Sequence> {
     }
 }
 
-pub struct SchedulerOutput<'a> {
+pub struct DefaultSchedulerOutput<'a> {
     pub completion: Box<[&'a mut Sequence]>,
     pub prompt: Box<[&'a mut Sequence]>,
 }
@@ -46,7 +49,7 @@ pub struct SchedulerOutput<'a> {
 /// are not only running, only waiting sequences, or none. If is it used, then it
 /// is used to allow waiting sequences to run.
 #[derive(Clone)]
-pub enum SchedulerMethod {
+pub enum DefaultSchedulerMethod {
     Fixed(NonZeroUsize),
 }
 
@@ -168,17 +171,17 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
     }
 }
 
-pub struct Scheduler<Backer: FcfsBacker> {
+pub struct DefaultScheduler<Backer: FcfsBacker> {
     waiting: Backer,
     running: Vec<Sequence>,
-    method: SchedulerMethod,
+    method: DefaultSchedulerMethod,
     bucketing_manager: Box<dyn BucketingManager<Backer>>,
 }
 
-impl<Backer: FcfsBacker> Scheduler<Backer> {
-    pub fn new(method: SchedulerMethod) -> Self {
+impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
+    pub fn new(method: DefaultSchedulerMethod) -> Self {
         let bucketing_manager: Box<dyn BucketingManager<_>> = match method {
-            SchedulerMethod::Fixed(_) => Box::new(FixedBucketingManager),
+            DefaultSchedulerMethod::Fixed(_) => Box::new(FixedBucketingManager),
         };
         Self {
             running: Vec::new(),
@@ -186,19 +189,6 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             method,
             bucketing_manager,
         }
-    }
-
-    pub fn add_seq(&mut self, seq: Sequence) {
-        if seq.is_running() {
-            // prefill case
-            self.running.push(seq);
-        } else {
-            self.waiting.add(seq);
-        }
-    }
-
-    pub fn waiting_len(&self) -> usize {
-        self.waiting.len()
     }
 
     /// Move the seuqences into buckets, and run the ones with the shortest lengths.
@@ -214,7 +204,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
     }
 
     /// Schedule all sequences based on their state and the available space.
-    pub fn schedule(&mut self) -> SchedulerOutput {
+    pub fn schedule(&mut self) -> DefaultSchedulerOutput {
         // Filter out all done sequences
         let running = std::mem::take(&mut self.running);
         let mut waiting = std::mem::take(&mut self.waiting);
@@ -226,7 +216,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
         match (waiting.len(), running.len()) {
             (0, 0) => {
                 self.running = running;
-                return SchedulerOutput {
+                return DefaultSchedulerOutput {
                     prompt: vec![].into(),
                     completion: vec![].into(),
                 };
@@ -239,7 +229,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                 self.waiting = Backer::new();
                 let running = std::mem::take(&mut self.running);
                 self.running = self.bucket_and_waitlist_seqs(running);
-                return SchedulerOutput {
+                return DefaultSchedulerOutput {
                     prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
                     completion: vec![].into(),
                 };
@@ -252,7 +242,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
                         .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
                     TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
                 }
-                return SchedulerOutput {
+                return DefaultSchedulerOutput {
                     prompt: vec![].into(),
                     completion: self.running.iter_mut().collect::<Vec<_>>().into(),
                 };
@@ -296,7 +286,7 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
             }
         }
 
-        SchedulerOutput {
+        DefaultSchedulerOutput {
             completion: completion.into(),
             prompt: prompt.into(),
         }
@@ -304,7 +294,33 @@ impl<Backer: FcfsBacker> Scheduler<Backer> {
 
     fn sequence_fits(&self, running: &[Sequence], _seq: &Sequence) -> bool {
         match &self.method {
-            SchedulerMethod::Fixed(n) => (running.len() + 1) <= (*n).into(),
+            DefaultSchedulerMethod::Fixed(n) => (running.len() + 1) <= (*n).into(),
         }
     }
+}
+
+impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
+    fn schedule(&mut self) -> SchedulerOutput<'_> {
+        SchedulerOutput::DefaultScheduler {
+            output: self.schedule(),
+        }
+    }
+    fn waiting_len(&self) -> usize {
+        self.waiting.len()
+    }
+    fn add_seq(&mut self, seq: Sequence) {
+        if seq.is_running() {
+            // prefill case
+            self.running.push(seq);
+        } else {
+            self.waiting.add(seq);
+        }
+    }
+    fn block_tables(&self) -> Option<&BlockTables> {
+        None
+    }
+    fn block_size(&self) -> Option<usize> {
+        None
+    }
+    fn free_finished_sequence_groups(&mut self) {}
 }

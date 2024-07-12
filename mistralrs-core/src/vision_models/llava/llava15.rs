@@ -233,6 +233,7 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
+                None, // TODO
             )
         } else {
             self.llm.forward(
@@ -241,6 +242,7 @@ impl Model {
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
+                None, // TODO
             )
         }
     }

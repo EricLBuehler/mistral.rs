@@ -4,6 +4,9 @@ use crate::device_map::DeviceMapper;
 use crate::layers::{
     repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
 };
+use crate::layers_masker::PastKvLenCache;
+use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -36,7 +39,6 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
     Ok(ln)
 }
 
-#[derive(Debug, Clone)]
 struct LayerWeights {
     attn_q: QLinear,
     attn_k: QLinear,
@@ -49,6 +51,7 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     rotary_emb: RotaryEmbedding,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl LayerWeights {
@@ -59,6 +62,7 @@ impl LayerWeights {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;
 
@@ -98,32 +102,49 @@ impl LayerWeights {
                 .contiguous()?;
         }
 
-        let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let y = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
+            }
+            None => {
+                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?.contiguous()?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?.contiguous()?;
+                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
+                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.n_head,
-            self.head_dim,
-            mask,
-            false,
-            b_sz,
-            q_len,
-        )?;
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.n_head,
+                    self.head_dim,
+                    mask,
+                    false,
+                    b_sz,
+                    q_len,
+                )?
+            }
+        };
 
-        let res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, hidden_size))?
-            .apply(&self.attn_output)?;
-        Ok(res)
+        let y = if mask.is_some() {
+            y.transpose(1, 2)?.reshape(&[b_sz, q_len, hidden_size])?
+        } else {
+            y.reshape(&[b_sz, q_len, hidden_size])?
+        };
+
+        self.attn_output.forward(&y)
     }
 }
 
-#[derive(Debug)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
@@ -185,6 +206,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         reader: &mut R,
         device: &Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -243,6 +265,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let attn_k = QLinear::new(&ct, reader, &format!("{prefix}.attn_k"), device)?;
             let attn_v = QLinear::new(&ct, reader, &format!("{prefix}.attn_v"), device)?;
             let attn_output = QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?;
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    head_count,
+                    head_dim,
+                    (1.0 / (head_dim as f64).sqrt()) as f32,
+                    Some(head_count_kv),
+                    None,
+                    device,
+                    None,
+                )?),
+            };
             layers.push(LayerWeights {
                 attn_q,
                 attn_k,
@@ -255,6 +289,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary_emb: rotary,
+                paged_attn,
             })
         }
         Ok(Self {
@@ -276,13 +311,17 @@ impl ModelWeights {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             DType::F32,
             self.layers[0].n_head,
         )?;
@@ -300,6 +339,9 @@ impl ModelWeights {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?;
             let ys = (ys + residual)?;
             let residual = &ys;

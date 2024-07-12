@@ -20,11 +20,12 @@ use tokio::sync::mpsc::channel;
 use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -353,6 +354,8 @@ impl Runner {
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
+        pa_gpu_mem = None,
+        pa_blk_size = None,
     ))]
     fn new(
         which: Which,
@@ -366,6 +369,8 @@ impl Runner {
         num_device_layers: Option<Either<usize, Vec<String>>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
+        pa_gpu_mem: Option<usize>,
+        pa_blk_size: Option<usize>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -480,6 +485,17 @@ impl Runner {
             None => DeviceMapMetadata::dummy(),
         };
 
+        let cache_config = if pa_gpu_mem.is_some() {
+            // Allocate 0.5 GB of CPU memory just as a placeholder.
+            // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+            Some(PagedAttentionConfig::new(
+                pa_blk_size,
+                512,
+                pa_gpu_mem.unwrap(),
+            )?)
+        } else {
+            None
+        };
         let pipeline = loader
             .load_model_from_hf(
                 None,
@@ -490,20 +506,34 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
+                cache_config,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let mistralrs = MistralRsBuilder::new(
-            pipeline,
-            SchedulerMethod::Fixed(
-                max_seqs
-                    .try_into()
-                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
-            ),
-        )
-        .with_no_kv_cache(no_kv_cache)
-        .with_prefix_cache_n(prefix_cache_n)
-        .build();
+        let scheduler_config = if cache_config.is_some() {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: max_seqs,
+                config: pipeline
+                    .blocking_lock()
+                    .get_metadata()
+                    .cache_config
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    max_seqs
+                        .try_into()
+                        .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                ),
+            }
+        };
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+            .with_no_kv_cache(no_kv_cache)
+            .with_prefix_cache_n(prefix_cache_n)
+            .build();
 
         Ok(Self { runner: mistralrs })
     }
