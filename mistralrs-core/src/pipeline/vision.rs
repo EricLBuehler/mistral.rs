@@ -230,24 +230,6 @@ impl Loader for VisionLoader {
             self.inner
                 .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
 
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::Adapter { .. }),
-                "PagedAttention does not support adapter models."
-            );
-            let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
-                paged_attn_config.block_size,
-                dtype,
-                model.config(),
-            )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
-            (Some(cache_config), Some(cache_engine))
-        } else {
-            (None, None)
-        };
-
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
             Some(processor.get_special_tokens()),
@@ -261,6 +243,25 @@ impl Loader for VisionLoader {
         if let Some(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())?;
         }
+
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::Adapter { .. }),
+                "PagedAttention does not support adapter models."
+            );
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+                device,
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();

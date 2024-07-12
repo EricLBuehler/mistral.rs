@@ -304,6 +304,16 @@ impl Loader for NormalLoader {
             _ => unreachable!(),
         };
 
+        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
+        let gen_conf: Option<GenerationConfig> = paths
+            .get_gen_conf_filename()
+            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        let chat_template = get_chat_template(paths, &self.chat_template, None);
+
+        if let Some(in_situ_quant) = in_situ_quant {
+            model.quantize(in_situ_quant, device.clone())?;
+        }
+
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             anyhow::ensure!(
                 !matches!(self.kind, ModelKind::Adapter { .. }),
@@ -315,22 +325,13 @@ impl Loader for NormalLoader {
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
+                device,
             )?;
             let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
         };
-
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
-        let gen_conf: Option<GenerationConfig> = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
-
-        if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
-        }
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();

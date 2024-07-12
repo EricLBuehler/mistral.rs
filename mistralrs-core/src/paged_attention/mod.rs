@@ -14,24 +14,30 @@ pub const _PAD_SLOT_ID: i64 = -1;
 pub use block_engine::{BlockEngine, BlockTables, LogicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
-use candle_core::DType;
+use candle_core::{DType, Device};
 pub use config::{ModelConfigLike, ModelConfigMetadata};
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };
+
+use crate::MemoryUsage;
 use tracing::info;
 
-/// All memory counts in MB. Default for block size is 16.
+/// All memory counts in MB. Default for block size is 32.
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_cpu: usize,
-    pub(crate) mem_gpu: usize,
+    pub(crate) mem_gpu: Option<usize>,
 }
 
 impl PagedAttentionConfig {
-    pub fn new(block_size: Option<usize>, mem_cpu: usize, mem_gpu: usize) -> anyhow::Result<Self> {
+    pub fn new(
+        block_size: Option<usize>,
+        mem_cpu: usize,
+        mem_gpu: Option<usize>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             block_size,
             mem_cpu,
@@ -62,23 +68,36 @@ macro_rules! mb_to_blocks {
     };
 }
 
-/// Memory values are in MBs. Specify block size or the default is 16.
+/// Memory values are in MBs. Specify block size or the default is 32.
 pub fn calculate_cache_config(
-    mem_gpu: usize,
+    mem_gpu: Option<usize>,
     mem_cpu: usize,
     block_size: Option<usize>,
     dtype: DType,
     config: &dyn ModelConfigLike,
+    device: &Device,
 ) -> anyhow::Result<CacheConfig> {
-    let block_size = block_size.unwrap_or(16);
+    let block_size = block_size.unwrap_or(32);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
     }
     let dtype_size = dtype.size_in_bytes();
 
+    let mem_gpu = match mem_gpu {
+        Some(v) => v,
+        None => {
+            let free = MemoryUsage.get_memory_available(device)? / SIZE_IN_MB;
+            info!(
+                "Automatically using {} MB for Paged Attention KV cache",
+                free - 512
+            );
+            free - 512
+        }
+    };
+
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
-    info!("Using Paged Attention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {}", num_gpu_blocks*block_size);
+    info!("Using Paged Attention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
     Ok(CacheConfig {
         block_size,
         num_gpu_blocks,

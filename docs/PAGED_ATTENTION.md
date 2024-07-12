@@ -1,10 +1,12 @@
 # Paged Attention in mistral.rs
 
-Mistral.rs supports Paged Attention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference.
+Mistral.rs supports Paged Attention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on CUDA.
 
-Our paged attention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache.
+Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, Paged Attention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
 
-> Note: The default block size if not specified is 16.
+> Note: The default block size if not specified is 32.
+
+> Warning: When using dynamic adapter activation or sending re-ISQ requests, it may trigger OOM because the Paged Attention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount (recommended) or disable paged attention.
 
 **There are more features being added to this:**
 - GGML model support 

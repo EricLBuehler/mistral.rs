@@ -407,6 +407,7 @@ impl Loader for GGUFLoader {
                 paged_attn_config.block_size,
                 DType::F32,
                 model_config,
+                device,
             )?;
             let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
             (Some(cache_config), Some(cache_engine))
