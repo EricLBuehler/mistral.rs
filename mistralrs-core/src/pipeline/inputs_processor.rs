@@ -161,7 +161,12 @@ pub mod text_models_inputs_processor {
                     }
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
-                        table.last().unwrap() // Position exceeded, so use last pos
+                        panic!(
+                            "Block table is too small (prompt)! i={} block_size={} table_len={}",
+                            i,
+                            paged_attn_metadata.block_size,
+                            table.len()
+                        );
                     } else {
                         table.get(i / paged_attn_metadata.block_size).unwrap()
                     };
@@ -273,7 +278,7 @@ pub mod text_models_inputs_processor {
                     .collect::<Vec<_>>();
 
                 let block_number = if start_pos / paged_attn_metadata.block_size >= table.len() {
-                    table.last().unwrap() //position exceed! use last position; TODO (bug fix)
+                    panic!("Block table is too small (completion)! start_pos={} block_size={} table_len={}", start_pos, paged_attn_metadata.block_size, table.len());
                 } else {
                     table
                         .get(start_pos / paged_attn_metadata.block_size)
