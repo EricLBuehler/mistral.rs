@@ -95,9 +95,6 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
 ) -> PyResult<Box<dyn Loader>> {
-    const REPEAT_LAST_N_DEFAULT: usize = 64;
-    const GQA_DEFAULT: usize = 1;
-
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -112,7 +109,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -130,7 +127,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -157,7 +154,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -178,9 +175,7 @@ fn parse_which(
             quantized_filename,
             repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -196,9 +191,7 @@ fn parse_which(
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -223,9 +216,7 @@ fn parse_which(
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -248,10 +239,7 @@ fn parse_which(
             repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -270,10 +258,7 @@ fn parse_which(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -301,10 +286,7 @@ fn parse_which(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -328,7 +310,7 @@ fn parse_which(
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -340,7 +322,6 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
-    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -366,7 +347,7 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<Either<usize, Vec<String>>>,
+        num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
         pa_gpu_mem: Option<usize>,
@@ -443,12 +424,13 @@ impl Runner {
         };
 
         let mapper = match num_device_layers {
-            Some(Either::Right(device_layers)) => {
+            Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
-                        DeviceLayerMapMetadata { ordinal: 0, layers },
-                    ])
+                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
+                        ordinal: 0,
+                        layers,
+                    }])
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -472,15 +454,8 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                    DeviceMapMetadata::from_num_device_layers(mapping)
                 }
-            }
-            Some(Either::Left(n_device_layers)) => {
-                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
-                    ordinal: 0,
-                    layers: n_device_layers,
-                }])
             }
             None => DeviceMapMetadata::dummy(),
         };

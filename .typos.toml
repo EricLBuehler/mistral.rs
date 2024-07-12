@@ -6,4 +6,7 @@ extend-ignore-identifiers-re = [
 ]
 
 [files]
-extend-exclude = ["mistralrs-pyo3/pdoc/*"]
+extend-exclude = [
+    "mistralrs-pyo3/pdoc/*",
+    "examples/server/phi3_duckduckgo_mistral.rs.ipynb"
+]

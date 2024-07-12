@@ -10,8 +10,6 @@ from mistralrs import (
 runner = Runner(
     which=Which.Plain(
         model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        tokenizer_json=None,
-        repeat_last_n=64,
         arch=Architecture.Mistral,
     ),
     anymoe_config=AnyMoeConfig(

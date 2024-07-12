@@ -57,8 +57,8 @@ use crate::{
     DeviceMapMetadata,
 };
 
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {
     #[serde(rename = "mistral")]

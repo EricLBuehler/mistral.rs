@@ -187,8 +187,6 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 runner = Runner(
     which=Which.VisionPlain(
         model_id="llava-hf/llava-v1.6-mistral-7b-hf",
-        tokenizer_json=None,
-        repeat_last_n=64,
         arch=VisionArchitecture.LLaVANext,
     ),
 )
