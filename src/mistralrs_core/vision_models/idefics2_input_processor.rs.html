@@ -308,6 +308,13 @@
 <a href="#308" id="308">308</a>
 <a href="#309" id="309">309</a>
 <a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, sync::Arc};
@@ -321,7 +328,9 @@
 <span class="kw">use crate</span>::{
     pipeline::{
         apply_chat_template,
-        text_models_inputs_processor::{<span class="self">self</span>, get_completion_input, get_prompt_input},
+        text_models_inputs_processor::{
+            <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
+        },
         InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
@@ -426,6 +435,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>std::any::Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -439,6 +449,7 @@
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = <span class="kw">if </span>is_prompt {
             get_prompt_input(
                 input_seqs
@@ -448,6 +459,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
+                paged_attn_metadata,
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             get_completion_input(
@@ -459,6 +471,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                paged_attn_metadata,
             )<span class="question-mark">?
         </span>};
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
@@ -498,6 +511,7 @@
             position_ids,
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
+            paged_attn_meta,
         }))
     }
 }

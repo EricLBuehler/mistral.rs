@@ -323,6 +323,20 @@
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
@@ -331,6 +345,7 @@
 
 <span class="kw">use crate</span>::{
     lora::{LoraConfig, Ordering},
+    paged_attention::AttentionImplementation,
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
     DeviceMapMetadata,
@@ -420,7 +435,11 @@
 
 <span class="comment">// New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
 </span><span class="kw">pub struct </span>ParamsGGML(<span class="kw">pub </span>FileGGML);
-<span class="kw">pub struct </span>ParamsGGUF&lt;<span class="lifetime">'a</span>&gt;(<span class="kw">pub </span>FileGGUF&lt;<span class="lifetime">'a</span>&gt;, <span class="kw">pub </span>Device&lt;<span class="lifetime">'a</span>&gt;);
+<span class="kw">pub struct </span>ParamsGGUF&lt;<span class="lifetime">'a</span>&gt;(
+    <span class="kw">pub </span>FileGGUF&lt;<span class="lifetime">'a</span>&gt;,
+    <span class="kw">pub </span>Device&lt;<span class="lifetime">'a</span>&gt;,
+    <span class="kw">pub </span>AttentionImplementation,
+);
 
 <span class="comment">// A `None` type vs the `Some` type (`Adapter&lt;'a&gt;`)
 </span><span class="kw">pub struct </span>NoAdapter {}
@@ -485,6 +504,7 @@
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, candle_core::Error&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized;
@@ -561,17 +581,25 @@
 <span class="kw">impl </span>Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;, NoAdapter&gt; {
     <span class="kw">pub fn </span>try_into_model&lt;T: FromGGUF&gt;(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;T, candle_core::Error&gt; {
         <span class="comment">// Destructure props:
-        </span><span class="kw">let </span>ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = <span class="self">self</span>.quant;
+        </span><span class="kw">let </span>ParamsGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            attention_implementation,
+        ) = <span class="self">self</span>.quant;
 
         <span class="comment">// Forwards all structured fields above into the required flattened param sequence:
-        </span>T::from_gguf(ct, reader, device, mapper)
+        </span>T::from_gguf(ct, reader, device, mapper, attention_implementation)
     }
 }
 
 <span class="kw">impl </span>Config&lt;ParamsGGUF&lt;<span class="lifetime">'_</span>&gt;, Adapter&lt;<span class="lifetime">'_</span>&gt;&gt; {
     <span class="kw">pub fn </span>try_into_model&lt;T: FromAdapterGGUF&gt;(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;T, candle_core::Error&gt; {
         <span class="comment">// Destructure props:
-        </span><span class="kw">let </span>ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = <span class="self">self</span>.quant;
+        </span><span class="kw">let </span>ParamsGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            _attention_implementation,
+        ) = <span class="self">self</span>.quant;
 
         <span class="kw">let </span>Adapter {
             xlora_config,

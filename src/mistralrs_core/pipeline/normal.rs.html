@@ -575,6 +575,54 @@
 <a href="#575" id="575">575</a>
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -593,6 +641,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
@@ -604,7 +653,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
@@ -770,6 +820,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
             LocalModelPaths,
@@ -780,7 +831,15 @@
             <span class="prelude-val">None</span>,
             silent
         );
-        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, dtype, device, silent, mapper, in_situ_quant)
+        <span class="self">self</span>.load_model_from_path(
+            <span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -792,6 +851,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
@@ -818,6 +878,12 @@
 
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
 
+        <span class="kw">let </span>attention_mechanism = <span class="kw">if </span>paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } <span class="kw">else </span>{
+            AttentionImplementation::Eager
+        };
+
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
                 paths,
@@ -829,7 +895,8 @@
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -862,6 +929,24 @@
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
 
+        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+            <span class="macro">anyhow::ensure!</span>(
+                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
+                <span class="string">"PagedAttention does not support adapter models."
+            </span>);
+            <span class="kw">let </span>cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
+            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
+        } <span class="kw">else </span>{
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+        };
+
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()
@@ -876,6 +961,7 @@
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = model.cache().lock().len();
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
+        <span class="kw">let </span>sliding_window = model.config().sliding_window;
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(NormalPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -899,6 +985,9 @@
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
         })))
     }
@@ -992,6 +1081,7 @@
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
+            <span class="kw-2">mut </span>paged_attn_meta,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
@@ -1000,6 +1090,12 @@
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
+                <span class="self">self</span>.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
             <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                 <span class="kw-2">&amp;</span>input_ids,

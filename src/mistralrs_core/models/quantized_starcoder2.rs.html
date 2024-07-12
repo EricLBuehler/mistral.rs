@@ -312,12 +312,57 @@
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
 <a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{
     repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
 };
+<span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::Cache;
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
@@ -350,8 +395,7 @@
     <span class="prelude-val">Ok</span>(ln)
 }
 
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>LayerWeights {
+<span class="kw">struct </span>LayerWeights {
     attn_q: QLinear,
     attn_k: QLinear,
     attn_v: QLinear,
@@ -363,6 +407,7 @@
     n_kv_head: usize,
     head_dim: usize,
     rotary_emb: RotaryEmbedding,
+    paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -373,6 +418,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, hidden_size) = x.dims3()<span class="question-mark">?</span>;
 
@@ -412,33 +458,50 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
+                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    <span class="kw-2">&amp;</span>q,
+                    <span class="kw-2">&amp;</span>k,
+                    <span class="kw-2">&amp;</span>v,
+                    mask,
+                    <span class="prelude-val">Some</span>(key_cache),
+                    <span class="prelude-val">Some</span>(value_cache),
+                    input_metadata,
+                )<span class="question-mark">?
+            </span>}
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = ScaledDotProductAttention.run_attention(
-            <span class="kw-2">&amp;</span>q,
-            <span class="kw-2">&amp;</span>k,
-            <span class="kw-2">&amp;</span>v,
-            <span class="self">self</span>.n_head,
-            <span class="self">self</span>.head_dim,
-            mask,
-            <span class="bool-val">false</span>,
-            b_sz,
-            q_len,
-        )<span class="question-mark">?</span>;
+                ScaledDotProductAttention.run_attention(
+                    <span class="kw-2">&amp;</span>q,
+                    <span class="kw-2">&amp;</span>k,
+                    <span class="kw-2">&amp;</span>v,
+                    <span class="self">self</span>.n_head,
+                    <span class="self">self</span>.head_dim,
+                    mask,
+                    <span class="bool-val">false</span>,
+                    b_sz,
+                    q_len,
+                )<span class="question-mark">?
+            </span>}
+        };
 
-        <span class="kw">let </span>res = attn_output
-            .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.reshape((b_sz, q_len, hidden_size))<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.attn_output)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(res)
+        <span class="kw">let </span>y = <span class="kw">if </span>mask.is_some() {
+            y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, hidden_size])<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            y.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, hidden_size])<span class="question-mark">?
+        </span>};
+
+        <span class="self">self</span>.attn_output.forward(<span class="kw-2">&amp;</span>y)
     }
 }
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>ModelWeights {
+<span class="kw">pub struct </span>ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec&lt;LayerWeights&gt;,
     output_norm: LayerNorm,
@@ -499,6 +562,7 @@
         reader: <span class="kw-2">&amp;mut </span>R,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
@@ -557,6 +621,18 @@
             <span class="kw">let </span>attn_k = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_v = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_v"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attn_output = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
+                AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
+                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
+                    head_count,
+                    head_dim,
+                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
+                    <span class="prelude-val">Some</span>(head_count_kv),
+                    <span class="prelude-val">None</span>,
+                    device,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?</span>),
+            };
             layers.push(LayerWeights {
                 attn_q,
                 attn_k,
@@ -569,6 +645,7 @@
                 n_kv_head: head_count_kv,
                 head_dim,
                 rotary_emb: rotary,
+                paged_attn,
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -590,13 +667,17 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
+        <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
+                .unwrap_or(<span class="kw-2">&amp;*</span>cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
@@ -614,6 +695,9 @@
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>ys = (ys + residual)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>ys;

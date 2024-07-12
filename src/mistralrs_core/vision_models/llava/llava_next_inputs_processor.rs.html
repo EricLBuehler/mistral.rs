@@ -348,6 +348,27 @@
 <a href="#348" id="348">348</a>
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
@@ -359,7 +380,9 @@
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>tokenizers::Tokenizer;
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{
+    get_completion_input, get_prompt_input, PagedAttentionMeta,
+};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
@@ -436,6 +459,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -502,6 +526,7 @@
                 seqlen_offsets_kernel_full: <span class="kw">_</span>,
                 context_lens,
                 position_ids,
+                paged_attn_meta,
             } = <span class="kw-2">*</span>text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -512,6 +537,7 @@
                     no_kv_cache,
                     last_n_context_len,
                     other_config,
+                    paged_attn_metadata,
                 )<span class="question-mark">?
                 </span>.downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
                 .expect(<span class="string">"Downcast failed."</span>);
@@ -527,6 +553,7 @@
                     num_image_tokens: <span class="prelude-val">None</span>,
                     num_image_samples: <span class="prelude-val">None</span>,
                 }),
+                paged_attn_meta,
             }));
         };
 
@@ -610,10 +637,24 @@
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = <span class="kw">if </span>is_prompt {
-            get_prompt_input(toks, input_seqs, device, last_n_context_len)<span class="question-mark">?
+            get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)<span class="question-mark">?
+            get_completion_input(
+                toks,
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>};
         <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
             input_ids: input,
@@ -627,6 +668,7 @@
                 num_image_tokens: <span class="prelude-val">Some</span>(num_image_tokens_flat),
                 num_image_samples: <span class="prelude-val">Some</span>(num_image_samples),
             }),
+            paged_attn_meta,
         }))
     }
 }

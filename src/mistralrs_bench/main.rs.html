@@ -418,13 +418,49 @@
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    initialize_logging, Constraint, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
-    LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
+    ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 <span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
@@ -696,6 +732,14 @@
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     </span><span class="attr">#[arg(short, long, value_parser, value_delimiter = <span class="string">';'</span>)]
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+
+    <span class="doccomment">/// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+    </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
+    </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="doccomment">/// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    </span><span class="attr">#[arg(long = <span class="string">"pa-blk-size"</span>)]
+    </span>paged_attn_block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
@@ -773,6 +817,18 @@
         DeviceMapMetadata::dummy()
     };
 
+    <span class="kw">let </span>cache_config = <span class="kw">if </span>args.paged_attn_gpu_mem.is_some() {
+        <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        </span><span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+            args.paged_attn_block_size,
+            <span class="number">512</span>,
+            args.paged_attn_gpu_mem.unwrap(),
+        )<span class="question-mark">?</span>)
+    } <span class="kw">else </span>{
+        <span class="prelude-val">None
+    </span>};
+
     <span class="kw">let </span>pipeline = loader.load_model_from_hf(
         <span class="prelude-val">None</span>,
         token_source,
@@ -781,20 +837,34 @@
         <span class="bool-val">false</span>,
         mapper,
         <span class="prelude-val">None</span>,
+        cache_config,
     )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
-    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(
-            (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                .try_into()
-                .unwrap(),
-        ),
-    )
-    .with_no_prefix_cache(<span class="bool-val">true</span>)
-    .with_disable_eos_stop(<span class="bool-val">true</span>)
-    .build();
+    <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: <span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+            config: pipeline
+                .blocking_lock()
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } <span class="kw">else </span>{
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(
+                (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                    .try_into()
+                    .unwrap(),
+            ),
+        }
+    };
+    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_no_prefix_cache(<span class="bool-val">true</span>)
+        .with_disable_eos_stop(<span class="bool-val">true</span>)
+        .build();
 
     <span class="macro">info!</span>(<span class="string">"Starting warmup run."</span>);
     warmup_run(mistralrs.clone());

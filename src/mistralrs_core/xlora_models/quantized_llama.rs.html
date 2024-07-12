@@ -941,7 +941,6 @@
 <a href="#941" id="941">941</a>
 <a href="#942" id="942">942</a>
 <a href="#943" id="943">943</a>
-<a href="#944" id="944">944</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1108,8 +1107,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">struct </span>LayerWeights {
+<span class="kw">struct </span>LayerWeights {
     attention_wq: QLoraLinear,
     attention_wk: QLoraLinear,
     attention_wv: QLoraLinear,
@@ -1190,8 +1188,8 @@
 
         <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = ScaledDotProductAttention.run_attention(
             <span class="kw-2">&amp;</span>q,
@@ -1199,7 +1197,7 @@
             <span class="kw-2">&amp;</span>v,
             <span class="self">self</span>.n_head,
             <span class="self">self</span>.head_dim,
-            mask.clone().as_ref(),
+            mask.as_ref(),
             <span class="bool-val">false</span>,
             b_sz,
             seq_len,
@@ -1723,7 +1721,7 @@
         };
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
             x,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;

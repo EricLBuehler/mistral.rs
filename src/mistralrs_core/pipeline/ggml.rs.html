@@ -508,6 +508,27 @@
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
 <a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -531,7 +552,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
-    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, Pipeline, TryIntoDType, DEBUG,
+    do_sample, get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType, DEBUG,
 };
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama, utils::tokens::get_token,
@@ -743,6 +765,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
@@ -780,6 +803,11 @@
 
             <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`."</span>);
         }
+
+        <span class="macro">anyhow::ensure!</span>(
+            paged_attn_config.is_none(),
+            <span class="string">"PagedAttention is not supported for GGML"
+        </span>);
 
         <span class="kw">let </span>has_adapter = <span class="self">self</span>.kind.is_adapted();
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
@@ -851,6 +879,9 @@
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
                 activation_dtype: DType::F32,
+                sliding_window: <span class="prelude-val">None</span>,
+                cache_config: <span class="prelude-val">None</span>,
+                cache_engine: <span class="prelude-val">None</span>,
             }),
         })))
     }
@@ -865,6 +896,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
             LocalModelPaths,
@@ -875,7 +907,15 @@
             <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.quantized_filename.as_ref().unwrap().clone()]),
             silent
         );
-        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, dtype, device, silent, mapper, in_situ_quant)
+        <span class="self">self</span>.load_model_from_path(
+            <span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
@@ -979,7 +1019,8 @@
             seqlen_offsets_kernel,
             seqlen_offsets_kernel_full,
             context_lens,
-            position_ids: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
+            position_ids: <span class="kw">_</span>,    <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
+            </span>paged_attn_meta: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore it for ggml
         </span>} = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
@@ -987,6 +1028,7 @@
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                <span class="prelude-val">None</span>,
             ),
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,

@@ -365,6 +365,41 @@
 <a href="#365" id="365">365</a>
 <a href="#366" id="366">366</a>
 <a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -375,9 +410,9 @@
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, Device};
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request,
-    SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -487,6 +522,14 @@
     <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+
+    <span class="doccomment">/// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+    </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
+    </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="doccomment">/// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    </span><span class="attr">#[arg(long = <span class="string">"pa-blk-size"</span>)]
+    </span>paged_attn_block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[utoipa::path(
@@ -686,6 +729,18 @@
         DeviceMapMetadata::dummy()
     };
 
+    <span class="kw">let </span>cache_config = <span class="kw">if </span>args.paged_attn_gpu_mem.is_some() {
+        <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        </span><span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+            args.paged_attn_block_size,
+            <span class="number">512</span>,
+            args.paged_attn_gpu_mem.unwrap(),
+        )<span class="question-mark">?</span>)
+    } <span class="kw">else </span>{
+        <span class="prelude-val">None
+    </span>};
+
     <span class="kw">let </span>pipeline = loader.load_model_from_hf(
         <span class="prelude-val">None</span>,
         args.token_source,
@@ -694,18 +749,33 @@
         <span class="bool-val">false</span>,
         mapper,
         args.in_situ_quant,
+        cache_config,
     )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
-    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    )
-    .with_opt_log(args.log)
-    .with_truncate_sequence(args.truncate_sequence)
-    .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: args.max_seqs,
+            config: pipeline
+                .lock()
+                .<span class="kw">await
+                </span>.get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } <span class="kw">else </span>{
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        }
+    };
+    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_opt_log(args.log)
+        .with_truncate_sequence(args.truncate_sequence)
+        .with_no_kv_cache(args.no_kv_cache)
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     <span class="kw">if </span>args.interactive_mode &amp;&amp; args.vision_interactive_mode {
         <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode and vision interactive mode are exclusive."</span>);

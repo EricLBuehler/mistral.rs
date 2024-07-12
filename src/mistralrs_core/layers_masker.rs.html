@@ -247,6 +247,52 @@
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::ops::Add;
@@ -279,6 +325,52 @@
         .broadcast_as(xs.shape())<span class="question-mark">?
         </span>.where_cond(<span class="kw-2">&amp;</span>on_true, on_false)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(res)
+}
+
+<span class="kw">pub trait </span>PastKvLenCache {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; PastKvLenCache <span class="kw">for </span><span class="kw-2">&amp;</span><span class="lifetime">'a </span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;] {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>kv_cache_1 = <span class="kw-2">&amp;</span><span class="self">self</span>[<span class="number">0</span>];
+        <span class="kw">if </span>kv_cache_1.is_none() {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
+        }
+        <span class="kw">let </span>k_cache_1 = <span class="kw-2">&amp;</span>kv_cache_1.as_ref().unwrap().<span class="number">0</span>;
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]);
+    }
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; PastKvLenCache <span class="kw">for </span><span class="kw-2">&amp;</span><span class="lifetime">'a </span>[usize] {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">if </span><span class="self">self</span>.windows(<span class="number">2</span>).all(|w| w[<span class="number">0</span>] == w[<span class="number">1</span>]) {
+            <span class="prelude-val">Ok</span>(<span class="self">self</span>[<span class="number">0</span>])
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+        }
+    }
+}
+
+<span class="kw">impl </span>PastKvLenCache <span class="kw">for </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>kv_cache_1 = <span class="kw-2">&amp;</span><span class="self">self</span>[<span class="number">0</span>];
+        <span class="kw">if </span>kv_cache_1.is_none() {
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
+        }
+        <span class="kw">let </span>k_cache_1 = <span class="kw-2">&amp;</span>kv_cache_1.as_ref().unwrap().<span class="number">0</span>;
+        <span class="kw">return </span><span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]);
+    }
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; PastKvLenCache <span class="kw">for </span><span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>[(Tensor, Tensor)]&gt; {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(<span class="number">0</span>),
+            <span class="prelude-val">Some</span>([(k_cache_1, <span class="kw">_</span>), ..]) =&gt; <span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]),
+            <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Unreachable"</span>),
+        }
+    }
 }
 
 <span class="kw">impl </span>CausalMasker {
@@ -328,11 +420,11 @@
     <span class="kw">pub fn </span>make_causal_mask_as_attn_bias(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
-        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
+        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
         dtype: DType,
         n_attn_heads: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-        <span class="kw">let </span>past_kv_len = <span class="self">self</span>.calculate_past_kv_len(cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
         <span class="kw">let </span>(b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
@@ -370,7 +462,7 @@
     <span class="kw">pub fn </span>make_causal_mask_with_sliding_window_as_attn_bias(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
-        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
+        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
         sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         dtype: DType,
         n_attn_heads: usize,
@@ -379,7 +471,7 @@
             <span class="kw">return </span><span class="self">self</span>.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
         }
         <span class="kw">let </span>sliding_window = sliding_window.unwrap();
-        <span class="kw">let </span>past_kv_len = <span class="self">self</span>.calculate_past_kv_len(cache)<span class="question-mark">?</span>;
+        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
         <span class="kw">let </span>(b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);

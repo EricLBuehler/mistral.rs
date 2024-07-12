@@ -983,13 +983,31 @@
 <a href="#983" id="983">983</a>
 <a href="#984" id="984">984</a>
 <a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     layers::{MatMul, ScaledDotProductAttention},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 <span class="doccomment">/// Mixtral Model
@@ -1563,6 +1581,7 @@
     <span class="kw">pub </span>max_seq_len: usize,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    cfg: ModelConfigMetadata,
 }
 
 <span class="kw">impl </span>XLoraModel {
@@ -1670,6 +1689,13 @@
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            },
         })
     }
 
@@ -1700,7 +1726,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
             xs.dtype(),
             <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
@@ -1856,6 +1882,7 @@
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1931,6 +1958,9 @@
             }
         }
         <span class="prelude-val">Ok</span>(sum)
+    }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
     }
 }
 

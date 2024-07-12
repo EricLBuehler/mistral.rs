@@ -1128,6 +1128,9 @@
 <a href="#1128" id="1128">1128</a>
 <a href="#1129" id="1129">1129</a>
 <a href="#1130" id="1130">1130</a>
+<a href="#1131" id="1131">1131</a>
+<a href="#1132" id="1132">1132</a>
+<a href="#1133" id="1133">1133</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1143,6 +1146,7 @@
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model <span class="kw">as </span>Mistral,
+    paged_attention::AttentionImplementation,
     pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -2008,7 +2012,8 @@
             vb.pp(<span class="string">"lm_head"</span>),
             is_gptx,
             normal_loading_metadata,
-        )<span class="question-mark">?</span>;
+            AttentionImplementation::Eager, <span class="comment">// TODO
+        </span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>vision_model = VisionTransformer::new(
             <span class="kw-2">&amp;</span>config.vision_config,
             vb_m.pp(<span class="string">"vision_model"</span>)
@@ -2178,7 +2183,8 @@
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
-        )
+            <span class="prelude-val">None</span>, <span class="comment">// TODO
+        </span>)
     }
 }
 

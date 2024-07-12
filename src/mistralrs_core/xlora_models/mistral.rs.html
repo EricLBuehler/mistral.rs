@@ -842,13 +842,31 @@
 <a href="#842" id="842">842</a>
 <a href="#843" id="843">843</a>
 <a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 <span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -1284,6 +1302,7 @@
     <span class="kw">pub </span>max_seq_len: usize,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    cfg: ModelConfigMetadata,
 }
 
 <span class="kw">impl </span>XLoraModel {
@@ -1392,6 +1411,13 @@
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
             }),
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -1422,7 +1448,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             <span class="self">self</span>.sliding_window,
             xs.dtype(),
             <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
@@ -1579,6 +1605,7 @@
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1649,6 +1676,9 @@
                 .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(sum)
+    }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
     }
 }
 

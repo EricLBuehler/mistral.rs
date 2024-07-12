@@ -477,6 +477,25 @@
 <a href="#477" id="477">477</a>
 <a href="#478" id="478">478</a>
 <a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -501,7 +520,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, Pipeline, TryIntoDType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
@@ -605,6 +624,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
             LocalModelPaths,
@@ -615,7 +635,15 @@
             <span class="prelude-val">None</span>,
             silent
         );
-        <span class="self">self</span>.load_model_from_path(<span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>, dtype, device, silent, mapper, in_situ_quant)
+        <span class="self">self</span>.load_model_from_path(
+            <span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -627,6 +655,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
@@ -651,6 +680,11 @@
         } <span class="kw">else </span>{
             Device::Cpu
         };
+
+        <span class="macro">anyhow::ensure!</span>(
+            paged_attn_config.is_none(),
+            <span class="string">"PagedAttention is not supported for vision models"
+        </span>);
 
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
@@ -720,7 +754,10 @@
                 kind: <span class="self">self</span>.kind.clone(),
                 has_no_kv_cache: <span class="bool-val">false</span>,
                 activation_dtype: dtype,
-            }),
+                sliding_window: <span class="prelude-val">None</span>, <span class="comment">// TODO
+                </span>cache_config: <span class="prelude-val">None</span>,   <span class="comment">// TODO
+                </span>cache_engine: <span class="prelude-val">None</span>,   <span class="comment">// TODO
+            </span>}),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
         })))
@@ -807,6 +844,7 @@
             position_ids,
             pixel_values,
             model_specific_args,
+            paged_attn_meta: <span class="kw">_</span>,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
         <span class="self">self</span>.model.forward(
             <span class="kw-2">&amp;</span>input_ids,

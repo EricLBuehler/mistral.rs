@@ -326,6 +326,8 @@
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -561,7 +563,8 @@
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
-            )
+                <span class="prelude-val">None</span>, <span class="comment">// TODO
+            </span>)
         } <span class="kw">else </span>{
             <span class="self">self</span>.llm.forward(
                 input_ids,
@@ -569,7 +572,8 @@
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
-            )
+                <span class="prelude-val">None</span>, <span class="comment">// TODO
+            </span>)
         }
     }
 }

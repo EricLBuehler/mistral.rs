@@ -563,8 +563,94 @@
 <a href="#563" id="563">563</a>
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -575,10 +661,14 @@
 
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    pipeline::{AdapterInstruction, CacheInstruction},
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
+        CacheInstruction,
+    },
     request::NormalRequest,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage, Response, DEBUG,
+    scheduler::{Scheduler, SchedulerOutput},
+    CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand::SeedableRng;
@@ -592,7 +682,6 @@
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
-    scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState},
     Constraint, StopTokens,
 };
@@ -604,7 +693,7 @@
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
     pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
-    scheduler: Scheduler&lt;VecDeque&lt;Sequence&gt;&gt;,
+    scheduler: Box&lt;<span class="kw">dyn </span>Scheduler&gt;,
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
@@ -618,7 +707,7 @@
     </span><span class="kw">pub fn </span>new(
         rx: Receiver&lt;Request&gt;,
         pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
-        method: SchedulerMethod,
+        config: SchedulerConfig,
         truncate_sequence: bool,
         no_kv_cache: bool,
         no_prefix_cache: bool,
@@ -627,10 +716,14 @@
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
+        <span class="comment">// Prefix caching is always disabled if using PagedAttention for now.
+        // TODO
+        </span><span class="kw">let </span>no_prefix_cache =
+            <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. }) || no_prefix_cache;
         <span class="self">Self </span>{
             rx,
             pipeline,
-            scheduler: Scheduler::new(method),
+            scheduler: config.into_scheduler(),
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache,
@@ -653,157 +746,230 @@
                 <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
             }
             <span class="kw">let </span>run_start = Instant::now();
-            <span class="kw">let </span><span class="kw-2">mut </span>scheduled = <span class="self">self</span>.scheduler.schedule();
+            <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
 
-            <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
-                <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
-                    scheduled.completion.iter().map(|seq| <span class="kw-2">*</span>seq.id()).collect();
-                <span class="kw">let </span>res = {
-                    <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-                    <span class="kw">let </span>pre_op =
-                        <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache &amp;&amp; last_completion_ids != current_completion_ids {
-                            CacheInstruction::In(
-                                scheduled.completion[<span class="number">0</span>]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
-                        } <span class="kw">else </span>{
-                            CacheInstruction::Nothing(
-                                scheduled.completion[<span class="number">0</span>]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
-                        };
-                    <span class="kw">let </span>post_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                        CacheInstruction::Out
-                    } <span class="kw">else </span>{
-                        CacheInstruction::Reset {
-                            reset_non_granular: <span class="bool-val">false</span>,
-                            adapter_inst: AdapterInstruction::None,
-                        }
-                    };
+            <span class="kw">match </span>scheduled {
+                SchedulerOutput::DefaultScheduler {
+                    output: <span class="kw-2">mut </span>scheduled,
+                } =&gt; {
+                    <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
+                        <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
+                            scheduled.completion.iter().map(|seq| <span class="kw-2">*</span>seq.id()).collect();
+                        <span class="kw">let </span>res = {
+                            <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                            <span class="kw">let </span>pre_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache
+                                &amp;&amp; last_completion_ids != current_completion_ids
+                            {
+                                CacheInstruction::In(
+                                    scheduled.completion[<span class="number">0</span>]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            } <span class="kw">else </span>{
+                                CacheInstruction::Nothing(
+                                    scheduled.completion[<span class="number">0</span>]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            };
+                            <span class="kw">let </span>post_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
+                                CacheInstruction::Out
+                            } <span class="kw">else </span>{
+                                CacheInstruction::Reset {
+                                    reset_non_granular: <span class="bool-val">false</span>,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
 
-                    pipeline
-                        .step(
+                            pipeline
+                                .step(
+                                    <span class="kw-2">&amp;mut </span>scheduled.completion,
+                                    <span class="bool-val">false</span>,
+                                    <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
+                                    <span class="self">self</span>.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                                )
+                                .<span class="kw">await
+                        </span>};
+
+                        <span class="macro">handle_pipeline_forward_error!</span>(
+                            <span class="string">"completion step"</span>,
+                            res,
                             <span class="kw-2">&amp;mut </span>scheduled.completion,
-                            <span class="bool-val">false</span>,
-                            <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
-                            <span class="self">self</span>.disable_eos_stop,
-                            rng.clone(),
-                            pre_op,
-                            post_op,
-                        )
-                        .<span class="kw">await
-                </span>};
+                            <span class="self">self</span>.pipeline,
+                            <span class="lifetime">'lp</span>,
+                            <span class="self">self</span>.prefix_cacher
+                        );
 
-                <span class="macro">handle_pipeline_forward_error!</span>(
-                    <span class="string">"completion step"</span>,
-                    res,
-                    <span class="kw-2">&amp;mut </span>scheduled.completion,
-                    <span class="self">self</span>.pipeline,
-                    <span class="lifetime">'lp</span>,
-                    <span class="self">self</span>.prefix_cacher
-                );
+                        last_completion_ids = current_completion_ids;
+                    }
 
-                last_completion_ids = current_completion_ids;
-            }
+                    <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
+                        <span class="kw">let </span>logits = {
+                            <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
 
-            <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
-                <span class="kw">let </span>logits = {
-                    <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+                            <span class="comment">// Run the prompt seqs
+                            </span><span class="kw">let </span>post_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
+                                CacheInstruction::Out
+                            } <span class="kw">else </span>{
+                                CacheInstruction::Reset {
+                                    reset_non_granular: <span class="bool-val">false</span>,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
+                            <span class="kw">let </span>adapter_inst = scheduled.prompt[<span class="number">0</span>]
+                                .get_adapters()
+                                .map(AdapterInstruction::Activate)
+                                .unwrap_or(AdapterInstruction::None);
 
-                    <span class="comment">// Run the prompt seqs
-                    </span><span class="kw">let </span>post_op = <span class="kw">if </span>!<span class="self">self</span>.no_kv_cache {
-                        CacheInstruction::Out
-                    } <span class="kw">else </span>{
-                        CacheInstruction::Reset {
-                            reset_non_granular: <span class="bool-val">false</span>,
-                            adapter_inst: AdapterInstruction::None,
-                        }
-                    };
-                    <span class="kw">let </span>adapter_inst = scheduled.prompt[<span class="number">0</span>]
-                        .get_adapters()
-                        .map(AdapterInstruction::Activate)
-                        .unwrap_or(AdapterInstruction::None);
+                            <span class="comment">// Reset non granular state because the old sequence must be dead.
+                            // Technically we don't need to do this but it is better to be safe.
+                            </span>pipeline
+                                .step(
+                                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
+                                    <span class="bool-val">true</span>,
+                                    <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
+                                    <span class="self">self</span>.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::DefaultInstructions {
+                                        pre_op: CacheInstruction::Reset {
+                                            reset_non_granular: <span class="bool-val">false</span>,
+                                            adapter_inst,
+                                        },
+                                        post_op,
+                                    },
+                                )
+                                .<span class="kw">await
+                        </span>};
 
-                    <span class="comment">// Reset non granular state because the old sequence must be dead.
-                    // Technically we don't need to do this but it is better to be safe.
-                    </span>pipeline
-                        .step(
+                        <span class="macro">handle_pipeline_forward_error!</span>(
+                            <span class="string">"prompt step"</span>,
+                            logits,
                             <span class="kw-2">&amp;mut </span>scheduled.prompt,
-                            <span class="bool-val">true</span>,
-                            <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
-                            <span class="self">self</span>.disable_eos_stop,
-                            rng.clone(),
-                            CacheInstruction::Reset {
-                                reset_non_granular: <span class="bool-val">false</span>,
-                                adapter_inst,
-                            },
-                            post_op,
-                        )
-                        .<span class="kw">await
-                </span>};
+                            <span class="self">self</span>.pipeline,
+                            <span class="lifetime">'lp</span>,
+                            <span class="self">self</span>.prefix_cacher
+                        );
 
-                <span class="macro">handle_pipeline_forward_error!</span>(
-                    <span class="string">"prompt step"</span>,
-                    logits,
-                    <span class="kw-2">&amp;mut </span>scheduled.prompt,
-                    <span class="self">self</span>.pipeline,
-                    <span class="lifetime">'lp</span>,
-                    <span class="self">self</span>.prefix_cacher
-                );
+                        <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
+                            seq.set_state(SequenceState::RunningCompletion);
+                            <span class="kw">let </span>now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect(<span class="string">"Time travel has occurred!"</span>)
+                                .as_millis();
+                            <span class="attr">#[allow(clippy::cast_precision_loss)]
+                            </span><span class="kw">let </span>prompt_tok_per_sec =
+                                seq.len() <span class="kw">as </span>f32 / (now - seq.timestamp()) <span class="kw">as </span>f32;
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
+                            seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
+                        }
+                        last_completion_ids = <span class="macro">vec!</span>[];
+                    }
 
-                <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
-                    seq.set_state(SequenceState::RunningCompletion);
-                    <span class="kw">let </span>now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect(<span class="string">"Time travel has occurred!"</span>)
-                        .as_millis();
-                    <span class="attr">#[allow(clippy::cast_precision_loss)]
-                    </span><span class="kw">let </span>prompt_tok_per_sec = seq.len() <span class="kw">as </span>f32 / (now - seq.timestamp()) <span class="kw">as </span>f32;
-                    seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
-                    seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
+                    <span class="kw">if </span><span class="self">self</span>.is_debug {
+                        <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_secs_f64();
+                        <span class="kw">let </span>total_len = scheduled.prompt.len() + scheduled.completion.len();
+                        <span class="kw">if </span>total_len &gt; <span class="number">0 </span>{
+                            <span class="kw">let </span>prompt_lengths = scheduled
+                                .prompt
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+                                .join(<span class="string">", "</span>);
+
+                            <span class="kw">let </span>completion_lengths = scheduled
+                                .completion
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+                                .join(<span class="string">", "</span>);
+
+                            <span class="macro">tracing::info!</span>(
+                                <span class="string">"Prompt[{}] Completion[{}] - {}ms"</span>,
+                                prompt_lengths,
+                                completion_lengths,
+                                ms_from_last_run * <span class="number">1000.</span>,
+                            );
+                        }
+                    }
+
+                    <span class="kw">if </span>scheduled.prompt.len() == <span class="number">0
+                        </span>&amp;&amp; scheduled.completion.len() == <span class="number">0
+                        </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
+                    </span>{
+                        <span class="comment">// If there is nothing to do, sleep until a request comes in
+                        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
+                            <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
+                        }
+                    }
                 }
-                last_completion_ids = <span class="macro">vec!</span>[];
+                SchedulerOutput::PagedAttention { <span class="kw-2">mut </span>output } =&gt; {
+                    <span class="kw">if </span>!output.scheduled.is_empty() {
+                        <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
+
+                        <span class="kw">let </span>is_prompt = <span class="macro">get_mut_arcmutex!</span>(output.scheduled[<span class="number">0</span>]).is_prompt();
+
+                        <span class="kw">let </span>block_tables = <span class="self">self</span>.scheduler.block_tables().unwrap();
+                        <span class="kw">let </span>block_size = <span class="self">self</span>.scheduler.block_size().unwrap();
+
+                        <span class="kw">let </span>metadata = PagedAttentionMeta {
+                            block_tables,
+                            block_size,
+                            sliding_window: pipeline.get_metadata().sliding_window,
+                        };
+
+                        <span class="kw">let </span><span class="kw-2">mut </span>guards = output
+                            .scheduled
+                            .iter_mut()
+                            .map(|seq| seq.lock().unwrap())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+
+                        <span class="kw">let </span>res = pipeline
+                            .step(
+                                <span class="kw-2">&amp;mut </span>guards.iter_mut().map(|seq| <span class="kw-2">&amp;mut **</span>seq).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                                is_prompt,
+                                <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
+                                <span class="self">self</span>.disable_eos_stop,
+                                rng.clone(),
+                                CacheBackendMetadata::PagedAttention {
+                                    metadata,
+                                    blocks_to_copy: output.blocks_to_copy,
+                                    blocks_to_swap_in: output.blocks_to_swap_in,
+                                    blocks_to_swap_out: output.blocks_to_swap_out,
+                                },
+                            )
+                            .<span class="kw">await</span>;
+
+                        <span class="macro">handle_pipeline_forward_error!</span>(
+                            <span class="string">"step"</span>,
+                            res,
+                            <span class="kw-2">&amp;mut </span>guards.iter_mut().map(|seq| <span class="kw-2">&amp;mut **</span>seq).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                            <span class="self">self</span>.pipeline,
+                            <span class="lifetime">'lp</span>,
+                            <span class="self">self</span>.prefix_cacher
+                        );
+
+                        <span class="kw">if </span>is_prompt {
+                            <span class="kw">for </span><span class="kw-2">mut </span>seq <span class="kw">in </span>guards {
+                                <span class="kw">let </span>now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .expect(<span class="string">"Time travel has occurred!"</span>)
+                                    .as_millis();
+                                <span class="attr">#[allow(clippy::cast_precision_loss)]
+                                </span><span class="kw">let </span>prompt_tok_per_sec =
+                                    seq.len() <span class="kw">as </span>f32 / (now - seq.timestamp()) <span class="kw">as </span>f32;
+                                seq.prompt_tok_per_sec = prompt_tok_per_sec * <span class="number">1000.</span>;
+                                seq.prompt_timestamp = <span class="prelude-val">Some</span>(now);
+                            }
+                        }
+                    }
+                }
             }
 
-            <span class="kw">if </span><span class="self">self</span>.is_debug {
-                <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_secs_f64();
-                <span class="kw">let </span>total_len = scheduled.prompt.len() + scheduled.completion.len();
-                <span class="kw">if </span>total_len &gt; <span class="number">0 </span>{
-                    <span class="kw">let </span>prompt_lengths = scheduled
-                        .prompt
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-                        .join(<span class="string">", "</span>);
-
-                    <span class="kw">let </span>completion_lengths = scheduled
-                        .completion
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-                        .join(<span class="string">", "</span>);
-
-                    <span class="macro">tracing::info!</span>(
-                        <span class="string">"Prompt[{}] Completion[{}] - {}ms"</span>,
-                        prompt_lengths,
-                        completion_lengths,
-                        ms_from_last_run * <span class="number">1000.</span>,
-                    );
-                }
-            }
-            <span class="kw">if </span>scheduled.prompt.len() == <span class="number">0
-                </span>&amp;&amp; scheduled.completion.len() == <span class="number">0
-                </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
-            </span>{
-                <span class="comment">// If there is nothing to do, sleep until a request comes in
-                </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
-                    <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
-                }
-            }
+            <span class="self">self</span>.scheduler.free_finished_sequence_groups();
         }
     }
 
@@ -1084,6 +1250,11 @@
                 }
             };
 
+            <span class="kw">let </span>block_size = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                .get_metadata()
+                .cache_config
+                .clone()
+                .map(|conf| conf.block_size);
             <span class="kw">let </span>seq = Sequence::new_waiting(
                 prompt.clone(),
                 <span class="self">self</span>.id,
@@ -1113,6 +1284,7 @@
                 </span>},
                 request.adapters.clone(),
                 images.clone(),
+                block_size,
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

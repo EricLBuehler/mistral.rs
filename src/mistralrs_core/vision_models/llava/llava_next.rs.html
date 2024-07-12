@@ -418,6 +418,8 @@
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -733,7 +735,8 @@
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
-            )
+                <span class="prelude-val">None</span>, <span class="comment">// TODO
+            </span>)
         } <span class="kw">else </span>{
             <span class="self">self</span>.llm.forward(
                 input_ids,
@@ -741,7 +744,8 @@
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
-            )
+                <span class="prelude-val">None</span>, <span class="comment">// TODO
+            </span>)
         }
     }
 }

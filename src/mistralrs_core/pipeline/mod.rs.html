@@ -975,6 +975,73 @@
 <a href="#975" id="975">975</a>
 <a href="#976" id="976">976</a>
 <a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a>
+<a href="#1021" id="1021">1021</a>
+<a href="#1022" id="1022">1022</a>
+<a href="#1023" id="1023">1023</a>
+<a href="#1024" id="1024">1024</a>
+<a href="#1025" id="1025">1025</a>
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a>
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -996,6 +1063,7 @@
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">mod </span>sampling_pipeline;
 <span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
@@ -1042,6 +1110,7 @@
 <span class="kw">pub use </span><span class="self">self</span>::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
+<span class="kw">use </span><span class="self">self</span>::text_models_inputs_processor::{PagedAttentionInputMetadata, PagedAttentionMeta};
 
 <span class="doccomment">/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -1365,6 +1434,7 @@
 ///     false,
 ///     DeviceMapMetadata::dummy(),
 ///     None,
+///     None,
 /// ).unwrap();
 /// ```
 </span><span class="kw">pub trait </span>Loader {
@@ -1381,6 +1451,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
     <span class="doccomment">/// Load a model from the specified paths.
@@ -1398,14 +1469,14 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
     <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind;
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">pub struct </span>GeneralMetadata {
+<span class="kw">pub struct </span>GeneralMetadata {
     <span class="kw">pub </span>max_seq_len: usize,
     <span class="kw">pub </span>repeat_last_n: usize,
     <span class="kw">pub </span>tok_trie: Arc&lt;TokTrie&gt;,
@@ -1416,6 +1487,10 @@
     <span class="comment">// TODO: Replace is_xlora queries to check via kind instead:
     </span><span class="kw">pub </span>is_xlora: bool,
     <span class="kw">pub </span>activation_dtype: DType,
+    <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="comment">// Paged Attention stuff
+    </span><span class="kw">pub </span>cache_config: <span class="prelude-ty">Option</span>&lt;CacheConfig&gt;,
+    <span class="kw">pub </span>cache_engine: <span class="prelude-ty">Option</span>&lt;CacheEngine&gt;,
 }
 
 <span class="kw">pub enum </span>AdapterInstruction {
@@ -1532,6 +1607,19 @@
     Vision { has_conv2d: bool },
 }
 
+<span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {
+    DefaultInstructions {
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
+    },
+    PagedAttention {
+        metadata: PagedAttentionMeta&lt;<span class="lifetime">'a</span>&gt;,
+        blocks_to_swap_in: HashMap&lt;usize, usize&gt;,
+        blocks_to_swap_out: HashMap&lt;usize, usize&gt;,
+        blocks_to_copy: HashMap&lt;usize, Vec&lt;usize&gt;&gt;,
+    },
+}
+
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">pub trait </span>Pipeline:
     Send
@@ -1553,84 +1641,128 @@
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
-        pre_op: CacheInstruction,
-        post_op: CacheInstruction,
+        backend_metadata: CacheBackendMetadata&lt;<span class="lifetime">'_</span>&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-        <span class="kw">let </span>inputs = <span class="self">self
-            </span>.get_processor()
-            .inputs_processor()
-            .process_inputs(
-                <span class="self">self</span>.tokenizer(),
-                input_seqs,
-                is_prompt,
-                <span class="self">self</span>.get_metadata().is_xlora,
-                <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
-                <span class="self">self</span>.get_metadata().has_no_kv_cache,
-                <span class="prelude-val">None</span>,
-                <span class="self">self</span>.get_input_processor_config(),
-            )
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+        <span class="kw">match </span>backend_metadata {
+            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } =&gt; {
+                <span class="kw">let </span>inputs = <span class="self">self
+                    </span>.get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        <span class="self">self</span>.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        <span class="self">self</span>.get_metadata().is_xlora,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
+                        <span class="self">self</span>.get_metadata().has_no_kv_cache,
+                        <span class="prelude-val">None</span>,
+                        <span class="self">self</span>.get_input_processor_config(),
+                        <span class="prelude-val">None</span>,
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
 
-        <span class="kw">match </span>pre_op {
-            CacheInstruction::In(adapter_inst) =&gt; {
-                <span class="kw">match </span>adapter_inst {
-                    AdapterInstruction::Activate(adapters) =&gt; {
-                        <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
-                                <span class="kw">dyn </span>std::error::Error,
-                            &gt;&gt;::as_ref(<span class="kw-2">&amp;</span>e))
-                        })<span class="question-mark">?
-                    </span>}
-                    AdapterInstruction::None =&gt; <span class="number">0</span>,
-                };
-                <span class="self">self</span>.clone_in_cache(input_seqs, <span class="bool-val">false</span>)
+                <span class="kw">match </span>pre_op {
+                    CacheInstruction::In(adapter_inst) =&gt; {
+                        <span class="kw">match </span>adapter_inst {
+                            AdapterInstruction::Activate(adapters) =&gt; {
+                                <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
+                                        <span class="kw">dyn </span>std::error::Error,
+                                    &gt;&gt;::as_ref(
+                                        <span class="kw-2">&amp;</span>e
+                                    ))
+                                })<span class="question-mark">?
+                            </span>}
+                            AdapterInstruction::None =&gt; <span class="number">0</span>,
+                        };
+                        <span class="self">self</span>.clone_in_cache(input_seqs, <span class="bool-val">false</span>)
+                    }
+                    CacheInstruction::Nothing(adapter_inst) =&gt; {
+                        <span class="kw">match </span>adapter_inst {
+                            AdapterInstruction::Activate(adapters) =&gt; {
+                                <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
+                                        <span class="kw">dyn </span>std::error::Error,
+                                    &gt;&gt;::as_ref(
+                                        <span class="kw-2">&amp;</span>e
+                                    ))
+                                })<span class="question-mark">?
+                            </span>}
+                            AdapterInstruction::None =&gt; <span class="number">0</span>,
+                        };
+                    }
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst,
+                    } =&gt; {
+                        <span class="kw">match </span>adapter_inst {
+                            AdapterInstruction::Activate(adapters) =&gt; {
+                                <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
+                                        <span class="kw">dyn </span>std::error::Error,
+                                    &gt;&gt;::as_ref(
+                                        <span class="kw-2">&amp;</span>e
+                                    ))
+                                })<span class="question-mark">?
+                            </span>}
+                            AdapterInstruction::None =&gt; <span class="number">0</span>,
+                        };
+                        <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>)
+                    }
+                    <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable PRE cache op."</span>),
+                }
+
+                <span class="kw">let </span>logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
+
+                <span class="kw">match </span>post_op {
+                    CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs, <span class="bool-val">false</span>),
+                    CacheInstruction::Nothing(<span class="kw">_</span>) =&gt; (),
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst: <span class="kw">_</span>,
+                    } =&gt; <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>),
+                    <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
+                }
+
+                <span class="self">self</span>.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="prelude-val">Ok</span>(())
             }
-            CacheInstruction::Nothing(adapter_inst) =&gt; {
-                <span class="kw">match </span>adapter_inst {
-                    AdapterInstruction::Activate(adapters) =&gt; {
-                        <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
-                                <span class="kw">dyn </span>std::error::Error,
-                            &gt;&gt;::as_ref(<span class="kw-2">&amp;</span>e))
-                        })<span class="question-mark">?
-                    </span>}
-                    AdapterInstruction::None =&gt; <span class="number">0</span>,
-                };
-            }
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst,
+            CacheBackendMetadata::PagedAttention {
+                metadata,
+                blocks_to_copy,
+                blocks_to_swap_in,
+                blocks_to_swap_out,
             } =&gt; {
-                <span class="kw">match </span>adapter_inst {
-                    AdapterInstruction::Activate(adapters) =&gt; {
-                        <span class="self">self</span>.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(&lt;anyhow::Error <span class="kw">as </span>AsRef&lt;
-                                <span class="kw">dyn </span>std::error::Error,
-                            &gt;&gt;::as_ref(<span class="kw-2">&amp;</span>e))
-                        })<span class="question-mark">?
-                    </span>}
-                    AdapterInstruction::None =&gt; <span class="number">0</span>,
-                };
-                <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>)
+                <span class="self">self</span>.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .expect(<span class="string">"PagedAttention must have cache engine."</span>)
+                    .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>inputs = <span class="self">self
+                    </span>.get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        <span class="self">self</span>.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        <span class="self">self</span>.get_metadata().is_xlora,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
+                        <span class="self">self</span>.get_metadata().has_no_kv_cache,
+                        <span class="prelude-val">None</span>,
+                        <span class="self">self</span>.get_input_processor_config(),
+                        <span class="prelude-val">Some</span>(metadata),
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
+
+                <span class="self">self</span>.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .<span class="kw">await</span><span class="question-mark">?</span>;
+                <span class="prelude-val">Ok</span>(())
             }
-            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable PRE cache op."</span>),
         }
-
-        <span class="kw">let </span>logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
-
-        <span class="kw">match </span>post_op {
-            CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs, <span class="bool-val">false</span>),
-            CacheInstruction::Nothing(<span class="kw">_</span>) =&gt; (),
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst: <span class="kw">_</span>,
-            } =&gt; <span class="self">self</span>.set_none_cache(reset_non_granular, <span class="bool-val">false</span>),
-            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unreachable POST cache op."</span>),
-        }
-
-        <span class="self">self</span>.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-            .<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">async fn </span>sample(
@@ -1653,6 +1785,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>xlora_forward(
@@ -1678,6 +1811,7 @@
             <span class="string">"Activating adapters is only supported for models fine-tuned with LoRA."
         </span>);
     }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata;
 }
 
 <span class="kw">pub trait </span>VisionModel: IsqModel + AnyMoeBaseModelMixin {

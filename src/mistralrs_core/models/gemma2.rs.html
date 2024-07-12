@@ -787,6 +787,27 @@
 <a href="#787" id="787">787</a>
 <a href="#788" id="788">788</a>
 <a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -803,7 +824,11 @@
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear},
     merge_delta,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -1242,6 +1267,7 @@
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     sliding_window: usize,
     final_logit_softcapping: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    cfg: ModelConfigMetadata,
 }
 
 <span class="kw">impl </span>Model {
@@ -1250,6 +1276,7 @@
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
@@ -1264,6 +1291,10 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
+        <span class="kw">if </span><span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::PagedAttention) {
+            <span class="comment">// TODO softcapping in paged attn
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Gemma 2 does not support Paged Attention."</span>);
+        }
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
@@ -1308,6 +1339,13 @@
             mapper,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: <span class="prelude-val">None</span>,
+            },
         })
     }
 
@@ -1323,14 +1361,14 @@
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             xs.dtype(),
             <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>sliding_attention_mask = CausalMasker
             .make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
-                <span class="kw-2">&amp;</span>cache,
+                <span class="kw-2">&amp;*</span>cache,
                 <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
                 xs.dtype(),
                 <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
@@ -1418,6 +1456,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -1452,6 +1491,9 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
+    }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
     }
 }
 

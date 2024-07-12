@@ -900,9 +900,34 @@
 <a href="#900" id="900">900</a>
 <a href="#901" id="901">901</a>
 <a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Debug, str::FromStr};
 
-<span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
+<span class="kw">use crate</span>::{
+    lora::{LoraConfig, Ordering},
+    paged_attention::AttentionImplementation,
+};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
@@ -931,6 +956,7 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;;
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_xlora(
@@ -1043,12 +1069,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::mistral::Model::new(
             <span class="kw-2">&amp;</span>MistralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1144,12 +1172,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::gemma::Model::new(
             <span class="kw-2">&amp;</span>GemmaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1237,12 +1267,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::llama::Llama::new(
             <span class="kw-2">&amp;</span>LlamaBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1328,12 +1360,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::mixtral::Model::new(
             <span class="kw-2">&amp;</span>MixtralBasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1422,12 +1456,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::phi2::Model::new(
             <span class="kw-2">&amp;</span>Phi2BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1523,12 +1559,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::phi3::Model::new(
             <span class="kw-2">&amp;</span>Phi3BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1619,12 +1657,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::qwen2::Model::new(
             <span class="kw-2">&amp;</span>Qwen2BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1665,6 +1705,7 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="kw">if </span>use_flash_attn {
             <span class="macro">warn!</span>(<span class="string">"Gemma 2 does not support flash attention."</span>);
@@ -1674,6 +1715,7 @@
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(
@@ -1763,12 +1805,14 @@
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt; {
         <span class="prelude-val">Ok</span>(Box::new(models::starcoder2::Model::new(
             <span class="kw-2">&amp;</span>Starcoder2BasicConfig::deserialize(config, use_flash_attn)<span class="question-mark">?</span>,
             vb,
             <span class="self">self</span>.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )<span class="question-mark">?</span>))
     }
     <span class="kw">fn </span>load_xlora(

@@ -290,6 +290,27 @@
 <a href="#290" id="290">290</a>
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
@@ -304,7 +325,9 @@
 
 <span class="kw">use </span><span class="kw">super</span>::llava15::LLaVAVisionSpecificArgs;
 <span class="kw">use </span><span class="kw">super</span>::utils::{expand2square, LLaVAImageProcessor};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{
+    get_completion_input, get_prompt_input, PagedAttentionMeta,
+};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
@@ -371,6 +394,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -418,6 +442,7 @@
                 seqlen_offsets_kernel_full: <span class="kw">_</span>,
                 context_lens,
                 position_ids,
+                paged_attn_meta,
             } = <span class="kw-2">*</span>text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -428,6 +453,7 @@
                     no_kv_cache,
                     last_n_context_len,
                     other_config,
+                    paged_attn_metadata,
                 )<span class="question-mark">?
                 </span>.downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
                 .expect(<span class="string">"Downcast failed."</span>);
@@ -439,6 +465,7 @@
                 position_ids,
                 pixel_values: <span class="prelude-val">None</span>,
                 model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                paged_attn_meta,
             }));
         };
 
@@ -508,10 +535,24 @@
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = <span class="kw">if </span>is_prompt {
-            get_prompt_input(toks, input_seqs, device, last_n_context_len)<span class="question-mark">?
+            get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)<span class="question-mark">?
+            get_completion_input(
+                toks,
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>};
         <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
             input_ids: input,
@@ -521,6 +562,7 @@
             position_ids,
             pixel_values,
             model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+            paged_attn_meta,
         }))
     }
 }

@@ -818,13 +818,27 @@
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
 <a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    paged_attention::ModelConfigMetadata,
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -1243,6 +1257,7 @@
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    cfg: ModelConfigMetadata,
 }
 
 <span class="kw">impl </span>XLoraLlama {
@@ -1273,7 +1288,7 @@
         };
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             x.dtype(),
             <span class="self">self</span>.blocks[<span class="number">0</span>].attn.num_attention_heads,
         )<span class="question-mark">?</span>;
@@ -1484,6 +1499,13 @@
             }),
             dtype,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: <span class="prelude-val">None</span>,
+            },
         })
     }
 }
@@ -1531,6 +1553,7 @@
         _start_offsets_kernel: Tensor,
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1601,6 +1624,9 @@
                 .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>(sum)
+    }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
     }
 }
 

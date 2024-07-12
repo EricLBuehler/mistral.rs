@@ -456,6 +456,27 @@
 <a href="#456" id="456">456</a>
 <a href="#457" id="457">457</a>
 <a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, sync::Arc};
@@ -469,7 +490,9 @@
 
 <span class="kw">use crate</span>::{
     pipeline::{
-        text_models_inputs_processor::{<span class="self">self</span>, get_completion_input, get_prompt_input},
+        text_models_inputs_processor::{
+            <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
+        },
         InputsProcessor, InputsProcessorType, MessagesAction, Processor, ProcessorCreator,
     },
     sequence::Sequence,
@@ -532,6 +555,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
+        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -587,6 +611,7 @@
                 seqlen_offsets_kernel_full: <span class="kw">_</span>,
                 context_lens,
                 position_ids,
+                paged_attn_meta,
             } = <span class="kw-2">*</span>text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -597,6 +622,7 @@
                     no_kv_cache,
                     last_n_context_len,
                     other_config,
+                    paged_attn_metadata,
                 )<span class="question-mark">?
                 </span>.downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
                 .expect(<span class="string">"Downcast failed."</span>);
@@ -609,6 +635,7 @@
                 position_ids,
                 pixel_values: <span class="prelude-val">None</span>,
                 model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: <span class="prelude-val">None </span>}),
+                paged_attn_meta,
             }));
         };
 
@@ -707,10 +734,24 @@
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = <span class="kw">if </span>is_prompt {
-            get_prompt_input(toks, input_seqs, device, last_n_context_len)<span class="question-mark">?
+            get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)<span class="question-mark">?
+            get_completion_input(
+                toks,
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata,
+            )<span class="question-mark">?
         </span>};
 
         <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
@@ -721,6 +762,7 @@
             position_ids,
             pixel_values,
             model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes }),
+            paged_attn_meta,
         }))
     }
 }

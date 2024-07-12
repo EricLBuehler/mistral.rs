@@ -565,6 +565,73 @@
 <a href="#565" id="565">565</a>
 <a href="#566" id="566">566</a>
 <a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -579,7 +646,12 @@
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    layers_masker::PastKvLenCache,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -602,8 +674,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
 }
 
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>Attention {
+<span class="kw">struct </span>Attention {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
@@ -616,10 +687,16 @@
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
 }
 
 <span class="kw">impl </span>Attention {
-    <span class="kw">fn </span>new(rotary_emb: Arc&lt;RotaryEmbedding&gt;, cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        rotary_emb: Arc&lt;RotaryEmbedding&gt;,
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: VarBuilder,
+        paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_sz = cfg.hidden_size;
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
         <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads;
@@ -642,6 +719,7 @@
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            paged_attn,
         })
     }
 
@@ -652,6 +730,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
@@ -701,39 +780,57 @@
                 </span>.contiguous()<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>(k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            attention_mask,
-            <span class="self">self</span>.sliding_window,
-            <span class="bool-val">false</span>,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
+                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    <span class="kw-2">&amp;</span>q,
+                    <span class="kw-2">&amp;</span>k,
+                    <span class="kw-2">&amp;</span>v,
+                    attention_mask,
+                    <span class="prelude-val">Some</span>(key_cache),
+                    <span class="prelude-val">Some</span>(value_cache),
+                    input_metadata,
+                )<span class="question-mark">?
+            </span>}
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>(k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+                    kv_cache,
+                    k,
+                    v,
+                    attention_mask,
+                    <span class="self">self</span>.sliding_window,
+                    <span class="bool-val">false</span>,
+                )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = ScaledDotProductAttention.run_attention(
-            <span class="kw-2">&amp;</span>q,
-            <span class="kw-2">&amp;</span>k,
-            <span class="kw-2">&amp;</span>v,
-            <span class="self">self</span>.num_heads,
-            <span class="self">self</span>.head_dim,
-            attn_mask.as_ref(),
-            <span class="self">self</span>.use_flash_attn,
-            b_sz,
-            q_len,
-        )<span class="question-mark">?</span>;
+                ScaledDotProductAttention.run_attention(
+                    <span class="kw-2">&amp;</span>q,
+                    <span class="kw-2">&amp;</span>k,
+                    <span class="kw-2">&amp;</span>v,
+                    <span class="self">self</span>.num_heads,
+                    <span class="self">self</span>.head_dim,
+                    attn_mask.as_ref(),
+                    <span class="self">self</span>.use_flash_attn,
+                    b_sz,
+                    q_len,
+                )<span class="question-mark">?
+            </span>}
+        };
 
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmatmul(
-            <span class="kw-2">&amp;</span>attn_output
+        attn_output = <span class="kw">if </span>attention_mask.is_some() {
+            attn_output
                 .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.reshape((b_sz, q_len, <span class="self">self</span>.hidden_size))<span class="question-mark">?</span>,
-            <span class="kw-2">&amp;</span><span class="self">self</span>.o_proj,
-        )<span class="question-mark">?</span>;
+                </span>.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, <span class="self">self</span>.hidden_size])<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            attn_output.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, <span class="self">self</span>.hidden_size])<span class="question-mark">?
+        </span>};
+        <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmatmul(<span class="kw-2">&amp;</span>attn_output, <span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.q_proj, QMatMul::QTensor(<span class="kw">_</span>)) {
             res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
@@ -875,8 +972,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>DecoderLayer {
+<span class="kw">struct </span>DecoderLayer {
     self_attn: Attention,
     block_sparse_moe: SparseMoeBlock,
     input_layernorm: RmsNorm,
@@ -891,11 +987,13 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"self_attn"</span>), loading_isq),
+            paged_attn,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>block_sparse_moe = SparseMoeBlock::new(
             cfg,
@@ -926,6 +1024,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
         <span class="kw">let </span>xs = <span class="self">self</span>.input_layernorm.forward(xs)<span class="question-mark">?</span>;
@@ -935,6 +1034,7 @@
             seqlen_offsets,
             start_offsets_kernel,
             kv_cache,
+            metadata,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = (xs + residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
@@ -945,8 +1045,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>Model {
+<span class="kw">pub struct </span>Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
@@ -956,6 +1055,7 @@
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    cfg: ModelConfigMetadata,
 }
 
 <span class="kw">impl </span>Model {
@@ -964,6 +1064,7 @@
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
@@ -982,16 +1083,29 @@
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
             <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
                 cfg.rope_theta <span class="kw">as </span>f32,
                 head_dim,
                 cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, <span class="bool-val">false</span>)
-                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
+                device,
                 is_gptx,
-                vb.dtype(),
+                vb_m.dtype(),
             )<span class="question-mark">?</span>);
+            <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
+                AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
+                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
+                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
+                    <span class="prelude-val">Some</span>(cfg.sliding_window),
+                    device,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?</span>),
+            };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -999,6 +1113,7 @@
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
@@ -1022,6 +1137,13 @@
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            },
         })
     }
 
@@ -1031,12 +1153,16 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
+        <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
         <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
+                .unwrap_or(<span class="kw-2">&amp;*</span>cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
             xs.dtype(),
             <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
@@ -1052,6 +1178,9 @@
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
             )<span class="question-mark">?</span>;
         }
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
@@ -1094,12 +1223,14 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     <span class="kw">fn </span>xlora_forward(
@@ -1128,6 +1259,9 @@
     </span>}
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.max_seq_len
+    }
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
     }
 }
 

@@ -967,7 +967,7 @@
         };
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            <span class="kw-2">&amp;</span>cache,
+            <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.max_seq_len),
             DType::F32,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
