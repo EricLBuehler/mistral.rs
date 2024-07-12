@@ -6,6 +6,8 @@ Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and b
 
 > Note: The default block size if not specified is 32.
 
+> Warning: When using dynamic adapter activation or sending re-ISQ requests, it may trigger OOM because the Paged Attention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount (recommended) or disable paged attention.
+
 **There are more features being added to this:**
 - GGML model support 
 - Adapter model support
