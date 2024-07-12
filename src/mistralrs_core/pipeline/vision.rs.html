@@ -529,6 +529,7 @@
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -761,25 +762,7 @@
             <span class="self">self</span>.inner
                 .get_processor(<span class="kw-2">&amp;</span>config, processor_config, preprocessor_config.clone()); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
 
-        </span><span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
-            <span class="macro">anyhow::ensure!</span>(
-                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
-                <span class="string">"PagedAttention does not support adapter models."
-            </span>);
-            <span class="kw">let </span>cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
-                paged_attn_config.block_size,
-                dtype,
-                model.config(),
-            )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
-            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
-        } <span class="kw">else </span>{
-            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-        };
-
-        <span class="kw">let </span>tokenizer = get_tokenizer(
+        </span><span class="kw">let </span>tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
             <span class="prelude-val">Some</span>(processor.get_special_tokens()),
         )<span class="question-mark">?</span>;
@@ -792,6 +775,25 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(in_situ_quant) = in_situ_quant {
             model.quantize(in_situ_quant, device.clone())<span class="question-mark">?</span>;
         }
+
+        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+            <span class="macro">anyhow::ensure!</span>(
+                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
+                <span class="string">"PagedAttention does not support adapter models."
+            </span>);
+            <span class="kw">let </span>cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+                device,
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
+            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
+        } <span class="kw">else </span>{
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+        };
 
         <span class="kw">let </span>max_seq_len = model.max_seq_len();
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();

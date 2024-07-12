@@ -774,6 +774,7 @@
 <a href="#774" id="774">774</a>
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1183,6 +1184,7 @@
                 paged_attn_config.block_size,
                 DType::F32,
                 model_config,
+                device,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine = CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, DType::F32, device)<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))

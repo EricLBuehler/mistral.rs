@@ -400,6 +400,17 @@
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -523,13 +534,19 @@
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
 
-    <span class="doccomment">/// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+    <span class="doccomment">/// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to to the
+    /// available GPU memory. Paged Attention is only supported on CUDA and is always automatically activated.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
     </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
-    <span class="doccomment">/// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    <span class="doccomment">/// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
+    /// Paged Attention is only supported on CUDA and is always automatically activated.
     </span><span class="attr">#[arg(long = <span class="string">"pa-blk-size"</span>)]
     </span>paged_attn_block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="doccomment">/// Disable Paged Attention on CUDA.
+    </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
+    </span>no_paged_attn: bool,
 }
 
 <span class="attr">#[utoipa::path(
@@ -729,17 +746,22 @@
         DeviceMapMetadata::dummy()
     };
 
-    <span class="kw">let </span>cache_config = <span class="kw">if </span>args.paged_attn_gpu_mem.is_some() {
-        <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
-        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        </span><span class="prelude-val">Some</span>(PagedAttentionConfig::new(
-            args.paged_attn_block_size,
-            <span class="number">512</span>,
-            args.paged_attn_gpu_mem.unwrap(),
-        )<span class="question-mark">?</span>)
-    } <span class="kw">else </span>{
-        <span class="prelude-val">None
-    </span>};
+    <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
+    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+    </span><span class="kw">let </span>cache_config = <span class="kw">match </span>(
+        args.paged_attn_block_size,
+        args.paged_attn_gpu_mem,
+        device.is_cuda(),
+        args.no_paged_attn,
+    ) {
+        (block_size, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
+            block_size, <span class="number">512</span>, <span class="prelude-val">None</span>, <span class="comment">// Autodetermine KV cache size
+        </span>)<span class="question-mark">?</span>),
+        (block_size, <span class="prelude-val">Some</span>(gpu_mem), <span class="kw">_</span>, <span class="bool-val">false</span>) =&gt; {
+            <span class="prelude-val">Some</span>(PagedAttentionConfig::new(block_size, <span class="number">512</span>, <span class="prelude-val">Some</span>(gpu_mem))<span class="question-mark">?</span>)
+        }
+        (<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="prelude-val">None</span>,
+    };
 
     <span class="kw">let </span>pipeline = loader.load_model_from_hf(
         <span class="prelude-val">None</span>,
