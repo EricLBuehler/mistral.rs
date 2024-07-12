@@ -434,6 +434,7 @@
 <a href="#434" id="434">434</a>
 <a href="#435" id="435">435</a>
 <a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -762,7 +763,7 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> vision_normal_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
+    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr, <span class="macro-nonterminal">$attention_mechanism</span>:expr) =&gt; {{
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             <span class="macro-nonterminal">$paths</span>.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -781,6 +782,7 @@
                 loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
                 real_device: <span class="macro-nonterminal">$real_device</span>,
             },
+            <span class="macro-nonterminal">$attention_mechanism</span>,
         )<span class="question-mark">?
     </span>}};
 }

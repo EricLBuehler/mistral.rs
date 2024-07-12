@@ -328,6 +328,18 @@
 <a href="#328" id="328">328</a>
 <a href="#329" id="329">329</a>
 <a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -338,6 +350,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::amoe::MlpLayer;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::ops::NonZeroOp;
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::IsqModel;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
@@ -448,6 +462,7 @@
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>device = normal_loading_metadata.real_device.clone();
         <span class="kw">let </span>dtype = vb.dtype();
@@ -469,6 +484,7 @@
                     vb.pp(<span class="string">"language_model"</span>),
                     is_gptx,
                     normal_loading_metadata,
+                    attention_mechanism,
                 )<span class="question-mark">?</span>;
                 Box::new(llama)
             }
@@ -479,6 +495,7 @@
                     vb.pp(<span class="string">"language_model"</span>),
                     is_gptx,
                     normal_loading_metadata,
+                    attention_mechanism,
                 )<span class="question-mark">?</span>;
                 Box::new(mistral)
             }
@@ -549,6 +566,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>pixel_values) = pixel_values {
             <span class="comment">// we assume(as it should be) only prompt request contains image
@@ -563,8 +581,8 @@
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
-                <span class="prelude-val">None</span>, <span class="comment">// TODO
-            </span>)
+                metadata,
+            )
         } <span class="kw">else </span>{
             <span class="self">self</span>.llm.forward(
                 input_ids,
@@ -572,8 +590,8 @@
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
-                <span class="prelude-val">None</span>, <span class="comment">// TODO
-            </span>)
+                metadata,
+            )
         }
     }
 }
@@ -597,7 +615,8 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         _model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
-    </span>) -&gt; candle_core::Result&lt;Tensor&gt; {
+        </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+    ) -&gt; candle_core::Result&lt;Tensor&gt; {
         <span class="self">self</span>.forward_inputs(
             input_ids,
             pixel_values,
@@ -609,6 +628,7 @@
             start_offsets_kernel,
             context_lens,
             position_ids,
+            metadata,
         )
     }
 
@@ -627,6 +647,10 @@
     <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
+
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="self">self</span>.llm.config()
+    }
 }
 
 <span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Model {

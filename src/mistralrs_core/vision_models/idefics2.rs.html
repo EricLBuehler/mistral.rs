@@ -1131,6 +1131,17 @@
 <a href="#1131" id="1131">1131</a>
 <a href="#1132" id="1132">1132</a>
 <a href="#1133" id="1133">1133</a>
+<a href="#1134" id="1134">1134</a>
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a>
+<a href="#1140" id="1140">1140</a>
+<a href="#1141" id="1141">1141</a>
+<a href="#1142" id="1142">1142</a>
+<a href="#1143" id="1143">1143</a>
+<a href="#1144" id="1144">1144</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1146,8 +1157,11 @@
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model <span class="kw">as </span>Mistral,
-    paged_attention::AttentionImplementation,
-    pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel, VisionModel,
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -2004,6 +2018,7 @@
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>text_model = Mistral::new_inner(
@@ -2012,8 +2027,8 @@
             vb.pp(<span class="string">"lm_head"</span>),
             is_gptx,
             normal_loading_metadata,
-            AttentionImplementation::Eager, <span class="comment">// TODO
-        </span>)<span class="question-mark">?</span>;
+            attention_mechanism,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>vision_model = VisionTransformer::new(
             <span class="kw-2">&amp;</span>config.vision_config,
             vb_m.pp(<span class="string">"vision_model"</span>)
@@ -2072,7 +2087,8 @@
         <span class="prelude-val">Ok</span>(new_inputs_embeds)
     }
 
-    <span class="kw">fn </span>forward_inner(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward_inner(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -2080,6 +2096,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>input_embeds = <span class="kw">if let </span><span class="prelude-val">Some</span>(pixel_values) = pixel_values {
             <span class="comment">// == START VISUAL INPUTS INTEGRATION ==
@@ -2183,8 +2200,8 @@
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
-            <span class="prelude-val">None</span>, <span class="comment">// TODO
-        </span>)
+            metadata,
+        )
     }
 }
 
@@ -2238,6 +2255,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw">_</span>: Vec&lt;usize&gt;, <span class="comment">// Ignore, it is for phi3
         </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; candle_core::Result&lt;Tensor&gt; {
         <span class="kw">let </span>pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="kw-2">*</span>model_specific_args
             .downcast()
@@ -2249,6 +2267,7 @@
             start_offsets_kernel,
             context_lens,
             pixel_attention_mask,
+            metadata,
         )
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
@@ -2263,5 +2282,8 @@
     <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+        <span class="self">self</span>.text_model.config()
+    }
 }
 </code></pre></div></section></main></body></html>

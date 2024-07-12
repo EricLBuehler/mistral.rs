@@ -714,6 +714,27 @@
 <a href="#714" id="714">714</a>
 <a href="#715" id="715">715</a>
 <a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -727,7 +748,7 @@
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
     merge_delta,
-    paged_attention::{ModelConfigMetadata, PagedAttention},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
         NormalLoadingMetadata, NormalModel,
@@ -1063,10 +1084,18 @@
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
         <span class="kw">let </span>vb_lm_head = vb.pp(<span class="string">"lm_head"</span>);
-        <span class="self">Self</span>::new_inner(cfg, vb_m, vb_lm_head, is_gptx, normal_loading_metadata)
+        <span class="self">Self</span>::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            normal_loading_metadata,
+            attention_mechanism,
+        )
     }
 
     <span class="kw">pub fn </span>new_inner(
@@ -1075,6 +1104,7 @@
         vb_lm_head: VarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
@@ -1099,14 +1129,26 @@
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
+            <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
+                AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
+                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
+                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
+                    cfg.sliding_window,
+                    <span class="kw-2">&amp;</span>normal_loading_metadata.real_device,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?</span>),
+            };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 cfg,
                 vb_l.pp(layer_idx),
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
-                <span class="prelude-val">None</span>, <span class="comment">// TODO
-            </span>)<span class="question-mark">?</span>;
+                paged_attn,
+            )<span class="question-mark">?</span>;
             layers.push(layer)
         }
         <span class="kw">let </span>norm = RmsNorm::new(

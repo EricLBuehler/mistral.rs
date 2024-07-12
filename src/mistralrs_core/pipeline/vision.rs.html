@@ -496,6 +496,39 @@
 <a href="#496" id="496">496</a>
 <a href="#497" id="497">497</a>
 <a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -508,6 +541,7 @@
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -686,6 +720,12 @@
             <span class="string">"PagedAttention is not supported for vision models"
         </span>);
 
+        <span class="kw">let </span>attention_mechanism = <span class="kw">if </span>paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } <span class="kw">else </span>{
+            AttentionImplementation::Eager
+        };
+
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
                 paths,
@@ -697,7 +737,8 @@
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
@@ -720,7 +761,25 @@
             <span class="self">self</span>.inner
                 .get_processor(<span class="kw-2">&amp;</span>config, processor_config, preprocessor_config.clone()); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
 
-        </span><span class="kw">let </span>tokenizer = get_tokenizer(
+        </span><span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+            <span class="macro">anyhow::ensure!</span>(
+                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
+                <span class="string">"PagedAttention does not support adapter models."
+            </span>);
+            <span class="kw">let </span>cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
+            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
+        } <span class="kw">else </span>{
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+        };
+
+        <span class="kw">let </span>tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
             <span class="prelude-val">Some</span>(processor.get_special_tokens()),
         )<span class="question-mark">?</span>;
@@ -738,6 +797,7 @@
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = model.cache().lock().len();
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
+        <span class="kw">let </span>sliding_window = model.config().sliding_window;
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(VisionPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -754,10 +814,10 @@
                 kind: <span class="self">self</span>.kind.clone(),
                 has_no_kv_cache: <span class="bool-val">false</span>,
                 activation_dtype: dtype,
-                sliding_window: <span class="prelude-val">None</span>, <span class="comment">// TODO
-                </span>cache_config: <span class="prelude-val">None</span>,   <span class="comment">// TODO
-                </span>cache_engine: <span class="prelude-val">None</span>,   <span class="comment">// TODO
-            </span>}),
+                sliding_window,
+                cache_config,
+                cache_engine,
+            }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
         })))
@@ -844,7 +904,7 @@
             position_ids,
             pixel_values,
             model_specific_args,
-            paged_attn_meta: <span class="kw">_</span>,
+            <span class="kw-2">mut </span>paged_attn_meta,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
         <span class="self">self</span>.model.forward(
             <span class="kw-2">&amp;</span>input_ids,
@@ -854,6 +914,12 @@
             context_lens,
             position_ids,
             model_specific_args,
+            <span class="self">self</span>.get_metadata().cache_engine.as_ref().map(|engine| {
+                (
+                    engine.get_kv_cache().clone(),
+                    paged_attn_meta.as_mut().unwrap(),
+                )
+            }),
         )
     }
     <span class="kw">async fn </span>sample(
