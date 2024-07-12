@@ -5,8 +5,6 @@ runner = Runner(
         tok_model_id=None,  # Automatically determine from ordering file
         quantized_model_id="TheBloke/zephyr-7B-beta-GGUF",
         quantized_filename="zephyr-7b-beta.Q4_0.gguf",
-        tokenizer_json=None,
-        repeat_last_n=64,
         xlora_model_id="lamm-mit/x-lora",
         order="orderings/xlora-paper-ordering.json",
         tgt_non_granular_index=None,
@@ -15,8 +13,6 @@ runner = Runner(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-        tokenizer_json=None,
-        repeat_last_n=64,
     ),
     speculative_gamma=32,
 )

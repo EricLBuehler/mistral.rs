@@ -107,10 +107,10 @@ pub trait IsqModel {
                 devices.push(device.clone());
             }
 
-        let t_start = Instant::now();
-        #[cfg(not(feature = "metal"))]
-        {
-            info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+            let t_start = Instant::now();
+            #[cfg(not(feature = "metal"))]
+            {
+                info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
                 use indicatif::ParallelProgressIterator;
                 use rayon::iter::{
