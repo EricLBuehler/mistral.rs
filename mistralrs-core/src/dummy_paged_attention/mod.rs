@@ -82,7 +82,7 @@ pub fn calculate_cache_config(
     let mem_gpu = match mem_gpu {
         Some(v) => v,
         None => {
-            let free = MemoryUsage.get_memory_available(device)?;
+            let free = MemoryUsage.get_memory_available(device)? / SIZE_IN_MB;
             info!(
                 "Automatically using {} MB for Paged Attention KV cache",
                 free - 512
@@ -93,7 +93,7 @@ pub fn calculate_cache_config(
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
-    info!("Using Paged Attention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {}", num_gpu_blocks*block_size);
+    info!("Using Paged Attention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
     Ok(CacheConfig {
         block_size,
         num_gpu_blocks,
