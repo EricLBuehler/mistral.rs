@@ -9,7 +9,9 @@ use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
 
-use crate::pipeline::text_models_inputs_processor::{get_completion_input, get_prompt_input};
+use crate::pipeline::text_models_inputs_processor::{
+    get_completion_input, get_prompt_input, PagedAttentionMeta,
+};
 use crate::pipeline::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
 };
@@ -86,6 +88,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
+        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
     ) -> anyhow::Result<Box<dyn Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
@@ -152,6 +155,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 seqlen_offsets_kernel_full: _,
                 context_lens,
                 position_ids,
+                paged_attn_meta,
             } = *text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     tokenizer,
@@ -162,6 +166,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     no_kv_cache,
                     last_n_context_len,
                     other_config,
+                    paged_attn_metadata,
                 )?
                 .downcast::<text_models_inputs_processor::ModelInputs>()
                 .expect("Downcast failed.");
@@ -177,6 +182,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     num_image_tokens: None,
                     num_image_samples: None,
                 }),
+                paged_attn_meta,
             }));
         };
 
@@ -260,10 +266,24 @@ impl InputsProcessor for LLaVANextInputProcessor {
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = if is_prompt {
-            get_prompt_input(toks, input_seqs, device, last_n_context_len)?
+            get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )?
         } else {
-            get_completion_input(toks, input_seqs, device, no_kv_cache, last_n_context_len)?
+            get_completion_input(
+                toks,
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata,
+            )?
         };
         Ok(Box::new(ModelInputs {
             input_ids: input,
@@ -277,6 +297,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 num_image_tokens: Some(num_image_tokens_flat),
                 num_image_samples: Some(num_image_samples),
             }),
+            paged_attn_meta,
         }))
     }
 }

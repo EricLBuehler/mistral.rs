@@ -24,8 +24,8 @@ use crate::{
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, Pipeline, Response,
-    TokenSource, TryIntoDType,
+    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
+    Pipeline, Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -59,7 +59,13 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "AnyMoE does not currently support PagedAttention"
+        );
+
         let target = self.target.load_model_from_hf(
             revision.clone(),
             token_source.clone(),
@@ -68,6 +74,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -92,7 +99,13 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "AnyMoE does not currently support PagedAttention"
+        );
+
         let target = self.target.load_model_from_path(
             paths,
             dtype,
@@ -100,6 +113,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -334,6 +348,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
         let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0);
+
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
         )));
@@ -417,6 +432,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         metadata.has_no_kv_cache,
                         None,
                         input_processor_cfg.clone(),
+                        None, // TODO: get block tables/handle it for PagedAttention
                     )
                     .unwrap();
 
@@ -535,5 +551,6 @@ fn new_dummy_seq(
         None,
         None,
         images,
+        None, // TODO incorrect for PagedAttention
     )
 }

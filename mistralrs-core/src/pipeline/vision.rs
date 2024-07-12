@@ -22,7 +22,7 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, Pipeline, TryIntoDType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -126,6 +126,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -136,7 +137,15 @@ impl Loader for VisionLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -148,6 +157,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -172,6 +182,11 @@ impl Loader for VisionLoader {
         } else {
             Device::Cpu
         };
+
+        anyhow::ensure!(
+            paged_attn_config.is_none(),
+            "PagedAttention is not supported for vision models"
+        );
 
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
@@ -241,6 +256,9 @@ impl Loader for VisionLoader {
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
                 activation_dtype: dtype,
+                sliding_window: None, // TODO
+                cache_config: None,   // TODO
+                cache_engine: None,   // TODO
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
@@ -328,6 +346,7 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
+            paged_attn_meta: _,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,

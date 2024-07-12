@@ -23,13 +23,12 @@ hf-hub = "0.3.2"
 thiserror = "1.0.57"
 tokenizers = "0.19.1"
 tqdm = "0.7.0"
-range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", version = "0.1.0" }
 chrono = "0.4.34"
 minijinja = "2.0.2"
 minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
-half = "2.4.0"
+half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
@@ -71,10 +70,11 @@ reqwest.workspace = true
 base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"] }
+mistralrs-paged-attn = { version = "0.1.13", path = "../mistralrs-paged-attn", optional = true }
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]

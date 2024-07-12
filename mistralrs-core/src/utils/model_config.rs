@@ -6,6 +6,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     lora::{LoraConfig, Ordering},
+    paged_attention::AttentionImplementation,
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
     DeviceMapMetadata,
@@ -95,7 +96,11 @@ impl<'a> Adapter<'a> {
 
 // New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
 pub struct ParamsGGML(pub FileGGML);
-pub struct ParamsGGUF<'a>(pub FileGGUF<'a>, pub Device<'a>);
+pub struct ParamsGGUF<'a>(
+    pub FileGGUF<'a>,
+    pub Device<'a>,
+    pub AttentionImplementation,
+);
 
 // A `None` type vs the `Some` type (`Adapter<'a>`)
 pub struct NoAdapter {}
@@ -160,6 +165,7 @@ pub trait FromGGUF {
         reader: &mut R,
         device: &candle_core::Device,
         mapper: DeviceMapMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self, candle_core::Error>
     where
         Self: Sized;
@@ -236,17 +242,25 @@ impl Config<ParamsGGML, Adapter<'_>> {
 impl Config<ParamsGGUF<'_>, NoAdapter> {
     pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = self.quant;
+        let ParamsGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            attention_implementation,
+        ) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
-        T::from_gguf(ct, reader, device, mapper)
+        T::from_gguf(ct, reader, device, mapper, attention_implementation)
     }
 }
 
 impl Config<ParamsGGUF<'_>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(FileGGUF { ct, reader }, Device { device, mapper }) = self.quant;
+        let ParamsGGUF(
+            FileGGUF { ct, reader },
+            Device { device, mapper },
+            _attention_implementation,
+        ) = self.quant;
 
         let Adapter {
             xlora_config,
@@ -275,6 +289,7 @@ use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
+    models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use akin::akin;
@@ -298,7 +313,7 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 }
 
 akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3];
+    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2];
 
     impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf {
         type Error = candle_core::Error;

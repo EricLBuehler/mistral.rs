@@ -9,8 +9,13 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers_masker::PastKvLenCache,
     merge_delta,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::{ModelConfigMetadata, PagedAttention},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -65,6 +70,9 @@ impl MlpLayer for MLP {
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
         vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
     }
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        vec![None, None, None]
+    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -106,7 +114,6 @@ impl MlpLayer for MLP {
     }
 }
 
-#[derive(Debug, Clone)]
 struct Attention {
     q_proj: QMatMul,
     k_proj: QMatMul,
@@ -119,10 +126,11 @@ struct Attention {
     hidden_size: usize,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, paged_attn: Option<PagedAttention>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -144,9 +152,11 @@ impl Attention {
             hidden_size: hidden_sz,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            paged_attn,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -155,6 +165,7 @@ impl Attention {
         _start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         rope_parameter: (&Tensor, &Tensor),
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -185,39 +196,59 @@ impl Attention {
         let v = v
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            attention_mask,
-            self.sliding_window,
-            false,
-        )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
+            }
+            None => {
+                let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+                    kv_cache,
+                    k,
+                    v,
+                    attention_mask,
+                    self.sliding_window,
+                    false,
+                )?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            attn_mask.as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            q_len,
-        )?;
+                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.num_heads,
+                    self.head_dim,
+                    attn_mask.as_ref(),
+                    self.use_flash_attn,
+                    b_sz,
+                    q_len,
+                )?
+            }
+        };
 
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = MatMul.qmatmul(
-            &attn_output
+        attn_output = if attention_mask.is_some() {
+            attn_output
                 .transpose(1, 2)?
-                .reshape((b_sz, q_len, self.hidden_size))?,
-            &self.o_proj,
-        )?;
+                .reshape(&[b_sz, q_len, self.hidden_size])?
+        } else {
+            attn_output.reshape(&[b_sz, q_len, self.hidden_size])?
+        };
+
+        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
         if matches!(self.q_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -239,10 +270,12 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = RmsNorm::new(
@@ -263,6 +296,7 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -271,6 +305,7 @@ impl DecoderLayer {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         rope_parameter: (&Tensor, &Tensor),
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let mut xs = self.input_layernorm.forward(xs)?;
@@ -281,6 +316,7 @@ impl DecoderLayer {
             start_offsets_kernel,
             kv_cache,
             rope_parameter,
+            metadata,
         )?;
         xs = (xs + residual)?;
         let residual = &xs;
@@ -302,6 +338,7 @@ pub struct Model {
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -352,6 +389,7 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                None, // TODO
             )?;
             layers.push(layer)
         }
@@ -376,6 +414,13 @@ impl Model {
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             rope_parameters,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -389,6 +434,7 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
@@ -396,6 +442,7 @@ impl Model {
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
 
@@ -406,12 +453,16 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = input_embeds;
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
@@ -428,6 +479,9 @@ impl Model {
                 start_offsets_kernel.clone(),
                 &mut cache[i],
                 (&self.rope_parameters.0, &self.rope_parameters.1),
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?;
         }
         xs = xs.to_device(&self.device)?;
@@ -440,7 +494,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -459,6 +513,9 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
+    }
 }
 
 impl LLaVALLM for Model {
@@ -473,6 +530,7 @@ impl LLaVALLM for Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
@@ -480,6 +538,7 @@ impl LLaVALLM for Model {
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
 }
@@ -492,12 +551,14 @@ impl NormalModel for Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     fn xlora_forward(
@@ -526,6 +587,9 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

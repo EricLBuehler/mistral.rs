@@ -13,7 +13,11 @@ use crate::{
     layers::{repeat_kv, CausalMasker, MatMul},
     lora::{linear_b, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
     Ordering,
 };
@@ -522,6 +526,7 @@ pub struct Model {
     final_logit_softcapping: Option<f64>,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -630,6 +635,13 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 
@@ -661,14 +673,14 @@ impl Model {
         };
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
         let sliding_attention_mask = CausalMasker
             .make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
-                &cache,
+                &*cache,
                 Some(self.sliding_window),
                 xs.dtype(),
                 self.layers[0].self_attn.num_heads,
@@ -794,7 +806,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -829,6 +841,49 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((None, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+        }
+        (tensors, &*self.mapper)
+    }
 }
 
 impl NormalModel for Model {
@@ -839,6 +894,7 @@ impl NormalModel for Model {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -909,6 +965,9 @@ impl NormalModel for Model {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

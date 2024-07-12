@@ -186,6 +186,8 @@ class Runner:
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
+        pa_gpu_mem: int | None = None,
+        pa_blk_size: int | None = None,
     ) -> None:
         """
         Load a model.
@@ -208,6 +210,9 @@ class Runner:
             the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
+        - `pa_gpu_mem` sets GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+        - `pa_blk_size` sets the block size (number of tokens per block) for Paged Attention.
+            If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
         """
         ...
 

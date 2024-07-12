@@ -8,9 +8,9 @@ use axum::{
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request,
-    SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,14 @@ struct Args {
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
+
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+    #[arg(long = "pa-gpu-mem")]
+    paged_attn_gpu_mem: Option<usize>,
+
+    /// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    #[arg(long = "pa-blk-size")]
+    paged_attn_block_size: Option<usize>,
 }
 
 #[utoipa::path(
@@ -319,6 +327,18 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
+    let cache_config = if args.paged_attn_gpu_mem.is_some() {
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        Some(PagedAttentionConfig::new(
+            args.paged_attn_block_size,
+            512,
+            args.paged_attn_gpu_mem.unwrap(),
+        )?)
+    } else {
+        None
+    };
+
     let pipeline = loader.load_model_from_hf(
         None,
         args.token_source,
@@ -327,18 +347,33 @@ async fn main() -> Result<()> {
         false,
         mapper,
         args.in_situ_quant,
+        cache_config,
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    )
-    .with_opt_log(args.log)
-    .with_truncate_sequence(args.truncate_sequence)
-    .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    let scheduler_config = if cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: args.max_seqs,
+            config: pipeline
+                .lock()
+                .await
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } else {
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        }
+    };
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_opt_log(args.log)
+        .with_truncate_sequence(args.truncate_sequence)
+        .with_no_kv_cache(args.no_kv_cache)
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");

@@ -100,9 +100,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
+    ModelDType, NormalRequest, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -118,17 +118,25 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     )
     .build(VisionLoaderType::LLaVANext);
     // Load, into a Pipeline
+
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        None,
+        &ModelDType::Auto,
         &Device::cuda_if_available(0)?,
         false,
         DeviceMapMetadata::dummy(),
         None,
+        None, // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+    Ok(MistralRsBuilder::new(
+        pipeline,
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        },
+    )
+    .build())
 }
 
 fn main() -> anyhow::Result<()> {

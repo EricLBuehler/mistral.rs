@@ -13,6 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
+    paged_attention::AttentionImplementation,
     pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -878,6 +879,7 @@ impl Idefics2 {
             vb.pp("lm_head"),
             is_gptx,
             normal_loading_metadata,
+            AttentionImplementation::Eager, // TODO
         )?;
         let vision_model = VisionTransformer::new(
             &config.vision_config,
@@ -1048,13 +1050,17 @@ impl Idefics2 {
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            None, // TODO
         )
     }
 }
 
 impl IsqModel for Idefics2 {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.text_model.get_tensors()
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_matmuls()
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_biases()
     }
 }
 

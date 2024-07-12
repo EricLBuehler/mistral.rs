@@ -233,6 +233,7 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
+                None, // TODO
             )
         } else {
             self.llm.forward(
@@ -241,14 +242,18 @@ impl Model {
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
+                None, // TODO
             )
         }
     }
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.llm.get_tensors()
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        self.llm.get_matmuls()
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        self.llm.get_biases()
     }
 }
 

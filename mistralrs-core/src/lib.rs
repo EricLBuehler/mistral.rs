@@ -27,17 +27,24 @@ mod lora;
 mod model_loader;
 mod ops;
 pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
+
 mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
 mod cublaslt;
+#[cfg(not(feature = "cuda"))]
+mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
+#[cfg(feature = "cuda")]
+mod paged_attention;
+#[cfg(not(feature = "cuda"))]
+use dummy_paged_attention as paged_attention;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -52,6 +59,7 @@ mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use paged_attention::PagedAttentionConfig;
 pub use pipeline::{
     chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
@@ -66,7 +74,7 @@ pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMes
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
-pub use scheduler::SchedulerMethod;
+pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -94,7 +102,7 @@ pub struct MistralRs {
 #[derive(Clone)]
 struct RebootState {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     truncate_sequence: bool,
     no_kv_cache: bool,
     no_prefix_cache: bool,
@@ -128,7 +136,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     log: Option<String>,
     truncate_sequence: Option<bool>,
     no_kv_cache: Option<bool>,
@@ -139,7 +147,7 @@ pub struct MistralRsBuilder {
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerConfig) -> Self {
         Self {
             pipeline,
             method,

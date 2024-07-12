@@ -6,7 +6,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
@@ -473,6 +476,7 @@ pub struct XLoraModel {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraModel {
@@ -582,6 +586,13 @@ impl XLoraModel {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 
@@ -612,7 +623,7 @@ impl XLoraModel {
         let xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
@@ -721,7 +732,7 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -756,6 +767,49 @@ impl IsqModel for XLoraModel {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((self.lm_head.bias_mut(), None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+        }
+        (tensors, &*self.mapper)
+    }
 }
 
 impl NormalModel for XLoraModel {
@@ -766,6 +820,7 @@ impl NormalModel for XLoraModel {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -836,6 +891,9 @@ impl NormalModel for XLoraModel {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType, NormalRequest,
-    Request, RequestMessage, Response, Result, SamplingParams, SchedulerMethod, TokenSource,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
+    ModelDType, NormalRequest, Request, RequestMessage, Response, Result, SamplingParams,
+    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -43,9 +43,16 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         false,
         DeviceMapMetadata::dummy(),
         None,
+        None, // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+    Ok(MistralRsBuilder::new(
+        pipeline,
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        },
+    )
+    .build())
 }
 
 fn main() -> anyhow::Result<()> {
