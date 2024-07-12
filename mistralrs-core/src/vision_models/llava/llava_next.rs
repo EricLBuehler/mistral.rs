@@ -10,6 +10,8 @@ use candle_nn::{linear, Activation, Linear, VarBuilder};
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
 use crate::ops::NonZeroOp;
+use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::pipeline::VisionModel;
@@ -125,6 +127,7 @@ impl Model {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
         let dtype = vb.dtype();
@@ -149,6 +152,7 @@ impl Model {
                     vb.pp("language_model"),
                     is_gptx,
                     normal_loading_metadata,
+                    attention_mechanism,
                 )?;
                 Box::new(llama)
             }
@@ -159,6 +163,7 @@ impl Model {
                     vb.pp("language_model"),
                     is_gptx,
                     normal_loading_metadata,
+                    attention_mechanism,
                 )?;
                 Box::new(mistral)
             }
@@ -297,6 +302,7 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -313,7 +319,7 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel,
                 context_lens,
-                None, // TODO
+                metadata,
             )
         } else {
             self.llm.forward(
@@ -322,7 +328,7 @@ impl Model {
                 start_offsets_kernel,
                 context_lens,
                 position_ids,
-                None, // TODO
+                metadata,
             )
         }
     }
@@ -347,6 +353,7 @@ impl VisionModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> candle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,
@@ -371,6 +378,7 @@ impl VisionModel for Model {
             start_offsets_kernel,
             context_lens,
             position_ids,
+            metadata,
         )
     }
 
@@ -388,6 +396,10 @@ impl VisionModel for Model {
 
     fn has_conv2d(&self) -> bool {
         true
+    }
+
+    fn config(&self) -> &ModelConfigMetadata {
+        self.llm.config()
     }
 }
 

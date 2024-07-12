@@ -11,7 +11,7 @@ use crate::{
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
     merge_delta,
-    paged_attention::{ModelConfigMetadata, PagedAttention},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
         NormalLoadingMetadata, NormalModel,
@@ -347,10 +347,18 @@ impl Model {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vb_lm_head = vb.pp("lm_head");
-        Self::new_inner(cfg, vb_m, vb_lm_head, is_gptx, normal_loading_metadata)
+        Self::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            normal_loading_metadata,
+            attention_mechanism,
+        )
     }
 
     pub fn new_inner(
@@ -359,6 +367,7 @@ impl Model {
         vb_lm_head: VarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -383,13 +392,25 @@ impl Model {
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (1.0 / (head_dim as f64).sqrt()) as f32,
+                    Some(cfg.num_key_value_heads),
+                    cfg.sliding_window,
+                    &normal_loading_metadata.real_device,
+                    None,
+                )?),
+            };
             let layer = DecoderLayer::new(
                 cfg,
                 vb_l.pp(layer_idx),
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
-                None, // TODO
+                paged_attn,
             )?;
             layers.push(layer)
         }
