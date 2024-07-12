@@ -18,10 +18,13 @@ use crate::{
         repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
         RmsNorm, ScaledDotProductAttention,
     },
+    layers_masker::PastKvLenCache,
     merge_delta,
     ops::{BitWiseOp, NonZeroOp},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -135,7 +138,6 @@ impl ShapeWithOneHole for BigShapeWithOneHole {
 
 // =================== BASE LAYERS ===================
 
-#[derive(Debug, Clone)]
 struct Attention {
     qkv_proj: QMatMul,
     o_proj: QMatMul,
@@ -146,10 +148,16 @@ struct Attention {
     rotary_emb: Arc<PhiRotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl Attention {
-    fn new(rotary_emb: Arc<PhiRotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        rotary_emb: Arc<PhiRotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+        paged_attn: Option<PagedAttention>,
+    ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
@@ -166,6 +174,7 @@ impl Attention {
             head_dim,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            paged_attn,
         })
     }
 
@@ -176,6 +185,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -219,37 +229,54 @@ impl Attention {
             .rotary_emb
             .forward(&q, &k, seqlen_offsets, position_ids)?;
 
-        let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            attention_mask,
-            self.sliding_window,
-            true,
-        )?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                )?
+            }
+            None => {
+                let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
+                    kv_cache,
+                    k,
+                    v,
+                    attention_mask,
+                    self.sliding_window,
+                    true,
+                )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            attn_mask.as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            q_len,
-        )?;
-
+                ScaledDotProductAttention.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    self.num_heads,
+                    self.head_dim,
+                    attn_mask.as_ref(),
+                    self.use_flash_attn,
+                    b_sz,
+                    q_len,
+                )?
+            }
+        };
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
-        let mut res = MatMul.qmatmul(
-            &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
-            &self.o_proj,
-        )?;
+        attn_output = if attention_mask.is_some() {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.reshape((b_sz, q_len, ()))?
+        };
+        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
         if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
             res = res.to_dtype(original_dtype)?;
         }
@@ -358,11 +385,13 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
         )?;
         let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = RmsNorm::new(
@@ -390,12 +419,18 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs =
-            self.self_attn
-                .forward(&xs, attention_mask, seqlen_offsets, position_ids, kv_cache)?;
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            position_ids,
+            kv_cache,
+            metadata,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -804,6 +839,7 @@ pub struct Model {
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -812,6 +848,7 @@ impl Model {
         vb: VarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -835,13 +872,22 @@ impl Model {
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(
-                vb.dtype(),
-                cfg.clone(),
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-            )?);
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?);
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    cfg.head_dim(),
+                    (1.0 / (cfg.head_dim() as f64).sqrt()) as f32,
+                    Some(cfg.num_key_value_heads),
+                    cfg.sliding_window,
+                    device,
+                    None,
+                )?),
+            };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -849,6 +895,7 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
             )?;
             layers.push(layer)
         }
@@ -873,9 +920,17 @@ impl Model {
             mapper,
             sliding_window: cfg.sliding_window,
             embed_tokens,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -884,6 +939,7 @@ impl Model {
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
             self.vision_embed_tokens
@@ -894,7 +950,10 @@ impl Model {
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &*cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
@@ -911,6 +970,9 @@ impl Model {
                 seqlen_offsets,
                 position_ids,
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -959,6 +1021,7 @@ impl VisionModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args
             .downcast()
@@ -970,6 +1033,7 @@ impl VisionModel for Model {
             &position_ids,
             context_lens,
             image_sizes,
+            metadata,
         )
     }
     fn cache(&self) -> &Cache {
@@ -983,6 +1047,9 @@ impl VisionModel for Model {
     }
     fn has_conv2d(&self) -> bool {
         true
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

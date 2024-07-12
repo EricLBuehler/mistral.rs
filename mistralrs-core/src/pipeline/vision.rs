@@ -10,6 +10,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -188,6 +189,12 @@ impl Loader for VisionLoader {
             "PagedAttention is not supported for vision models"
         );
 
+        let attention_mechanism = if paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } else {
+            AttentionImplementation::Eager
+        };
+
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -199,7 +206,8 @@ impl Loader for VisionLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             _ => unreachable!(),
         };
@@ -222,6 +230,24 @@ impl Loader for VisionLoader {
             self.inner
                 .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
 
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::Adapter { .. }),
+                "PagedAttention does not support adapter models."
+            );
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
             Some(processor.get_special_tokens()),
@@ -240,6 +266,7 @@ impl Loader for VisionLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -256,9 +283,9 @@ impl Loader for VisionLoader {
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
                 activation_dtype: dtype,
-                sliding_window: None, // TODO
-                cache_config: None,   // TODO
-                cache_engine: None,   // TODO
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
@@ -346,7 +373,7 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
-            paged_attn_meta: _,
+            mut paged_attn_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
@@ -356,6 +383,12 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             model_specific_args,
+            self.get_metadata().cache_engine.as_ref().map(|engine| {
+                (
+                    engine.get_kv_cache().clone(),
+                    paged_attn_meta.as_mut().unwrap(),
+                )
+            }),
         )
     }
     async fn sample(

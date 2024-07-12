@@ -16,7 +16,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     merge_delta,
     models::llama::Config,
-    paged_attention::{ModelConfigMetadata, PagedAttention},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
         NormalLoadingMetadata, NormalModel,
@@ -348,6 +348,7 @@ impl Llama {
         vb: VarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -374,13 +375,28 @@ impl Llama {
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
+                    let paged_attn = match &attention_mechanism {
+                        AttentionImplementation::Eager => None,
+                        AttentionImplementation::PagedAttention => Some(
+                            PagedAttention::new(
+                                cfg.num_attention_heads,
+                                head_dim,
+                                (1.0 / (head_dim as f64).sqrt()) as f32,
+                                Some(cfg.num_key_value_heads),
+                                None,
+                                &normal_loading_metadata.real_device,
+                                None,
+                            )
+                            .expect("Failed to create PagedAttention"),
+                        ),
+                    };
                     Block::load(
                         vb.pp(&format!("model.layers.{i}")),
                         cfg,
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
-                        None, // TODO
+                        paged_attn,
                     )
                     .expect("Failed to load block.")
                 })

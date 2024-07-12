@@ -7,7 +7,6 @@ Our paged attention implementation has 2 inputs: GPU KV cache memory size, and b
 > Note: The default block size if not specified is 16.
 
 **There are more features being added to this:**
-- Vision model support
 - GGML model support 
 - Adapter model support
 - Speculative decoding
@@ -16,6 +15,7 @@ Our paged attention implementation has 2 inputs: GPU KV cache memory size, and b
 **Supported models:**
 - Normal models
 - GGUF models
+- Vision models
 
 > Note: the prefix cacher will be disabled when using Paged Attention regardless of settings. This functionality will be added soon!
 

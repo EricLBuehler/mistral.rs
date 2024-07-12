@@ -10,6 +10,7 @@ use pyo3::pyclass;
 use serde::Deserialize;
 
 use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
+use crate::paged_attention::AttentionImplementation;
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -29,6 +30,7 @@ pub trait VisionModelLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -81,6 +83,7 @@ impl VisionModelLoader for Phi3VLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Phi3Config = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -89,6 +92,7 @@ impl VisionModelLoader for Phi3VLoader {
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -123,6 +127,7 @@ impl VisionModelLoader for Idefics2Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -131,6 +136,7 @@ impl VisionModelLoader for Idefics2Loader {
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -166,6 +172,7 @@ impl VisionModelLoader for LLaVANextLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: LLaVAConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -174,6 +181,7 @@ impl VisionModelLoader for LLaVANextLoader {
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -206,6 +214,7 @@ impl VisionModelLoader for LLaVALoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: LLaVAConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -214,6 +223,7 @@ impl VisionModelLoader for LLaVALoader {
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn is_gptx(&self) -> bool {
