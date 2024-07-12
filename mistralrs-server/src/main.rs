@@ -341,10 +341,10 @@ async fn main() -> Result<()> {
         device.is_cuda(),
         args.no_paged_attn,
     ) {
-        (block_size, None, true, true) => Some(PagedAttentionConfig::new(
+        (block_size, None, true, false) => Some(PagedAttentionConfig::new(
             block_size, 512, None, // Autodetermine KV cache size
         )?),
-        (block_size, Some(gpu_mem), _, true) => {
+        (block_size, Some(gpu_mem), _, false) => {
             Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
         }
         (_, _, _, _) => None,

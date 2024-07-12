@@ -87,6 +87,10 @@ pub fn calculate_cache_config(
         Some(v) => v,
         None => {
             let free = MemoryUsage.get_memory_available(device)?;
+            info!(
+                "Automatically using {} MB for Paged Attention KV cache",
+                free - 512
+            );
             free - 512
         }
     };

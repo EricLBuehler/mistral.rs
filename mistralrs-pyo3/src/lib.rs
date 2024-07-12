@@ -465,10 +465,10 @@ impl Runner {
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         let cache_config = match (pa_blk_size, pa_gpu_mem, device.is_cuda(), no_paged_attn) {
-            (block_size, None, true, true) => Some(PagedAttentionConfig::new(
+            (block_size, None, true, false) => Some(PagedAttentionConfig::new(
                 block_size, 512, None, // Autodetermine KV cache size
             )?),
-            (block_size, Some(gpu_mem), _, true) => {
+            (block_size, Some(gpu_mem), _, false) => {
                 Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
             }
             (_, _, _, _) => None,
