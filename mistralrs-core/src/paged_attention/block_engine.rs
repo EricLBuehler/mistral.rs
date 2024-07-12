@@ -24,8 +24,11 @@ impl LogicalTokenBlock {
     }
 
     pub fn is_full(&self) -> bool {
-        // FIX(EricLBuehler): todo fix. This is a hack to have one extra block table allocated.
-        self.num_tokens + 1 == self.block_size
+        self.num_tokens == self.block_size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_tokens == 0
     }
 
     pub fn append_token_id(&mut self, token: usize) {

@@ -79,7 +79,7 @@ enum SequenceCustomMetadata {
 macro_rules! blocks_to_add_new_tok {
     ($logical_token_blocks:expr) => {{
         let last = $logical_token_blocks.last();
-        if !last.is_some_and(|last| last.is_full()) {
+        if !last.is_some_and(|last| last.is_full() || last.is_empty()) {
             // If we have space
             0
         } else {
@@ -96,16 +96,20 @@ impl SequenceCustomMetadata {
                 block_size,
             } => {
                 let last = logical_token_blocks.last_mut();
-                if last.is_some() && !last.as_ref().is_some_and(|last| last.is_full()) {
-                    // If we have space
-                    let last = last.unwrap();
-                    last.append_token_id(tok);
-                } else {
+                match last {
+                    Some(last) => {
+                        last.append_token_id(tok);
+                    }
+                    None => {
+                        logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
+                        logical_token_blocks
+                            .last_mut()
+                            .unwrap()
+                            .append_token_id(tok);
+                    }
+                }
+                if logical_token_blocks.last().as_ref().unwrap().is_full() {
                     logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
-                    logical_token_blocks
-                        .last_mut()
-                        .unwrap()
-                        .append_token_id(tok);
                 }
             }
             Self::None => (),
