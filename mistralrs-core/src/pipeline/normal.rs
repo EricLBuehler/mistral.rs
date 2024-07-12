@@ -315,6 +315,7 @@ impl Loader for NormalLoader {
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
+                device,
             )?;
             let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
             (Some(cache_config), Some(cache_engine))

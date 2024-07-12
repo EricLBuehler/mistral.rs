@@ -43,7 +43,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         false,
         DeviceMapMetadata::dummy(),
         None,
-        Some(PagedAttentionConfig::new(Some(32), 1024, 4096)?),
+        Some(PagedAttentionConfig::new(Some(32), 1024, None)?), // Automatically determine memory usage
     )?;
     let config = pipeline
         .blocking_lock()

@@ -337,6 +337,7 @@ impl Runner {
         anymoe_config = None,
         pa_gpu_mem = None,
         pa_blk_size = None,
+        no_paged_attn = false,
     ))]
     fn new(
         which: Which,
@@ -352,6 +353,7 @@ impl Runner {
         anymoe_config: Option<AnyMoeConfig>,
         pa_gpu_mem: Option<usize>,
         pa_blk_size: Option<usize>,
+        no_paged_attn: bool,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -460,17 +462,18 @@ impl Runner {
             None => DeviceMapMetadata::dummy(),
         };
 
-        let cache_config = if pa_gpu_mem.is_some() {
-            // Allocate 0.5 GB of CPU memory just as a placeholder.
-            // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-            Some(PagedAttentionConfig::new(
-                pa_blk_size,
-                512,
-                pa_gpu_mem.unwrap(),
-            )?)
-        } else {
-            None
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        let cache_config = match (pa_blk_size, pa_gpu_mem, device.is_cuda(), no_paged_attn) {
+            (block_size, None, true, true) => Some(PagedAttentionConfig::new(
+                block_size, 512, None, // Autodetermine KV cache size
+            )?),
+            (block_size, Some(gpu_mem), _, true) => {
+                Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
+            }
+            (_, _, _, _) => None,
         };
+
         let pipeline = loader
             .load_model_from_hf(
                 None,

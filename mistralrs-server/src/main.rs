@@ -121,13 +121,19 @@ struct Args {
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is set, Paged Attention will be used.
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to to the
+    /// available GPU memory. Paged Attention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Block size (number of tokens per block) for Paged Attention. If this is set, then so must `pa_gpu_mem` be to use Paged Attention.
+    /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
+    /// Paged Attention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
+
+    /// Disable Paged Attention on CUDA.
+    #[arg(long = "no-paged-attn", default_value_t = false)]
+    no_paged_attn: bool,
 }
 
 #[utoipa::path(
@@ -327,16 +333,21 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
-    let cache_config = if args.paged_attn_gpu_mem.is_some() {
-        // Allocate 0.5 GB of CPU memory just as a placeholder.
-        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        Some(PagedAttentionConfig::new(
-            args.paged_attn_block_size,
-            512,
-            args.paged_attn_gpu_mem.unwrap(),
-        )?)
-    } else {
-        None
+    // Allocate 0.5 GB of CPU memory just as a placeholder.
+    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+    let cache_config = match (
+        args.paged_attn_block_size,
+        args.paged_attn_gpu_mem,
+        device.is_cuda(),
+        args.no_paged_attn,
+    ) {
+        (block_size, None, true, true) => Some(PagedAttentionConfig::new(
+            block_size, 512, None, // Autodetermine KV cache size
+        )?),
+        (block_size, Some(gpu_mem), _, true) => {
+            Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
+        }
+        (_, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
