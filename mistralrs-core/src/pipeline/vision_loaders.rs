@@ -163,6 +163,8 @@ impl VisionModelLoader for Idefics2Loader {
 // ======================== LLaVANext Loader
 
 /// [`VisionLoader`] for an LLaVANext Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVANextLoader;
 
 impl VisionModelLoader for LLaVANextLoader {
@@ -205,6 +207,8 @@ impl VisionModelLoader for LLaVANextLoader {
 // ======================== LLaVA Loader
 
 /// [`VisionLoader`] for an LLaVA Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVALoader;
 
 impl VisionModelLoader for LLaVALoader {
