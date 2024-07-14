@@ -184,11 +184,6 @@ impl Loader for VisionLoader {
             Device::Cpu
         };
 
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "PagedAttention is not supported for vision models"
-        );
-
         let attention_mechanism = if paged_attn_config.is_some() {
             AttentionImplementation::PagedAttention
         } else {
