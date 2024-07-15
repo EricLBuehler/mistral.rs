@@ -6,7 +6,7 @@ Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and b
 
 > Note: The default block size if not specified is 32.
 
-> Warning: When using dynamic adapter activation or sending re-ISQ requests, it may trigger OOM because the Paged Attention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount (recommended) or disable paged attention.
+> Note: if OOM happens (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it happens because the Paged Attention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
 
 **There are more features being added to this:**
 - GGML model support 
@@ -23,14 +23,14 @@ Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and b
 
 ## Using the CLI
 
-Add the `--pa-gpu-mem` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.
+Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.
 
 ```
 cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 --isq Q4K plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
 ```
-cargo run --release --features cuda -- -i --pa-gpu-mem 8192 --pa-blk-size 32 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
+cargo run --release --features cuda -- -i --pa-gpu-mem-usage .95 --pa-blk-size 32 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
 ```
 
 ## Using the Rust API
