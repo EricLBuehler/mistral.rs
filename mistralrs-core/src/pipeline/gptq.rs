@@ -12,6 +12,7 @@ use super::{
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -23,7 +24,7 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     do_sample, get_mut_arcmutex, get_paths, normal_model_loader, DeviceMapMetadata,
-    NormalLoaderType, Pipeline, TryIntoDType,
+    NormalLoaderType, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -195,6 +196,7 @@ impl Loader for GptqLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -205,7 +207,15 @@ impl Loader for GptqLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -217,6 +227,7 @@ impl Loader for GptqLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -256,7 +267,8 @@ impl Loader for GptqLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                AttentionImplementation::Eager
             ),
             ModelKind::AdapterQuantized {
                 adapter: AdapterKind::XLora,
@@ -306,6 +318,9 @@ impl Loader for GptqLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
+                sliding_window: todo!(),
+                cache_config: todo!(),
+                cache_engine: todo!(),
             }),
         })))
     }
@@ -399,6 +414,7 @@ impl Pipeline for GptqPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
@@ -407,6 +423,7 @@ impl Pipeline for GptqPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
+                todo!(),
             ),
             true => self.model.xlora_forward(
                 &input_ids,

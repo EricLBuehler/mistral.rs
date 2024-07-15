@@ -13,6 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     layers_utils::repeat_kv,
+    paged_attention::ModelConfigMetadata,
     pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
     utils::progress::NiceProgressBar,
 };
@@ -352,7 +353,10 @@ impl Llama {
 }
 
 impl IsqModel for Llama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        unreachable!()
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
         unreachable!()
     }
 }
@@ -399,6 +403,9 @@ impl NormalModel for Llama {
     }
     fn max_seq_len(&self) -> usize {
         self.blocks[0].attn.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        todo!()
     }
 }
 

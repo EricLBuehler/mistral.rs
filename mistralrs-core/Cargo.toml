@@ -71,15 +71,16 @@ base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"] }
 mistralrs-paged-attn = { version = "0.1.13", path = "../mistralrs-paged-attn", optional = true }
+mistralrs-quant = { version = "0.1.13", path = "../mistralrs-quant", optional = true }
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
-cudnn = ["candle-core/cudnn", "mistralrs-quant/cudnn"]
-metal = ["candle-core/metal", "candle-nn/metal", "mistralrs-quant/metal"]
-flash-attn = ["cuda", "dep:candle-flash-attn", "mistralrs-quant/flash-attn"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
-mkl = ["candle-core/mkl", "candle-nn/mkl", "mistralrs-quant/mkl"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:mistralrs-quant", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
+cudnn = ["candle-core/cudnn"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+flash-attn = ["cuda", "dep:candle-flash-attn"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+mkl = ["candle-core/mkl", "candle-nn/mkl"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

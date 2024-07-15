@@ -2352,8 +2352,8 @@ dependencies = [
  "lrtable",
  "minijinja",
  "minijinja-contrib",
- "mistralrs-quant",
  "mistralrs-paged-attn",
+ "mistralrs-quant",
  "mistralrs-vision",
  "once_cell",
  "plotly",
@@ -2416,7 +2416,7 @@ dependencies = [
 name = "mistralrs-quant"
 version = "0.1.26"
 dependencies = [
- "bindgen_cuda",
+ "bindgen_cuda 0.1.5",
  "candle-core",
  "candle-nn",
  "half",

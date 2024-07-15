@@ -19,7 +19,7 @@ use super::progress::{Joinable, NonThreadingHandle, Parellelize};
 
 trait TensorLoaderBackend {
     fn get_names(&self) -> Vec<String>;
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor>;
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor>;
 }
 
 struct SafetensorBackend(MmapedSafetensors);
@@ -32,8 +32,13 @@ impl TensorLoaderBackend for SafetensorBackend {
             .map(|(name, _)| name)
             .collect::<Vec<_>>()
     }
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
-        self.0.load(name, device)?.to_dtype(dtype)
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
+        let t = self.0.load(name, device)?;
+        if let Some(dtype) = dtype {
+            t.to_dtype(dtype)
+        } else {
+            Ok(t)
+        }
     }
 }
 
@@ -43,14 +48,19 @@ impl TensorLoaderBackend for PickleBackend {
     fn get_names(&self) -> Vec<String> {
         self.0.tensor_infos().keys().cloned().collect::<Vec<_>>()
     }
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
-        self.0
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
+        let t = self
+            .0
             .get(name)?
             .ok_or(candle_core::Error::Msg(format!(
                 "Could not load tensor {name}"
             )))?
-            .to_device(device)?
-            .to_dtype(dtype)
+            .to_device(device)?;
+        if let Some(dtype) = dtype {
+            t.to_dtype(dtype)
+        } else {
+            Ok(t)
+        }
     }
 }
 
