@@ -80,6 +80,7 @@ pub fn calculate_cache_config(
     }
     let dtype_size = dtype.size_in_bytes();
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let mem_gpu = match mem_gpu {
         Either::Left(v) => v,
         Either::Right(f) => {
