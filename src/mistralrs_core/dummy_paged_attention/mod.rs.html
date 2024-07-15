@@ -100,6 +100,7 @@
 <a href="#100" id="100">100</a>
 <a href="#101" id="101">101</a>
 <a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
 </pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
@@ -118,6 +119,7 @@
 <span class="kw">pub use </span>cache_engine::{CacheConfig, CacheEngine};
 <span class="kw">use </span>candle_core::{DType, Device};
 <span class="kw">pub use </span>config::{ModelConfigLike, ModelConfigMetadata};
+<span class="kw">use </span>either::Either;
 <span class="kw">pub use </span>layers::PagedAttention;
 <span class="kw">pub use </span>scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -131,14 +133,14 @@
 </span><span class="kw">pub struct </span>PagedAttentionConfig {
     <span class="kw">pub</span>(<span class="kw">crate</span>) block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) mem_cpu: usize,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) mem_gpu: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) mem_gpu: Either&lt;usize, f32&gt;,
 }
 
 <span class="kw">impl </span>PagedAttentionConfig {
     <span class="kw">pub fn </span>new(
         _block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         _mem_cpu: usize,
-        _mem_gpu: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        _mem_gpu: Either&lt;usize, f32&gt;,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
         <span class="macro">anyhow::bail!</span>(<span class="string">"PagedAttention is only supported for CUDA, compile with feature `cuda`."</span>)
     }
@@ -166,9 +168,9 @@
     </span>};
 }
 
-<span class="doccomment">/// Memory values are in MBs. Specify block size or the default is 32.
+<span class="doccomment">/// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 </span><span class="kw">pub fn </span>calculate_cache_config(
-    mem_gpu: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    mem_gpu: Either&lt;usize, f32&gt;,
     mem_cpu: usize,
     block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     dtype: DType,
@@ -181,16 +183,16 @@
     }
     <span class="kw">let </span>dtype_size = dtype.size_in_bytes();
 
-    <span class="kw">let </span>mem_gpu = <span class="kw">match </span>mem_gpu {
-        <span class="prelude-val">Some</span>(v) =&gt; v,
-        <span class="prelude-val">None </span>=&gt; {
-            <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span>/ SIZE_IN_MB;
-            <span class="macro">info!</span>(
-                <span class="string">"Automatically using {} MB for Paged Attention KV cache"</span>,
-                free - <span class="number">512
-            </span>);
-            free - <span class="number">512
-        </span>}
+    <span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    </span><span class="kw">let </span>mem_gpu = <span class="kw">match </span>mem_gpu {
+        Either::Left(v) =&gt; v,
+        Either::Right(f) =&gt; {
+            <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
+            <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32 * f;
+            <span class="kw">let </span>size = (total - free) <span class="kw">as </span>usize;
+            <span class="macro">info!</span>(<span class="string">"Allocating {size} MB for Paged Attention KV cache"</span>);
+            size
+        }
     };
 
     <span class="kw">let </span>num_gpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
