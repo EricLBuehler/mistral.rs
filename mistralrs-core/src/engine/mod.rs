@@ -276,9 +276,12 @@ impl Engine {
                             .map(|seq| seq.lock().unwrap())
                             .collect::<Vec<_>>();
 
+                        let mut guards_mut =
+                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
                         let res = pipeline
                             .step(
-                                &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
+                                &mut guards_mut,
                                 is_prompt,
                                 &mut self.prefix_cacher,
                                 self.disable_eos_stop,
@@ -295,7 +298,7 @@ impl Engine {
                         handle_pipeline_forward_error!(
                             "step",
                             res,
-                            &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
+                            &mut guards_mut,
                             self.pipeline,
                             'lp,
                             self.prefix_cacher
