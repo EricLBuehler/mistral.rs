@@ -76,7 +76,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
     ) -> anyhow::Result<Box<dyn Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
@@ -245,6 +245,11 @@ impl InputsProcessor for Phi3InputsProcessor {
                     .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                     .collect::<Vec<_>>(),
             );
+            if let Some(ref mut metadata) = paged_attn_metadata {
+                // Free and then reallocate as appropriate
+                metadata.block_engine.free_sequence(*seq.id());
+                metadata.block_engine.allocate(*seq);
+            }
 
             toks.push(input_ids);
         }
@@ -262,7 +267,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )?
         } else {
             get_completion_input(
@@ -271,7 +276,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )?
         };
 

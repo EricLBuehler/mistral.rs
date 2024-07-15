@@ -271,13 +271,12 @@ impl Engine {
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                            let block_tables = self.scheduler.block_tables().unwrap();
                             let block_size = self.scheduler.block_size().unwrap();
 
                             let metadata = PagedAttentionMeta {
-                                block_tables,
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
+                                block_engine: self.scheduler.block_engine().unwrap(),
                             };
 
                             pipeline

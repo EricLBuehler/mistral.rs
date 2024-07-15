@@ -345,4 +345,7 @@ impl Scheduler for PagedAttentionScheduler {
     fn free_finished_sequence_groups(&mut self) {
         self.free_finished_sequence_groups()
     }
+    fn block_engine(&mut self) -> Option<&mut BlockEngine> {
+        Some(&mut self.block_engine)
+    }
 }
