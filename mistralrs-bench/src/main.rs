@@ -3,10 +3,10 @@ use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use either::Either;
 use mistralrs_core::{
-    initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
-    ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
-    SamplingParams, SchedulerConfig, TokenSource, Usage,
+    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -381,7 +381,7 @@ fn main() -> anyhow::Result<()> {
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
-        device.is_cuda(),
+        paged_attn_supported(),
         args.no_paged_attn,
     ) {
         (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
