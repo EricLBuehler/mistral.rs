@@ -1,3 +1,9 @@
+//! This is simply an example of configuring the paged attention.
+//!
+//! Paged attention is used by default on all CUDA devices.
+//!
+//! Otherwise, it defaults to 90% usage and block size = 32.
+
 use either::Either;
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -43,7 +49,11 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         false,
         DeviceMapMetadata::dummy(),
         None,
-        Some(PagedAttentionConfig::new(Some(32), 1024, None)?), // Automatically determine memory usage
+        Some(PagedAttentionConfig::new(
+            Some(32),
+            1024,
+            Either::Right(0.9),
+        )?), // Automatically determine memory usage
     )?;
     let config = pipeline
         .blocking_lock()

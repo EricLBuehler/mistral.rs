@@ -16,6 +16,7 @@ pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
 use candle_core::{DType, Device};
 pub use config::{ModelConfigLike, ModelConfigMetadata};
+use either::Either;
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -29,14 +30,14 @@ use tracing::info;
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_cpu: usize,
-    pub(crate) mem_gpu: Option<usize>,
+    pub(crate) mem_gpu: Either<usize, f32>,
 }
 
 impl PagedAttentionConfig {
     pub fn new(
         _block_size: Option<usize>,
         _mem_cpu: usize,
-        _mem_gpu: Option<usize>,
+        _mem_gpu: Either<usize, f32>,
     ) -> anyhow::Result<Self> {
         anyhow::bail!("PagedAttention is only supported for CUDA, compile with feature `cuda`.")
     }
@@ -64,9 +65,9 @@ macro_rules! mb_to_blocks {
     };
 }
 
-/// Memory values are in MBs. Specify block size or the default is 32.
+/// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 pub fn calculate_cache_config(
-    mem_gpu: Option<usize>,
+    mem_gpu: Either<usize, f32>,
     mem_cpu: usize,
     block_size: Option<usize>,
     dtype: DType,
@@ -80,14 +81,13 @@ pub fn calculate_cache_config(
     let dtype_size = dtype.size_in_bytes();
 
     let mem_gpu = match mem_gpu {
-        Some(v) => v,
-        None => {
-            let free = MemoryUsage.get_memory_available(device)? / SIZE_IN_MB;
-            info!(
-                "Automatically using {} MB for Paged Attention KV cache",
-                free - 512
-            );
-            free - 512
+        Either::Left(v) => v,
+        Either::Right(f) => {
+            let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
+            let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32 * f;
+            let size = (total - free) as usize;
+            info!("Allocating {size} MB for Paged Attention KV cache");
+            size
         }
     };
 

@@ -351,7 +351,7 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<usize>,
+        pa_gpu_mem: Option<Either<usize, f32>>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
     ) -> PyResult<Self> {
@@ -466,10 +466,12 @@ impl Runner {
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
         let cache_config = match (pa_blk_size, pa_gpu_mem, device.is_cuda(), no_paged_attn) {
             (block_size, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size, 512, None, // Autodetermine KV cache size
+                block_size,
+                512,
+                Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
             )?),
-            (block_size, Some(gpu_mem), _, false) => {
-                Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
+            (block_size, Some(either), true, false) => {
+                Some(PagedAttentionConfig::new(block_size, 512, either)?)
             }
             (_, _, _, _) => None,
         };

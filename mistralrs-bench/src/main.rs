@@ -1,6 +1,7 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
+use either::Either;
 use mistralrs_core::{
     initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
     DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
@@ -278,10 +279,16 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to to the
-    /// available GPU memory. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to
+    /// using `pa-gpu-mem-usage` set to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
+
+    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention.
+    /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// This is always used over `pa-gpu-mem` if both are specified.
+    #[arg(long = "pa-gpu-mem-usage")]
+    paged_attn_gpu_mem_usage: Option<f32>,
 
     /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
     /// Paged Attention is only supported on CUDA and is always automatically activated.
@@ -373,16 +380,32 @@ fn main() -> anyhow::Result<()> {
     let cache_config = match (
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
+        args.paged_attn_gpu_mem_usage,
         device.is_cuda(),
         args.no_paged_attn,
     ) {
-        (block_size, None, true, false) => Some(PagedAttentionConfig::new(
-            block_size, 512, None, // Autodetermine KV cache size
+        (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
         )?),
-        (block_size, Some(gpu_mem), _, false) => {
-            Some(PagedAttentionConfig::new(block_size, 512, Some(gpu_mem))?)
+        (block_size, Some(m), None, true, false) => {
+            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
         }
-        (_, _, _, _) => None,
+        (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(f),
+        )?),
+        (block_size, Some(_m), Some(f), true, false) => {
+            info!("Both memory size and usage were specified, defaulting to the usage value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                Either::Right(f),
+            )?)
+        }
+        (_, _, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
