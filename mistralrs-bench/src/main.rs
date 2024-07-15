@@ -284,7 +284,7 @@ struct Args {
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention.
+    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
     /// This is always used over `pa-gpu-mem` if both are specified.
     #[arg(long = "pa-gpu-mem-usage")]
