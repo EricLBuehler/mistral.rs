@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     engine::TERMINATE_ALL_NEXT_STEP,
-    paged_attention::BlockTables,
+    paged_attention::{BlockEngine, BlockTables},
     sequence::{Sequence, SequenceState, StopReason},
 };
 
@@ -323,4 +323,7 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
         None
     }
     fn free_finished_sequence_groups(&mut self) {}
+    fn block_engine(&mut self) -> Option<&mut BlockEngine> {
+        None
+    }
 }

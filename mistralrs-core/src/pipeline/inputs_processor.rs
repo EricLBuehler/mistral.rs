@@ -47,7 +47,7 @@ pub mod text_models_inputs_processor {
 
     use crate::{
         layers::set_use_matmul_via_f16,
-        paged_attention::{BlockTables, _PAD_SLOT_ID},
+        paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };
 
@@ -71,11 +71,10 @@ pub mod text_models_inputs_processor {
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
     }
 
-    #[derive(Clone)]
     pub struct PagedAttentionMeta<'a> {
-        pub block_tables: &'a BlockTables,
         pub sliding_window: Option<usize>,
         pub block_size: usize,
+        pub block_engine: &'a mut BlockEngine,
     }
 
     #[derive(Clone, Debug)]
@@ -101,7 +100,7 @@ pub mod text_models_inputs_processor {
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
         let max_len = input_seqs
             .iter()
@@ -128,8 +127,8 @@ pub mod text_models_inputs_processor {
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
-            if let Some(ref paged_attn_metadata) = paged_attn_metadata {
-                let table = paged_attn_metadata.block_tables.get(seq.id());
+            if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
+                let table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
                 let prompt_len = seq.len();
 
                 if table.is_none() {
@@ -240,7 +239,7 @@ pub mod text_models_inputs_processor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
         if no_kv_cache {
             return get_prompt_input(
@@ -269,8 +268,12 @@ pub mod text_models_inputs_processor {
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
-            if let Some(ref paged_attn_metadata) = paged_attn_metadata {
-                let table = paged_attn_metadata.block_tables.get(seq.id()).unwrap();
+            if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
+                let table = paged_attn_metadata
+                    .block_engine
+                    .block_tables
+                    .get(seq.id())
+                    .unwrap();
 
                 let table = table
                     .iter()
@@ -393,7 +396,7 @@ pub mod text_models_inputs_processor {
             no_kv_cache: bool,
             last_n_context_len: Option<(usize, usize)>,
             _: Option<Arc<dyn Any>>,
-            paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+            mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         ) -> Result<Box<dyn Any>> {
             if is_xlora && !is_prompt {
                 let InputMetadata {
@@ -411,7 +414,7 @@ pub mod text_models_inputs_processor {
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata.clone(),
+                    paged_attn_metadata.as_mut(),
                 )?;
                 let InputMetadata {
                     input: input_ids,
@@ -429,7 +432,7 @@ pub mod text_models_inputs_processor {
                     device,
                     no_kv_cache,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,
@@ -458,7 +461,7 @@ pub mod text_models_inputs_processor {
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )?;
                 Ok(Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
@@ -487,7 +490,7 @@ pub mod text_models_inputs_processor {
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,
@@ -517,7 +520,7 @@ pub mod text_models_inputs_processor {
                     device,
                     no_kv_cache,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )?;
                 Ok(Box::new(ModelInputs {
                     input_ids,

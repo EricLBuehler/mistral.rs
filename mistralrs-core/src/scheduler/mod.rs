@@ -4,8 +4,8 @@ pub use default_scheduler::{DefaultScheduler, DefaultSchedulerMethod, DefaultSch
 
 use crate::{
     paged_attention::{
-        BlockTables, CacheConfig, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
-        PagedAttentionSchedulerOutput,
+        BlockEngine, BlockTables, CacheConfig, PagedAttentionScheduler,
+        PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
 };
@@ -55,4 +55,5 @@ pub trait Scheduler {
     // Paged Attention metadata
     fn block_tables(&self) -> Option<&BlockTables>;
     fn block_size(&self) -> Option<usize>;
+    fn block_engine(&mut self) -> Option<&mut BlockEngine>;
 }
