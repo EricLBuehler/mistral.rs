@@ -257,18 +257,7 @@ impl Engine {
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
                     if !output.scheduled.is_empty() {
-                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
-
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
-
-                        let block_tables = self.scheduler.block_tables().unwrap();
-                        let block_size = self.scheduler.block_size().unwrap();
-
-                        let metadata = PagedAttentionMeta {
-                            block_tables,
-                            block_size,
-                            sliding_window: pipeline.get_metadata().sliding_window,
-                        };
 
                         let mut guards = output
                             .scheduled
@@ -276,30 +265,71 @@ impl Engine {
                             .map(|seq| seq.lock().unwrap())
                             .collect::<Vec<_>>();
 
-                        let res = pipeline
-                            .step(
-                                &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
-                                is_prompt,
-                                &mut self.prefix_cacher,
-                                self.disable_eos_stop,
-                                rng.clone(),
-                                CacheBackendMetadata::PagedAttention {
-                                    metadata,
-                                    blocks_to_copy: output.blocks_to_copy,
-                                    blocks_to_swap_in: output.blocks_to_swap_in,
-                                    blocks_to_swap_out: output.blocks_to_swap_out,
-                                },
-                            )
-                            .await;
+                        let mut guards_mut =
+                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
+                        let res = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+                            let block_tables = self.scheduler.block_tables().unwrap();
+                            let block_size = self.scheduler.block_size().unwrap();
+
+                            let metadata = PagedAttentionMeta {
+                                block_tables,
+                                block_size,
+                                sliding_window: pipeline.get_metadata().sliding_window,
+                            };
+
+                            pipeline
+                                .step(
+                                    &mut guards_mut,
+                                    is_prompt,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::PagedAttention {
+                                        metadata,
+                                        blocks_to_copy: output.blocks_to_copy,
+                                        blocks_to_swap_in: output.blocks_to_swap_in,
+                                        blocks_to_swap_out: output.blocks_to_swap_out,
+                                    },
+                                )
+                                .await
+                        };
 
                         handle_pipeline_forward_error!(
                             "step",
                             res,
-                            &mut guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>(),
+                            &mut guards_mut,
                             self.pipeline,
                             'lp,
                             self.prefix_cacher
                         );
+
+                        if self.is_debug {
+                            let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                            let total_len = guards.len();
+                            if total_len > 0 {
+                                let lengths = guards
+                                    .iter()
+                                    .map(|seq| seq.len().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+
+                                let (prompt_lengths, completion_lengths) = if is_prompt {
+                                    (lengths, "".to_string())
+                                } else {
+                                    ("".to_string(), lengths)
+                                };
+
+                                tracing::info!(
+                                    "Prompt[{}] Completion[{}] - {}ms",
+                                    prompt_lengths,
+                                    completion_lengths,
+                                    ms_from_last_run * 1000.,
+                                );
+                            }
+                        }
 
                         if is_prompt {
                             for mut seq in guards {
