@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
-use crate::lora::{LoraConfig, Ordering};
+use crate::{
+    lora::{LoraConfig, Ordering},
+    paged_attention::AttentionImplementation,
+};
 use anyhow::Result;
 use candle_core::Device;
 use candle_nn::{Activation, VarBuilder};
@@ -30,6 +33,7 @@ pub trait NormalModelLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -54,8 +58,8 @@ use crate::{
     DeviceMapMetadata,
 };
 
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {
     #[serde(rename = "mistral")]
@@ -145,12 +149,14 @@ impl NormalModelLoader for MistralLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mistral::Model::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -246,12 +252,14 @@ impl NormalModelLoader for GemmaLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::gemma::Model::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -339,12 +347,14 @@ impl NormalModelLoader for LlamaLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -430,12 +440,14 @@ impl NormalModelLoader for MixtralLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mixtral::Model::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -524,12 +536,14 @@ impl NormalModelLoader for Phi2Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi2::Model::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -625,12 +639,14 @@ impl NormalModelLoader for Phi3Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi3::Model::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -721,12 +737,14 @@ impl NormalModelLoader for Qwen2Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::qwen2::Model::new(
             &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -767,6 +785,7 @@ impl NormalModelLoader for Gemma2Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         if use_flash_attn {
             warn!("Gemma 2 does not support flash attention.");
@@ -776,6 +795,7 @@ impl NormalModelLoader for Gemma2Loader {
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(
@@ -865,12 +885,14 @@ impl NormalModelLoader for Starcoder2Loader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::starcoder2::Model::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn load_xlora(

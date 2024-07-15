@@ -14,7 +14,11 @@ use crate::{
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, QLinear},
     merge_delta,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -140,6 +144,13 @@ impl MlpLayer for MLP {
             self.down_proj.inner(),
         ]
     }
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        vec![
+            self.gate_proj.bias_mut(),
+            self.up_proj.bias_mut(),
+            self.down_proj.bias_mut(),
+        ]
+    }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
     }
@@ -227,8 +238,9 @@ impl Attention {
             rotary_emb,
             query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
-            use_sliding_window: layer_idx % 2 != 0,
-            sliding_window: if layer_idx % 2 != 0 {
+            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            sliding_window: if layer_idx % 2 == 0 {
+                // ^ Order is SWA, global, SWA
                 Some(cfg.sliding_window)
             } else {
                 None
@@ -445,6 +457,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -453,6 +466,7 @@ impl Model {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata
             .mapper
@@ -467,6 +481,10 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
+            // TODO softcapping in paged attn
+            candle_core::bail!("Gemma 2 does not support Paged Attention.");
+        }
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
@@ -511,6 +529,13 @@ impl Model {
             mapper,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 
@@ -526,14 +551,14 @@ impl Model {
         let mut cache = self.cache.lock();
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
         let sliding_attention_mask = CausalMasker
             .make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
-                &cache,
+                &*cache,
                 Some(self.sliding_window),
                 xs.dtype(),
                 self.layers[0].self_attn.num_heads,
@@ -574,7 +599,7 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -593,6 +618,24 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
+            tensors.push((layer.self_attn.o_proj.bias_mut(), Some(i)));
+            tensors.extend(
+                layer
+                    .mlp
+                    .get_isq_biases()
+                    .into_iter()
+                    .map(|b| (b, Some(i)))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        (tensors, &*self.mapper)
+    }
 }
 
 impl NormalModel for Model {
@@ -603,6 +646,7 @@ impl NormalModel for Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -637,6 +681,9 @@ impl NormalModel for Model {
     }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

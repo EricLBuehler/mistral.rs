@@ -38,8 +38,6 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 runner = Runner(
     which=Which.Plain(
         model_id="google/gemma-2-9b-it",
-        tokenizer_json=None,
-        repeat_last_n=64,
         arch=Architecture.Gemma2,
     ),
 )

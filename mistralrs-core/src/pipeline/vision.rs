@@ -10,6 +10,7 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -22,7 +23,7 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, Pipeline, TryIntoDType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -126,6 +127,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -136,7 +138,15 @@ impl Loader for VisionLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -148,6 +158,7 @@ impl Loader for VisionLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -173,6 +184,12 @@ impl Loader for VisionLoader {
             Device::Cpu
         };
 
+        let attention_mechanism = if paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } else {
+            AttentionImplementation::Eager
+        };
+
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -184,7 +201,8 @@ impl Loader for VisionLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             _ => unreachable!(),
         };
@@ -221,10 +239,30 @@ impl Loader for VisionLoader {
             model.quantize(in_situ_quant, device.clone())?;
         }
 
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            anyhow::ensure!(
+                !matches!(self.kind, ModelKind::Adapter { .. }),
+                "PagedAttention does not support adapter models."
+            );
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+                device,
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tok_trie: tok_trie.clone(),
@@ -241,6 +279,9 @@ impl Loader for VisionLoader {
                 kind: self.kind.clone(),
                 has_no_kv_cache: false,
                 activation_dtype: dtype,
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
@@ -328,6 +369,7 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
+            mut paged_attn_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
@@ -337,6 +379,12 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             model_specific_args,
+            self.get_metadata().cache_engine.as_ref().map(|engine| {
+                (
+                    engine.get_kv_cache().clone(),
+                    paged_attn_meta.as_mut().unwrap(),
+                )
+            }),
         )
     }
     async fn sample(

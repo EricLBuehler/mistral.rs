@@ -5,7 +5,7 @@ use std::{
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
-    Device, Tensor,
+    DType, Device, Tensor,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
@@ -77,69 +77,140 @@ macro_rules! generate_isq {
 }
 
 pub trait IsqModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
+    /// Get matmuls for ISQ quantization
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
+    #[allow(clippy::type_complexity)]
+    /// Get biases for ISQ device mapping
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper);
     /// Quantize the model in-situ.
     fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
-        let (tensors, mapper) = self.get_tensors();
-        let total_tensors = tensors.len();
-        let n_quantized = AtomicUsize::new(0);
-        info!(
-            "Applying in-situ quantization into {dtype:?} to {total_tensors} tensors in parallel."
-        );
-        let bar = ProgressBar::new(total_tensors as u64);
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                .unwrap()
-                .progress_chars("#>-"),
-        );
-
-        let mut devices = Vec::new();
-        for (_, layer) in &tensors {
-            let device = if let Some(layer) = layer {
-                mapper.device_for(*layer, false).unwrap_or(&device)
-            } else {
-                &device
-            };
-            devices.push(device.clone());
-        }
-
-        let t_start = Instant::now();
-        #[cfg(not(feature = "metal"))]
         {
-            // NOTE(EricLBuehler): On version 0.2.0, remove this
-            let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
-            if isq_low_mem {
-                warn!("ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant");
+            let (tensors, mapper) = self.get_matmuls();
+            let total_tensors = tensors.len();
+            let n_quantized = AtomicUsize::new(0);
+            info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
+            let bar = ProgressBar::new(total_tensors as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+
+            let mut devices = Vec::new();
+            for (_, layer) in &tensors {
+                let device = if let Some(layer) = layer {
+                    mapper.device_for(*layer, false).unwrap_or(&device)
+                } else {
+                    &device
+                };
+                devices.push(device.clone());
             }
 
-            info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+            let t_start = Instant::now();
+            #[cfg(not(feature = "metal"))]
+            {
+                info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
-            use indicatif::ParallelProgressIterator;
-            use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-            tensors
-                .into_par_iter()
-                .zip(devices)
-                .progress_with(bar)
-                .for_each(|((tensor, _), device)| {
-                    generate_isq!(tensor, device, dtype, n_quantized)
-                });
+                use indicatif::ParallelProgressIterator;
+                use rayon::iter::{
+                    IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
+                };
+                tensors
+                    .into_par_iter()
+                    .zip(devices)
+                    .progress_with(bar)
+                    .for_each(|((tensor, _), device)| {
+                        generate_isq!(tensor, device, dtype, n_quantized)
+                    });
+            }
+
+            #[cfg(feature = "metal")]
+            {
+                use indicatif::ProgressIterator;
+                tensors
+                    .into_iter()
+                    .zip(devices)
+                    .progress_with(bar)
+                    .for_each(|((tensor, _), device)| {
+                        generate_isq!(tensor, device, dtype, n_quantized)
+                    });
+            }
+            let delta = Instant::now().duration_since(t_start).as_secs_f32();
+            info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
         }
-
-        #[cfg(feature = "metal")]
         {
-            use indicatif::ProgressIterator;
-            tensors
-                .into_iter()
-                .zip(devices)
-                .progress_with(bar)
-                .for_each(|((tensor, _), device)| {
-                    generate_isq!(tensor, device, dtype, n_quantized)
-                });
-        }
-        let delta = Instant::now().duration_since(t_start).as_secs_f32();
-        info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
+            let (tensors, mapper) = self.get_biases();
+            let total_tensors = tensors.len();
+            info!("Applying in-situ quantization bias device mapping to {total_tensors} biases.");
+            let bar = ProgressBar::new(total_tensors as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
 
+            let mut devices = Vec::new();
+            for (_, layer) in &tensors {
+                let device = if let Some(layer) = layer {
+                    mapper.device_for(*layer, false).unwrap_or(&device)
+                } else {
+                    &device
+                };
+                devices.push(device.clone());
+            }
+
+            let t_start = Instant::now();
+            #[cfg(not(feature = "metal"))]
+            {
+                // NOTE(EricLBuehler): On version 0.2.0, remove this
+                let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
+                if isq_low_mem {
+                    warn!("ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant");
+                }
+
+                info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+
+                use indicatif::ParallelProgressIterator;
+                use rayon::iter::{
+                    IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
+                };
+                tensors
+                    .into_par_iter()
+                    .zip(devices)
+                    .progress_with(bar)
+                    .for_each(|((tensor, _), device)| {
+                        if let Some(tensor) = tensor {
+                            *tensor = tensor
+                                .to_device(&device)
+                                .unwrap()
+                                .to_dtype(DType::F32)
+                                .unwrap();
+                        }
+                    });
+            }
+
+            #[cfg(feature = "metal")]
+            {
+                use indicatif::ProgressIterator;
+                tensors
+                    .into_iter()
+                    .zip(devices)
+                    .progress_with(bar)
+                    .for_each(|((tensor, _), device)| {
+                        if let Some(tensor) = tensor {
+                            *tensor = tensor
+                                .to_device(&device)
+                                .unwrap()
+                                .to_dtype(DType::F32)
+                                .unwrap();
+                        }
+                    });
+            }
+            let delta = Instant::now().duration_since(t_start).as_secs_f32();
+            info!("Applied in-situ quantization device mapping. Took {delta:.2}s",);
+        }
         Ok(())
     }
 }

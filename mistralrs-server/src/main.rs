@@ -7,10 +7,11 @@ use axum::{
 };
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
+use either::Either;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelSelected, Request,
-    SchedulerMethod, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,26 @@ struct Args {
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
+
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to
+    /// using `pa-gpu-mem-usage` set to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    #[arg(long = "pa-gpu-mem")]
+    paged_attn_gpu_mem: Option<usize>,
+
+    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention, from 0 to 1.
+    /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// This is always used over `pa-gpu-mem` if both are specified.
+    #[arg(long = "pa-gpu-mem-usage")]
+    paged_attn_gpu_mem_usage: Option<f32>,
+
+    /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
+    /// Paged Attention is only supported on CUDA and is always automatically activated.
+    #[arg(long = "pa-blk-size")]
+    paged_attn_block_size: Option<usize>,
+
+    /// Disable Paged Attention on CUDA.
+    #[arg(long = "no-paged-attn", default_value_t = false)]
+    no_paged_attn: bool,
 }
 
 #[utoipa::path(
@@ -286,7 +307,7 @@ async fn main() -> Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
                 ordinal: 0,
                 layers,
             }])
@@ -313,10 +334,43 @@ async fn main() -> Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+            DeviceMapMetadata::from_num_device_layers(mapping)
         }
     } else {
         DeviceMapMetadata::dummy()
+    };
+
+    // Allocate 0.5 GB of CPU memory just as a placeholder.
+    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+    let cache_config = match (
+        args.paged_attn_block_size,
+        args.paged_attn_gpu_mem,
+        args.paged_attn_gpu_mem_usage,
+        device.is_cuda(),
+        args.no_paged_attn,
+    ) {
+        (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+        )?),
+        (block_size, Some(m), None, true, false) => {
+            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
+        }
+        (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(f),
+        )?),
+        (block_size, Some(_m), Some(f), true, false) => {
+            info!("Both memory size and usage were specified, defaulting to the usage value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                Either::Right(f),
+            )?)
+        }
+        (_, _, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
@@ -327,18 +381,33 @@ async fn main() -> Result<()> {
         false,
         mapper,
         args.in_situ_quant,
+        cache_config,
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
-    )
-    .with_opt_log(args.log)
-    .with_truncate_sequence(args.truncate_sequence)
-    .with_no_kv_cache(args.no_kv_cache)
-    .with_prefix_cache_n(args.prefix_cache_n)
-    .build();
+    let scheduler_config = if cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: args.max_seqs,
+            config: pipeline
+                .lock()
+                .await
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } else {
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+        }
+    };
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_opt_log(args.log)
+        .with_truncate_sequence(args.truncate_sequence)
+        .with_no_kv_cache(args.no_kv_cache)
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");

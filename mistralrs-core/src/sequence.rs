@@ -10,6 +10,7 @@ use tokio::sync::{
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
@@ -47,7 +48,7 @@ impl Display for StopReason {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SequenceState {
     Done(StopReason),
     RunningPrompt,
@@ -55,12 +56,90 @@ pub enum SequenceState {
     Waiting,
     Error,
     RunningPrefillPrompt,
+    // For PagedAttention:
+    FinishedAborted,
+    FinishedIgnored,
+    Swapped,
 }
 
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),
     None,
+}
+
+enum SequenceCustomMetadata {
+    PagedAttention {
+        logical_token_blocks: Vec<LogicalTokenBlock>,
+        block_size: usize,
+    },
+    None,
+}
+
+macro_rules! blocks_to_add_new_tok {
+    ($logical_token_blocks:expr) => {{
+        let last = $logical_token_blocks.last();
+        if !last.is_some_and(|last| last.is_full() || last.is_empty()) {
+            // If we have space
+            0
+        } else {
+            1
+        }
+    }};
+}
+
+impl SequenceCustomMetadata {
+    fn append_token_to_blocks(&mut self, tok: usize) {
+        match self {
+            Self::PagedAttention {
+                logical_token_blocks,
+                block_size,
+            } => {
+                let last = logical_token_blocks.last_mut();
+                match last {
+                    Some(last) => {
+                        last.append_token_id(tok);
+                    }
+                    None => {
+                        logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
+                        logical_token_blocks
+                            .last_mut()
+                            .unwrap()
+                            .append_token_id(tok);
+                    }
+                }
+                if logical_token_blocks.last().as_ref().unwrap().is_full() {
+                    logical_token_blocks.push(LogicalTokenBlock::new(*block_size));
+                }
+            }
+            Self::None => (),
+        }
+    }
+
+    fn pop_token_from_blocks(&mut self) {
+        match self {
+            Self::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                let last = logical_token_blocks.last_mut().unwrap();
+                last.pop_token();
+            }
+            Self::None => (),
+        }
+    }
+
+    fn append_tokens_to_blocks(&mut self, toks: Vec<usize>) {
+        for tok in toks {
+            self.append_token_to_blocks(tok);
+        }
+    }
+
+    fn remove_tokens_from_blocks(&mut self, n: usize) {
+        for _ in 0..n {
+            self.pop_token_from_blocks();
+        }
+    }
 }
 
 pub struct Sequence {
@@ -106,6 +185,37 @@ pub struct Sequence {
     pub prompt_timestamp: Option<u128>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
+
+    // Custom backend metadata
+    custom_metadata: SequenceCustomMetadata,
+}
+
+impl BlockEngineSequence for Sequence {
+    fn blocks_to_add_new_tok(&self) -> usize {
+        match &self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                blocks_to_add_new_tok!(logical_token_blocks)
+            }
+            SequenceCustomMetadata::None => unreachable!(),
+        }
+    }
+
+    fn get_id(&self) -> usize {
+        self.id
+    }
+
+    fn get_logical_token_blocks(&self) -> usize {
+        match &self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => logical_token_blocks.len(),
+            SequenceCustomMetadata::None => unreachable!(),
+        }
+    }
 }
 
 impl Sequence {
@@ -130,8 +240,20 @@ impl Sequence {
         prefix: Option<String>,
         adapters: Option<Vec<String>>,
         input_images: Option<Vec<image::DynamicImage>>,
+        // Paged attention
+        block_size: Option<usize>,
     ) -> Self {
         let prompt_len = tokens.len();
+        let mut custom_metadata = if let Some(block_size) = block_size {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks: Vec::new(),
+                block_size,
+            }
+        } else {
+            SequenceCustomMetadata::None
+        };
+        custom_metadata
+            .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
         Self {
             tokens,
             logprobs: Vec::new(),
@@ -172,6 +294,7 @@ impl Sequence {
             scheduling_urgency: 0,
             adapters,
             input_images,
+            custom_metadata,
         }
     }
 
@@ -234,22 +357,39 @@ impl Sequence {
     }
 
     pub fn is_running(&self) -> bool {
-        *self.state.read().unwrap() == SequenceState::RunningCompletion
-            || *self.state.read().unwrap() == SequenceState::RunningPrompt
-            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
+        matches!(
+            *self.state.read().unwrap(),
+            SequenceState::RunningCompletion
+                | SequenceState::RunningPrompt
+                | SequenceState::RunningPrefillPrompt
+        )
     }
 
     pub fn is_completion(&self) -> bool {
-        *self.state.read().unwrap() == SequenceState::RunningCompletion
+        matches!(
+            *self.state.read().unwrap(),
+            SequenceState::RunningCompletion
+        )
     }
 
     pub fn is_prompt(&self) -> bool {
-        *self.state.read().unwrap() == SequenceState::RunningPrompt
-            || *self.state.read().unwrap() == SequenceState::RunningPrefillPrompt
+        matches!(
+            *self.state.read().unwrap(),
+            SequenceState::RunningPrompt | SequenceState::RunningPrefillPrompt
+        )
     }
 
     pub fn is_waiting(&self) -> bool {
-        *self.state.read().unwrap() == SequenceState::Waiting
+        matches!(*self.state.read().unwrap(), SequenceState::Waiting)
+    }
+
+    pub fn is_finished_paged_attn(&self) -> bool {
+        matches!(
+            *self.state.read().unwrap(),
+            SequenceState::FinishedAborted
+                | SequenceState::FinishedIgnored
+                | SequenceState::Done(_)
+        )
     }
 
     pub fn get_toks(&self) -> &[u32] {
@@ -261,8 +401,20 @@ impl Sequence {
 
     /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
-        self.tokens = toks;
+        self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
+        // Handle possible block engine
+        match &mut self.custom_metadata {
+            SequenceCustomMetadata::PagedAttention {
+                logical_token_blocks,
+                block_size: _,
+            } => {
+                logical_token_blocks.clear();
+            }
+            SequenceCustomMetadata::None => (),
+        }
+        self.custom_metadata
+            .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -307,12 +459,16 @@ impl Sequence {
     pub(crate) fn add_tmp_tok(&mut self, tok: u32) {
         self.is_tmp = true;
         self.tokens.push(tok);
+        // Handle possible block engine
+        self.custom_metadata.append_token_to_blocks(tok as usize);
     }
 
     /// Internal api to remove n raw tokens.
     pub(crate) fn remove_tmp_tok(&mut self, n: usize) {
         self.is_tmp = false;
         self.tokens.truncate(self.tokens.len() - n);
+        // Handle possible block engine
+        self.custom_metadata.remove_tokens_from_blocks(n);
     }
 
     pub fn add_token(
@@ -335,6 +491,9 @@ impl Sequence {
         self.last_logprob = tok.logprob;
         self.last_is_done = *is_done;
 
+        self.custom_metadata
+            .append_token_to_blocks(tok.token as usize);
+
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
@@ -354,6 +513,10 @@ impl Sequence {
             get_mut_group!(self).n_choices -= 1;
         }
         *self.state.write().unwrap() = state;
+    }
+
+    pub fn getstate(&self) -> SequenceState {
+        *self.state.read().unwrap()
     }
 
     pub fn is_done(

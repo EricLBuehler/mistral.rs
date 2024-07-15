@@ -407,7 +407,7 @@ impl ModelWeights {
         };
         let mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             Some(self.max_seq_len),
             DType::F32,
             self.layers[0].n_head,

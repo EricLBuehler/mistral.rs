@@ -84,3 +84,7 @@ required-features = []
 [[example]]
 name = "anymoe_lora"
 required-features = []
+
+[[example]]
+name = "paged_attn"
+required-features = []

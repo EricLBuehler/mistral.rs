@@ -1,10 +1,12 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
+use either::Either;
 use mistralrs_core::{
-    initialize_logging, Constraint, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
-    LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, Usage,
+    initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
+    ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -276,6 +278,26 @@ struct Args {
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
+
+    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to
+    /// using `pa-gpu-mem-usage` set to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    #[arg(long = "pa-gpu-mem")]
+    paged_attn_gpu_mem: Option<usize>,
+
+    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention, from 0 to 1.
+    /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// This is always used over `pa-gpu-mem` if both are specified.
+    #[arg(long = "pa-gpu-mem-usage")]
+    paged_attn_gpu_mem_usage: Option<f32>,
+
+    /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
+    /// Paged Attention is only supported on CUDA and is always automatically activated.
+    #[arg(long = "pa-blk-size")]
+    paged_attn_block_size: Option<usize>,
+
+    /// Disable Paged Attention on CUDA.
+    #[arg(long = "no_paged_attn", default_value_t = false)]
+    no_paged_attn: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -320,7 +342,7 @@ fn main() -> anyhow::Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
+            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
                 ordinal: 0,
                 layers,
             }])
@@ -347,10 +369,43 @@ fn main() -> anyhow::Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+            DeviceMapMetadata::from_num_device_layers(mapping)
         }
     } else {
         DeviceMapMetadata::dummy()
+    };
+
+    // Allocate 0.5 GB of CPU memory just as a placeholder.
+    // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+    let cache_config = match (
+        args.paged_attn_block_size,
+        args.paged_attn_gpu_mem,
+        args.paged_attn_gpu_mem_usage,
+        device.is_cuda(),
+        args.no_paged_attn,
+    ) {
+        (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+        )?),
+        (block_size, Some(m), None, true, false) => {
+            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
+        }
+        (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            Either::Right(f),
+        )?),
+        (block_size, Some(_m), Some(f), true, false) => {
+            info!("Both memory size and usage were specified, defaulting to the usage value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                Either::Right(f),
+            )?)
+        }
+        (_, _, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
@@ -361,20 +416,34 @@ fn main() -> anyhow::Result<()> {
         false,
         mapper,
         None,
+        cache_config,
     )?;
     info!("Model loaded.");
 
-    let mistralrs = MistralRsBuilder::new(
-        pipeline,
-        SchedulerMethod::Fixed(
-            (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
-                .try_into()
-                .unwrap(),
-        ),
-    )
-    .with_no_prefix_cache(true)
-    .with_disable_eos_stop(true)
-    .build();
+    let scheduler_config = if cache_config.is_some() {
+        SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+            config: pipeline
+                .blocking_lock()
+                .get_metadata()
+                .cache_config
+                .as_ref()
+                .unwrap()
+                .clone(),
+        }
+    } else {
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(
+                (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                    .try_into()
+                    .unwrap(),
+            ),
+        }
+    };
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        .with_no_prefix_cache(true)
+        .with_disable_eos_stop(true)
+        .build();
 
     info!("Starting warmup run.");
     warmup_run(mistralrs.clone());

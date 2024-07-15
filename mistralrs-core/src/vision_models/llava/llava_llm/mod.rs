@@ -1,7 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::pipeline::{IsqModel, NormalModel};
+use crate::pipeline::{
+    text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalModel,
+};
 
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
     //Normal model without anymoe, but add embed and forward_input_embed. This is only a temporary solution. Finally when the rope problem solved for normal LLM models, we should refactor this.
@@ -13,6 +15,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor>;
 }
 

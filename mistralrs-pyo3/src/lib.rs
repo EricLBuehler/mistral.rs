@@ -20,11 +20,12 @@ use tokio::sync::mpsc::channel;
 use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -94,9 +95,6 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
 ) -> PyResult<Box<dyn Loader>> {
-    const REPEAT_LAST_N_DEFAULT: usize = 64;
-    const GQA_DEFAULT: usize = 1;
-
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -111,7 +109,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -130,7 +128,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -158,7 +156,7 @@ fn parse_which(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -180,9 +178,7 @@ fn parse_which(
             quantized_filename,
             repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -198,9 +194,7 @@ fn parse_which(
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -225,9 +219,7 @@ fn parse_which(
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -250,10 +242,7 @@ fn parse_which(
             repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -272,10 +261,7 @@ fn parse_which(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -303,10 +289,7 @@ fn parse_which(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { repeat_last_n, gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -330,7 +313,7 @@ fn parse_which(
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
+                repeat_last_n,
             },
             chat_template,
             tokenizer_json,
@@ -342,7 +325,6 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
-    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -356,6 +338,9 @@ impl Runner {
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
+        pa_gpu_mem = None,
+        pa_blk_size = None,
+        no_paged_attn = false,
     ))]
     fn new(
         which: Which,
@@ -366,9 +351,12 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<Either<usize, Vec<String>>>,
+        num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
+        pa_gpu_mem: Option<Either<usize, f32>>,
+        pa_blk_size: Option<usize>,
+        no_paged_attn: bool,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -441,12 +429,13 @@ impl Runner {
         };
 
         let mapper = match num_device_layers {
-            Some(Either::Right(device_layers)) => {
+            Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
-                        DeviceLayerMapMetadata { ordinal: 0, layers },
-                    ])
+                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
+                        ordinal: 0,
+                        layers,
+                    }])
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -470,17 +459,24 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                    DeviceMapMetadata::from_num_device_layers(mapping)
                 }
             }
-            Some(Either::Left(n_device_layers)) => {
-                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
-                    ordinal: 0,
-                    layers: n_device_layers,
-                }])
-            }
             None => DeviceMapMetadata::dummy(),
+        };
+
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        let cache_config = match (pa_blk_size, pa_gpu_mem, device.is_cuda(), no_paged_attn) {
+            (block_size, None, true, false) => Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            )?),
+            (block_size, Some(either), true, false) => {
+                Some(PagedAttentionConfig::new(block_size, 512, either)?)
+            }
+            (_, _, _, _) => None,
         };
 
         let pipeline = loader
@@ -493,20 +489,34 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
+                cache_config,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let mistralrs = MistralRsBuilder::new(
-            pipeline,
-            SchedulerMethod::Fixed(
-                max_seqs
-                    .try_into()
-                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
-            ),
-        )
-        .with_no_kv_cache(no_kv_cache)
-        .with_prefix_cache_n(prefix_cache_n)
-        .build();
+        let scheduler_config = if cache_config.is_some() {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: max_seqs,
+                config: pipeline
+                    .blocking_lock()
+                    .get_metadata()
+                    .cache_config
+                    .as_ref()
+                    .unwrap()
+                    .clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    max_seqs
+                        .try_into()
+                        .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                ),
+            }
+        };
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+            .with_no_kv_cache(no_kv_cache)
+            .with_prefix_cache_n(prefix_cache_n)
+            .build();
 
         Ok(Self { runner: mistralrs })
     }

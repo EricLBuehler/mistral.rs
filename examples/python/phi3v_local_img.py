@@ -4,8 +4,6 @@ import base64
 runner = Runner(
     which=Which.VisionPlain(
         model_id="microsoft/Phi-3-vision-128k-instruct",
-        tokenizer_json=None,
-        repeat_last_n=64,
         arch=VisionArchitecture.Phi3V,
     ),
 )

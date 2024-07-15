@@ -20,6 +20,7 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
 use crate::prefix_cacher::PrefixCacheManager;
 mod sampling_pipeline;
 use crate::lora::{LoraConfig, Ordering};
@@ -67,6 +68,7 @@ pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
+use self::text_models_inputs_processor::{PagedAttentionInputMetadata, PagedAttentionMeta};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -392,6 +394,7 @@ impl ModelKind {
 ///     false,
 ///     DeviceMapMetadata::dummy(),
 ///     None,
+///     None,
 /// ).unwrap();
 /// ```
 pub trait Loader {
@@ -408,6 +411,7 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     /// Load a model from the specified paths.
@@ -425,13 +429,13 @@ pub trait Loader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
     fn get_id(&self) -> String;
     fn get_kind(&self) -> ModelKind;
 }
 
-#[derive(Clone)]
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     pub repeat_last_n: usize,
@@ -443,6 +447,10 @@ pub struct GeneralMetadata {
     // TODO: Replace is_xlora queries to check via kind instead:
     pub is_xlora: bool,
     pub activation_dtype: DType,
+    pub sliding_window: Option<usize>,
+    // Paged Attention stuff
+    pub cache_config: Option<CacheConfig>,
+    pub cache_engine: Option<CacheEngine>,
 }
 
 pub enum AdapterInstruction {
@@ -559,6 +567,19 @@ pub enum ModelCategory {
     Vision { has_conv2d: bool },
 }
 
+pub enum CacheBackendMetadata<'a> {
+    DefaultInstructions {
+        pre_op: CacheInstruction,
+        post_op: CacheInstruction,
+    },
+    PagedAttention {
+        metadata: PagedAttentionMeta<'a>,
+        blocks_to_swap_in: HashMap<usize, usize>,
+        blocks_to_swap_out: HashMap<usize, usize>,
+        blocks_to_copy: HashMap<usize, Vec<usize>>,
+    },
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -580,84 +601,128 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-        pre_op: CacheInstruction,
-        post_op: CacheInstruction,
+        backend_metadata: CacheBackendMetadata<'_>,
     ) -> Result<(), candle_core::Error> {
-        let inputs = self
-            .get_processor()
-            .inputs_processor()
-            .process_inputs(
-                self.tokenizer(),
-                input_seqs,
-                is_prompt,
-                self.get_metadata().is_xlora,
-                &self.device(),
-                self.get_metadata().has_no_kv_cache,
-                None,
-                self.get_input_processor_config(),
-            )
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        match backend_metadata {
+            CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().has_no_kv_cache,
+                        None,
+                        self.get_input_processor_config(),
+                        None,
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-        match pre_op {
-            CacheInstruction::In(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                match pre_op {
+                    CacheInstruction::In(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.clone_in_cache(input_seqs, false)
                     }
-                    AdapterInstruction::None => 0,
-                };
-                self.clone_in_cache(input_seqs, false)
-            }
-            CacheInstruction::Nothing(adapter_inst) => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
+                    CacheInstruction::Nothing(adapter_inst) => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
                     }
-                    AdapterInstruction::None => 0,
-                };
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst,
+                    } => {
+                        match adapter_inst {
+                            AdapterInstruction::Activate(adapters) => {
+                                self.activate_adapters(adapters).map_err(|e| {
+                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                        dyn std::error::Error,
+                                    >>::as_ref(
+                                        &e
+                                    ))
+                                })?
+                            }
+                            AdapterInstruction::None => 0,
+                        };
+                        self.set_none_cache(reset_non_granular, false)
+                    }
+                    _ => unreachable!("Unreachable PRE cache op."),
+                }
+
+                let logits = self.forward_inputs(inputs)?;
+
+                match post_op {
+                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Reset {
+                        reset_non_granular,
+                        adapter_inst: _,
+                    } => self.set_none_cache(reset_non_granular, false),
+                    _ => unreachable!("Unreachable POST cache op."),
+                }
+
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .await?;
+                Ok(())
             }
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst,
+            CacheBackendMetadata::PagedAttention {
+                metadata,
+                blocks_to_copy,
+                blocks_to_swap_in,
+                blocks_to_swap_out,
             } => {
-                match adapter_inst {
-                    AdapterInstruction::Activate(adapters) => {
-                        self.activate_adapters(adapters).map_err(|e| {
-                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                dyn std::error::Error,
-                            >>::as_ref(&e))
-                        })?
-                    }
-                    AdapterInstruction::None => 0,
-                };
-                self.set_none_cache(reset_non_granular, false)
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .expect("PagedAttention must have cache engine.")
+                    .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
+
+                let inputs = self
+                    .get_processor()
+                    .inputs_processor()
+                    .process_inputs(
+                        self.tokenizer(),
+                        input_seqs,
+                        is_prompt,
+                        self.get_metadata().is_xlora,
+                        &self.device(),
+                        self.get_metadata().has_no_kv_cache,
+                        None,
+                        self.get_input_processor_config(),
+                        Some(metadata),
+                    )
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+                let logits = self.forward_inputs(inputs)?;
+
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                    .await?;
+                Ok(())
             }
-            _ => unreachable!("Unreachable PRE cache op."),
         }
-
-        let logits = self.forward_inputs(inputs)?;
-
-        match post_op {
-            CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-            CacheInstruction::Nothing(_) => (),
-            CacheInstruction::Reset {
-                reset_non_granular,
-                adapter_inst: _,
-            } => self.set_none_cache(reset_non_granular, false),
-            _ => unreachable!("Unreachable POST cache op."),
-        }
-
-        self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-            .await?;
-        Ok(())
     }
 
     async fn sample(
@@ -680,6 +745,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -705,6 +771,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
             "Activating adapters is only supported for models fine-tuned with LoRA."
         );
     }
+    fn config(&self) -> &ModelConfigMetadata;
 }
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
@@ -719,11 +786,13 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;
     fn max_seq_len(&self) -> usize;
     fn has_conv2d(&self) -> bool;
+    fn config(&self) -> &ModelConfigMetadata;
 }
 
 pub(crate) fn extract_logits(

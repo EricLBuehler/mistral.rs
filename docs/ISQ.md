@@ -29,14 +29,14 @@ runner = Runner(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-        tokenizer_json=None,
-        repeat_last_n=64,
     ),
     in_situ_quant="Q4K",
 )
 ```
 
 ## Rust Example
+You can find this example [here](../mistralrs/examples/isq/main.rs).
+
 ```rust
 let pipeline = loader.load_model_from_hf(
     None,
@@ -46,6 +46,7 @@ let pipeline = loader.load_model_from_hf(
     false,
     DeviceMapMetadata::dummy(),
     Some(GgmlDType::Q4K),
+    None, // No Paged Attention yet
 )?;
 ```
 

@@ -4,7 +4,8 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    paged_attention::ModelConfigMetadata,
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
@@ -423,6 +424,7 @@ pub struct XLoraLlama {
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraLlama {
@@ -453,7 +455,7 @@ impl XLoraLlama {
         };
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
@@ -664,12 +666,19 @@ impl XLoraLlama {
             }),
             dtype,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 }
 
 impl IsqModel for XLoraLlama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
@@ -698,6 +707,9 @@ impl IsqModel for XLoraLlama {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
+    }
 }
 
 impl NormalModel for XLoraLlama {
@@ -708,6 +720,7 @@ impl NormalModel for XLoraLlama {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -778,6 +791,9 @@ impl NormalModel for XLoraLlama {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 
