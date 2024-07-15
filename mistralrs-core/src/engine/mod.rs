@@ -301,6 +301,31 @@ impl Engine {
                             self.prefix_cacher
                         );
 
+                        if self.is_debug {
+                            let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                            let total_len = guards.len();
+                            if total_len > 0 {
+                                let lengths = guards
+                                    .iter()
+                                    .map(|seq| seq.len().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+
+                                let (prompt_lengths, completion_lengths) = if is_prompt {
+                                    (lengths, "".to_string())
+                                } else {
+                                    ("".to_string(), lengths)
+                                };
+
+                                tracing::info!(
+                                    "Prompt[{}] Completion[{}] - {}ms",
+                                    prompt_lengths,
+                                    completion_lengths,
+                                    ms_from_last_run * 1000.,
+                                );
+                            }
+                        }
+
                         if is_prompt {
                             for mut seq in guards {
                                 let now = SystemTime::now()
