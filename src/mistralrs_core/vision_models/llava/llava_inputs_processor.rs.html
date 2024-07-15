@@ -311,6 +311,11 @@
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
@@ -394,7 +399,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -525,6 +530,11 @@
                     .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             );
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
+                <span class="comment">// Free and then reallocate as appropriate
+                </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
+                metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
+            }
 
             toks.push(input_ids);
         }
@@ -542,7 +552,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             get_completion_input(
@@ -551,7 +561,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>};
         <span class="prelude-val">Ok</span>(Box::new(ModelInputs {

@@ -324,6 +324,9 @@
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
@@ -332,7 +335,7 @@
 
 <span class="kw">use crate</span>::{
     engine::TERMINATE_ALL_NEXT_STEP,
-    paged_attention::BlockTables,
+    paged_attention::{BlockEngine, BlockTables},
     sequence::{Sequence, SequenceState, StopReason},
 };
 
@@ -649,5 +652,8 @@
         <span class="prelude-val">None
     </span>}
     <span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>BlockEngine&gt; {
+        <span class="prelude-val">None
+    </span>}
 }
 </code></pre></div></section></main></body></html>

@@ -538,6 +538,9 @@
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
 <a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -587,7 +590,7 @@
 
     <span class="kw">use crate</span>::{
         layers::set_use_matmul_via_f16,
-        paged_attention::{BlockTables, _PAD_SLOT_ID},
+        paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };
 
@@ -611,11 +614,10 @@
         Tensor::cat(<span class="kw-2">&amp;</span>padded_x[..], <span class="number">0</span>).map_err(anyhow::Error::msg)
     }
 
-    <span class="attr">#[derive(Clone)]
-    </span><span class="kw">pub struct </span>PagedAttentionMeta&lt;<span class="lifetime">'a</span>&gt; {
-        <span class="kw">pub </span>block_tables: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>BlockTables,
+    <span class="kw">pub struct </span>PagedAttentionMeta&lt;<span class="lifetime">'a</span>&gt; {
         <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         <span class="kw">pub </span>block_size: usize,
+        <span class="kw">pub </span>block_engine: <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw-2">mut </span>BlockEngine,
     }
 
     <span class="attr">#[derive(Clone, Debug)]
@@ -641,7 +643,7 @@
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
         <span class="kw">let </span>max_len = input_seqs
             .iter()
@@ -668,8 +670,8 @@
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>paged_attn_metadata) = paged_attn_metadata {
-                <span class="kw">let </span>table = paged_attn_metadata.block_tables.get(seq.id());
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
+                <span class="kw">let </span>table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
                 <span class="kw">let </span>prompt_len = seq.len();
 
                 <span class="kw">if </span>table.is_none() {
@@ -780,7 +782,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
         <span class="kw">if </span>no_kv_cache {
             <span class="kw">return </span>get_prompt_input(
@@ -809,8 +811,12 @@
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>paged_attn_metadata) = paged_attn_metadata {
-                <span class="kw">let </span>table = paged_attn_metadata.block_tables.get(seq.id()).unwrap();
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
+                <span class="kw">let </span>table = paged_attn_metadata
+                    .block_engine
+                    .block_tables
+                    .get(seq.id())
+                    .unwrap();
 
                 <span class="kw">let </span>table = table
                     .iter()
@@ -933,7 +939,7 @@
             no_kv_cache: bool,
             last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
             <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-            paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+            <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
             <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
                 <span class="kw">let </span>InputMetadata {
@@ -951,7 +957,7 @@
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata.clone(),
+                    paged_attn_metadata.as_mut(),
                 )<span class="question-mark">?</span>;
                 <span class="kw">let </span>InputMetadata {
                     input: input_ids,
@@ -969,7 +975,7 @@
                     device,
                     no_kv_cache,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
                     input_ids,
@@ -998,7 +1004,7 @@
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
@@ -1027,7 +1033,7 @@
                     input_seqs,
                     device,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
                     input_ids,
@@ -1057,7 +1063,7 @@
                     device,
                     no_kv_cache,
                     last_n_context_len,
-                    paged_attn_metadata,
+                    paged_attn_metadata.as_mut(),
                 )<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
                     input_ids,

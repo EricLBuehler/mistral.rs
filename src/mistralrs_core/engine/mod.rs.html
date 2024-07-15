@@ -678,7 +678,6 @@
 <a href="#678" id="678">678</a>
 <a href="#679" id="679">679</a>
 <a href="#680" id="680">680</a>
-<a href="#681" id="681">681</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{
@@ -952,13 +951,12 @@
                         <span class="kw">let </span>res = {
                             <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
 
-                            <span class="kw">let </span>block_tables = <span class="self">self</span>.scheduler.block_tables().unwrap();
                             <span class="kw">let </span>block_size = <span class="self">self</span>.scheduler.block_size().unwrap();
 
                             <span class="kw">let </span>metadata = PagedAttentionMeta {
-                                block_tables,
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
+                                block_engine: <span class="self">self</span>.scheduler.block_engine().unwrap(),
                             };
 
                             pipeline

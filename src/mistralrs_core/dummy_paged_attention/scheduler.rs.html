@@ -346,6 +346,9 @@
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
 <a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! The Scheduler uses a BlockEngine to schedule and automatically batch sequences. The
 //! primary method `schedule` returns the batched sequences as inputs, as well as the
 //! operations to be executed on the cache by the CacheEngine.
@@ -692,6 +695,9 @@
     }
     <span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
         <span class="self">self</span>.free_finished_sequence_groups()
+    }
+    <span class="kw">fn </span>block_engine(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>BlockEngine&gt; {
+        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span><span class="self">self</span>.block_engine)
     }
 }
 </code></pre></div></section></main></body></html>

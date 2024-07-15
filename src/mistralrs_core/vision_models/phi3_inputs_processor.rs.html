@@ -477,6 +477,11 @@
 <a href="#477" id="477">477</a>
 <a href="#478" id="478">478</a>
 <a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, sync::Arc};
@@ -555,7 +560,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -724,6 +729,11 @@
                     .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             );
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
+                <span class="comment">// Free and then reallocate as appropriate
+                </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
+                metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
+            }
 
             toks.push(input_ids);
         }
@@ -741,7 +751,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             get_completion_input(
@@ -750,7 +760,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>};
 

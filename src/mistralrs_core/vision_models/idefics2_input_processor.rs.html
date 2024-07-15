@@ -435,7 +435,7 @@
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
-        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>std::any::Any&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
@@ -459,7 +459,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             get_completion_input(
@@ -471,7 +471,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
-                paged_attn_metadata,
+                paged_attn_metadata.as_mut(),
             )<span class="question-mark">?
         </span>};
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
