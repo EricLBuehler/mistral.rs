@@ -492,10 +492,10 @@
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::{
-    initialize_logging, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder, ModelDType,
-    ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
-    SamplingParams, SchedulerConfig, TokenSource, Usage,
+    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
+    ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 <span class="kw">use </span>std::fmt::Display;
 <span class="kw">use </span>std::sync::Arc;
@@ -870,7 +870,7 @@
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
-        device.is_cuda(),
+        paged_attn_supported(),
         args.no_paged_attn,
     ) {
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(

@@ -434,6 +434,7 @@
 <a href="#434" id="434">434</a>
 <a href="#435" id="435">435</a>
 <a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -445,9 +446,10 @@
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -782,7 +784,7 @@
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
-        device.is_cuda(),
+        paged_attn_supported(),
         args.no_paged_attn,
     ) {
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(

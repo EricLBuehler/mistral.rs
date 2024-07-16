@@ -429,6 +429,7 @@
 <a href="#429" id="429">429</a>
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -512,6 +513,7 @@
 <span class="kw">pub use </span>utils::debug::initialize_logging;
 <span class="kw">pub use </span>utils::memory_usage::MemoryUsage;
 <span class="kw">pub use </span>utils::normal::{ModelDType, TryIntoDType};
+<span class="kw">pub use </span>utils::paged_attn_supported;
 
 <span class="doccomment">/// `true` if `MISTRALRS_DEBUG=1`
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>DEBUG: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);

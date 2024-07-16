@@ -254,6 +254,16 @@
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
 <a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gguf_metadata;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>memory_usage;
@@ -510,4 +520,14 @@
         </span>}
     };
 }
+
+<span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>))]
+</span><span class="kw">pub const fn </span>paged_attn_supported() -&gt; bool {
+    <span class="bool-val">true
+</span>}
+
+<span class="attr">#[cfg(not(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>)))]
+</span><span class="kw">pub const fn </span>paged_attn_supported() -&gt; bool {
+    <span class="bool-val">false
+</span>}
 </code></pre></div></section></main></body></html>
