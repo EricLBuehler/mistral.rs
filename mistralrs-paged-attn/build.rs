@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
     use std::fs;
     use std::fs::read_to_string;
@@ -67,7 +67,7 @@ pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}
     Ok(())
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 fn main() -> Result<()> {
     Ok(())
 }

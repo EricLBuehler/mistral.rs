@@ -9,9 +9,10 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use either::Either;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -346,7 +347,7 @@ async fn main() -> Result<()> {
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
-        device.is_cuda(),
+        paged_attn_supported(),
         args.no_paged_attn,
     ) {
         (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(

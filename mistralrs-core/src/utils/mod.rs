@@ -254,3 +254,13 @@ macro_rules! serde_default_fn {
         }
     };
 }
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub const fn paged_attn_supported() -> bool {
+    true
+}
+
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+pub const fn paged_attn_supported() -> bool {
+    false
+}
