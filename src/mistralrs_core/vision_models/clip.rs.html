@@ -317,14 +317,10 @@
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a>
-<a href="#321" id="321">321</a>
-<a href="#322" id="322">322</a>
-<a href="#323" id="323">323</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
-</span><span class="kw">use </span>candle_core::{DType, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
+</span><span class="kw">use </span>candle_core::{IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
 <span class="kw">use </span>candle_nn::{Conv2dConfig, Module};
 
 <span class="kw">use crate</span>::{layers::FusedBiasLinear, serde_default_fn};
@@ -471,23 +467,19 @@
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, causal_attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>in_dtype = xs.dtype();
         <span class="kw">let </span>(bsz, seq_len, hidden_size) = xs.dims3()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>query_states = (<span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
         <span class="kw">let </span>proj_shape = (bsz * <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.head_dim);
         <span class="kw">let </span>query_states = <span class="self">self
             </span>.shape(<span class="kw-2">&amp;</span>query_states, seq_len, bsz)<span class="question-mark">?
-            </span>.reshape(proj_shape)<span class="question-mark">?
-            </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+            </span>.reshape(proj_shape)<span class="question-mark">?</span>;
         <span class="kw">let </span>key_states = <span class="self">self
             </span>.shape(<span class="kw-2">&amp;</span><span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>, seq_len, bsz)<span class="question-mark">?
-            </span>.reshape(proj_shape)<span class="question-mark">?
-            </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+            </span>.reshape(proj_shape)<span class="question-mark">?</span>;
         <span class="kw">let </span>value_states = <span class="self">self
             </span>.shape(<span class="kw-2">&amp;</span><span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>, seq_len, bsz)<span class="question-mark">?
-            </span>.reshape(proj_shape)<span class="question-mark">?
-            </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+            </span>.reshape(proj_shape)<span class="question-mark">?</span>;
         <span class="kw">let </span>attn_weights = query_states.matmul(<span class="kw-2">&amp;</span>key_states.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>src_len = key_states.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
@@ -503,7 +495,7 @@
 
         <span class="kw">let </span>attn_weights = candle_nn::ops::softmax(<span class="kw-2">&amp;</span>attn_weights, D::Minus1)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_output = attn_weights.matmul(<span class="kw-2">&amp;</span>value_states)<span class="question-mark">?</span>.to_dtype(in_dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attn_output = attn_weights.matmul(<span class="kw-2">&amp;</span>value_states)<span class="question-mark">?</span>;
         <span class="kw">let </span>attn_output = attn_output
             .reshape((bsz, <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
