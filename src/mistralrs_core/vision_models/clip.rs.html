@@ -493,7 +493,7 @@
             attn_weights
         };
 
-        <span class="kw">let </span>attn_weights = candle_nn::ops::softmax(<span class="kw-2">&amp;</span>attn_weights, D::Minus1)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_output = attn_weights.matmul(<span class="kw-2">&amp;</span>value_states)<span class="question-mark">?</span>;
         <span class="kw">let </span>attn_output = attn_output
