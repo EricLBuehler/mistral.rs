@@ -85,8 +85,9 @@ pub fn calculate_cache_config(
         Either::Left(v) => v,
         Either::Right(f) => {
             let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
-            let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32 * f;
-            let size = (total - free) as usize;
+            let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
+            let used = total - free;
+            let size = (total as f32 * f - used) as usize;
             info!("Allocating {size} MB for Paged Attention KV cache");
             size
         }
