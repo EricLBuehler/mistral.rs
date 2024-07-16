@@ -52,7 +52,7 @@ pub trait Scheduler {
     /// This may do nothing. It depends on the implementation
     fn free_finished_sequence_groups(&mut self);
 
-    // Paged Attention metadata
+    // PagedAttention metadata
     fn block_tables(&self) -> Option<&BlockTables>;
     fn block_size(&self) -> Option<usize>;
     fn block_engine(&mut self) -> Option<&mut BlockEngine>;

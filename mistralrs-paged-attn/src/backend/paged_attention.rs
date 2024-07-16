@@ -250,7 +250,7 @@ impl candle::CustomOp1 for PagedAttention {
     }
 }
 
-/// Paged Attention layer.
+/// PagedAttention layer.
 ///
 /// This implements scaled dot-product attention, `softmax(Q @ K^T . softmax_scale) @ V`.
 /// Multi-query and grouped-query attention are supported by using tensors key_cache and value_cache

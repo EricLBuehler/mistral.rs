@@ -1,12 +1,12 @@
-# Paged Attention in mistral.rs
+# PagedAttention in mistral.rs
 
-Mistral.rs supports Paged Attention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on CUDA.
+Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on CUDA devices on Unix-like platforms such as WSL, Linux, or Mac.
 
-Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, Paged Attention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
+Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
 
 > Note: The default block size if not specified is 32.
 
-> Note: if OOM happens (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it happens because the Paged Attention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
+> Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
 
 **There are more features being added to this:**
 - GGML model support 
@@ -19,7 +19,7 @@ Our Paged Attention implementation has 2 inputs: GPU KV cache memory size, and b
 - GGUF models
 - Vision models
 
-> Note: the prefix cacher will be disabled when using Paged Attention regardless of settings. This functionality will be added soon!
+> Note: the prefix cacher will be disabled when using PagedAttention regardless of settings. This functionality will be added soon!
 
 ## Using the CLI
 

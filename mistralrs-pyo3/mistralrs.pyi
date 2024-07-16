@@ -211,11 +211,11 @@ class Runner:
             the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-        - `pa_gpu_mem` sets GPU memory to allocate for KV cache with Paged Attention in MBs *OR* the percentage utilization, from 0 to 1. If this is not set and the device is
-            CUDA, it will default to using 90% of the total memory after allocation of the KV cache. Paged Attention is only supported on CUDA and is always automatically activated.
-        - `pa_blk_size` sets the block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA,
-            it will default to 32. Paged Attention is only supported on CUDA and is always automatically activated.
-        - `no_paged_attn` disables Paged Attention on CUDA
+        - `pa_gpu_mem` sets GPU memory to allocate for KV cache with PagedAttention in MBs *OR* the percentage utilization, from 0 to 1. If this is not set and the device is
+            CUDA, it will default to using 90% of the total memory after allocation of the KV cache. PagedAttention is only supported on CUDA and is always automatically activated.
+        - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
+            it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
+        - `no_paged_attn` disables PagedAttention on CUDA
         """
         ...
 

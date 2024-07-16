@@ -279,23 +279,23 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to
-    /// using `pa-gpu-mem-usage` set to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
+    /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
+    /// If this is not set and the device is CUDA, it will default to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     /// This is always used over `pa-gpu-mem` if both are specified.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
-    /// Paged Attention is only supported on CUDA and is always automatically activated.
+    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
+    /// PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable Paged Attention on CUDA.
+    /// Disable PagedAttention on CUDA.
     #[arg(long = "no_paged_attn", default_value_t = false)]
     no_paged_attn: bool,
 }
