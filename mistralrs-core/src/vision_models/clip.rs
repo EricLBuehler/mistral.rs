@@ -174,7 +174,7 @@ impl ClipAttention {
             attn_weights
         };
 
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
         let attn_output = attn_weights.matmul(&value_states)?;
         let attn_output = attn_output
