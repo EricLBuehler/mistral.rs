@@ -101,6 +101,7 @@
 <a href="#101" id="101">101</a>
 <a href="#102" id="102">102</a>
 <a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
 </pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
@@ -188,8 +189,9 @@
         Either::Left(v) =&gt; v,
         Either::Right(f) =&gt; {
             <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
-            <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32 * f;
-            <span class="kw">let </span>size = (total - free) <span class="kw">as </span>usize;
+            <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
+            <span class="kw">let </span>used = total - free;
+            <span class="kw">let </span>size = (total * f - used) <span class="kw">as </span>usize;
             <span class="macro">info!</span>(<span class="string">"Allocating {size} MB for Paged Attention KV cache"</span>);
             size
         }
