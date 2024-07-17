@@ -670,7 +670,7 @@
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">pub struct </span>NormalPipeline {
     model: Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;,
@@ -941,10 +941,10 @@
         }
 
         <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
-            <span class="macro">anyhow::ensure!</span>(
-                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
-                <span class="string">"PagedAttention does not support adapter models."
-            </span>);
+            <span class="kw">if </span>!<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }) {
+                <span class="macro">warn!</span>(<span class="string">"Adapter models do not currently support PagedAttention, running without"</span>);
+            }
+
             <span class="kw">let </span>cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,

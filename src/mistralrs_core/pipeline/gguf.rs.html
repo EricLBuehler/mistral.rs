@@ -833,7 +833,7 @@
 <span class="kw">use </span>strum::EnumString;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">enum </span>Model {
     Llama(QLlama),
@@ -1173,10 +1173,10 @@
         }
 
         <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
-            <span class="macro">anyhow::ensure!</span>(
-                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::AdapterQuantized { .. }),
-                <span class="string">"PagedAttention for GGUF does not support adapter models."
-            </span>);
+            <span class="kw">if </span>!<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::AdapterQuantized { .. }) {
+                <span class="macro">warn!</span>(<span class="string">"Adapter models do not currently support PagedAttention, running without"</span>);
+            }
+
             <span class="kw">let </span>model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike = <span class="kw-2">&amp;</span>model;
             <span class="kw">let </span>cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
