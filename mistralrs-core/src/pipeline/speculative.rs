@@ -8,6 +8,7 @@ use anyhow::Result as anyhowResult;
 use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use crate::{
     finish_and_add_tokens_to_seq, get_mut_arcmutex,
@@ -48,10 +49,14 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "Speculative decoding does not currently support PagedAttention"
-        );
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!(
+                "Speculative decoding does not currently support PagedAttention, running without"
+            );
+            None
+        } else {
+            paged_attn_config
+        };
 
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -91,10 +96,14 @@ impl Loader for SpeculativeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "Speculative decoding does not currently support PagedAttention"
-        );
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!(
+                "Speculative decoding does not currently support PagedAttention, running without"
+            );
+            None
+        } else {
+            paged_attn_config
+        };
 
         let target = self.target.load_model_from_path(
             paths,
