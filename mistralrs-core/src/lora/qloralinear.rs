@@ -329,6 +329,6 @@ impl LinearLayerLike for QLoraLinear {
         }
     }
     fn is_lora(&self) -> bool {
-        false
+        !self.adapters.is_empty()
     }
 }
