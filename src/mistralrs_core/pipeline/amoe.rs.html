@@ -554,6 +554,10 @@
 <a href="#554" id="554">554</a>
 <a href="#555" id="555">555</a>
 <a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -571,7 +575,7 @@
 <span class="kw">use </span>plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 <span class="kw">use </span>rand::{seq::SliceRandom, thread_rng};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
@@ -617,10 +621,12 @@
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhow::Result&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
-        <span class="macro">anyhow::ensure!</span>(
-            paged_attn_config.is_none(),
-            <span class="string">"AnyMoE does not currently support PagedAttention"
-        </span>);
+        <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
+            <span class="macro">warn!</span>(<span class="string">"AnyMoE does not currently support PagedAttention, running without"</span>);
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            paged_attn_config
+        };
 
         <span class="kw">let </span>target = <span class="self">self</span>.target.load_model_from_hf(
             revision.clone(),
@@ -657,10 +663,12 @@
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhow::Result&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
-        <span class="macro">anyhow::ensure!</span>(
-            paged_attn_config.is_none(),
-            <span class="string">"AnyMoE does not currently support PagedAttention"
-        </span>);
+        <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
+            <span class="macro">warn!</span>(<span class="string">"AnyMoE does not currently support PagedAttention, running without"</span>);
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            paged_attn_config
+        };
 
         <span class="kw">let </span>target = <span class="self">self</span>.target.load_model_from_path(
             paths,

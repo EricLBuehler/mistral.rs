@@ -529,6 +529,8 @@
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -804,10 +806,12 @@
             <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`."</span>);
         }
 
-        <span class="macro">anyhow::ensure!</span>(
-            paged_attn_config.is_none(),
-            <span class="string">"PagedAttention is not supported for GGML"
-        </span>);
+        <span class="kw">let _ </span>= <span class="kw">if </span>paged_attn_config.is_none() {
+            <span class="macro">warn!</span>(<span class="string">"GGML does not currently support PagedAttention, running without"</span>);
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            paged_attn_config
+        };
 
         <span class="kw">let </span>has_adapter = <span class="self">self</span>.kind.is_adapted();
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
