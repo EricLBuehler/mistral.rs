@@ -294,4 +294,7 @@ impl LinearLayerLike for LoraLinear {
             out + result
         }
     }
+    fn is_lora(&self) -> bool {
+        false
+    }
 }

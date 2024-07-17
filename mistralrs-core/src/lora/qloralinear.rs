@@ -328,4 +328,7 @@ impl LinearLayerLike for QLoraLinear {
             out + result
         }
     }
+    fn is_lora(&self) -> bool {
+        false
+    }
 }

@@ -11,7 +11,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul},
-    lora::{linear_b, LinearLayerLike, LoraConfig},
+    lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -516,7 +516,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
@@ -615,10 +615,22 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
-            embed_tokens.embeddings(),
-            normal_loading_metadata.loading_isq,
-        )?);
+
+        let lm_head = linear_no_bias(
+            embed_tokens.embeddings().dim(1)?,
+            embed_tokens.embeddings().dim(0)?,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            lora_config,
+            &mut count,
+            &xlora_ordering,
+            preload_adapters,
+        )?;
+        if xlora_config.is_some() && lm_head.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
+
         Ok(Self {
             embed_tokens,
             layers,
@@ -710,11 +722,11 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+        if self.lm_head.is_quant() {
             xs = xs.to_dtype(DType::F32)?;
         }
 
-        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+        let mut xs = self.lm_head.lora_forward(&xs, None, 1.0, None)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = (xs / final_logit_softcapping)?;
@@ -763,10 +775,13 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if matches!(self.lm_head, QMatMul::QTensor(_)) {
+                if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -780,10 +795,13 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if matches!(self.lm_head, QMatMul::QTensor(_)) {
+                if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             }
         } else {
             let mut res = self
@@ -797,10 +815,13 @@ impl Model {
                     None,
                 )?
                 .contiguous()?;
-            if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            if self.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(
+                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                context_lens,
+            )
         }
     }
 }
@@ -808,7 +829,7 @@ impl Model {
 impl IsqModel for Model {
     fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
