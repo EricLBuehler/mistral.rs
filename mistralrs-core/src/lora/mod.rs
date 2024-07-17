@@ -177,7 +177,7 @@ impl LinearLayerLike for Linear {
         false
     }
     fn is_lora(&self) -> bool {
-        true
+        false
     }
 }
 

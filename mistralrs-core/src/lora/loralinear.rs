@@ -295,6 +295,6 @@ impl LinearLayerLike for LoraLinear {
         }
     }
     fn is_lora(&self) -> bool {
-        false
+        !self.adapters.is_empty()
     }
 }
