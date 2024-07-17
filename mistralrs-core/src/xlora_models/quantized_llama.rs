@@ -447,7 +447,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
             lora_config,
             vb,
             ordering,
-            format!("lm_head"),
+            "lm_head".to_string(),
             &mut count,
             preload_adapters,
         )?;
@@ -724,7 +724,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             lora_config,
             vb,
             ordering,
-            format!("lm_head"),
+            "lm_head".to_string(),
             &mut count,
             preload_adapters,
         )?;
