@@ -56,7 +56,7 @@ use std::sync::Arc;
 use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -396,10 +396,10 @@ impl Loader for GGUFLoader {
         }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::AdapterQuantized { .. }),
-                "PagedAttention for GGUF does not support adapter models."
-            );
+            if !matches!(self.kind, ModelKind::AdapterQuantized { .. }) {
+                warn!("Adapter models do not currently support PagedAttention, running without");
+            }
+
             let model_config: &dyn ModelConfigLike = &model;
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
