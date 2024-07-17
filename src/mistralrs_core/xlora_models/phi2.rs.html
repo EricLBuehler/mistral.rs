@@ -846,6 +846,24 @@
 <a href="#846" id="846">846</a>
 <a href="#847" id="847">847</a>
 <a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -874,7 +892,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear},
+    layers::{repeat_kv, CausalMasker},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -1261,7 +1279,7 @@
     embed_tokens: Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     final_layernorm: LayerNorm,
-    lm_head: QLinear,
+    lm_head: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>max_seq_len: usize,
@@ -1352,16 +1370,25 @@
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.fc2).unwrap().merge_weights()<span class="question-mark">?</span>;
             }
         }
-        <span class="kw">let </span>lm_head = candle_nn::linear(
+        <span class="kw">let </span>lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
+            lora_config,
+            <span class="kw-2">&amp;mut </span>count,
+            <span class="kw-2">&amp;</span>xlora_ordering,
+            preload_adapters,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; lm_head.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
@@ -1474,7 +1501,10 @@
                 <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span><span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1491,7 +1521,10 @@
                 <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             }
         } <span class="kw">else </span>{
             <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1508,7 +1541,10 @@
             <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
             }
-            extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+            extract_logits(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                context_lens,
+            )
         }
     }
 }
@@ -1516,7 +1552,7 @@
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
     <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().inner(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner(),
@@ -1541,7 +1577,7 @@
     }
     <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.bias_mut(), <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().bias_mut(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)

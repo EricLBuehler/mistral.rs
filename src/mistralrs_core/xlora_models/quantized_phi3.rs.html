@@ -558,6 +558,25 @@
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
 <a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -565,7 +584,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::repeat_kv;
 <span class="kw">use </span><span class="kw">crate</span>::layers::CausalMasker;
-<span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
 <span class="kw">use </span><span class="kw">crate</span>::layers::RmsNorm;
 <span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::lora::get_lora_cfg;
@@ -597,11 +615,12 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 
-<span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">4</span>] = [
+<span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">5</span>] = [
     <span class="string">"self_attn.qkv_proj"</span>,
     <span class="string">"self_attn.o_proj"</span>,
     <span class="string">"mlp.gate_up_proj"</span>,
     <span class="string">"mlp.down_proj"</span>,
+    <span class="string">"lm_head"</span>,
 ];
 
 <span class="attr">#[derive(Debug)]
@@ -755,7 +774,7 @@
     tok_embeddings: Embedding,
     layers: Vec&lt;LayerWeights&gt;,
     output_norm: RmsNorm,
-    output: QMatMul,
+    output: QLoraLinear,
     mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -819,7 +838,7 @@
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>output_norm = rms_norm(ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
@@ -909,6 +928,21 @@
                 layer.mlp.ffn_up.merge_weights()<span class="question-mark">?</span>;
             }
         }
+        <span class="kw">let </span>output_cfg = get_lora_cfg(<span class="kw-2">&amp;</span>output);
+        <span class="kw">let </span>output = QLoraLinear::new(
+            QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>output_cfg,
+            lora_config,
+            vb,
+            ordering,
+            <span class="string">"lm_head"</span>.to_string(),
+            <span class="kw-2">&amp;mut </span>count,
+            preload_adapters,
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; output.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
@@ -950,7 +984,6 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(_b_sz, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
@@ -1007,8 +1040,7 @@
             xs = (ys + residual)<span class="question-mark">?
         </span>}
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>xs = xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output_norm)<span class="question-mark">?</span>.i((.., seq_len - <span class="number">1</span>, ..))<span class="question-mark">?</span>;
-        <span class="self">self</span>.output.forward(<span class="kw-2">&amp;</span>xs)
+        xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.output_norm)
     }
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -1039,7 +1071,7 @@
 
             <span class="kw">if </span>no_kv_cache {
                 extract_logits(
-                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                         <span class="kw-2">&amp;</span><span class="self">self
                             </span>.inner_forward(
                                 input_ids_full,
@@ -1050,14 +1082,16 @@
                                 <span class="prelude-val">None</span>,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                        <span class="prelude-val">None</span>,
+                        <span class="number">1.0</span>,
+                        <span class="prelude-val">None</span>,
                     )<span class="question-mark">?</span>,
                     context_lens,
                 )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span>extract_logits(
-                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                         <span class="kw-2">&amp;</span><span class="self">self
                             </span>.inner_forward(
                                 input_ids,
@@ -1068,18 +1102,22 @@
                                 <span class="prelude-val">None</span>,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                        <span class="prelude-val">None</span>,
+                        <span class="number">1.0</span>,
+                        <span class="prelude-val">None</span>,
                     )<span class="question-mark">?</span>,
                     context_lens,
                 )
             }
         } <span class="kw">else </span>{
             extract_logits(
-                <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                     <span class="kw-2">&amp;</span><span class="self">self
                         </span>.inner_forward(input_ids, seqlen_offsets, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, no_kv_cache, <span class="prelude-val">None</span>)<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?</span>,
-                    <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                    <span class="prelude-val">None</span>,
+                    <span class="number">1.0</span>,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>,
                 context_lens,
             )

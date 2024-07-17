@@ -831,6 +831,24 @@
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
 <a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -849,7 +867,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{<span class="self">self</span>, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -1251,7 +1269,7 @@
     wte: Embedding,
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
-    lm_head: QLinear,
+    lm_head: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     <span class="kw">pub </span>kv_cache: pipeline::Cache,
     <span class="kw">pub </span>device: Device,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
@@ -1354,7 +1372,10 @@
                 <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span><span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1371,7 +1392,10 @@
                 <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             }
         } <span class="kw">else </span>{
             <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1388,7 +1412,10 @@
             <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
             }
-            extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+            extract_logits(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                context_lens,
+            )
         }
     }
 
@@ -1408,23 +1435,32 @@
             .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
         <span class="kw">let </span>vb = vb.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
         <span class="kw">let </span>dtype = vb.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
 
         <span class="kw">let </span>wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = candle_nn::linear(
+        <span class="kw">let </span>lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
+            lora_config,
+            <span class="kw-2">&amp;mut </span>count,
+            <span class="kw-2">&amp;</span>xlora_ordering,
+            preload_adapters,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; lm_head.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="kw">let </span>ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="kw">let </span><span class="kw-2">mut </span>blocks: Vec&lt;<span class="kw">_</span>&gt; =
             NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
@@ -1491,7 +1527,7 @@
             wte,
             blocks,
             ln_f,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -1513,7 +1549,7 @@
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>XLoraLlama {
     <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="self">self</span>.lm_head.inner(), <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().inner(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.q_proj).unwrap().inner(),

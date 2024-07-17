@@ -295,6 +295,9 @@
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
 <a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul};
 
 <span class="kw">use </span>candle_core::{
@@ -590,6 +593,9 @@
             <span class="kw">let </span>out = out.sum(<span class="number">0</span>)<span class="question-mark">?</span>;
             out + result
         }
+    }
+    <span class="kw">fn </span>is_lora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        !<span class="self">self</span>.adapters.is_empty()
     }
 }
 </code></pre></div></section></main></body></html>

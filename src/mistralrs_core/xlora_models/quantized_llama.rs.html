@@ -941,6 +941,43 @@
 <a href="#941" id="941">941</a>
 <a href="#942" id="942">942</a>
 <a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -968,7 +1005,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
-<span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">7</span>] = [
+<span class="kw">const </span>SUPPORTED_LAYERS: [<span class="kw-2">&amp;</span>str; <span class="number">8</span>] = [
     <span class="string">"self_attn.q_proj"</span>,
     <span class="string">"self_attn.k_proj"</span>,
     <span class="string">"self_attn.v_proj"</span>,
@@ -976,6 +1013,7 @@
     <span class="string">"mlp.up_proj"</span>,
     <span class="string">"mlp.down_proj"</span>,
     <span class="string">"mlp.gate_proj"</span>,
+    <span class="string">"lm_head"</span>,
 ];
 
 <span class="attr">#[derive(Debug)]
@@ -1218,7 +1256,7 @@
     tok_embeddings: Embedding,
     layers: Vec&lt;LayerWeights&gt;,
     norm: QRmsNorm,
-    output: QMatMul,
+    output: QLoraLinear,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
@@ -1382,11 +1420,26 @@
                 }
             }
         }
+        <span class="kw">let </span>output_cfg = get_lora_cfg(<span class="kw-2">&amp;</span>output);
+        <span class="kw">let </span>output = QLoraLinear::new(
+            QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>output_cfg,
+            lora_config,
+            vb,
+            ordering,
+            <span class="string">"lm_head"</span>.to_string(),
+            <span class="kw-2">&amp;mut </span>count,
+            preload_adapters,
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; output.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd <span class="kw">as </span>usize),
             layers,
             norm,
-            output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
+            output,
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">true</span>),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -1644,11 +1697,26 @@
                 }
             }
         }
+        <span class="kw">let </span>output_cfg = get_lora_cfg(<span class="kw-2">&amp;</span>output);
+        <span class="kw">let </span>output = QLoraLinear::new(
+            QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>output_cfg,
+            lora_config,
+            vb,
+            ordering,
+            <span class="string">"lm_head"</span>.to_string(),
+            <span class="kw-2">&amp;mut </span>count,
+            preload_adapters,
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; output.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
-            output: QMatMul::from_qtensor(output)<span class="question-mark">?</span>,
+            output,
             device: device.clone(),
             cache: Cache::new(block_count, <span class="bool-val">true</span>),
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -1794,7 +1862,7 @@
 
             <span class="kw">if </span>no_kv_cache {
                 extract_logits(
-                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                         <span class="kw-2">&amp;</span><span class="self">self
                             </span>.inner_forward(
                                 input_ids_full,
@@ -1806,14 +1874,16 @@
                                 <span class="prelude-val">None</span>,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                        <span class="prelude-val">None</span>,
+                        <span class="number">1.0</span>,
+                        <span class="prelude-val">None</span>,
                     )<span class="question-mark">?</span>,
                     context_lens,
                 )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span>extract_logits(
-                    <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                         <span class="kw-2">&amp;</span><span class="self">self
                             </span>.inner_forward(
                                 input_ids,
@@ -1825,14 +1895,16 @@
                                 <span class="prelude-val">None</span>,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                        <span class="prelude-val">None</span>,
+                        <span class="number">1.0</span>,
+                        <span class="prelude-val">None</span>,
                     )<span class="question-mark">?</span>,
                     context_lens,
                 )
             }
         } <span class="kw">else </span>{
             extract_logits(
-                <span class="kw-2">&amp;</span>MatMul.qmatmul(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.output.lora_forward(
                     <span class="kw-2">&amp;</span><span class="self">self
                         </span>.inner_forward(
                             input_ids,
@@ -1844,7 +1916,9 @@
                             <span class="prelude-val">None</span>,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?</span>,
-                    <span class="kw-2">&amp;</span><span class="self">self</span>.output,
+                    <span class="prelude-val">None</span>,
+                    <span class="number">1.0</span>,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>,
                 context_lens,
             )

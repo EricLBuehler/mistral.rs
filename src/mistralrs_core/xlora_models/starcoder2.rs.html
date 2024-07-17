@@ -866,6 +866,25 @@
 <a href="#866" id="866">866</a>
 <a href="#867" id="867">867</a>
 <a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -879,7 +898,7 @@
     device_map::DeviceMapper,
     layers::{CausalMasker, RotaryEmbedding, ScaledDotProductAttention},
     layers_utils::repeat_kv,
-    lora::{linear_b, LinearLayerLike, LoraConfig},
+    lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -1291,7 +1310,7 @@
     embed_tokens: candle_nn::Embedding,
     layers: Vec&lt;DecoderLayer&gt;,
     norm: LayerNorm,
-    lm_head: QMatMul,
+    lm_head: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
@@ -1383,10 +1402,20 @@
             cfg.norm_epsilon,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = QMatMul::Tensor(mapper.cast_nm_device(
-            embed_tokens.embeddings(),
-            normal_loading_metadata.loading_isq,
-        )<span class="question-mark">?</span>);
+        <span class="kw">let </span>lm_head = linear_no_bias(
+            embed_tokens.embeddings().dim(<span class="number">1</span>)<span class="question-mark">?</span>,
+            embed_tokens.embeddings().dim(<span class="number">0</span>)<span class="question-mark">?</span>,
+            mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
+            lora_config,
+            <span class="kw-2">&amp;mut </span>count,
+            <span class="kw-2">&amp;</span>xlora_ordering,
+            preload_adapters,
+        )<span class="question-mark">?</span>;
+        <span class="kw">if </span>xlora_config.is_some() &amp;&amp; lm_head.is_lora() {
+            <span class="comment">// This is why we can pass dummy values (..., None, 1.0, None)?
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Got an adapter `lm_head` layer, this is unsupported with X-LoRA."</span>);
+        }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
@@ -1506,10 +1535,13 @@
                         <span class="prelude-val">None</span>,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
+                <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             } <span class="kw">else </span>{
                 <span class="comment">// is_full_pass=true is ok because no_kv_cache=false
                 </span><span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1523,10 +1555,13 @@
                         <span class="prelude-val">None</span>,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
+                <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
                 }
-                extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+                extract_logits(
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                    context_lens,
+                )
             }
         } <span class="kw">else </span>{
             <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self
@@ -1540,10 +1575,13 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
-            <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
+            <span class="kw">if </span><span class="self">self</span>.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)<span class="question-mark">?</span>;
             }
-            extract_logits(<span class="kw-2">&amp;</span>res.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>, context_lens)
+            extract_logits(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.lora_forward(<span class="kw-2">&amp;</span>res, <span class="prelude-val">None</span>, <span class="number">1.0</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>,
+                context_lens,
+            )
         }
     }
 }
@@ -1551,7 +1589,7 @@
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
     <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().inner(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner(),
@@ -1579,7 +1617,7 @@
     }
     <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((<span class="prelude-val">None</span>, <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().bias_mut(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
