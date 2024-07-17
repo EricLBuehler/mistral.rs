@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use crate::device_map::DeviceMapper;
 use crate::layers::repeat_kv;
 use crate::layers::CausalMasker;
-use crate::layers::MatMul;
 use crate::layers::RmsNorm;
 use crate::layers::ScaledDotProductAttention;
 use crate::lora::get_lora_cfg;
@@ -37,11 +36,12 @@ use crate::models::quantized_phi3::PropsGGUF;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 
-const SUPPORTED_LAYERS: [&str; 4] = [
+const SUPPORTED_LAYERS: [&str; 5] = [
     "self_attn.qkv_proj",
     "self_attn.o_proj",
     "mlp.gate_up_proj",
     "mlp.down_proj",
+    "lm_head",
 ];
 
 #[derive(Debug)]
@@ -195,7 +195,7 @@ pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
     output_norm: RmsNorm,
-    output: QMatMul,
+    output: QLoraLinear,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
     pub cache: Cache,
@@ -259,7 +259,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
-        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
+        let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
         let mapper = mapper.into_mapper(block_count, device)?;
@@ -349,6 +349,21 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 layer.mlp.ffn_up.merge_weights()?;
             }
         }
+        let output_cfg = get_lora_cfg(&output);
+        let output = QLoraLinear::new(
+            QMatMul::from_qtensor(output)?,
+            &output_cfg,
+            lora_config,
+            vb,
+            ordering,
+            "lm_head".to_string(),
+            &mut count,
+            preload_adapters,
+        )?;
+        if xlora_config.is_some() && output.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
@@ -390,7 +405,6 @@ impl ModelWeights {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -447,8 +461,7 @@ impl ModelWeights {
             xs = (ys + residual)?
         }
         let xs = xs.to_device(&self.device)?;
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
-        self.output.forward(&xs)
+        xs.apply(&self.output_norm)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -479,7 +492,7 @@ impl ModelWeights {
 
             if no_kv_cache {
                 extract_logits(
-                    &MatMul.qmatmul(
+                    &self.output.lora_forward(
                         &self
                             .inner_forward(
                                 input_ids_full,
@@ -490,14 +503,16 @@ impl ModelWeights {
                                 None,
                             )?
                             .contiguous()?,
-                        &self.output,
+                        None,
+                        1.0,
+                        None,
                     )?,
                     context_lens,
                 )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 extract_logits(
-                    &MatMul.qmatmul(
+                    &self.output.lora_forward(
                         &self
                             .inner_forward(
                                 input_ids,
@@ -508,18 +523,22 @@ impl ModelWeights {
                                 None,
                             )?
                             .contiguous()?,
-                        &self.output,
+                        None,
+                        1.0,
+                        None,
                     )?,
                     context_lens,
                 )
             }
         } else {
             extract_logits(
-                &MatMul.qmatmul(
+                &self.output.lora_forward(
                     &self
                         .inner_forward(input_ids, seqlen_offsets, None, false, no_kv_cache, None)?
                         .contiguous()?,
-                    &self.output,
+                    None,
+                    1.0,
+                    None,
                 )?,
                 context_lens,
             )

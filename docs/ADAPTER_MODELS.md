@@ -14,12 +14,14 @@ When using an adapter model with a quantized base model, if the ordering file sp
 - model.layers.{layer_idx}.mlp.up_proj
 - model.layers.{layer_idx}.mlp.down_proj
 - model.layers.{layer_idx}.mlp.gate_proj
+- lm_head
 
 **Phi 3 architecture:**
 - model.layers.{layer_idx}.self_attn.qkv_proj
 - model.layers.{layer_idx}.self_attn.o_proj
 - model.layers.{layer_idx}.mlp.gate_up_proj
 - model.layers.{layer_idx}.mlp.down_proj
+- lm_head
 
 ## Adapter ordering file
 **Preparing the X-LoRA/LoRA Ordering File**
