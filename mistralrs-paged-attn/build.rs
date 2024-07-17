@@ -9,12 +9,12 @@ fn main() -> Result<()> {
     use std::path::PathBuf;
 
     const OTHER_CONTENT: &str = r#"
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod ffi;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod backend;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}};
     "#;
 
