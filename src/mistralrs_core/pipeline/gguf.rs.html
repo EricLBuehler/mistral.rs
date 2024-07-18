@@ -775,6 +775,26 @@
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
 <a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1068,31 +1088,46 @@
     }
 }
 
+<span class="kw">struct </span>ContentConfig {
+    hidden_size: usize,
+    num_attn_heads: usize,
+    num_kv_heads: usize,
+    num_layers: usize,
+}
+
 <span class="attr">#[allow(clippy::cast_possible_truncation)]
-</span><span class="kw">impl </span>ModelConfigLike <span class="kw">for </span>Content {
+</span><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; From&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>Content&gt; <span class="kw">for </span>ContentConfig {
+    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Content) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>arch = value.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
+        <span class="self">Self </span>{
+            hidden_size: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
+                .to_u64()
+                .unwrap() <span class="kw">as </span>usize,
+            num_attn_heads: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count"</span>)]
+                .to_u64()
+                .unwrap() <span class="kw">as </span>usize,
+            num_kv_heads: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count_kv"</span>)]
+                .to_u64()
+                .unwrap() <span class="kw">as </span>usize,
+            num_layers: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)]
+                .to_u64()
+                .unwrap() <span class="kw">as </span>usize,
+        }
+    }
+}
+
+<span class="kw">impl </span>ModelConfigLike <span class="kw">for </span>ContentConfig {
     <span class="kw">fn </span>hidden_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">let </span>arch = <span class="self">self</span>.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
-        <span class="self">self</span>.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
-            .to_u64()
-            .unwrap() <span class="kw">as </span>usize
+        <span class="self">self</span>.hidden_size
     }
     <span class="kw">fn </span>num_attn_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">let </span>arch = <span class="self">self</span>.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
-        <span class="self">self</span>.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count"</span>)]
-            .to_u64()
-            .unwrap() <span class="kw">as </span>usize
+        <span class="self">self</span>.num_attn_heads
     }
     <span class="kw">fn </span>num_kv_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">let </span>arch = <span class="self">self</span>.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
-        <span class="self">self</span>.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count_kv"</span>)]
-            .to_u64()
-            .unwrap() <span class="kw">as </span>usize
+        <span class="self">self</span>.num_kv_heads
     }
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">let </span>arch = <span class="self">self</span>.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
-        <span class="self">self</span>.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)]
-            .to_u64()
-            .unwrap() <span class="kw">as </span>usize
+        <span class="self">self</span>.num_layers
     }
 }
 
@@ -1172,26 +1207,6 @@
             }
         }
 
-        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
-            <span class="kw">if </span>!<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::AdapterQuantized { .. }) {
-                <span class="macro">warn!</span>(<span class="string">"Adapter models do not currently support PagedAttention, running without"</span>);
-            }
-
-            <span class="kw">let </span>model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike = <span class="kw-2">&amp;</span>model;
-            <span class="kw">let </span>cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
-                paged_attn_config.block_size,
-                DType::F32,
-                model_config,
-                device,
-            )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine = CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, DType::F32, device)<span class="question-mark">?</span>;
-            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
-        } <span class="kw">else </span>{
-            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-        };
-
         <span class="kw">if </span>DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
             <span class="kw">for </span>(name, info) <span class="kw">in </span><span class="kw-2">&amp;</span>model.tensor_infos {
@@ -1236,12 +1251,21 @@
         <span class="kw">let </span>has_adapter = <span class="self">self</span>.kind.is_adapted();
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
 
+        <span class="kw">let </span>paged_attn_config = <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::AdapterQuantized { .. }) {
+            <span class="macro">warn!</span>(<span class="string">"Adapter models do not currently support PagedAttention, running without"</span>);
+            <span class="prelude-val">None
+        </span>} <span class="kw">else </span>{
+            paged_attn_config
+        };
+
+        <span class="kw">let </span>model_config_metadata: ContentConfig = (<span class="kw-2">&amp;</span>model).into();
+
         <span class="kw">let </span>model_config = {
             <span class="comment">// Base config (quantization only):
             </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF(
                 (model, <span class="kw-2">&amp;mut </span>file).into(),
                 (device, mapper).into(),
-                <span class="kw">if </span>cache_config.is_some() {
+                <span class="kw">if </span>paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } <span class="kw">else </span>{
                     AttentionImplementation::Eager
@@ -1282,6 +1306,22 @@
                 ),
             },
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+        };
+
+        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+            <span class="kw">let </span>model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike = <span class="kw-2">&amp;</span>model_config_metadata;
+            <span class="kw">let </span>cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                DType::F32,
+                model_config,
+                device,
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine = CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, DType::F32, device)<span class="question-mark">?</span>;
+            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
+        } <span class="kw">else </span>{
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
 
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
