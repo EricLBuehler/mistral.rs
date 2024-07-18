@@ -34,16 +34,16 @@ pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
 mod cublaslt;
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod paged_attention;
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 use dummy_paged_attention as paged_attention;
 mod pipeline;
 mod prefix_cacher;
