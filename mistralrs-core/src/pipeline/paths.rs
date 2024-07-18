@@ -354,7 +354,7 @@ pub(crate) fn get_chat_template(
     } else if chat_template_ovrd.is_some() {
         None
     } else {
-        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
+        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
     };
 
     let mut template: ChatTemplate = match chat_template_ovrd {
