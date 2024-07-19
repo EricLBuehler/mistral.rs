@@ -192,14 +192,14 @@
             <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
             <span class="kw">let </span>used = total - free;
             <span class="kw">let </span>size = (total * f - used) <span class="kw">as </span>usize;
-            <span class="macro">info!</span>(<span class="string">"Allocating {size} MB for Paged Attention KV cache"</span>);
+            <span class="macro">info!</span>(<span class="string">"Allocating {size} MB for PagedAttention KV cache"</span>);
             size
         }
     };
 
     <span class="kw">let </span>num_gpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     <span class="kw">let </span>num_cpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
-    <span class="macro">info!</span>(<span class="string">"Using Paged Attention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens"</span>, num_gpu_blocks<span class="kw-2">*</span>block_size);
+    <span class="macro">info!</span>(<span class="string">"Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens"</span>, num_gpu_blocks<span class="kw-2">*</span>block_size);
     <span class="prelude-val">Ok</span>(CacheConfig {
         block_size,
         num_gpu_blocks,

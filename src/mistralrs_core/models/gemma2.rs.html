@@ -1293,7 +1293,7 @@
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">if </span><span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::PagedAttention) {
             <span class="comment">// TODO softcapping in paged attn
-            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Gemma 2 does not support Paged Attention."</span>);
+            </span><span class="macro">candle_core::bail!</span>(<span class="string">"Gemma 2 does not support PagedAttention."</span>);
         }
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
