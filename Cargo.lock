@@ -1979,6 +1979,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f958d3d68f4167080a18141e10381e7634563984a537f2a49a30fd8e53ac5767"
+
+[[package]]
 name = "ipnet"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2404,6 +2410,7 @@ dependencies = [
  "mistralrs-core",
  "pyo3",
  "pyo3-build-config",
+ "pyo3_special_method_derive",
  "reqwest",
  "serde",
  "serde_json",
@@ -3066,6 +3073,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap 2.2.6",
  "indoc",
+ "inventory",
  "libc",
  "memoffset",
  "num-bigint",
@@ -3124,6 +3132,29 @@ dependencies = [
  "proc-macro2",
  "pyo3-build-config",
  "quote",
+ "syn 2.0.71",
+]
+
+[[package]]
+name = "pyo3_special_method_derive"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5b19222b1fe97610db34eff5894c24a0f962f6f2be5f4035ad788431de89074"
+dependencies = [
+ "pyo3",
+ "pyo3_special_method_derive_macro",
+]
+
+[[package]]
+name = "pyo3_special_method_derive_macro"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef146cb74e8ddac34518118a758d7f3a2f2d59f59c8aca842367b062ca03ba5"
+dependencies = [
+ "proc-macro2",
+ "pyo3",
+ "quote",
+ "quote_into",
  "syn 2.0.71",
 ]
 
@@ -3190,6 +3221,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "quote_into"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93886ed56f228a5d960fc4d26afa3736df12a251872869cf24f5efe5f07699b9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "quote_into_macro",
+]
+
+[[package]]
+name = "quote_into_macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36b828998c40452b5afe441c75194e93181432e669585f4ceb7b0d32a3f73525"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
