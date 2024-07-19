@@ -466,16 +466,16 @@
 
 <span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cublaslt;
-<span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+<span class="attr">#[cfg(not(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>)))]
 </span><span class="kw">mod </span>dummy_paged_attention;
 <span class="kw">mod </span>gguf;
 <span class="kw">pub mod </span>layers;
 <span class="kw">mod </span>layers_masker;
 <span class="kw">mod </span>layers_utils;
 <span class="kw">mod </span>models;
-<span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>))]
 </span><span class="kw">mod </span>paged_attention;
-<span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+<span class="attr">#[cfg(not(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>)))]
 </span><span class="kw">use </span>dummy_paged_attention <span class="kw">as </span>paged_attention;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
