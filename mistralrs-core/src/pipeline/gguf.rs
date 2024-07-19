@@ -56,7 +56,7 @@ use std::sync::Arc;
 use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -291,31 +291,46 @@ fn parse_gguf_value(value: &GgufValue) -> String {
     }
 }
 
+struct ContentConfig {
+    hidden_size: usize,
+    num_attn_heads: usize,
+    num_kv_heads: usize,
+    num_layers: usize,
+}
+
 #[allow(clippy::cast_possible_truncation)]
-impl ModelConfigLike for Content {
+impl<'a> From<&'a Content> for ContentConfig {
+    fn from(value: &'a Content) -> Self {
+        let arch = value.metadata["general.architecture"].to_string().unwrap();
+        Self {
+            hidden_size: value.metadata[&format!("{arch}.embedding_length")]
+                .to_u64()
+                .unwrap() as usize,
+            num_attn_heads: value.metadata[&format!("{arch}.attention.head_count")]
+                .to_u64()
+                .unwrap() as usize,
+            num_kv_heads: value.metadata[&format!("{arch}.attention.head_count_kv")]
+                .to_u64()
+                .unwrap() as usize,
+            num_layers: value.metadata[&format!("{arch}.block_count")]
+                .to_u64()
+                .unwrap() as usize,
+        }
+    }
+}
+
+impl ModelConfigLike for ContentConfig {
     fn hidden_size(&self) -> usize {
-        let arch = self.metadata["general.architecture"].to_string().unwrap();
-        self.metadata[&format!("{arch}.embedding_length")]
-            .to_u64()
-            .unwrap() as usize
+        self.hidden_size
     }
     fn num_attn_heads(&self) -> usize {
-        let arch = self.metadata["general.architecture"].to_string().unwrap();
-        self.metadata[&format!("{arch}.attention.head_count")]
-            .to_u64()
-            .unwrap() as usize
+        self.num_attn_heads
     }
     fn num_kv_heads(&self) -> usize {
-        let arch = self.metadata["general.architecture"].to_string().unwrap();
-        self.metadata[&format!("{arch}.attention.head_count_kv")]
-            .to_u64()
-            .unwrap() as usize
+        self.num_kv_heads
     }
     fn num_layers(&self) -> usize {
-        let arch = self.metadata["general.architecture"].to_string().unwrap();
-        self.metadata[&format!("{arch}.block_count")]
-            .to_u64()
-            .unwrap() as usize
+        self.num_layers
     }
 }
 
@@ -395,26 +410,6 @@ impl Loader for GGUFLoader {
             }
         }
 
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::AdapterQuantized { .. }),
-                "PagedAttention for GGUF does not support adapter models."
-            );
-            let model_config: &dyn ModelConfigLike = &model;
-            let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
-                paged_attn_config.block_size,
-                DType::F32,
-                model_config,
-                device,
-            )?;
-            let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
-            (Some(cache_config), Some(cache_engine))
-        } else {
-            (None, None)
-        };
-
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let mut tensors = Vec::new();
             for (name, info) in &model.tensor_infos {
@@ -459,12 +454,21 @@ impl Loader for GGUFLoader {
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
+        let paged_attn_config = if matches!(self.kind, ModelKind::AdapterQuantized { .. }) {
+            warn!("Adapter models do not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
+        let model_config_metadata: ContentConfig = (&model).into();
+
         let model_config = {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 (model, &mut file).into(),
                 (device, mapper).into(),
-                if cache_config.is_some() {
+                if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
                     AttentionImplementation::Eager
@@ -505,6 +509,22 @@ impl Loader for GGUFLoader {
                 ),
             },
             _ => unreachable!(),
+        };
+
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            let model_config: &dyn ModelConfigLike = &model_config_metadata;
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                DType::F32,
+                model_config,
+                device,
+            )?;
+            let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
         };
 
         let gen_conf: Option<GenerationConfig> = paths

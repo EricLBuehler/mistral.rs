@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
     use std::fs;
     use std::fs::read_to_string;
@@ -9,12 +9,12 @@ fn main() -> Result<()> {
     use std::path::PathBuf;
 
     const OTHER_CONTENT: &str = r#"
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod ffi;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 mod backend;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}};
     "#;
 
@@ -67,7 +67,7 @@ pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}
     Ok(())
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
 fn main() -> Result<()> {
     Ok(())
 }

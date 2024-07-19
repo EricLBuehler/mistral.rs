@@ -16,7 +16,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -418,7 +418,7 @@ pub struct XLoraLlama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: QLinear,
+    lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     pub kv_cache: pipeline::Cache,
     pub device: Device,
     xlora_classifier: Option<XLoraClassifier>,
@@ -521,7 +521,10 @@ impl XLoraLlama {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -538,7 +541,10 @@ impl XLoraLlama {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             }
         } else {
             let mut res = self
@@ -555,7 +561,10 @@ impl XLoraLlama {
             if self.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(
+                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                context_lens,
+            )
         }
     }
 
@@ -575,23 +584,32 @@ impl XLoraLlama {
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let dtype = vb.dtype();
+        let mut count = 0;
 
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = candle_nn::linear(
+        let lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), false),
+            lora_config,
+            &mut count,
+            &xlora_ordering,
+            preload_adapters,
         )?;
+        if xlora_config.is_some() && lm_head.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
-        let mut count = 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
@@ -658,7 +676,7 @@ impl XLoraLlama {
             wte,
             blocks,
             ln_f,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -680,7 +698,7 @@ impl XLoraLlama {
 impl IsqModel for XLoraLlama {
     fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),

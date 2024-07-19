@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
@@ -61,10 +61,12 @@ impl Loader for AnyMoeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "AnyMoE does not currently support PagedAttention"
-        );
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!("AnyMoE does not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
 
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -101,10 +103,12 @@ impl Loader for AnyMoeLoader {
         in_situ_quant: Option<GgmlDType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "AnyMoE does not currently support PagedAttention"
-        );
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!("AnyMoE does not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
 
         let target = self.target.load_model_from_path(
             paths,

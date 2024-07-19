@@ -44,7 +44,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
@@ -314,11 +314,14 @@ impl Loader for NormalLoader {
             model.quantize(in_situ_quant, device.clone())?;
         }
 
+        let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
+            warn!("Adapter models do not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::Adapter { .. }),
-                "PagedAttention does not support adapter models."
-            );
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,

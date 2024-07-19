@@ -8,6 +8,8 @@ Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and bl
 
 > Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
 
+> Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.
+
 **There are more features being added to this:**
 - GGML model support 
 - Adapter model support
