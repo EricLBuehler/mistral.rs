@@ -187,6 +187,7 @@ impl From<TextConfig> for mistral::Config {
             rope_theta: val.rope_theta,
             sliding_window: val.sliding_window,
             use_flash_attn: val.use_flash_attn,
+            head_dim: None,
         }
     }
 }

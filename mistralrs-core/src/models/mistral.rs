@@ -39,6 +39,14 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) use_flash_attn: bool,
+    pub(crate) head_dim: Option<usize>,
+}
+
+impl Config {
+    pub(crate) fn head_dim(&self) -> usize {
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +149,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
@@ -159,7 +166,7 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
+        let head_dim = cfg.head_dim();
         let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
@@ -173,7 +180,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
@@ -282,11 +288,9 @@ impl Attention {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
         attn_output = if attention_mask.is_some() {
-            attn_output
-                .transpose(1, 2)?
-                .reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
-            attn_output.reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.reshape((b_sz, q_len, ()))?
         };
 
         let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
@@ -419,7 +423,7 @@ impl Model {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim = cfg.head_dim();
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
