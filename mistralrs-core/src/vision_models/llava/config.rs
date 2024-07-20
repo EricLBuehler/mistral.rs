@@ -94,6 +94,7 @@ impl Config {
             rope_theta: self.text_config.rope_theta as f64,
             sliding_window: self.text_config.sliding_window,
             use_flash_attn: self.use_flash_attn,
+            head_dim: None,
         }
     }
 

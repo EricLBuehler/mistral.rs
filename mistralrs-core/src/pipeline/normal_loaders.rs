@@ -114,6 +114,7 @@ struct MistralBasicConfig {
     rms_norm_eps: f64,
     rope_theta: f64,
     sliding_window: Option<usize>,
+    head_dim: Option<usize>,
 }
 
 impl MistralBasicConfig {
@@ -132,6 +133,7 @@ impl MistralBasicConfig {
             rope_theta: basic_config.rope_theta,
             sliding_window: basic_config.sliding_window,
             use_flash_attn,
+            head_dim: basic_config.head_dim,
         })
     }
 }
