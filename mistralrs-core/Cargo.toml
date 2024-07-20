@@ -73,7 +73,8 @@ plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
 mistralrs-paged-attn = { version = "0.2.0", path = "../mistralrs-paged-attn", optional = true }
 
 [features]
-default = ["dep:plotly"]
+default = ["plotly"]
+plotly = ["dep:plotly"]
 pyo3_macros = ["pyo3"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
 cudnn = ["candle-core/cudnn"]
