@@ -753,6 +753,10 @@
 <a href="#753" id="753">753</a>
 <a href="#754" id="754">754</a>
 <a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -794,6 +798,14 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
     <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) head_dim: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+}
+
+<span class="kw">impl </span>Config {
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>head_dim(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.head_dim
+            .unwrap_or(<span class="self">self</span>.hidden_size / <span class="self">self</span>.num_attention_heads)
+    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -896,7 +908,6 @@
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
@@ -914,7 +925,7 @@
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
         <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads;
         <span class="kw">let </span>num_kv_groups = num_heads / num_kv_heads;
-        <span class="kw">let </span>head_dim = hidden_sz / num_heads;
+        <span class="kw">let </span>head_dim = cfg.head_dim();
         <span class="kw">let </span>q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
@@ -928,7 +939,6 @@
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
@@ -1037,11 +1047,9 @@
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
         }
         attn_output = <span class="kw">if </span>attention_mask.is_some() {
-            attn_output
-                .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, <span class="self">self</span>.hidden_size])<span class="question-mark">?
+            attn_output.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, q_len, ()))<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            attn_output.reshape(<span class="kw-2">&amp;</span>[b_sz, q_len, <span class="self">self</span>.hidden_size])<span class="question-mark">?
+            attn_output.reshape((b_sz, q_len, ()))<span class="question-mark">?
         </span>};
 
         <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmatmul(<span class="kw-2">&amp;</span>attn_output, <span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)<span class="question-mark">?</span>;
@@ -1174,7 +1182,7 @@
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        <span class="kw">let </span>head_dim = cfg.head_dim();
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">for </span>layer_idx <span class="kw">in

@@ -110,6 +110,7 @@
 <a href="#110" id="110">110</a>
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>serde::Deserialize;
 
@@ -206,6 +207,7 @@
             rope_theta: <span class="self">self</span>.text_config.rope_theta <span class="kw">as </span>f64,
             sliding_window: <span class="self">self</span>.text_config.sliding_window,
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
+            head_dim: <span class="prelude-val">None</span>,
         }
     }
 

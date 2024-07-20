@@ -1038,7 +1038,7 @@
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
         <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads;
         <span class="kw">let </span>num_kv_groups = num_heads / num_kv_heads;
-        <span class="kw">let </span>head_dim = hidden_sz / num_heads;
+        <span class="kw">let </span>head_dim = cfg.head_dim();
         <span class="kw">let </span>q_proj = linear_no_bias(
             hidden_sz,
             num_heads * head_dim,
@@ -1346,7 +1346,7 @@
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        <span class="kw">let </span>head_dim = cfg.head_dim();
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;

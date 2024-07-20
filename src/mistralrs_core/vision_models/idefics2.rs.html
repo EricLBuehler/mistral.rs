@@ -1142,6 +1142,7 @@
 <a href="#1142" id="1142">1142</a>
 <a href="#1143" id="1143">1143</a>
 <a href="#1144" id="1144">1144</a>
+<a href="#1145" id="1145">1145</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1331,6 +1332,7 @@
             rope_theta: val.rope_theta,
             sliding_window: val.sliding_window,
             use_flash_attn: val.use_flash_attn,
+            head_dim: <span class="prelude-val">None</span>,
         }
     }
 }
