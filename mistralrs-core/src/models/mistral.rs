@@ -149,7 +149,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
@@ -181,7 +180,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
@@ -290,11 +288,9 @@ impl Attention {
             attn_output = attn_output.to_dtype(DType::F32)?;
         }
         attn_output = if attention_mask.is_some() {
-            attn_output
-                .transpose(1, 2)?
-                .reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
-            attn_output.reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.reshape((b_sz, q_len, ()))?
         };
 
         let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
