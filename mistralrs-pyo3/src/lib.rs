@@ -57,9 +57,11 @@ fn get_device() -> Result<Device> {
 fn get_device() -> Result<Device> {
     let mut device = METAL_DEVICE.lock().unwrap();
     if let Some(device) = device.as_ref() {
+        dbg!(&device);
         return Ok(device.clone());
     };
     let res = Device::new_metal(0)?;
+    dbg!(&res);
     *device = Some(res.clone());
     Ok(res)
 }
