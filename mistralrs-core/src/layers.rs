@@ -481,20 +481,12 @@ impl QLinear {
         Self {
             inner: QMatMul::Tensor(linear.weight().clone()),
             bias: linear.bias().cloned(),
-            dtype: if linear.weight().device().is_cuda() {
-                DType::BF16
-            } else {
-                DType::F32
-            },
+            dtype: linear.weight().dtype(),
         }
     }
 
     pub fn from_parts(w: Tensor, b: Option<Tensor>) -> Self {
-        let dtype = if w.device().is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
+        let dtype = w.dtype();
         Self {
             inner: QMatMul::Tensor(w),
             bias: b,
