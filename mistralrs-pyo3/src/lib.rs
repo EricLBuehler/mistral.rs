@@ -2,7 +2,7 @@
 
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
-use candle_core::{quantized::GgmlDType, Result};
+use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 use std::{
@@ -12,7 +12,7 @@ use std::{
     fs,
     io::Read,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
@@ -38,30 +38,19 @@ mod stream;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
 
-#[cfg(not(feature = "metal"))]
-static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
-#[cfg(feature = "metal")]
-static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static DEVICE: OnceLock<Device> = OnceLock::new();
 
 #[cfg(not(feature = "metal"))]
-fn get_device() -> Result<Device> {
-    let mut device = CUDA_DEVICE.lock().unwrap();
-    if let Some(device) = device.as_ref() {
-        return Ok(device.clone());
-    };
-    let res = Device::cuda_if_available(0)?;
-    *device = Some(res.clone());
-    Ok(res)
+fn get_device() -> Device {
+    DEVICE
+        .get_or_init(|| Device::cuda_if_available(0).expect("Failed to create device"))
+        .clone()
 }
 #[cfg(feature = "metal")]
 fn get_device() -> Result<Device> {
-    let mut device = METAL_DEVICE.lock().unwrap();
-    if let Some(device) = device.as_ref() {
-        return Ok(device.clone());
-    };
-    let res = Device::new_metal(0)?;
-    *device = Some(res.clone());
-    Ok(res)
+    DEVICE
+        .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
+        .clone()
 }
 
 fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
@@ -418,7 +407,7 @@ impl Runner {
             loader
         };
 
-        let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let device = get_device();
         let isq = if let Some(isq) = in_situ_quant {
             Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
         } else {
