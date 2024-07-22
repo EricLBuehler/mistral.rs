@@ -404,23 +404,22 @@ async fn main() -> Result<()> {
         }
     };
     // Throughput logging in the server
-    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+    let builder = MistralRsBuilder::new(pipeline, scheduler_config)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .with_throughput_logging()
-        .build();
+        .with_prefix_cache_n(args.prefix_cache_n);
 
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
     } else if args.interactive_mode {
-        interactive_mode(mistralrs, false).await;
+        interactive_mode(builder.build(), false).await;
         return Ok(());
     } else if args.vision_interactive_mode {
-        interactive_mode(mistralrs, true).await;
+        interactive_mode(builder.build(), true).await;
         return Ok(());
     }
+    let mistralrs = builder.with_throughput_logging().build();
 
     let port = args.port.expect("Expected port to be specified.");
 
