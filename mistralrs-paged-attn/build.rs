@@ -1,6 +1,9 @@
 use anyhow::Result;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
+const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
     use std::fs;
     use std::fs::read_to_string;
@@ -32,7 +35,12 @@ pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}
     println!("cargo:rerun-if-changed=src/pagedattention.cu");
     println!("cargo:rerun-if-changed=src/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/reshape_and_cache_kernel.cu");
-    let builder = bindgen_cuda::Builder::default();
+    let mut builder = bindgen_cuda::Builder::default();
+    // https://github.com/EricLBuehler/mistral.rs/issues/286
+    if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+        builder = builder.arg("--compiler-options");
+        builder = builder.arg(cuda_nvcc_flags_env);
+    }
     println!("cargo:info={builder:?}");
     builder.build_lib("libpagedattention.a");
 
