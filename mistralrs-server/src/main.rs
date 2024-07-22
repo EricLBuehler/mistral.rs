@@ -403,11 +403,13 @@ async fn main() -> Result<()> {
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
+    // Throughput logging in the server
     let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n)
+        .with_throughput_logging()
         .build();
 
     if args.interactive_mode && args.vision_interactive_mode {

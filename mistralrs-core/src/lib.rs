@@ -109,6 +109,7 @@ struct RebootState {
     no_prefix_cache: bool,
     prefix_cache_n: usize,
     disable_eos_stop: bool,
+    throughput_logging_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -145,6 +146,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     gemm_full_precision_f16: Option<bool>,
+    throughput_logging_enabled: Option<()>,
 }
 
 impl MistralRsBuilder {
@@ -159,6 +161,7 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             gemm_full_precision_f16: None,
+            throughput_logging_enabled: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -191,6 +194,10 @@ impl MistralRsBuilder {
     }
     pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
+        self
+    }
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging_enabled = Some(());
         self
     }
 
@@ -248,6 +255,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             gemm_full_precision_f16,
+            throughput_logging_enabled,
         } = config;
 
         let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
@@ -273,6 +281,7 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            throughput_logging_enabled: throughput_logging_enabled.is_some(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -293,6 +302,9 @@ impl MistralRs {
                     prefix_cache_n,
                     disable_eos_stop,
                 );
+                if throughput_logging_enabled.is_some() {
+                    engine.enable_throughput_logging();
+                }
                 engine.run().await;
             });
         });
@@ -343,6 +355,9 @@ impl MistralRs {
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                     );
+                    if reboot_state.throughput_logging_enabled {
+                        engine.enable_throughput_logging();
+                    }
                     engine.run().await;
                 });
             });
