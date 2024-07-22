@@ -19,13 +19,13 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
-    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, VisionLoaderBuilder,
-    VisionSpecificConfig,
+    initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
+    CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
+    Response, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -467,7 +467,12 @@ impl Runner {
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        let cache_config = match (pa_blk_size, pa_gpu_mem, device.is_cuda(), no_paged_attn) {
+        let cache_config = match (
+            pa_blk_size,
+            pa_gpu_mem,
+            paged_attn_supported(),
+            no_paged_attn,
+        ) {
             (block_size, None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
                 512,

@@ -46,7 +46,7 @@ let pipeline = loader.load_model_from_hf(
     false,
     DeviceMapMetadata::dummy(),
     Some(GgmlDType::Q4K),
-    None, // No Paged Attention yet
+    None, // No PagedAttention yet
 )?;
 ```
 

@@ -9,9 +9,10 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use either::Either;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -122,23 +123,23 @@ struct Args {
     #[arg(long = "isq", value_parser = parse_isq)]
     in_situ_quant: Option<GgmlDType>,
 
-    /// GPU memory to allocate for KV cache with Paged Attention in MBs. If this is not set and the device is CUDA, it will default to
-    /// using `pa-gpu-mem-usage` set to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
+    /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with Paged Attention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`. Paged Attention is only supported on CUDA and is always automatically activated.
+    /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
+    /// If this is not set and the device is CUDA, it will default to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     /// This is always used over `pa-gpu-mem` if both are specified.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Block size (number of tokens per block) for Paged Attention. If this is not set and the device is CUDA, it will default to 32.
-    /// Paged Attention is only supported on CUDA and is always automatically activated.
+    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
+    /// PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable Paged Attention on CUDA.
+    /// Disable PagedAttention on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
 }
@@ -346,7 +347,7 @@ async fn main() -> Result<()> {
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
-        device.is_cuda(),
+        paged_attn_supported(),
         args.no_paged_attn,
     ) {
         (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(

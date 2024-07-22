@@ -440,9 +440,9 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
-version = "1.6.0"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "514de17de45fdb8dc022b1a7975556c53c86f9f0aa5f534b98977b171857c2c9"
+checksum = "a12916984aab3fa6e39d655a33e09c0071eb36d6ab3aea5c2d78551f1df6d952"
 
 [[package]]
 name = "bzip2"
@@ -468,7 +468,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=ad6a9643#ad6a9643a4f0a93290ae3c8913eee52c4db383a7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=c967be9#c967be9cf653b3f0846d4c3f7ffb6a3de90a6813"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -495,7 +495,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=ad6a9643#ad6a9643a4f0a93290ae3c8913eee52c4db383a7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=c967be9#c967be9cf653b3f0846d4c3f7ffb6a3de90a6813"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -506,7 +506,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=ad6a9643#ad6a9643a4f0a93290ae3c8913eee52c4db383a7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=c967be9#c967be9cf653b3f0846d4c3f7ffb6a3de90a6813"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -514,7 +514,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=ad6a9643#ad6a9643a4f0a93290ae3c8913eee52c4db383a7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=c967be9#c967be9cf653b3f0846d4c3f7ffb6a3de90a6813"
 dependencies = [
  "metal",
  "once_cell",
@@ -525,7 +525,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=ad6a9643#ad6a9643a4f0a93290ae3c8913eee52c4db383a7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=c967be9#c967be9cf653b3f0846d4c3f7ffb6a3de90a6813"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -542,13 +542,12 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.1"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907d8581360765417f8f2e0e7d602733bbed60156b4465b7617243689ef9b83d"
+checksum = "324c74f2155653c90b04f25b2a47a8a631360cb908f92a772695f430c7e31052"
 dependencies = [
  "jobserver",
  "libc",
- "once_cell",
 ]
 
 [[package]]
@@ -877,9 +876,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.11.7"
+version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56ee2a3fbbd981e1c7ea73cc2af136e754eb22d17436de37155227ee4dbe0cf4"
+checksum = "89df33b4eb35d6d3f19ce8015fda23079131afef42cf6ede03e961ab8aeb29af"
 dependencies = [
  "half",
  "libloading",
@@ -2288,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2302,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2318,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2383,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2393,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "accelerate-src",
  "base64 0.22.1",
@@ -2425,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2453,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.1.26"
+version = "0.2.0"
 dependencies = [
  "candle-core",
  "image",
@@ -3621,9 +3620,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "security-framework"
-version = "2.11.0"
+version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c627723fd09706bacdb5cf41499e95098555af3c3c29d014dc3c458ef6be11c0"
+checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
 dependencies = [
  "bitflags 2.6.0",
  "core-foundation",
@@ -3634,9 +3633,9 @@ dependencies = [
 
 [[package]]
 name = "security-framework-sys"
-version = "2.11.0"
+version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "317936bbbd05227752583946b9e66d7ce3b489f84e11a94a510b4437fef407d7"
+checksum = "75da29fe9b9b08fe9d6b22b5b4bcbc75d8db3aa31e639aa56bb62e9d46bfceaf"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -3729,9 +3728,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.8.3"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e73139bc5ec2d45e6c5fd85be5a46949c1c39a4c18e56915f5eb4c12f975e377"
+checksum = "69cecfa94848272156ea67b2b1a53f20fc7bc638c4a46d2f8abde08f05f4b857"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3747,9 +3746,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.8.3"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b80d3d6b56b64335c0180e5ffde23b3c5e08c14c585b51a15bd0e95393f46703"
+checksum = "a8fee4991ef4f274617a51ad4af30519438dacb2f56ac773b08a1922ff743350"
 dependencies = [
  "darling 0.20.10",
  "proc-macro2",

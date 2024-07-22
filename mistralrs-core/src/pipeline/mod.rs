@@ -448,7 +448,7 @@ pub struct GeneralMetadata {
     pub is_xlora: bool,
     pub activation_dtype: DType,
     pub sliding_window: Option<usize>,
-    // Paged Attention stuff
+    // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
 }

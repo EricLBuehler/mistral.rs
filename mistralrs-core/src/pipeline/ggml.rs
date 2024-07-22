@@ -273,10 +273,12 @@ impl Loader for GGMLLoader {
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
 
-        anyhow::ensure!(
-            paged_attn_config.is_none(),
-            "PagedAttention is not supported for GGML"
-        );
+        let _ = if paged_attn_config.is_none() {
+            warn!("GGML does not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());

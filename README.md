@@ -65,7 +65,7 @@ Mistal.rs supports several model categories:
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Continuous batching and Paged Attention support.
+- Continuous batching and PagedAttention support.
 - Prefix caching.
 - [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
@@ -90,7 +90,7 @@ Mistal.rs supports several model categories:
 - AnyMoE: Build a memory-efficient MoE model from anything, in seconds
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
-- Paged Attention: [docs](docs/PAGED_ATTENTION.md)
+- PagedAttention: [docs](docs/PAGED_ATTENTION.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -189,7 +189,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.1.26)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.0)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
