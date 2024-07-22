@@ -71,7 +71,7 @@ base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
 mistralrs-paged-attn = { version = "0.2.0", path = "../mistralrs-paged-attn", optional = true }
-mistralrs-quant = { version = "0.1.13", path = "../mistralrs-quant", optional = true }
+mistralrs-quant = { version = "0.2.0", path = "../mistralrs-quant", optional = true }
 
 [features]
 default = ["dep:plotly"]
