@@ -1,8 +1,10 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
     activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
     VarBuilder,
 };
+
+use crate::ops::{TopKLastDimOp, TopKOutput};
 
 use super::config::XLoraConfig;
 
@@ -35,10 +37,10 @@ impl XLoraClassifier {
         vb: VarBuilder,
         is_quantized: bool,
     ) -> Result<Self> {
-        if config.top_k_lora.is_some() || config.enable_softmax_topk {
-            // TODO(EricLBuehler): Implement
-            candle_core::bail!("`top_k_lora` and `enable_softmax_topk` are not yet supported.");
+        if config.enable_softmax_topk {
+            candle_core::bail!("`enable_softmax_topk` is not implemented");
         }
+
         let (last, inner): (Linear, Vec<Box<dyn ModuleT + Send + Sync>>) = if config.xlora_depth
             == 1
         {
@@ -282,6 +284,19 @@ impl XLoraClassifier {
         if let Some(ref softmax) = self.softmax {
             scalings = softmax.forward(&scalings)?;
         }
+
+        let scalings = if let Some(topk_lora) = self.config.top_k_lora {
+            let TopKOutput { values: _, indices } = scalings.topk(topk_lora)?;
+
+            let scalings_zeroed = scalings.zeros_like()?;
+            scalings_zeroed.scatter_add(
+                &indices,
+                &scalings.gather(&indices, D::Minus1)?,
+                D::Minus1,
+            )?
+        } else {
+            scalings
+        };
 
         Ok(scalings)
     }
