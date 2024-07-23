@@ -383,8 +383,12 @@ impl Engine {
 
                         let throughput_end = Instant::now();
                         if self.throughput_logging_enabled {
-                            let ts = guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
-                                as f64
+                            let n_toks = if is_prompt {
+                                guards.len()
+                            } else {
+                                guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
+                            };
+                            let ts = n_toks as f64
                                 / throughput_end
                                     .duration_since(throughput_start)
                                     .as_secs_f64();
