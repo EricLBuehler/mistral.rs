@@ -113,7 +113,7 @@ impl Attention {
             head_dim,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
-            sliding_window: Some(cfg.sliding_window),
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -574,7 +574,7 @@ pub struct XLoraModel {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
     dtype: DType,
@@ -703,7 +703,7 @@ impl XLoraModel {
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
-                sliding_window: Some(cfg.sliding_window),
+                sliding_window: cfg.sliding_window,
             },
         })
     }
@@ -736,7 +736,7 @@ impl XLoraModel {
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
             &*cache,
-            Some(self.sliding_window),
+            self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
