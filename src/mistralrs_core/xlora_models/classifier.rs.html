@@ -305,11 +305,28 @@
 <a href="#305" id="305">305</a>
 <a href="#306" id="306">306</a>
 <a href="#307" id="307">307</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{
     activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
     VarBuilder,
 };
+
+<span class="kw">use </span><span class="kw">crate</span>::ops::{TopKLastDimOp, TopKOutput};
 
 <span class="kw">use </span><span class="kw">super</span>::config::XLoraConfig;
 
@@ -342,10 +359,10 @@
         vb: VarBuilder,
         is_quantized: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">if </span>config.top_k_lora.is_some() || config.enable_softmax_topk {
-            <span class="comment">// TODO(EricLBuehler): Implement
-            </span><span class="macro">candle_core::bail!</span>(<span class="string">"`top_k_lora` and `enable_softmax_topk` are not yet supported."</span>);
+        <span class="kw">if </span>config.enable_softmax_topk {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"`enable_softmax_topk` is not implemented"</span>);
         }
+
         <span class="kw">let </span>(last, inner): (Linear, Vec&lt;Box&lt;<span class="kw">dyn </span>ModuleT + Send + Sync&gt;&gt;) = <span class="kw">if </span>config.xlora_depth
             == <span class="number">1
         </span>{
@@ -589,6 +606,19 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>softmax) = <span class="self">self</span>.softmax {
             scalings = softmax.forward(<span class="kw-2">&amp;</span>scalings)<span class="question-mark">?</span>;
         }
+
+        <span class="kw">let </span>scalings = <span class="kw">if let </span><span class="prelude-val">Some</span>(topk_lora) = <span class="self">self</span>.config.top_k_lora {
+            <span class="kw">let </span>TopKOutput { values: <span class="kw">_</span>, indices } = scalings.topk(topk_lora)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>scalings_zeroed = scalings.zeros_like()<span class="question-mark">?</span>;
+            scalings_zeroed.scatter_add(
+                <span class="kw-2">&amp;</span>indices,
+                <span class="kw-2">&amp;</span>scalings.gather(<span class="kw-2">&amp;</span>indices, D::Minus1)<span class="question-mark">?</span>,
+                D::Minus1,
+            )<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            scalings
+        };
 
         <span class="prelude-val">Ok</span>(scalings)
     }
