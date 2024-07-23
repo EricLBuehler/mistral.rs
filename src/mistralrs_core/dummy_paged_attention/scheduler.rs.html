@@ -349,6 +349,12 @@
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! The Scheduler uses a BlockEngine to schedule and automatically batch sequences. The
 //! primary method `schedule` returns the batched sequences as inputs, as well as the
 //! operations to be executed on the cache by the CacheEngine.
@@ -362,7 +368,7 @@
 
 <span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
 };
 
 <span class="kw">use </span>tracing::warn;
@@ -371,7 +377,8 @@
     get_mut_arcmutex,
     paged_attention::BlockEngine,
     scheduler::{Scheduler, SchedulerOutput},
-    sequence::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceState, StopReason},
+    TERMINATE_ALL_NEXT_STEP,
 };
 
 <span class="kw">use super</span>::{block_engine::AllocStatus, BlockEngineSequence, BlockTables, CacheConfig};
@@ -538,11 +545,16 @@
             }
         }
 
-        <span class="kw">let _ </span>= <span class="self">self
-            </span>.running
+        <span class="self">self</span>.running
             .iter()
-            .map(|seq| <span class="macro">get_mut_arcmutex!</span>(seq).set_state(SequenceState::RunningCompletion))
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            .for_each(|seq| <span class="macro">get_mut_arcmutex!</span>(seq).set_state(SequenceState::RunningCompletion));
+
+        <span class="kw">if </span>TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+            <span class="self">self</span>.running.iter().for_each(|seq| {
+                <span class="macro">get_mut_arcmutex!</span>(seq).set_state(SequenceState::Done(StopReason::Canceled))
+            });
+            TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">false</span>, Ordering::SeqCst);
+        }
 
         PagedAttentionSchedulerOutput {
             scheduled: <span class="self">self</span>.running.clone().into(), <span class="comment">// Clone should be cheap.
