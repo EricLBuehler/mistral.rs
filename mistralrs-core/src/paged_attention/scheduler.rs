@@ -11,7 +11,7 @@ type DstBlocksTo = Vec<usize>;
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
 };
 
 use tracing::warn;
@@ -20,7 +20,8 @@ use crate::{
     get_mut_arcmutex,
     paged_attention::BlockEngine,
     scheduler::{Scheduler, SchedulerOutput},
-    sequence::{Sequence, SequenceState},
+    sequence::{Sequence, SequenceState, StopReason},
+    TERMINATE_ALL_NEXT_STEP,
 };
 
 use super::{block_engine::AllocStatus, BlockEngineSequence, BlockTables, CacheConfig};
@@ -187,11 +188,16 @@ impl PagedAttentionScheduler {
             }
         }
 
-        let _ = self
-            .running
+        self.running
             .iter()
-            .map(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion))
-            .collect::<Vec<_>>();
+            .for_each(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion));
+
+        if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+            self.running.iter().for_each(|seq| {
+                get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled))
+            });
+            TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
+        }
 
         PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into(), // Clone should be cheap.
