@@ -558,6 +558,10 @@
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
 <a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -572,7 +576,8 @@
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>image::DynamicImage;
 <span class="kw">use </span>indexmap::IndexMap;
-<span class="kw">use </span>plotly::{layout::Axis, ImageFormat, Plot, Scatter};
+<span class="attr">#[cfg(feature = <span class="string">"plotly"</span>)]
+</span><span class="kw">use </span>plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 <span class="kw">use </span>rand::{seq::SliceRandom, thread_rng};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>tracing::{info, warn};
@@ -1042,7 +1047,8 @@
         target.amoe_finish_training(gate_model_id)<span class="question-mark">?</span>;
         <span class="macro">assert_eq!</span>(target.amoe_base_model_trainable_params(), <span class="number">0</span>);
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(loss_svg) = loss_svg {
+        <span class="attr">#[cfg(feature = <span class="string">"plotly"</span>)]
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(loss_svg) = loss_svg {
             <span class="kw">let </span><span class="kw-2">mut </span>plot = Plot::new();
             <span class="kw">for </span>gate <span class="kw">in </span><span class="number">0</span>..all_losses[<span class="number">0</span>].len() {
                 <span class="kw">let </span>gate_loss = all_losses
@@ -1078,6 +1084,8 @@
             }
             plot.write_image(path, ImageFormat::SVG, <span class="number">800</span>, <span class="number">600</span>, <span class="number">1.0</span>);
         }
+        <span class="attr">#[cfg(not(feature = <span class="string">"plotly"</span>))]
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(_loss_svg) = loss_svg {}
 
         <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(AnyMoeTrainingResult {
             steps,
