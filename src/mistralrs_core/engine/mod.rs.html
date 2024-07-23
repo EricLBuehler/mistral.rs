@@ -678,6 +678,74 @@
 <a href="#678" id="678">678</a>
 <a href="#679" id="679">679</a>
 <a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{
@@ -729,6 +797,7 @@
     prefix_cacher: PrefixCacheManager,
     is_debug: bool,
     disable_eos_stop: bool,
+    throughput_logging_enabled: bool,
 }
 
 <span class="kw">impl </span>Engine {
@@ -764,7 +833,14 @@
             ),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
+            throughput_logging_enabled: <span class="bool-val">false</span>,
         }
+    }
+
+    <span class="comment">// TODO(EricLBuehler): On v0.3.0 move this into the Engine constructor
+    </span><span class="doccomment">/// Enable throughput logging.
+    </span><span class="kw">pub fn </span>enable_throughput_logging(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.throughput_logging_enabled = <span class="bool-val">true</span>;
     }
 
     <span class="kw">pub async fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
@@ -781,7 +857,10 @@
                 SchedulerOutput::DefaultScheduler {
                     output: <span class="kw-2">mut </span>scheduled,
                 } =&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>prompt_ts = <span class="prelude-val">None</span>;
+                    <span class="kw">let </span><span class="kw-2">mut </span>completion_ts = <span class="prelude-val">None</span>;
                     <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
+                        <span class="kw">let </span>throughput_start = Instant::now();
                         <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
                             scheduled.completion.iter().map(|seq| <span class="kw-2">*</span>seq.id()).collect();
                         <span class="kw">let </span>res = {
@@ -832,11 +911,22 @@
                             <span class="lifetime">'lp</span>,
                             <span class="self">self</span>.prefix_cacher
                         );
+                        <span class="kw">let </span>throughput_end = Instant::now();
+                        <span class="attr">#[allow(clippy::cast_precision_loss)]
+                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
+                            completion_ts = <span class="prelude-val">Some</span>(
+                                scheduled.completion.len() <span class="kw">as </span>f64
+                                    / throughput_end
+                                        .duration_since(throughput_start)
+                                        .as_secs_f64(),
+                            );
+                        }
 
                         last_completion_ids = current_completion_ids;
                     }
 
                     <span class="kw">if </span>scheduled.prompt.len() &gt; <span class="number">0 </span>{
+                        <span class="kw">let </span>throughput_start = Instant::now();
                         <span class="kw">let </span>logits = {
                             <span class="kw">let </span><span class="kw-2">mut </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
 
@@ -882,6 +972,20 @@
                             <span class="lifetime">'lp</span>,
                             <span class="self">self</span>.prefix_cacher
                         );
+                        <span class="kw">let </span>throughput_end = Instant::now();
+                        <span class="attr">#[allow(clippy::cast_precision_loss)]
+                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
+                            prompt_ts = <span class="prelude-val">Some</span>(
+                                scheduled
+                                    .prompt
+                                    .iter()
+                                    .map(|seq| seq.get_toks().len())
+                                    .sum::&lt;usize&gt;() <span class="kw">as </span>f64
+                                    / throughput_end
+                                        .duration_since(throughput_start)
+                                        .as_secs_f64(),
+                            );
+                        }
 
                         <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
                             seq.set_state(SequenceState::RunningCompletion);
@@ -925,6 +1029,21 @@
                         }
                     }
 
+                    <span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
+                        <span class="kw">match </span>(prompt_ts, completion_ts) {
+                            (<span class="prelude-val">Some</span>(prompt), <span class="prelude-val">Some</span>(completion)) =&gt; {
+                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s"</span>);
+                            }
+                            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(completion)) =&gt; {
+                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Completion {completion} T/s"</span>);
+                            }
+                            (<span class="prelude-val">Some</span>(prompt), <span class="prelude-val">None</span>) =&gt; {
+                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Prompt: {prompt} T/s"</span>);
+                            }
+                            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; (),
+                        }
+                    }
+
                     <span class="kw">if </span>scheduled.prompt.len() == <span class="number">0
                         </span>&amp;&amp; scheduled.completion.len() == <span class="number">0
                         </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
@@ -937,6 +1056,8 @@
                 }
                 SchedulerOutput::PagedAttention { <span class="kw-2">mut </span>output } =&gt; {
                     <span class="kw">if </span>!output.scheduled.is_empty() {
+                        <span class="kw">let </span>throughput_start = Instant::now();
+
                         <span class="kw">let </span>is_prompt = <span class="macro">get_mut_arcmutex!</span>(output.scheduled[<span class="number">0</span>]).is_prompt();
 
                         <span class="kw">let </span><span class="kw-2">mut </span>guards = output
@@ -1008,6 +1129,21 @@
                                     ms_from_last_run * <span class="number">1000.</span>,
                                 );
                             }
+                        }
+
+                        <span class="kw">let </span>throughput_end = Instant::now();
+                        <span class="attr">#[allow(clippy::cast_precision_loss)]
+                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
+                            <span class="kw">let </span>n_toks = <span class="kw">if </span>is_prompt {
+                                guards.iter().map(|seq| seq.get_toks().len()).sum::&lt;usize&gt;()
+                            } <span class="kw">else </span>{
+                                guards.len()
+                            };
+                            <span class="kw">let </span>ts = n_toks <span class="kw">as </span>f64
+                                / throughput_end
+                                    .duration_since(throughput_start)
+                                    .as_secs_f64();
+                            <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V2): {ts} T/s"</span>);
                         }
 
                         <span class="kw">if </span>is_prompt {

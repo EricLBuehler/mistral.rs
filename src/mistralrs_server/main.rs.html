@@ -435,6 +435,17 @@
 <a href="#435" id="435">435</a>
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -579,6 +590,10 @@
     <span class="doccomment">/// Disable PagedAttention on CUDA.
     </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
     </span>no_paged_attn: bool,
+
+    <span class="doccomment">/// Enable server throughput logging when not using interactive mode
+    </span><span class="attr">#[arg(long = <span class="string">"throughput"</span>, default_value_t = <span class="bool-val">false</span>)]
+    </span>throughput_log: bool,
 }
 
 <span class="attr">#[utoipa::path(
@@ -840,22 +855,29 @@
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
-    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+    <span class="comment">// Throughput logging in the server
+    </span><span class="kw">let </span>builder = MistralRsBuilder::new(pipeline, scheduler_config)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .build();
+        .with_prefix_cache_n(args.prefix_cache_n);
 
     <span class="kw">if </span>args.interactive_mode &amp;&amp; args.vision_interactive_mode {
         <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode and vision interactive mode are exclusive."</span>);
     } <span class="kw">else if </span>args.interactive_mode {
-        interactive_mode(mistralrs, <span class="bool-val">false</span>).<span class="kw">await</span>;
+        interactive_mode(builder.build(), <span class="bool-val">false</span>).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     } <span class="kw">else if </span>args.vision_interactive_mode {
-        interactive_mode(mistralrs, <span class="bool-val">true</span>).<span class="kw">await</span>;
+        interactive_mode(builder.build(), <span class="bool-val">true</span>).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
+
+    <span class="kw">let </span>builder = <span class="kw">if </span>args.throughput_log {
+        builder.with_throughput_logging()
+    } <span class="kw">else </span>{
+        builder
+    };
+    <span class="kw">let </span>mistralrs = builder.build();
 
     <span class="kw">let </span>port = args.port.expect(<span class="string">"Expected port to be specified."</span>);
 

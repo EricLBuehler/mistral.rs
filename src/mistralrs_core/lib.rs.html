@@ -430,6 +430,21 @@
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
 <a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a>
+<a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -541,6 +556,7 @@
     no_prefix_cache: bool,
     prefix_cache_n: usize,
     disable_eos_stop: bool,
+    throughput_logging_enabled: bool,
 }
 
 <span class="attr">#[derive(Debug)]
@@ -577,6 +593,7 @@
     prefix_cache_n: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     disable_eos_stop: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     gemm_full_precision_f16: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    throughput_logging_enabled: <span class="prelude-ty">Option</span>&lt;()&gt;,
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
@@ -591,6 +608,7 @@
             prefix_cache_n: <span class="prelude-val">None</span>,
             disable_eos_stop: <span class="prelude-val">None</span>,
             gemm_full_precision_f16: <span class="prelude-val">None</span>,
+            throughput_logging_enabled: <span class="prelude-val">None</span>,
         }
     }
     <span class="kw">pub fn </span>with_log(<span class="kw-2">mut </span><span class="self">self</span>, log: String) -&gt; <span class="self">Self </span>{
@@ -623,6 +641,10 @@
     </span>}
     <span class="kw">pub fn </span>with_gemm_full_precision_f16(<span class="kw-2">mut </span><span class="self">self</span>, gemm_full_precision: bool) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.gemm_full_precision_f16 = <span class="prelude-val">Some</span>(gemm_full_precision);
+        <span class="self">self
+    </span>}
+    <span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.throughput_logging_enabled = <span class="prelude-val">Some</span>(());
         <span class="self">self
     </span>}
 
@@ -680,6 +702,7 @@
             prefix_cache_n,
             disable_eos_stop,
             gemm_full_precision_f16,
+            throughput_logging_enabled,
         } = config;
 
         <span class="kw">let </span>model_supports_reduced_gemm = <span class="kw">match </span>pipeline.try_lock().unwrap().category() {
@@ -705,6 +728,7 @@
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            throughput_logging_enabled: throughput_logging_enabled.is_some(),
         };
 
         <span class="kw">let </span>(tx, rx) = channel(<span class="number">10_000</span>);
@@ -725,6 +749,9 @@
                     prefix_cache_n,
                     disable_eos_stop,
                 );
+                <span class="kw">if </span>throughput_logging_enabled.is_some() {
+                    engine.enable_throughput_logging();
+                }
                 engine.run().<span class="kw">await</span>;
             });
         });
@@ -775,6 +802,9 @@
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                     );
+                    <span class="kw">if </span>reboot_state.throughput_logging_enabled {
+                        engine.enable_throughput_logging();
+                    }
                     engine.run().<span class="kw">await</span>;
                 });
             });
