@@ -142,6 +142,10 @@ struct Args {
     /// Disable PagedAttention on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable server throughput logging when not using interactive mode
+    #[arg(short, long, default_value_t = false)]
+    throughput_log: bool,
 }
 
 #[utoipa::path(
@@ -419,7 +423,13 @@ async fn main() -> Result<()> {
         interactive_mode(builder.build(), true).await;
         return Ok(());
     }
-    let mistralrs = builder.with_throughput_logging().build();
+
+    let builder = if args.throughput_log {
+        builder.with_throughput_logging()
+    } else {
+        builder
+    };
+    let mistralrs = builder.build();
 
     let port = args.port.expect("Expected port to be specified.");
 
