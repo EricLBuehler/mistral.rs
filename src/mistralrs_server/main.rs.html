@@ -695,12 +695,11 @@
     <span class="kw">let </span>allow_origin = AllowOrigin::any();
     <span class="kw">let </span>cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([http::header::CONTENT_TYPE])
+        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
     Router::new()
         .merge(SwaggerUi::new(<span class="string">"/docs"</span>).url(<span class="string">"/api-doc/openapi.json"</span>, doc))
-        .layer(cors_layer)
         .route(<span class="string">"/v1/chat/completions"</span>, post(chatcompletions))
         .route(<span class="string">"/v1/completions"</span>, post(completions))
         .route(<span class="string">"/v1/models"</span>, get(models))
@@ -708,6 +707,7 @@
         .route(<span class="string">"/"</span>, get(health))
         .route(<span class="string">"/activate_adapters"</span>, post(activate_adapters))
         .route(<span class="string">"/re_isq"</span>, post(re_isq))
+        .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
 }
