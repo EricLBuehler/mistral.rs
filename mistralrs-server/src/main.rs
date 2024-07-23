@@ -142,6 +142,10 @@ struct Args {
     /// Disable PagedAttention on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable server throughput logging when not using interactive mode
+    #[arg(long = "throughput", default_value_t = false)]
+    throughput_log: bool,
 }
 
 #[utoipa::path(
@@ -403,22 +407,29 @@ async fn main() -> Result<()> {
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
-    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+    // Throughput logging in the server
+    let builder = MistralRsBuilder::new(pipeline, scheduler_config)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .build();
+        .with_prefix_cache_n(args.prefix_cache_n);
 
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
     } else if args.interactive_mode {
-        interactive_mode(mistralrs, false).await;
+        interactive_mode(builder.build(), false).await;
         return Ok(());
     } else if args.vision_interactive_mode {
-        interactive_mode(mistralrs, true).await;
+        interactive_mode(builder.build(), true).await;
         return Ok(());
     }
+
+    let builder = if args.throughput_log {
+        builder.with_throughput_logging()
+    } else {
+        builder
+    };
+    let mistralrs = builder.build();
 
     let port = args.port.expect("Expected port to be specified.");
 
