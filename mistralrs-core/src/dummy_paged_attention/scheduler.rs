@@ -195,7 +195,8 @@ impl PagedAttentionScheduler {
         if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
             self.running.iter().for_each(|seq| {
                 get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled))
-            })
+            });
+            TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
         }
 
         PagedAttentionSchedulerOutput {
