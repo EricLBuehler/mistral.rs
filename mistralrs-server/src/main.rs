@@ -144,7 +144,7 @@ struct Args {
     no_paged_attn: bool,
 
     /// Enable server throughput logging when not using interactive mode
-    #[arg(long = "thru", default_value_t = false)]
+    #[arg(long = "throughput", default_value_t = false)]
     throughput_log: bool,
 }
 
