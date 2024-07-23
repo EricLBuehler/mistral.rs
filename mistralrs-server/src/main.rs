@@ -247,12 +247,11 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     let allow_origin = AllowOrigin::any();
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([http::header::CONTENT_TYPE])
+        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
     Router::new()
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
-        .layer(cors_layer)
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
         .route("/v1/models", get(models))
@@ -260,6 +259,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
+        .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
 }
