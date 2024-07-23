@@ -628,6 +628,9 @@
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
 <a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -641,9 +644,11 @@
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
-    finish_and_add_tokens_to_seq, get_mut_arcmutex,
+    get_mut_arcmutex,
     pipeline::{
-        sampling::{sample_sequence, sample_target_sequence_speculative},
+        sampling::{
+            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+        },
         AdapterInstruction, Cache,
     },
     prefix_cacher::PrefixCacheManager,
@@ -1173,14 +1178,15 @@
                 <span class="comment">// Add the tokens to the seq and the trie
                 </span><span class="kw">for </span>accepted <span class="kw">in </span>accepted_tokens {
                     <span class="comment">// Do not use the prefix cacher
-                    </span><span class="macro">finish_and_add_tokens_to_seq!</span>(
+                    </span>finish_or_add_toks_to_seq(
                         <span class="self">self</span>,
                         prefix_cacher,
                         seq,
-                        accepted,
+                        accepted.clone(),
                         eos_tok,
-                        <span class="bool-val">false
-                    </span>);
+                        <span class="bool-val">false</span>,
+                    )
+                    .<span class="kw">await</span><span class="question-mark">?</span>;
                     <span class="kw">match </span>seq.recognizer {
                         SequenceRecognizer::Regex(<span class="kw-2">ref mut </span>rx) =&gt; {
                             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
@@ -1217,7 +1223,7 @@
                     true,
                 )
                 .await?;
-                finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, sample, eos_tok, false);
+                finish_or_add_toks_to_seq(self, prefix_cacher, seq, sample, eos_tok, false);
                 */
 
                 </span><span class="kw">match </span>post_op {

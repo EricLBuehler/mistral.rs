@@ -524,7 +524,6 @@
 <a href="#524" id="524">524</a>
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
-<a href="#527" id="527">527</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -539,6 +538,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
@@ -549,7 +549,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
-    api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
+    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
@@ -570,7 +570,6 @@
 <span class="kw">pub struct </span>VisionPipeline {
     model: Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;,
     tokenizer: Arc&lt;Tokenizer&gt;,
-    tok_trie: Arc&lt;TokTrie&gt;,
     chat_template: Arc&lt;ChatTemplate&gt;,
     model_id: String,
     metadata: Arc&lt;GeneralMetadata&gt;,
@@ -792,7 +791,6 @@
         <span class="kw">let </span>sliding_window = model.config().sliding_window;
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(VisionPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
             model_id: <span class="self">self</span>.model_id.clone(),
@@ -922,8 +920,8 @@
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-        <span class="macro">do_sample!</span>(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng)
-    }
+        sample_and_add_toks(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng).<span class="kw">await
+    </span>}
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
         <span class="kw">let </span>has_conv2d = <span class="self">self</span>.model.has_conv2d();
         ModelCategory::Vision { has_conv2d }

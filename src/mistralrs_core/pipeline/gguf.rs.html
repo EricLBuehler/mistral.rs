@@ -794,7 +794,6 @@
 <a href="#794" id="794">794</a>
 <a href="#795" id="795">795</a>
 <a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -815,6 +814,7 @@
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -824,8 +824,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
-    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths,
-    PagedAttentionConfig, Pipeline, TryIntoDType, DEBUG,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
+    Pipeline, TryIntoDType, DEBUG,
 };
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
@@ -867,7 +867,6 @@
 <span class="kw">pub struct </span>GGUFPipeline {
     model: Model,
     tokenizer: Arc&lt;Tokenizer&gt;,
-    tok_trie: Arc&lt;TokTrie&gt;,
     no_kv_cache: bool,
     chat_template: Arc&lt;ChatTemplate&gt;,
     model_id: String,
@@ -1360,7 +1359,6 @@
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(GGUFPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -1583,8 +1581,8 @@
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-        <span class="macro">do_sample!</span>(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng)
-    }
+        sample_and_add_toks(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng).<span class="kw">await
+    </span>}
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
         ModelCategory::Text
     }

@@ -1043,7 +1043,6 @@
 <a href="#1043" id="1043">1043</a>
 <a href="#1044" id="1044">1044</a>
 <a href="#1045" id="1045">1045</a>
-<a href="#1046" id="1046">1046</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -1065,10 +1064,9 @@
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
+<span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
-<span class="kw">mod </span>sampling_pipeline;
-<span class="kw">use </span><span class="kw">crate</span>::lora::{LoraConfig, Ordering};
 <span class="kw">use crate</span>::{DeviceMapMetadata, TryIntoDType};
 <span class="kw">pub use </span>amoe::{AnyMoeLoader, AnyMoePipeline};
 <span class="kw">use </span>candle_core::quantized::GgmlDType;
