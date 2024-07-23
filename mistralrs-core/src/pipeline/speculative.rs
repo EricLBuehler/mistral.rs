@@ -11,9 +11,11 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
-    finish_and_add_tokens_to_seq, get_mut_arcmutex,
+    get_mut_arcmutex,
     pipeline::{
-        sampling::{sample_sequence, sample_target_sequence_speculative},
+        sampling::{
+            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+        },
         AdapterInstruction, Cache,
     },
     prefix_cacher::PrefixCacheManager,
@@ -543,14 +545,15 @@ impl Pipeline for SpeculativePipeline {
                 // Add the tokens to the seq and the trie
                 for accepted in accepted_tokens {
                     // Do not use the prefix cacher
-                    finish_and_add_tokens_to_seq!(
+                    finish_or_add_toks_to_seq(
                         self,
                         prefix_cacher,
                         seq,
-                        accepted,
+                        accepted.clone(),
                         eos_tok,
-                        false
-                    );
+                        false,
+                    )
+                    .await?;
                     match seq.recognizer {
                         SequenceRecognizer::Regex(ref mut rx) => {
                             get_mut_arcmutex!(self.target)
@@ -587,7 +590,7 @@ impl Pipeline for SpeculativePipeline {
                     true,
                 )
                 .await?;
-                finish_and_add_tokens_to_seq!(self, prefix_cacher, seq, sample, eos_tok, false);
+                finish_or_add_toks_to_seq(self, prefix_cacher, seq, sample, eos_tok, false);
                 */
 
                 match post_op {

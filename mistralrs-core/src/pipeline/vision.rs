@@ -12,6 +12,7 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -22,7 +23,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, do_sample, get_paths, vision_normal_model_loader, AnyMoeExpertType,
+    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
@@ -43,7 +44,6 @@ use tracing::info;
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: Arc<TokTrie>,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
@@ -265,7 +265,6 @@ impl Loader for VisionLoader {
         let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
@@ -395,7 +394,7 @@ impl Pipeline for VisionPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         let has_conv2d = self.model.has_conv2d();

@@ -18,6 +18,7 @@ use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -27,8 +28,8 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths,
-    PagedAttentionConfig, Pipeline, TryIntoDType, DEBUG,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
+    Pipeline, TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -70,7 +71,6 @@ enum Model {
 pub struct GGUFPipeline {
     model: Model,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
@@ -563,7 +563,6 @@ impl Loader for GGUFLoader {
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -786,7 +785,7 @@ impl Pipeline for GGUFPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
