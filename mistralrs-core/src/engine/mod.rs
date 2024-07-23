@@ -164,6 +164,7 @@ impl Engine {
                             self.prefix_cacher
                         );
                         let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
                             completion_ts = Some(
                                 scheduled.completion.len() as f64
@@ -224,6 +225,7 @@ impl Engine {
                             self.prefix_cacher
                         );
                         let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
                             prompt_ts = Some(
                                 scheduled
@@ -382,6 +384,7 @@ impl Engine {
                         }
 
                         let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
                             let n_toks = if is_prompt {
                                 guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
