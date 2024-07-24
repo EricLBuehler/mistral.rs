@@ -12,6 +12,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+#[cfg(feature = "plotly")]
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -482,6 +483,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
+        #[cfg(feature = "plotly")]
         if let Some(loss_svg) = loss_svg {
             let mut plot = Plot::new();
             for gate in 0..all_losses[0].len() {
@@ -518,6 +520,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             }
             plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
         }
+        #[cfg(not(feature = "plotly"))]
+        if let Some(_loss_svg) = loss_svg {}
 
         Ok(Some(AnyMoeTrainingResult {
             steps,

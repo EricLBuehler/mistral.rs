@@ -20,10 +20,9 @@ use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
     AnyMoeTrainingResult,
 };
+use crate::lora::{LoraConfig, Ordering};
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
 use crate::prefix_cacher::PrefixCacheManager;
-mod sampling_pipeline;
-use crate::lora::{LoraConfig, Ordering};
 use crate::{DeviceMapMetadata, TryIntoDType};
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use candle_core::quantized::GgmlDType;

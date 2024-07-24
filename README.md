@@ -35,10 +35,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
     ```
 
-- 💎 Run the Gemma 2 model
+- 🦙 Run the Llama 3.1 model
 
     ```
-    ./mistralrs_server -i plain -m google/gemma-2-9b-it -a gemma2
+    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
     ```
 
 - φ³ Run the Phi 3 model with 128K context window
@@ -189,7 +189,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.0)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.2)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 

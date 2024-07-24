@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
+    layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
     paged_attention::AttentionImplementation,
 };
@@ -311,6 +312,7 @@ struct LlamaBasicConfig {
     #[serde(default = "default_rope")]
     rope_theta: f32,
     max_position_embeddings: usize,
+    rope_scaling: Option<Llama3RopeConfig>,
 }
 
 fn default_rope() -> f32 {
@@ -333,6 +335,7 @@ impl LlamaBasicConfig {
             rope_theta: basic_config.rope_theta,
             use_flash_attn,
             max_position_embeddings: basic_config.max_position_embeddings,
+            rope_scaling: basic_config.rope_scaling,
         })
     }
 }
@@ -406,7 +409,7 @@ struct MixtralBasicConfig {
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     num_experts_per_tok: usize,
     num_local_experts: usize,
 }

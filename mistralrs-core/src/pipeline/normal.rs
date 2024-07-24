@@ -18,6 +18,7 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -27,7 +28,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
     TryIntoDType,
 };
@@ -49,7 +50,6 @@ use tracing::{info, warn};
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
@@ -346,7 +346,6 @@ impl Loader for NormalLoader {
         let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -501,7 +500,7 @@ impl Pipeline for NormalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text

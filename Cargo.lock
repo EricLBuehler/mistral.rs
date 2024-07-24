@@ -625,9 +625,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.9"
+version = "4.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64acc1846d54c1fe936a78dc189c34e28d3f5afc348403f28ecf53660b9b8462"
+checksum = "8f6b81fb3c84f5563d509c59b5a48d935f689e993afa90fe39047f05adef9142"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -635,9 +635,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.9"
+version = "4.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fb8393d67ba2e7bfaf28a23458e4e2b543cc73a99595511eb207fdb8aede942"
+checksum = "5ca6706fd5224857d9ac5eb9355f6683563cc0541c7cd9d014043b57cbec78ac"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2025,9 +2025,9 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 
 [[package]]
 name = "jobserver"
-version = "0.1.31"
+version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2b099aaa34a9751c5bf0878add70444e1ed2dd73f347be99003d4577277de6e"
+checksum = "48d1dbcbbeb6a7fec7e059840aa538bd62aaccf972c7346c4d9d2059312853d0"
 dependencies = [
  "libc",
 ]
@@ -2240,18 +2240,18 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "2.0.3"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "933ee10775d58fca8238a84fe165dfe4bde8b07d7574f24d76ffea91170f3ac6"
+checksum = "45f7e8e35b6c7b169bf40b0176d2c79291ab8ee53290b84e0668ab21d841aa9d"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "minijinja-contrib"
-version = "2.0.3"
+version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "237307aea18e4cc6b3ba0d190ee46f06ff82944a99cc895f04e4c94ccbf121d9"
+checksum = "6853ef2340c668281c5ea86b04da2ebb2fc9e98a7185a887591de4cac945d5b5"
 dependencies = [
  "minijinja",
  "serde",
@@ -2287,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2392,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "accelerate-src",
  "base64 0.22.1",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "bindgen_cuda 0.1.5",
  "candle-core",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "candle-core",
  "image",
@@ -3192,13 +3192,14 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.3"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a78e6f726d84fcf960409f509ae354a32648f090c8d32a2ea8b1a1bc3bab14"
+checksum = "9096629c45860fc7fb143e125eb826b5e721e10be3263160c7d60ca832cf8c46"
 dependencies = [
  "libc",
  "once_cell",
  "socket2",
+ "tracing",
  "windows-sys 0.52.0",
 ]
 
@@ -3539,9 +3540,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.11"
+version = "0.23.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4828ea528154ae444e5a642dbb7d5623354030dc9822b83fd9bb79683c7399d0"
+checksum = "c58f8c84392efc0a126acce10fa59ff7b3d2ac06ab451a33f2741989b806b044"
 dependencies = [
  "log",
  "once_cell",
