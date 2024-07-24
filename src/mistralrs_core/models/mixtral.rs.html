@@ -668,7 +668,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_position_embeddings: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rms_norm_eps: f64,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: usize,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_experts_per_tok: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_local_experts: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -718,7 +718,7 @@
             hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
-            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            sliding_window: cfg.sliding_window,
             paged_attn,
         })
     }
@@ -1050,7 +1050,7 @@
     layers: Vec&lt;DecoderLayer&gt;,
     norm: RmsNorm,
     lm_head: QMatMul,
-    sliding_window: usize,
+    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>device: Device,
     <span class="kw">pub </span>cache: Cache,
     <span class="kw">pub </span>max_seq_len: usize,
@@ -1101,7 +1101,7 @@
                     head_dim,
                     (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
                     <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                    <span class="prelude-val">Some</span>(cfg.sliding_window),
+                    cfg.sliding_window,
                     device,
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>),
@@ -1142,7 +1142,7 @@
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
-                sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+                sliding_window: cfg.sliding_window,
             },
         })
     }
@@ -1163,7 +1163,7 @@
                 .as_ref()
                 .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
                 .unwrap_or(<span class="kw-2">&amp;*</span>cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
-            <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
+            <span class="self">self</span>.sliding_window,
             xs.dtype(),
             <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
         )<span class="question-mark">?</span>;
