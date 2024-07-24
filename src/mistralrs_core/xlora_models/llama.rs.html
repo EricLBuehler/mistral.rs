@@ -846,21 +846,18 @@
 <a href="#846" id="846">846</a>
 <a href="#847" id="847">847</a>
 <a href="#848" id="848">848</a>
-<a href="#849" id="849">849</a>
-<a href="#850" id="850">850</a>
-<a href="#851" id="851">851</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
     lora::{linear_no_bias <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 <span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
@@ -884,7 +881,7 @@
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
+    rotary_emb: Arc&lt;Llama3RotaryEmbedding&gt;,
     max_seq_len: usize,
 }
 
@@ -1009,7 +1006,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc&lt;RotaryEmbedding&gt;,
+        rope: Arc&lt;Llama3RotaryEmbedding&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>size_in = cfg.hidden_size;
@@ -1220,7 +1217,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc&lt;RotaryEmbedding&gt;,
+        rope: Arc&lt;Llama3RotaryEmbedding&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>attn = CausalSelfAttention::load(
@@ -1461,21 +1458,18 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="kw">let </span><span class="kw-2">mut </span>blocks: Vec&lt;<span class="kw">_</span>&gt; =
             NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
                 .into_iter()
                 .map(|i| {
                     <span class="kw">let </span>rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
+                        Llama3RotaryEmbedding::new(
+                            vb.dtype(),
+                            cfg,
                             mapper
                                 .device_for(i, <span class="bool-val">false</span>)
                                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
                             is_gptx,
-                            vb.dtype(),
                         )
                         .expect(<span class="string">"Failed to create RoPE"</span>),
                     );

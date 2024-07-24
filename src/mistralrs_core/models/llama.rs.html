@@ -688,17 +688,10 @@
 <a href="#688" id="688">688</a>
 <a href="#689" id="689">689</a>
 <a href="#690" id="690">690</a>
-<a href="#691" id="691">691</a>
-<a href="#692" id="692">692</a>
-<a href="#693" id="693">693</a>
-<a href="#694" id="694">694</a>
-<a href="#695" id="695">695</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{
-    embedding, linear_no_bias <span class="kw">as </span>linear, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
+<span class="kw">use </span>candle_nn::{embedding, linear_no_bias <span class="kw">as </span>linear, Embedding, Module, VarBuilder};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
 
@@ -709,7 +702,10 @@
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm,
+        ScaledDotProductAttention,
+    },
     layers_masker::PastKvLenCache,
     merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -732,6 +728,7 @@
     <span class="kw">pub </span>rms_norm_eps: f64,
     <span class="kw">pub </span>rope_theta: f32,
     <span class="kw">pub </span>max_position_embeddings: usize,
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;Llama3RopeConfig&gt;,
 }
 
 <span class="kw">struct </span>CausalSelfAttention {
@@ -743,7 +740,7 @@
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
+    rotary_emb: Arc&lt;Llama3RotaryEmbedding&gt;,
     max_seq_len: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
 }
@@ -862,7 +859,7 @@
     <span class="kw">fn </span>load(
         vb: VarBuilder,
         cfg: <span class="kw-2">&amp;</span>Config,
-        rope: Arc&lt;RotaryEmbedding&gt;,
+        rope: Arc&lt;Llama3RotaryEmbedding&gt;,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>size_in = cfg.hidden_size;
@@ -1016,7 +1013,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc&lt;RotaryEmbedding&gt;,
+        rope: Arc&lt;Llama3RotaryEmbedding&gt;,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>attn = CausalSelfAttention::load(
@@ -1135,15 +1132,8 @@
                         .device_for(i, <span class="bool-val">false</span>)
                         .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
                     <span class="kw">let </span>rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
-                            device,
-                            is_gptx,
-                            vb.dtype(),
-                        )
-                        .expect(<span class="string">"Failed to create RoPE"</span>),
+                        Llama3RotaryEmbedding::new(vb.dtype(), cfg, device, is_gptx)
+                            .expect(<span class="string">"Failed to create RoPE"</span>),
                     );
                     <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                         AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,

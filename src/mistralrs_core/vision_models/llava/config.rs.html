@@ -111,9 +111,13 @@
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>serde::Deserialize;
 
+<span class="kw">use </span><span class="kw">crate</span>::layers::Llama3RopeConfig;
 <span class="kw">use </span><span class="kw">crate</span>::serde_default_fn;
 
 <span class="kw">use </span><span class="kw">crate</span>::models::llama::Config <span class="kw">as </span>LLaMAConfig;
@@ -156,6 +160,7 @@
     <span class="attr">#[serde(default = <span class="string">"default_vocab_size"</span>)]
     </span><span class="kw">pub </span>vocab_size: usize,
     <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;Llama3RopeConfig&gt;,
 }
 
 <span class="macro">serde_default_fn!</span>(usize, default_num_hidden_layers, <span class="number">32</span>);
@@ -190,6 +195,7 @@
             rms_norm_eps: <span class="self">self</span>.text_config.rms_norm_eps,
             rope_theta: <span class="self">self</span>.text_config.rope_theta,
             max_position_embeddings: <span class="self">self</span>.text_config.max_position_embeddings,
+            rope_scaling: <span class="self">self</span>.text_config.rope_scaling.clone(),
         }
     }
 
