@@ -1,9 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{
-    embedding, linear_no_bias as linear, Embedding, Module, RotaryEmbedding, VarBuilder,
-};
+use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -14,7 +12,10 @@ use crate::{
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{
+        repeat_kv, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm,
+        ScaledDotProductAttention,
+    },
     layers_masker::PastKvLenCache,
     merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -37,6 +38,7 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
+    pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
 struct CausalSelfAttention {
@@ -48,7 +50,7 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
 }
@@ -167,7 +169,7 @@ impl CausalSelfAttention {
     fn load(
         vb: VarBuilder,
         cfg: &Config,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
@@ -321,7 +323,7 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
@@ -440,15 +442,8 @@ impl Llama {
                         .device_for(i, false)
                         .unwrap_or(&normal_loading_metadata.real_device);
                     let rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
-                            device,
-                            is_gptx,
-                            vb.dtype(),
-                        )
-                        .expect("Failed to create RoPE"),
+                        Llama3RotaryEmbedding::new(vb.dtype(), cfg, device, is_gptx)
+                            .expect("Failed to create RoPE"),
                     );
                     let paged_attn = match &attention_mechanism {
                         AttentionImplementation::Eager => None,
