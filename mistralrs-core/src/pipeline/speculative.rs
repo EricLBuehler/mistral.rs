@@ -393,7 +393,10 @@ impl Pipeline for SpeculativePipeline {
                             None,
                             None,
                             None, // TODO: get block tables/handle it
+                            None, // TODO: do we support???
                         )
+                        .nth(0)
+                        .unwrap()
                         .unwrap();
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
 
@@ -457,7 +460,10 @@ impl Pipeline for SpeculativePipeline {
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         None,
                         None, // TODO: get block tables/handle it
+                        None, // TODO: do we support???
                     )
+                    .nth(0)
+                    .unwrap()
                     .unwrap();
 
                 let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;

@@ -241,8 +241,6 @@ pub mod text_models_inputs_processor {
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
-        no_kv_cache: bool,
-        last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
@@ -407,8 +405,6 @@ pub mod text_models_inputs_processor {
             toks,
             input_seqs,
             device,
-            no_kv_cache,
-            last_n_context_len,
             paged_attn_metadata,
         )))
     }

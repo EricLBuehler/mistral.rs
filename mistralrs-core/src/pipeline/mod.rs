@@ -600,74 +600,78 @@ pub trait Pipeline:
     ) -> Result<(), candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
-                let inputs = self
-                    .get_processor()
-                    .inputs_processor()
-                    .process_inputs(
-                        self.tokenizer(),
-                        input_seqs,
-                        is_prompt,
-                        self.get_metadata().is_xlora,
-                        &self.device(),
-                        self.get_metadata().has_no_kv_cache,
-                        None,
-                        self.get_input_processor_config(),
-                        None,
-                    )
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
+                    self.tokenizer(),
+                    input_seqs,
+                    is_prompt,
+                    self.get_metadata().is_xlora,
+                    &self.device(),
+                    self.get_metadata().has_no_kv_cache,
+                    None,
+                    self.get_input_processor_config(),
+                    None,
+                    None, // TODO
+                );
 
-                match pre_op {
-                    CacheInstruction::In(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.clone_in_cache(input_seqs, false)
+                let mut logits = None;
+
+                for inputs in inputs_iter {
+                    let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    match pre_op {
+                        CacheInstruction::In(ref adapter_inst) => {
+                            match adapter_inst {
+                                AdapterInstruction::Activate(adapters) => {
+                                    self.activate_adapters(adapters.clone()).map_err(|e| {
+                                        candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            dyn std::error::Error,
+                                        >>::as_ref(
+                                            &e
+                                        ))
+                                    })?
+                                }
+                                AdapterInstruction::None => 0,
+                            };
+                            self.clone_in_cache(input_seqs, false)
+                        }
+                        CacheInstruction::Nothing(ref adapter_inst) => {
+                            match adapter_inst {
+                                AdapterInstruction::Activate(adapters) => {
+                                    self.activate_adapters(adapters.clone()).map_err(|e| {
+                                        candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            dyn std::error::Error,
+                                        >>::as_ref(
+                                            &e
+                                        ))
+                                    })?
+                                }
+                                AdapterInstruction::None => 0,
+                            };
+                        }
+                        CacheInstruction::Reset {
+                            reset_non_granular,
+                            ref adapter_inst,
+                        } => {
+                            match adapter_inst {
+                                AdapterInstruction::Activate(adapters) => {
+                                    self.activate_adapters(adapters.clone()).map_err(|e| {
+                                        candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            dyn std::error::Error,
+                                        >>::as_ref(
+                                            &e
+                                        ))
+                                    })?
+                                }
+                                AdapterInstruction::None => 0,
+                            };
+                            self.set_none_cache(reset_non_granular, false)
+                        }
+                        _ => unreachable!("Unreachable PRE cache op."),
                     }
-                    CacheInstruction::Nothing(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                    }
-                    CacheInstruction::Reset {
-                        reset_non_granular,
-                        adapter_inst,
-                    } => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
-                            }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.set_none_cache(reset_non_granular, false)
-                    }
-                    _ => unreachable!("Unreachable PRE cache op."),
+
+                    logits = Some(self.forward_inputs(inputs)?);
                 }
 
-                let logits = self.forward_inputs(inputs)?;
+                let logits = logits.expect("Did not get any inputs. This is shocking.");
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -695,23 +699,28 @@ pub trait Pipeline:
                     .expect("PagedAttention must have cache engine.")
                     .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
 
-                let inputs = self
-                    .get_processor()
-                    .inputs_processor()
-                    .process_inputs(
-                        self.tokenizer(),
-                        input_seqs,
-                        is_prompt,
-                        self.get_metadata().is_xlora,
-                        &self.device(),
-                        self.get_metadata().has_no_kv_cache,
-                        None,
-                        self.get_input_processor_config(),
-                        Some(metadata),
-                    )
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
+                    self.tokenizer(),
+                    input_seqs,
+                    is_prompt,
+                    self.get_metadata().is_xlora,
+                    &self.device(),
+                    self.get_metadata().has_no_kv_cache,
+                    None,
+                    self.get_input_processor_config(),
+                    Some(metadata),
+                    None, // TODO
+                );
 
-                let logits = self.forward_inputs(inputs)?;
+                let mut logits = None;
+
+                for inputs in inputs_iter {
+                    let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+                    logits = Some(self.forward_inputs(inputs)?);
+                }
+
+                let logits = logits.expect("Did not get any inputs. This is shocking.");
 
                 self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
                     .await?;

@@ -438,13 +438,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         None,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
+                        None, // TODO: prompt chunking doesn't work.
                     )
+                    .nth(0)
                     .unwrap();
 
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap())?;
 
                 // Clear the KV cache
                 target.set_none_cache(true, true);
