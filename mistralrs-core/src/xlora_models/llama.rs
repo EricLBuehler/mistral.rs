@@ -2,14 +2,14 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -33,7 +33,7 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
 }
 
@@ -158,7 +158,7 @@ impl CausalSelfAttention {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
@@ -369,7 +369,7 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
@@ -610,21 +610,18 @@ impl XLoraLlama {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
                     let rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
+                        Llama3RotaryEmbedding::new(
+                            vb.dtype(),
+                            &cfg,
                             mapper
                                 .device_for(i, false)
                                 .unwrap_or(&normal_loading_metadata.real_device),
                             is_gptx,
-                            vb.dtype(),
                         )
                         .expect("Failed to create RoPE"),
                     );
