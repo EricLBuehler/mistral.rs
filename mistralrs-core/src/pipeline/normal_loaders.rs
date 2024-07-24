@@ -402,7 +402,7 @@ struct MixtralBasicConfig {
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     num_experts_per_tok: usize,
     num_local_experts: usize,
 }
