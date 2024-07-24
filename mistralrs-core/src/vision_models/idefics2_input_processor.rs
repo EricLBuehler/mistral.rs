@@ -120,13 +120,18 @@ impl InputsProcessor for Idefics2ImageProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
-    ) -> anyhow::Result<Box<dyn std::any::Any>> {
+    ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
-            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Cannot make inputs for X-LoRA vision model.",
+            ))));
         }
         if no_kv_cache {
-            anyhow::bail!("Vision model must have kv cache.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Vision model must have kv cache.",
+            ))));
         }
+
         let text_models_inputs_processor::InputMetadata {
             input,
             positions,
@@ -144,7 +149,11 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
         } else {
             get_completion_input(
                 input_seqs
@@ -156,7 +165,11 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
         };
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
@@ -170,24 +183,27 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     pixel_attention_mask,
                     image_sizes: _,
                     num_img_tokens: _,
-                } = self.preprocess(
-                    seq.take_images()
-                        .expect("Need to have images by this point."),
-                    config,
-                    device,
-                )?;
-                pixel_values_accum.push(pixel_values.unsqueeze(0)?);
-                pixel_attention_mask_accum.push(pixel_attention_mask.unwrap().unsqueeze(0)?);
+                } = self
+                    .preprocess(
+                        seq.take_images()
+                            .expect("Need to have images by this point."),
+                        config,
+                        device,
+                    )
+                    .expect("Preprocessing failed");
+                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
+                pixel_attention_mask_accum
+                    .push(pixel_attention_mask.unwrap().unsqueeze(0).unwrap());
             }
             (
-                Some(Tensor::cat(&pixel_values_accum, 0)?),
-                Some(Tensor::cat(&pixel_attention_mask_accum, 0)?),
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
             )
         } else {
             (None, None)
         };
 
-        Ok(Box::new(ModelInputs {
+        let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             seqlen_offsets_kernel: positions_kernel,
@@ -196,7 +212,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
             paged_attn_meta,
-        }))
+        });
+        Box::new(std::iter::once(Ok(inputs)))
     }
 }
 

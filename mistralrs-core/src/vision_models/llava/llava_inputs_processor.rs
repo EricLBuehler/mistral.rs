@@ -83,12 +83,16 @@ impl InputsProcessor for LLaVAInputProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
-    ) -> anyhow::Result<Box<dyn Any>> {
+    ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
-            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Cannot make inputs for X-LoRA vision model.",
+            ))));
         }
         if no_kv_cache {
-            anyhow::bail!("Vision model must have kv cache.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Vision model must have kv cache.",
+            ))));
         }
 
         let config = other_config
@@ -112,49 +116,61 @@ impl InputsProcessor for LLaVAInputProcessor {
                     pixel_attention_mask: _,
                     image_sizes: _,
                     num_img_tokens,
-                } = self.preprocess(imgs.clone(), config, device)?;
+                } = self
+                    .preprocess(imgs.clone(), config, device)
+                    .expect("Preprocessor failed");
                 pixel_values_accum.push(pixel_values);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
             (
-                Some(Tensor::cat(&pixel_values_accum, 0)?),
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(num_img_tokens_accum),
             )
         } else {
-            let text_models_inputs_processor::ModelInputs {
-                input_ids,
-                input_ids_full: _,
-                seqlen_offsets,
-                seqlen_offsets_full: _,
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full: _,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-            } = *text_models_inputs_processor::TextInputsProcessor
-                .process_inputs(
-                    tokenizer,
-                    input_seqs,
-                    is_prompt,
-                    is_xlora,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    other_config,
-                    paged_attn_metadata,
-                )?
-                .downcast::<text_models_inputs_processor::ModelInputs>()
-                .expect("Downcast failed.");
-            return Ok(Box::new(ModelInputs {
-                input_ids,
-                seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                position_ids,
-                pixel_values: None,
-                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
-                paged_attn_meta,
-            }));
+            return Box::new(
+                text_models_inputs_processor::TextInputsProcessor
+                    .process_inputs(
+                        tokenizer,
+                        input_seqs,
+                        is_prompt,
+                        is_xlora,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        other_config,
+                        paged_attn_metadata,
+                        None, // TODO
+                    )
+                    .into_iter()
+                    .map(
+                        |metadata: anyhow::Result<Box<dyn Any>>| -> anyhow::Result<Box<dyn Any>> {
+                            let text_models_inputs_processor::ModelInputs {
+                                input_ids,
+                                input_ids_full: _,
+                                seqlen_offsets,
+                                seqlen_offsets_full: _,
+                                seqlen_offsets_kernel,
+                                seqlen_offsets_kernel_full: _,
+                                context_lens,
+                                position_ids,
+                                paged_attn_meta,
+                            } = *metadata?
+                                .downcast::<text_models_inputs_processor::ModelInputs>()
+                                .expect("Downcast failed.");
+                            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                                input_ids,
+                                seqlen_offsets,
+                                seqlen_offsets_kernel,
+                                context_lens,
+                                position_ids,
+                                pixel_values: None,
+                                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                                paged_attn_meta,
+                            });
+                            Ok(inputs)
+                        },
+                    ),
+            );
         };
 
         let mut toks = Vec::new();
@@ -166,7 +182,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                     .collect::<Vec<_>>(),
                 false,
             )
-            .map_err(anyhow::Error::msg)?;
+            .expect("Decoding failed");
 
         for (detokenized, (seq, num_img_tokens)) in detokenized.into_iter().zip(
             input_seqs
@@ -222,21 +238,15 @@ impl InputsProcessor for LLaVAInputProcessor {
             toks.push(input_ids);
         }
 
-        let text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
-        } = if is_prompt {
+        let iter = if is_prompt {
             get_prompt_input(
                 toks,
                 input_seqs,
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         } else {
             get_completion_input(
                 toks,
@@ -245,17 +255,32 @@ impl InputsProcessor for LLaVAInputProcessor {
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         };
-        Ok(Box::new(ModelInputs {
-            input_ids: input,
-            seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
-            context_lens,
-            position_ids,
-            pixel_values,
-            model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
-            paged_attn_meta,
+
+        Box::new(iter.into_iter().map(move |x| {
+            x.map(|metadata| {
+                let text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    positions_kernel,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                } = metadata;
+                let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                    input_ids: input,
+                    seqlen_offsets: positions,
+                    seqlen_offsets_kernel: positions_kernel,
+                    context_lens,
+                    position_ids,
+                    pixel_values: pixel_values.clone(),
+                    model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                    paged_attn_meta,
+                });
+                inputs
+            })
         }))
     }
 }

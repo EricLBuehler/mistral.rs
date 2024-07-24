@@ -78,12 +78,16 @@ impl InputsProcessor for Phi3InputsProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
-    ) -> anyhow::Result<Box<dyn Any>> {
+    ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
-            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Cannot make inputs for X-LoRA vision model.",
+            ))));
         }
         if no_kv_cache {
-            anyhow::bail!("Vision model must have kv cache.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Vision model must have kv cache.",
+            ))));
         }
 
         let config = other_config
@@ -111,54 +115,67 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
-                } = self.preprocess(imgs, config, device)?;
+                } = self
+                    .preprocess(imgs, config, device)
+                    .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
             (
-                Some(Tensor::cat(&pixel_values_accum, 0)?),
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
                 n_images,
             )
         } else {
-            let text_models_inputs_processor::ModelInputs {
-                input_ids,
-                input_ids_full: _,
-                seqlen_offsets,
-                seqlen_offsets_full: _,
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full: _,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-            } = *text_models_inputs_processor::TextInputsProcessor
-                .process_inputs(
-                    tokenizer,
-                    input_seqs,
-                    is_prompt,
-                    is_xlora,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    other_config,
-                    paged_attn_metadata,
-                )?
-                .downcast::<text_models_inputs_processor::ModelInputs>()
-                .expect("Downcast failed.");
-
-            return Ok(Box::new(ModelInputs {
-                input_ids,
-                seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                position_ids,
-                pixel_values: None,
-                model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None }),
-                paged_attn_meta,
-            }));
+            return Box::new(
+                text_models_inputs_processor::TextInputsProcessor
+                    .process_inputs(
+                        tokenizer,
+                        input_seqs,
+                        is_prompt,
+                        is_xlora,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        other_config,
+                        paged_attn_metadata,
+                        None, // TODO
+                    )
+                    .into_iter()
+                    .map(
+                        |metadata: anyhow::Result<Box<dyn Any>>| -> anyhow::Result<Box<dyn Any>> {
+                            let text_models_inputs_processor::ModelInputs {
+                                input_ids,
+                                input_ids_full: _,
+                                seqlen_offsets,
+                                seqlen_offsets_full: _,
+                                seqlen_offsets_kernel,
+                                seqlen_offsets_kernel_full: _,
+                                context_lens,
+                                position_ids,
+                                paged_attn_meta,
+                            } = *metadata?
+                                .downcast::<text_models_inputs_processor::ModelInputs>()
+                                .expect("Downcast failed.");
+                            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                                input_ids,
+                                seqlen_offsets,
+                                seqlen_offsets_kernel,
+                                context_lens,
+                                position_ids,
+                                pixel_values: None,
+                                model_specific_args: Box::new(Phi3VisionSpecificArgs {
+                                    image_sizes: None,
+                                }),
+                                paged_attn_meta,
+                            });
+                            Ok(inputs)
+                        },
+                    ),
+            );
         };
 
         let mut toks = Vec::new();
@@ -170,7 +187,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     .collect::<Vec<_>>(),
                 false,
             )
-            .map_err(anyhow::Error::msg)?;
+            .expect("Decode failed");
 
         for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
             input_seqs
@@ -184,7 +201,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .collect::<Vec<_>>();
             let prompt_chunks = tokenizer
                 .encode_batch(splits, true)
-                .map_err(anyhow::Error::msg)?
+                .expect("Encode failed")
                 .into_iter()
                 .map(|enc| enc.get_ids().to_vec())
                 .collect::<Vec<_>>();
@@ -212,11 +229,15 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .collect::<Vec<_>>();
             // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
             if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
-                anyhow::bail!("`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].");
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].",
+                ))));
             }
             // Total images must be the same as the number of image tags
             if unique_image_ids.len() != n_images {
-                anyhow::bail!("Total images must be the same as the number of image tags.");
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "Total images must be the same as the number of image tags.",
+                ))));
             }
 
             // Use the TryInto + unwrap_or to handle case when id==0
@@ -255,21 +276,15 @@ impl InputsProcessor for Phi3InputsProcessor {
             toks.push(input_ids);
         }
 
-        let text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
-        } = if is_prompt {
+        let iter = if is_prompt {
             get_prompt_input(
                 toks,
                 input_seqs,
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         } else {
             get_completion_input(
                 toks,
@@ -278,18 +293,34 @@ impl InputsProcessor for Phi3InputsProcessor {
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         };
 
-        Ok(Box::new(ModelInputs {
-            input_ids: input,
-            seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
-            context_lens,
-            position_ids,
-            pixel_values,
-            model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes }),
-            paged_attn_meta,
+        Box::new(iter.into_iter().map(move |x| {
+            x.map(|metadata| {
+                let text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    positions_kernel,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                } = metadata;
+                let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                    input_ids: input,
+                    seqlen_offsets: positions,
+                    seqlen_offsets_kernel: positions_kernel,
+                    context_lens,
+                    position_ids,
+                    pixel_values: pixel_values.clone(),
+                    model_specific_args: Box::new(Phi3VisionSpecificArgs {
+                        image_sizes: image_sizes.clone(),
+                    }),
+                    paged_attn_meta,
+                });
+                inputs
+            })
         }))
     }
 }
