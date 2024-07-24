@@ -353,6 +353,15 @@ impl Llama3RotaryEmbedding {
     ) -> Result<()> {
         match self {
             Self::Llama3 { sin, cos, is_gptx } => {
+                let (b_sz_seq_len, h, n_embd) = q.dims3()?;
+                *q = q
+                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
+                    .transpose(1, 2)?;
+                let (b_sz_seq_len, h, n_embd) = k.dims3()?;
+                *k = k
+                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
+                    .transpose(1, 2)?;
+
                 let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
                 let mut q_embeds = Vec::new();
                 let mut k_embeds = Vec::new();
