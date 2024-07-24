@@ -119,6 +119,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        token_batchsize: Option<usize>,
     ) -> anyhow::Result<Box<dyn std::any::Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
