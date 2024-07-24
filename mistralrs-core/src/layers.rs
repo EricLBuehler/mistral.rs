@@ -262,8 +262,10 @@ pub enum Llama3RotaryEmbedding {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub enum Llama3RopeType {
+    #[serde(rename = "llama2")]
     Llama3,
     #[default]
+    #[serde(rename = "default")]
     Default,
 }
 
