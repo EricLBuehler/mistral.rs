@@ -451,7 +451,6 @@ pub mod text_models_inputs_processor {
                         paged_attn_metadata.as_mut(),
                         token_batchsize,
                     )
-                    .into_iter()
                     .zip(get_completion_input(
                         input_seqs
                             .iter()
@@ -508,7 +507,6 @@ pub mod text_models_inputs_processor {
                         paged_attn_metadata.as_mut(),
                         token_batchsize,
                     )
-                    .into_iter()
                     .map(|x| {
                         x.map(|metadata| {
                             let InputMetadata {
@@ -547,7 +545,6 @@ pub mod text_models_inputs_processor {
                         paged_attn_metadata.as_mut(),
                         token_batchsize,
                     )
-                    .into_iter()
                     .map(|x| {
                         x.map(|metadata| {
                             let InputMetadata {
@@ -587,7 +584,6 @@ pub mod text_models_inputs_processor {
                         paged_attn_metadata.as_mut(),
                         token_batchsize,
                     )
-                    .into_iter()
                     .map(|x| {
                         x.map(|metadata| {
                             let InputMetadata {

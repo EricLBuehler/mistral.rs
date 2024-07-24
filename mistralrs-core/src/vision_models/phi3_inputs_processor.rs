@@ -144,7 +144,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                         paged_attn_metadata,
                         None, // TODO
                     )
-                    .into_iter()
                     .map(
                         |metadata: anyhow::Result<Box<dyn Any>>| -> anyhow::Result<Box<dyn Any>> {
                             let text_models_inputs_processor::ModelInputs {
