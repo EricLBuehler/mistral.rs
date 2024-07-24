@@ -442,7 +442,7 @@ impl Llama {
                         .device_for(i, false)
                         .unwrap_or(&normal_loading_metadata.real_device);
                     let rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(vb.dtype(), &cfg, device, is_gptx)
+                        Llama3RotaryEmbedding::new(vb.dtype(), cfg, device, is_gptx)
                             .expect("Failed to create RoPE"),
                     );
                     let paged_attn = match &attention_mechanism {

@@ -617,7 +617,7 @@ impl XLoraLlama {
                     let rotary_emb = Arc::new(
                         Llama3RotaryEmbedding::new(
                             vb.dtype(),
-                            &cfg,
+                            cfg,
                             mapper
                                 .device_for(i, false)
                                 .unwrap_or(&normal_loading_metadata.real_device),
