@@ -575,6 +575,7 @@ impl Engine {
             .map(|x| x as i64)
             .unwrap_or(-1);
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
+        let minp = request.sampling_params.min_p.unwrap_or(0.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline)
             .get_metadata()
             .num_hidden_layers;
@@ -667,6 +668,7 @@ impl Engine {
             logits_bias,
             topk,
             topp,
+            minp,
         );
 
         if request.sampling_params.n_choices == 0 {

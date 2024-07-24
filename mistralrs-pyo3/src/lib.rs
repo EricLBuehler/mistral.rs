@@ -738,6 +738,7 @@ impl Runner {
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
+                    min_p: request.min_p,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -828,6 +829,7 @@ impl Runner {
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
+                    min_p: request.min_p,
                 },
                 response: tx,
                 return_logprobs: false,
@@ -899,6 +901,7 @@ struct CompletionRequest {
     grammar: Option<String>,
     grammar_type: Option<String>,
     adapters: Option<Vec<String>>,
+    min_p: Option<f64>,
 }
 
 #[pymethods]
@@ -921,7 +924,8 @@ impl CompletionRequest {
         top_k=None,
         grammar = None,
         grammar_type = None,
-        adapters = None
+        adapters = None,
+        min_p=None,
     ))]
     fn new(
         prompt: String,
@@ -941,6 +945,7 @@ impl CompletionRequest {
         grammar: Option<String>,
         grammar_type: Option<String>,
         adapters: Option<Vec<String>>,
+        min_p: Option<f64>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -960,6 +965,7 @@ impl CompletionRequest {
             grammar,
             grammar_type,
             adapters,
+            min_p,
         })
     }
 }
@@ -994,6 +1000,7 @@ struct ChatCompletionRequest {
     grammar: Option<String>,
     grammar_type: Option<String>,
     adapters: Option<Vec<String>>,
+    min_p: Option<f64>,
 }
 
 #[pymethods]
@@ -1016,7 +1023,8 @@ impl ChatCompletionRequest {
         stream=false,
         grammar = None,
         grammar_type = None,
-        adapters = None
+        adapters = None,
+        min_p=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -1036,6 +1044,7 @@ impl ChatCompletionRequest {
         grammar: Option<String>,
         grammar_type: Option<String>,
         adapters: Option<Vec<String>>,
+        min_p: Option<f64>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -1103,6 +1112,7 @@ impl ChatCompletionRequest {
             grammar,
             grammar_type,
             adapters,
+            min_p,
         })
     }
 }
