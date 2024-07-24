@@ -1,6 +1,7 @@
 use candle_nn::Activation;
 use serde::Deserialize;
 
+use crate::layers::Llama3RopeConfig;
 use crate::serde_default_fn;
 
 use crate::models::llama::Config as LLaMAConfig;
@@ -43,6 +44,7 @@ pub struct LLaVATextConfig {
     #[serde(default = "default_vocab_size")]
     pub vocab_size: usize,
     pub sliding_window: Option<usize>,
+    pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
 serde_default_fn!(usize, default_num_hidden_layers, 32);
@@ -77,6 +79,7 @@ impl Config {
             rms_norm_eps: self.text_config.rms_norm_eps,
             rope_theta: self.text_config.rope_theta,
             max_position_embeddings: self.text_config.max_position_embeddings,
+            rope_scaling: self.text_config.rope_scaling.clone(),
         }
     }
 

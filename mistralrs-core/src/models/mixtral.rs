@@ -34,7 +34,7 @@ pub struct Config {
     pub(crate) max_position_embeddings: usize,
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
-    pub(crate) sliding_window: usize,
+    pub(crate) sliding_window: Option<usize>,
     pub(crate) num_experts_per_tok: usize,
     pub(crate) num_local_experts: usize,
     pub(crate) use_flash_attn: bool,
@@ -84,7 +84,7 @@ impl Attention {
             hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
-            sliding_window: Some(cfg.sliding_window),
+            sliding_window: cfg.sliding_window,
             paged_attn,
         })
     }
@@ -416,7 +416,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -467,7 +467,7 @@ impl Model {
                     head_dim,
                     (1.0 / (head_dim as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads),
-                    Some(cfg.sliding_window),
+                    cfg.sliding_window,
                     device,
                     None,
                 )?),
@@ -508,7 +508,7 @@ impl Model {
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
-                sliding_window: Some(cfg.sliding_window),
+                sliding_window: cfg.sliding_window,
             },
         })
     }
@@ -529,7 +529,7 @@ impl Model {
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
-            Some(self.sliding_window),
+            self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;

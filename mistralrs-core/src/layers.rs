@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    f32::consts::PI,
     ops::Mul,
     str::FromStr,
     sync::{
@@ -15,10 +16,13 @@ use candle_core::{
     DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
+use serde::Deserialize;
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE, models::llama, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16,
+};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -242,6 +246,144 @@ impl PhiRotaryEmbedding {
             k_embeds.push(k_embed);
         }
         Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
+    }
+}
+
+/// RoPE for Llama3
+#[derive(Debug, Clone)]
+pub enum Llama3RotaryEmbedding {
+    Llama3 {
+        sin: Tensor,
+        cos: Tensor,
+        is_gptx: bool,
+    },
+    Default(RotaryEmbedding),
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub enum Llama3RopeType {
+    #[serde(rename = "llama3")]
+    Llama3,
+    #[default]
+    #[serde(rename = "default")]
+    Default,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Llama3RopeConfig {
+    pub factor: f32,
+    pub low_freq_factor: f32,
+    pub high_freq_factor: f32,
+    pub original_max_position_embeddings: usize,
+    pub rope_type: Llama3RopeType,
+}
+
+fn calculate_default_inv_freq(cfg: &llama::Config) -> Vec<f32> {
+    let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+    (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / head_dim as f32))
+        .collect()
+}
+
+// https://github.com/huggingface/transformers/blob/1392a6867f40a55dfabaf306745c67627598b1af/src/transformers/modeling_rope_utils.py#L298
+impl Llama3RotaryEmbedding {
+    pub fn new(dtype: DType, cfg: &llama::Config, dev: &Device, is_gpt_neox: bool) -> Result<Self> {
+        match &cfg.rope_scaling {
+            None
+            | Some(Llama3RopeConfig {
+                rope_type: Llama3RopeType::Default,
+                ..
+            }) => Ok(Self::Default(RotaryEmbedding::new(
+                cfg.rope_theta,
+                cfg.hidden_size / cfg.num_attention_heads,
+                cfg.max_position_embeddings,
+                dev,
+                is_gpt_neox,
+                dtype,
+            )?)),
+            Some(rope_scaling) => {
+                let low_freq_wavelen = rope_scaling.original_max_position_embeddings as f32
+                    / rope_scaling.low_freq_factor;
+                let high_freq_wavelen = rope_scaling.original_max_position_embeddings as f32
+                    / rope_scaling.high_freq_factor;
+
+                let inv_freq = calculate_default_inv_freq(cfg)
+                    .into_iter()
+                    .map(|freq| {
+                        let wavelen = 2. * PI / freq;
+                        if wavelen < high_freq_wavelen {
+                            freq
+                        } else if wavelen > low_freq_wavelen {
+                            freq / rope_scaling.factor
+                        } else {
+                            let smooth = (rope_scaling.original_max_position_embeddings as f32
+                                / wavelen
+                                - rope_scaling.low_freq_factor)
+                                / (rope_scaling.high_freq_factor - rope_scaling.low_freq_factor);
+                            (1. - smooth) * freq / rope_scaling.factor + smooth * freq
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let inv_freq_len = inv_freq.len();
+                let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+
+                let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+                    .to_dtype(DType::F32)?
+                    .reshape((cfg.max_position_embeddings, 1))?;
+                let freqs = t.matmul(&inv_freq)?;
+                let sin = freqs.sin()?.to_dtype(dtype)?;
+                let cos = freqs.cos()?.to_dtype(dtype)?;
+                Ok(Self::Llama3 {
+                    sin,
+                    cos,
+                    is_gptx: is_gpt_neox,
+                })
+            }
+        }
+    }
+
+    pub fn forward(
+        &self,
+        positions: &[usize],
+        positions_kernel: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
+        b_sz: usize,
+    ) -> Result<()> {
+        match self {
+            Self::Llama3 { sin, cos, is_gptx } => {
+                let (b_sz_seq_len, h, n_embd) = q.dims3()?;
+                *q = q
+                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
+                    .transpose(1, 2)?;
+                let (b_sz_seq_len, h, n_embd) = k.dims3()?;
+                *k = k
+                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
+                    .transpose(1, 2)?;
+
+                let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+                let mut q_embeds = Vec::new();
+                let mut k_embeds = Vec::new();
+                for (i, offset) in positions.iter().enumerate() {
+                    let cos = cos.narrow(0, *offset, seq_len)?;
+                    let sin = sin.narrow(0, *offset, seq_len)?;
+                    let rope = if *is_gptx {
+                        candle_nn::rotary_emb::rope
+                    } else {
+                        candle_nn::rotary_emb::rope_i
+                    };
+                    let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                *q = Tensor::cat(&q_embeds, 0)?;
+                *k = Tensor::cat(&k_embeds, 0)?;
+                Ok(())
+            }
+            Self::Default(rope) => rope.forward(positions, positions_kernel, q, k, b_sz),
+        }
     }
 }
 
