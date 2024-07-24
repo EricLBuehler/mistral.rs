@@ -143,7 +143,9 @@ pub trait IsqModel {
             let (tensors, mapper) = self.get_biases();
             let total_tensors = tensors.len();
             if total_tensors > 0 {
-                info!("Applying in-situ quantization bias device mapping to {total_tensors} biases.");
+                info!(
+                    "Applying in-situ quantization bias device mapping to {total_tensors} biases."
+                );
                 let bar = ProgressBar::new(total_tensors as u64);
                 bar.set_style(
                     ProgressStyle::default_bar()
@@ -151,7 +153,7 @@ pub trait IsqModel {
                         .unwrap()
                         .progress_chars("#>-"),
                 );
-    
+
                 let mut devices = Vec::new();
                 for (_, layer) in &tensors {
                     let device = if let Some(layer) = layer {
@@ -161,7 +163,7 @@ pub trait IsqModel {
                     };
                     devices.push(device.clone());
                 }
-    
+
                 let t_start = Instant::now();
                 #[cfg(not(feature = "metal"))]
                 {
@@ -170,9 +172,9 @@ pub trait IsqModel {
                     if isq_low_mem {
                         warn!("ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant");
                     }
-    
+
                     info!("Applying ISQ on {} threads.", rayon::current_num_threads());
-    
+
                     use indicatif::ParallelProgressIterator;
                     use rayon::iter::{
                         IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
@@ -191,7 +193,7 @@ pub trait IsqModel {
                             }
                         });
                 }
-    
+
                 #[cfg(feature = "metal")]
                 {
                     use indicatif::ProgressIterator;
