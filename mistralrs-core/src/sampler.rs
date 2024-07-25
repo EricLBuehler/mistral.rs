@@ -28,6 +28,7 @@ pub struct SamplingParams {
     pub temperature: Option<f64>,
     pub top_k: Option<usize>,
     pub top_p: Option<f64>,
+    pub min_p: Option<f64>,
     pub top_n_logprobs: usize,
     pub frequency_penalty: Option<f32>,
     pub presence_penalty: Option<f32>,
@@ -43,6 +44,7 @@ impl Default for SamplingParams {
             temperature: None,
             top_k: None,
             top_p: None,
+            min_p: None,
             top_n_logprobs: 0,
             frequency_penalty: None,
             presence_penalty: None,
@@ -63,8 +65,9 @@ pub struct Sampler {
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     logits_bias: Option<Tensor>,
-    topk: i64,
-    topp: f64,
+    top_k: i64,
+    top_p: f64,
+    min_p: f64,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -98,8 +101,9 @@ impl Sampler {
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         logits_bias: Option<Tensor>,
-        topk: i64,
-        topp: f64,
+        top_k: i64,
+        top_p: f64,
+        min_p: f64,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -113,8 +117,9 @@ impl Sampler {
             frequency_penalty,
             presence_penalty,
             logits_bias,
-            topk,
-            topp,
+            top_k,
+            top_p,
+            min_p,
         }
     }
 
@@ -182,12 +187,13 @@ impl Sampler {
         })
     }
 
-    fn sample_speculative_topkp(
+    fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
         return_logprobs: bool,
         top_k: i64,
         top_p: f32,
+        min_p: f32,
     ) -> Result<Logprobs> {
         let mut probs: Vec<f32> = logits.to_vec1()?;
         let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
@@ -218,6 +224,20 @@ impl Sampler {
                 probs[*index] = 0.0;
             } else {
                 cumsum += probs[*index];
+            }
+        }
+
+        let max_p = probs[argsort_indices[0]];
+
+        // MIN P
+
+        // min-p sampling samples from the tokens whose prob are greater than
+        // (max prob of token in dist) * min_p
+
+        // Clamp smaller probabilities to zero.
+        for index in &argsort_indices {
+            if max_p * min_p >= probs[*index] {
+                probs[*index] = 0.0;
             }
         }
 
@@ -274,11 +294,12 @@ impl Sampler {
         })
     }
 
-    fn sample_topkp(
+    fn sample_top_kp_min_p(
         &self,
         probs: &mut Vec<f32>,
         top_k: i64,
         top_p: f32,
+        min_p: f32,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
@@ -299,6 +320,7 @@ impl Sampler {
         if top_p <= 0.0 || top_p >= 1.0 {
             return self.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
         }
+
         // TOP P
 
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
@@ -312,6 +334,24 @@ impl Sampler {
                 probs[*index] = 0.0;
             } else {
                 cumsum += probs[*index];
+            }
+        }
+
+        if min_p <= 0.0 || min_p >= 1.0 {
+            return self.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
+        }
+
+        let max_p = probs[argsort_indices[0]];
+
+        // MIN P
+
+        // min-p sampling samples from the tokens whose prob are greater than
+        // (max prob of token in dist) * min_p
+
+        // Clamp smaller probabilities to zero.
+        for index in &argsort_indices {
+            if max_p * min_p >= probs[*index] {
+                probs[*index] = 0.0;
             }
         }
 
@@ -366,21 +406,23 @@ impl Sampler {
         };
         let next_token = if sample_speculative {
             match self.temperature {
-                None => self.sample_speculative_topkp(
+                None => self.sample_speculative_top_kp_min_p(
                     logits,
                     return_logprobs,
-                    self.topk,
-                    self.topp as f32,
+                    self.top_k,
+                    self.top_p as f32,
+                    self.min_p as f32,
                 )?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
                     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
 
-                    self.sample_speculative_topkp(
+                    self.sample_speculative_top_kp_min_p(
                         probs,
                         return_logprobs,
-                        self.topk,
-                        self.topp as f32,
+                        self.top_k,
+                        self.top_p as f32,
+                        self.min_p as f32,
                     )?
                 }
             }
@@ -392,10 +434,11 @@ impl Sampler {
                     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
                     let mut probs: Vec<f32> = probs.to_vec1()?;
 
-                    self.sample_topkp(
+                    self.sample_top_kp_min_p(
                         &mut probs,
-                        self.topk,
-                        self.topp as f32,
+                        self.top_k,
+                        self.top_p as f32,
+                        self.min_p as f32,
                         return_logprobs,
                         rng,
                     )?
@@ -432,7 +475,17 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, None, 32, 0.1);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+        );
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, false).unwrap();
@@ -450,7 +503,17 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, None, 32, 0.1);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+        );
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, true).unwrap();

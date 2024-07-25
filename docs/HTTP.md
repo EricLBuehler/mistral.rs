@@ -4,6 +4,16 @@ Mistral.rs provides a lightweight OpenAI API compatible HTTP server based on [ax
 
 The API consists of the following endpoints. They can be viewed in your browser interactively by going to `http://localhost:<port>/docs`.
 
+## Additional object keys
+
+To support additional features, we have extended the completion and chat completion request objects. Both have the same keys added:
+
+- `top_k`: `int` | `null`. If non null, it is only relevant if positive.
+- `grammar`: `{"type" : "regex" | "yacc", "value": string}` or `null`. Grammar to use.
+- `adapters`: `array of string` | `null`. Adapter names to activate for this request.
+- `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
+
+
 ## `POST`: `/v1/chat/completions`
 Process an OpenAI compatible request, returning an OpenAI compatible response when finished. Please find the official OpenAI API documentation [here](https://platform.openai.com/docs/api-reference/chat). To control the interval keep-alive messages are sent, set the `KEEP_ALIVE_INTERVAL` environment variable to the desired time in ms.
 
@@ -67,7 +77,7 @@ curl http://localhost:<port>/health
 ```
 
 ## `GET`: `/docs`
-Returns OpenAPI API docs.
+Returns OpenAPI API docs via SwaggerUI.
 
 Example with `curl`:
 ```bash

@@ -30,6 +30,7 @@ class ChatCompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     adapters: list[str] | None = None
+    min_p: float | None = None
 
 @dataclass
 class CompletionRequest:
@@ -55,6 +56,7 @@ class CompletionRequest:
     grammar: str | None = None
     grammar_type: str | None = None
     adapters: list[str] | None = None
+    min_p: float | None = None
 
 @dataclass
 class Architecture(Enum):
