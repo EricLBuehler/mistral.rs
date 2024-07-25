@@ -1,12 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use core::f64;
 use std::{
     collections::HashMap,
     iter::zip,
     sync::{Arc, Mutex},
 };
 
-use candle_core::{bail, Device, Error, Result, Tensor, D};
+use candle_core::{bail, DType, Device, Error, IndexOp, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -14,6 +15,11 @@ use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
+
+use crate::{
+    layers_masker::{masked_fill, masked_fill_not},
+    ops::BitWiseOp,
+};
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -447,6 +453,95 @@ impl Sampler {
         };
         Ok(next_token)
     }
+}
+
+fn get_bin_counts_and_mask(
+    tokens: &Tensor,
+    vocab_size: usize,
+    num_seqs: usize,
+) -> Result<(Tensor, Tensor)> {
+    // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L179
+    let bin_counts = Tensor::zeros((num_seqs, vocab_size + 1), DType::I64, tokens.device())?;
+    let bin_counts = bin_counts.scatter_add(tokens, &tokens.ones_like()?, 1)?;
+    let bin_counts = bin_counts.i((.., ..vocab_size))?;
+    let mask = bin_counts.gt(0f64)?;
+    Ok((bin_counts, mask))
+}
+
+fn apply_penalties(
+    logits: &Tensor,
+    prompt_tokens_tensor: &Tensor,
+    output_tokens_tensor: &Tensor,
+    presence_penalties: &Tensor,
+    freq_penalties: &Tensor,
+    repetition_penalties: &Tensor,
+) -> Result<Tensor> {
+    // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L243
+    let (num_seqs, vocab_size) = logits.dims2()?;
+    let (_, prompt_mask) = get_bin_counts_and_mask(prompt_tokens_tensor, vocab_size, num_seqs)?;
+    let (output_bin_counts, output_mask) =
+        get_bin_counts_and_mask(output_tokens_tensor, vocab_size, num_seqs)?;
+
+    let repetition_penalties = repetition_penalties.unsqueeze(1)?.expand((1, vocab_size))?;
+    // We'll just use where_cond
+    let repetition_penalties_mask = prompt_mask.bitwise_or(&output_mask)?;
+    let repetition_penalties =
+        masked_fill_not(&repetition_penalties, &repetition_penalties_mask, 1.0)?;
+
+    // https://platform.openai.com/docs/api-reference/parameter-details
+    let mut logits = logits.gt(0f64)?.where_cond(
+        &(logits / &repetition_penalties)?,
+        &(logits * &repetition_penalties)?,
+    )?;
+
+    logits = (logits - (freq_penalties.unsqueeze(D::Minus1)? * output_bin_counts)?)?;
+    logits = (logits - (presence_penalties.unsqueeze(D::Minus1)? * output_mask)?)?;
+    Ok(logits)
+}
+
+fn apply_topk_topp(logits: &Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
+    // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L266
+    let (logits_sort, logits_idx) = logits.sort_last_dim(true)?;
+
+    // Apply topk
+    let topk_mask = (k.to_dtype(DType::I64)?.neg()? + logits_sort.dim(1)? as f64)?;
+    // Get all topk values
+    let topk_mask = logits_sort.gather(&topk_mask.unsqueeze(1)?, 1)?;
+    let topk_mask = logits_sort.lt(&topk_mask)?;
+    let logits_sort = masked_fill(&logits_sort, &topk_mask, f64::NEG_INFINITY)?;
+
+    // Apply topp
+    let probs_sort = candle_nn::ops::softmax_last_dim(&logits_sort)?;
+    let probs_sum = probs_sort.cumsum(D::Minus1)?;
+    let topp_mask = probs_sum.le(&(p.unsqueeze(1)?.neg()? + 1f64)?)?;
+    // At least one
+    // Equivalent of Pytorch `topp_mask[:, -1] = False`
+    let topp_mask = topp_mask.slice_assign(
+        &[&.., &(topk_mask.dim(1)? - 1..)],
+        &Tensor::zeros(
+            (topk_mask.dim(0)?, 1),
+            topp_mask.dtype(),
+            topp_mask.device(),
+        )?,
+    )?;
+    let logits_sort = masked_fill(&logits_sort, &topp_mask, f64::NEG_INFINITY)?;
+
+    // Resort the probs
+    let src = Tensor::arange(0, logits_idx.dim(D::Minus1)? as u32, logits_idx.device())?;
+    let logits_idx_inv = logits_idx
+        .zeros_like()?
+        .scatter_add(&logits_idx, &src, D::Minus1)?;
+
+    logits_sort.gather(&logits_idx_inv, D::Minus1)
+}
+
+fn apply_minp(logits: &Tensor, minp: &Tensor) -> Result<Tensor> {
+    // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L298
+    let probs = candle_nn::ops::softmax_last_dim(logits)?;
+    let top_probs = probs.max_keepdim(D::Minus1)?;
+    let scaled_minp = (minp.unsqueeze(1)? * top_probs)?;
+    let toks_to_remove = probs.lt(&scaled_minp)?;
+    masked_fill(logits, &toks_to_remove, f64::NEG_INFINITY)
 }
 
 mod tests {

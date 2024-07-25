@@ -23,12 +23,27 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
-fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
+pub(crate) fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
     let on_false = xs;
     let res = mask
         .broadcast_as(xs.shape())?
         .where_cond(&on_true, on_false)?;
+    Ok(res)
+}
+
+// https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
+// Other way around from normal masked_fill
+pub(crate) fn masked_fill_not<D: WithDType>(
+    xs: &Tensor,
+    mask: &Tensor,
+    value: D,
+) -> Result<Tensor> {
+    let on_false = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+    let on_true = xs;
+    let res = mask
+        .broadcast_as(xs.shape())?
+        .where_cond(on_true, &on_false)?;
     Ok(res)
 }
 
