@@ -544,14 +544,14 @@ fn apply_minp(logits: &Tensor, minp: &Tensor) -> Result<Tensor> {
     masked_fill(logits, &toks_to_remove, f64::NEG_INFINITY)
 }
 
-// (bs, vocab) -> (bs)\
+// (bs, vocab) -> (bs)
 /// Approximation of multinomial
 fn sample_gumbel(probs: &Tensor) -> Result<Tensor> {
     // https://github.com/lucidrains/speculative-decoding/blob/main/speculative_decoding/speculative_decoding.py#L36
     let uniform_dist = Tensor::rand(0f32, 1f32, probs.shape(), probs.device())?;
     let gumbel_noise = uniform_dist.log()?.neg()?.log()?.neg()?;
     // Already applied temperature, no need to again
-    (probs + gumbel_noise)?.argmax(D::Minus1)
+    candle_nn::ops::softmax_last_dim(&(probs + gumbel_noise)?)?.argmax(D::Minus1)
 }
 
 mod tests {
