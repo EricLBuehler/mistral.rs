@@ -746,6 +746,8 @@
 <a href="#746" id="746">746</a>
 <a href="#747" id="747">747</a>
 <a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{
@@ -1323,6 +1325,7 @@
             .map(|x| x <span class="kw">as </span>i64)
             .unwrap_or(-<span class="number">1</span>);
         <span class="kw">let </span>topp = request.sampling_params.top_p.unwrap_or(<span class="number">1.0</span>);
+        <span class="kw">let </span>minp = request.sampling_params.min_p.unwrap_or(<span class="number">0.0</span>);
         <span class="kw">let </span>num_hidden_layers = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
             .get_metadata()
             .num_hidden_layers;
@@ -1415,6 +1418,7 @@
             logits_bias,
             topk,
             topp,
+            minp,
         );
 
         <span class="kw">if </span>request.sampling_params.n_choices == <span class="number">0 </span>{

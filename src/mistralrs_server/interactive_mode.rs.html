@@ -185,6 +185,7 @@
 <a href="#185" id="185">185</a>
 <a href="#186" id="186">186</a>
 <a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
@@ -221,6 +222,7 @@
         temperature: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         top_k: <span class="prelude-val">Some</span>(<span class="number">32</span>),
         top_p: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
+        min_p: <span class="prelude-val">Some</span>(<span class="number">0.05</span>),
         top_n_logprobs: <span class="number">0</span>,
         frequency_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         presence_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),

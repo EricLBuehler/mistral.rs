@@ -170,6 +170,10 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
@@ -277,6 +281,8 @@
     </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Vec&lt;String&gt;&gt;))]
     </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f64&gt;))]
+    </span><span class="kw">pub </span>min_p: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 }
 
 <span class="attr">#[derive(Debug, Serialize, ToSchema)]
@@ -341,5 +347,7 @@
     </span><span class="kw">pub </span>grammar: <span class="prelude-ty">Option</span>&lt;Grammar&gt;,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;Vec&lt;String&gt;&gt;))]
     </span><span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;f64&gt;))]
+    </span><span class="kw">pub </span>min_p: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 }
 </code></pre></div></section></main></body></html>

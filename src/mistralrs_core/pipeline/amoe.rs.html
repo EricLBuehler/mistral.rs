@@ -562,6 +562,7 @@
 <a href="#562" id="562">562</a>
 <a href="#563" id="563">563</a>
 <a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -916,7 +917,8 @@
 
         <span class="comment">// Create several dummy objects for the sequences.
         </span><span class="kw">let </span>(dummy_sender, <span class="kw">_</span>) = tokio::sync::mpsc::channel(<span class="number">10000</span>);
-        <span class="kw">let </span>dummy_sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>);
+        <span class="kw">let </span>dummy_sampler =
+            Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>);
 
         <span class="kw">let </span>dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="number">0</span>,

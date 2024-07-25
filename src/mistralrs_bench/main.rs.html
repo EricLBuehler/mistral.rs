@@ -487,6 +487,8 @@
 <a href="#487" id="487">487</a>
 <a href="#488" id="488">488</a>
 <a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -546,6 +548,7 @@
         temperature: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         top_k: <span class="prelude-val">Some</span>(<span class="number">32</span>),
         top_p: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
+        min_p: <span class="prelude-val">Some</span>(<span class="number">0.05</span>),
         top_n_logprobs: <span class="number">0</span>,
         frequency_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         presence_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
@@ -705,6 +708,7 @@
         temperature: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         top_k: <span class="prelude-val">Some</span>(<span class="number">32</span>),
         top_p: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
+        min_p: <span class="prelude-val">Some</span>(<span class="number">0.05</span>),
         top_n_logprobs: <span class="number">0</span>,
         frequency_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
         presence_penalty: <span class="prelude-val">Some</span>(<span class="number">0.1</span>),
@@ -818,7 +822,7 @@
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; multinomial"</span>);
+    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; minp -&gt; multinomial"</span>);
     <span class="kw">if </span>use_flash_attn {
         <span class="macro">info!</span>(<span class="string">"Using flash attention."</span>);
     }

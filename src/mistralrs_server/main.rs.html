@@ -747,7 +747,7 @@
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; multinomial"</span>);
+    <span class="macro">info!</span>(<span class="string">"Sampling method: penalties -&gt; temperature -&gt; topk -&gt; topp -&gt; minp -&gt; multinomial"</span>);
     <span class="kw">if </span>use_flash_attn {
         <span class="macro">info!</span>(<span class="string">"Using flash attention."</span>);
     }
