@@ -331,7 +331,7 @@ fn main() -> anyhow::Result<()> {
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
+    info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
     if use_flash_attn {
         info!("Using flash attention.");
     }

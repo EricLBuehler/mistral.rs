@@ -236,7 +236,7 @@ impl Sampler {
 
         // Clamp smaller probabilities to zero.
         for index in &argsort_indices {
-            if max_p * min_p < probs[*index] {
+            if max_p * min_p >= probs[*index] {
                 probs[*index] = 0.0;
             }
         }
@@ -350,7 +350,7 @@ impl Sampler {
 
         // Clamp smaller probabilities to zero.
         for index in &argsort_indices {
-            if max_p * min_p < probs[*index] {
+            if max_p * min_p >= probs[*index] {
                 probs[*index] = 0.0;
             }
         }
