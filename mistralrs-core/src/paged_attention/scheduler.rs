@@ -82,9 +82,10 @@ impl PagedAttentionScheduler {
                 match can_allocate {
                     AllocStatus::Later => break, // If we can only allocate later, do not bother iterating over the rest.
                     AllocStatus::Impossible => {
+                        let id = *get_mut_arcmutex!(seq).id();
+                        let len = get_mut_arcmutex!(seq).get_toks().len();
                         warn!(
-                            "Input prompt with length of {} tokens is too long and exceeds capacity of block engine. Sequence will be ignored.",
-                            get_mut_arcmutex!(seq).prompt_tokens()
+                            "Sequence {id} with length of {len} tokens is too long and exceeds capacity of block engine. Sequence will be ignored.",
                         );
                         get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
                         did_ignore = true;
@@ -92,13 +93,17 @@ impl PagedAttentionScheduler {
                     _ => {}
                 }
 
-                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
-                let seq_handle = get_mut_arcmutex!(seq);
-                self._allocate(&seq_handle);
+                if !did_ignore {
+                    get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                    let seq_handle = get_mut_arcmutex!(seq);
+                    self._allocate(&seq_handle);
+                }
 
                 let seq = self.waiting.pop_front().unwrap();
                 self.running.push_back(seq.clone());
-                scheduled.push_back(seq);
+                if !did_ignore {
+                    scheduled.push_back(seq);
+                }
             }
 
             // If we did schedule, or we ignored sequences.
