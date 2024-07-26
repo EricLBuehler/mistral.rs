@@ -2351,7 +2351,6 @@ dependencies = [
  "derive_more",
  "dirs",
  "either",
- "futures",
  "galil-seiferas",
  "half",
  "hf-hub",
@@ -2370,7 +2369,6 @@ dependencies = [
  "pyo3",
  "radix_trie",
  "rand",
- "rand_isaac",
  "rayon",
  "regex-automata 0.4.7",
  "reqwest",
@@ -2382,7 +2380,6 @@ dependencies = [
  "thiserror",
  "tokenizers",
  "tokio",
- "tokio-rayon",
  "toml",
  "tqdm",
  "tracing",
@@ -2409,7 +2406,6 @@ dependencies = [
  "base64 0.22.1",
  "candle-core",
  "either",
- "futures",
  "image",
  "indexmap 2.2.6",
  "intel-mkl-src",
@@ -3259,15 +3255,6 @@ checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
 dependencies = [
  "num-traits",
  "rand",
-]
-
-[[package]]
-name = "rand_isaac"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fac4373cd91b4f55722c553fb0f286edbb81ef3ff6eec7b99d1898a4110a0b28"
-dependencies = [
- "rand_core",
 ]
 
 [[package]]
@@ -4238,16 +4225,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-rayon"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cf33a76e0b1dd03b778f83244137bd59887abf25c0e87bc3e7071105f457693"
-dependencies = [
- "rayon",
  "tokio",
 ]
 
