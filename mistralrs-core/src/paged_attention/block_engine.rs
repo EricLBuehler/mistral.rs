@@ -231,18 +231,19 @@ impl BlockEngine {
     }
 
     pub fn free_sequence(&mut self, id: usize) {
-        let block_table = self.block_tables.get(&id).unwrap();
-
-        // Free from block table
-        for block in block_table {
-            if block.deref_mut().is_gpu {
-                self.gpu_allocator.free_block(block.clone())
-            } else {
-                self.cpu_allocator.free_block(block.clone())
+        // Handle double free if run out of tokens
+        if let Some(block_table) = self.block_tables.get(&id) {
+            // Free from block table
+            for block in block_table {
+                if block.deref_mut().is_gpu {
+                    self.gpu_allocator.free_block(block.clone())
+                } else {
+                    self.cpu_allocator.free_block(block.clone())
+                }
             }
-        }
 
-        self.block_tables.remove(&id);
+            self.block_tables.remove(&id);
+        }
     }
 
     #[allow(dead_code)]
@@ -300,7 +301,7 @@ impl BlockEngine {
         &mut self,
         sequence: &impl BlockEngineSequence,
     ) -> Option<(usize, usize)> {
-        let table = self.block_tables.get_mut(&sequence.get_id()).unwrap();
+        let table = self.block_tables.get_mut(&sequence.get_id())?;
 
         match sequence.blocks_to_add_new_tok() {
             1 => {

@@ -105,6 +105,8 @@ pub struct ChatCompletionRequest {
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<Vec<String>>))]
     pub adapters: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub min_p: Option<f64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -169,4 +171,6 @@ pub struct CompletionRequest {
     pub grammar: Option<Grammar>,
     #[schema(example = json!(Option::None::<Vec<String>>))]
     pub adapters: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<f64>))]
+    pub min_p: Option<f64>,
 }

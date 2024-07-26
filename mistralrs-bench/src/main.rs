@@ -57,6 +57,7 @@ fn run_bench(
         temperature: Some(0.1),
         top_k: Some(32),
         top_p: Some(0.1),
+        min_p: Some(0.05),
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
@@ -216,6 +217,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         temperature: Some(0.1),
         top_k: Some(32),
         top_p: Some(0.1),
+        min_p: Some(0.05),
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
@@ -329,7 +331,7 @@ fn main() -> anyhow::Result<()> {
         candle_core::utils::with_simd128(),
         candle_core::utils::with_f16c()
     );
-    info!("Sampling method: penalties -> temperature -> topk -> topp -> multinomial");
+    info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
     if use_flash_attn {
         info!("Using flash attention.");
     }

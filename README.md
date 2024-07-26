@@ -91,6 +91,11 @@ Mistal.rs supports several model categories:
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
 - PagedAttention: [docs](docs/PAGED_ATTENTION.md)
+- Various sampling techniques:
+    - Top K
+    - Top P
+    - Min P
+    - Please suggest more by raising an issue!
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.

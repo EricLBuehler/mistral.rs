@@ -34,6 +34,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
         temperature: Some(0.1),
         top_k: Some(32),
         top_p: Some(0.1),
+        min_p: Some(0.05),
         top_n_logprobs: 0,
         frequency_penalty: Some(0.1),
         presence_penalty: Some(0.1),
