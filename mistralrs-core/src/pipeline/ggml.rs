@@ -33,7 +33,6 @@ use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
 use std::path::PathBuf;

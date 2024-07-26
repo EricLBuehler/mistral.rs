@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use rand_isaac::Isaac64Rng;
+use candle_core::{IndexOp, Result, Tensor};
 
 use crate::{
-    aici::toktree::TokTrie,
     get_bias_if_not_allowed,
     prefix_cacher::PrefixCacheManager,
     sampler::{Logprobs, NewSampler, SamplingMetadata},
@@ -261,6 +257,7 @@ pub fn sample_sequences(
     add_to_trie: bool,
 ) -> Result<Vec<Logprobs>> {
     let seqs_len = seqs.len();
+    #[allow(clippy::cast_possible_truncation)]
     let seqs_with_grammar = seqs
         .iter()
         .enumerate()
@@ -272,6 +269,7 @@ pub fn sample_sequences(
             }
         })
         .collect::<Vec<_>>();
+    #[allow(clippy::cast_possible_truncation)]
     let seqs_without_grammar = (0..seqs.len())
         .filter(|i| seqs_with_grammar.contains(&(*i as u32)))
         .map(|x| x as u32)
@@ -288,6 +286,7 @@ pub fn sample_sequences(
 
     // Handle case with no grammar first
     {
+        #[allow(clippy::cast_possible_truncation)]
         let metadata = prepare_sampling_metadata(
             seqs.iter()
                 .enumerate()
@@ -302,6 +301,7 @@ pub fn sample_sequences(
 
     // Grammars must be processed sequentially
     {
+        #[allow(clippy::cast_possible_truncation)]
         for (i, seq) in seqs
             .iter_mut()
             .enumerate()

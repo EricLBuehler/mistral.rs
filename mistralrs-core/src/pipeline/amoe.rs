@@ -15,7 +15,6 @@ use indexmap::IndexMap;
 #[cfg(feature = "plotly")]
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
-use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
@@ -24,7 +23,6 @@ use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
-    sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceSamplingMetadata},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
@@ -353,8 +351,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler =
-            Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0, 0.0);
 
         let sampling_metadata = SequenceSamplingMetadata {
             topp: Tensor::new(&[-1f32], &self.device()).unwrap(),
@@ -436,7 +432,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         sampling_metadata.clone(),
                         dummy_group.clone(),
                         images,
-                        &*self.tokenizer(),
+                        &self.tokenizer(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();

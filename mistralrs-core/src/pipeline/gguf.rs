@@ -48,7 +48,6 @@ use candle_core::quantized::{
 use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
 use std::path::PathBuf;

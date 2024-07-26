@@ -13,14 +13,13 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
-    sampler::SamplingMetadata,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
     get_mut_group,
     pipeline::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    sampler::{Logprobs, Sampler},
+    sampler::Logprobs,
     ChatCompletionResponse, Usage,
 };
 use candle_core::Tensor;

@@ -1,12 +1,7 @@
-use std::{
-    any::Any,
-    iter::zip,
-    sync::{Arc, Mutex},
-};
+use std::{any::Any, iter::zip, sync::Arc};
 
 use anyhow::Result as anyhowResult;
 use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
-use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -372,7 +367,6 @@ impl Pipeline for SpeculativePipeline {
                 // ======================= Run draft model gamma times producing tokens ============================
                 // ======================= Sample the `gamma` logits. ============================
                 let mut draft_samples = Vec::new();
-                let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
