@@ -595,7 +595,6 @@ pub trait Pipeline:
         is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
     ) -> Result<(), candle_core::Error> {
         match backend_metadata {
@@ -679,7 +678,7 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop)
                     .await?;
                 Ok(())
             }
@@ -713,7 +712,7 @@ pub trait Pipeline:
 
                 let logits = self.forward_inputs(inputs)?;
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop)
                     .await?;
                 Ok(())
             }
@@ -726,7 +725,6 @@ pub trait Pipeline:
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error>;
 
     fn category(&self) -> ModelCategory;

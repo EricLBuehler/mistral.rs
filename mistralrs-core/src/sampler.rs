@@ -16,10 +16,7 @@ use rand_isaac::Isaac64Rng;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
-use crate::{
-    layers_masker::{masked_fill, masked_fill_not},
-    ops::BitWiseOp,
-};
+use crate::layers_masker::masked_fill;
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -92,6 +89,18 @@ pub struct Logprobs {
     pub logprob: f32,
     pub bytes: String,
     pub top_logprobs: Option<Vec<TopLogprob>>,
+}
+
+#[derive(Clone)]
+pub struct SamplingMetadata<'a> {
+    pub output_tokens_tensor: Tensor,
+    pub presence_penalties: Tensor,
+    pub freq_penalties: Tensor,
+    pub topk: Tensor,
+    pub topp: Tensor,
+    pub minp: Tensor,
+    pub temperature: Tensor,
+    pub tokenizers: Vec<&'a Tokenizer>,
 }
 
 fn argmax_sample_last_dim(logits: &Tensor) -> Result<Tensor> {
@@ -455,6 +464,54 @@ impl Sampler {
     }
 }
 
+pub struct NewSampler;
+
+impl NewSampler {
+    pub fn sample_on_gpu(
+        &self,
+        logits: Tensor,
+        metadata: SamplingMetadata,
+    ) -> Result<Vec<Logprobs>> {
+        let logits = logits.to_dtype(DType::F32)?;
+
+        let logits = apply_penalties(
+            logits,
+            &metadata.output_tokens_tensor,
+            &metadata.presence_penalties,
+            &metadata.freq_penalties,
+        )?;
+
+        let logits = (logits / metadata.temperature)?;
+
+        let logits = apply_topk_topp(&logits, &metadata.topp, &metadata.topk)?;
+        let logits = apply_minp(&logits, &metadata.minp)?;
+
+        let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+        let log_probs = probs.log()?;
+
+        let sampled = sample_gumbel(&logits)?;
+
+        let sampled_toks = sampled.to_vec1::<u32>()?;
+        let logprobs = log_probs.to_vec1::<f32>()?;
+
+        let mut logprobs_collector = Vec::new();
+        for (tok, (logprob, tokenizer)) in sampled_toks
+            .into_iter()
+            .zip(logprobs.into_iter().zip(metadata.tokenizers))
+        {
+            logprobs_collector.push(Logprobs {
+                token: tok,
+                logprob,
+                top_logprobs: None, // TODO
+                bytes: tokenizer
+                    .decode(&[tok.try_into().unwrap()], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            });
+        }
+        Ok(logprobs_collector)
+    }
+}
+
 fn get_bin_counts_and_mask(
     tokens: &Tensor,
     vocab_size: usize,
@@ -469,30 +526,15 @@ fn get_bin_counts_and_mask(
 }
 
 fn apply_penalties(
-    logits: &Tensor,
-    prompt_tokens_tensor: &Tensor,
+    mut logits: Tensor,
     output_tokens_tensor: &Tensor,
     presence_penalties: &Tensor,
     freq_penalties: &Tensor,
-    repetition_penalties: &Tensor,
 ) -> Result<Tensor> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L243
     let (num_seqs, vocab_size) = logits.dims2()?;
-    let (_, prompt_mask) = get_bin_counts_and_mask(prompt_tokens_tensor, vocab_size, num_seqs)?;
     let (output_bin_counts, output_mask) =
         get_bin_counts_and_mask(output_tokens_tensor, vocab_size, num_seqs)?;
-
-    let repetition_penalties = repetition_penalties.unsqueeze(1)?.expand((1, vocab_size))?;
-    // We'll just use where_cond
-    let repetition_penalties_mask = prompt_mask.bitwise_or(&output_mask)?;
-    let repetition_penalties =
-        masked_fill_not(&repetition_penalties, &repetition_penalties_mask, 1.0)?;
-
-    // https://platform.openai.com/docs/api-reference/parameter-details
-    let mut logits = logits.gt(0f64)?.where_cond(
-        &(logits / &repetition_penalties)?,
-        &(logits * &repetition_penalties)?,
-    )?;
 
     logits = (logits - (freq_penalties.unsqueeze(D::Minus1)? * output_bin_counts)?)?;
     logits = (logits - (presence_penalties.unsqueeze(D::Minus1)? * output_mask)?)?;

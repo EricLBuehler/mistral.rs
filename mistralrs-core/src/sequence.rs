@@ -3,15 +3,17 @@ use std::{
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokenizers::Tokenizer;
 use tokio::sync::{
     mpsc::{error::SendError, Sender},
     Mutex, MutexGuard,
 };
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
+    sampler::SamplingMetadata,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
@@ -142,13 +144,24 @@ impl SequenceCustomMetadata {
     }
 }
 
+#[derive(Clone)]
+pub struct SequenceSamplingMetadata {
+    pub topp: Tensor,             // f64
+    pub topk: Tensor,             // f64
+    pub minp: Tensor,             // f64
+    pub freq_penalty: Tensor,     // f64
+    pub presence_penalty: Tensor, // f64
+    pub temperature: Tensor,      // f64
+    pub tokenizer: Arc<Tokenizer>,
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
     prompt_len: usize,
     max_len: Option<usize>,
     timestamp: u128,
-    sampler: Arc<Sampler>,
+    sampling_metadata: SequenceSamplingMetadata,
     stop_tokens: Vec<u32>,
     stop_strings: Vec<String>,
     return_logprobs: bool,
@@ -160,6 +173,7 @@ pub struct Sequence {
     prefix: Option<String>,
     is_tmp: bool,
     adapters: Option<Vec<String>>,
+    pub(crate) tok_trie: TokTrie,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -226,7 +240,7 @@ impl Sequence {
         timestamp: u128,
         layers: usize,
         responder: Sender<Response>,
-        sampler: Sampler,
+        sampling_metadata: SequenceSamplingMetadata,
         stop_tokens: Vec<u32>,
         stop_strings: Vec<String>,
         max_len: Option<usize>,
@@ -242,6 +256,7 @@ impl Sequence {
         input_images: Option<Vec<image::DynamicImage>>,
         // Paged attention
         block_size: Option<usize>,
+        tok_trie: TokTrie,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -269,7 +284,7 @@ impl Sequence {
                 None
             },
             responder,
-            sampler: sampler.into(),
+            sampling_metadata,
             stop_tokens,
             stop_strings,
             max_len,
@@ -295,6 +310,7 @@ impl Sequence {
             adapters,
             input_images,
             custom_metadata,
+            tok_trie,
         }
     }
 
@@ -441,8 +457,8 @@ impl Sequence {
         self.xlora_cache.is_some()
     }
 
-    pub fn sampler(&mut self) -> Arc<Sampler> {
-        self.sampler.clone()
+    pub fn sampling_metadata(&self) -> &SequenceSamplingMetadata {
+        &self.sampling_metadata
     }
 
     /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
