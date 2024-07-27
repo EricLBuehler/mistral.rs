@@ -4,7 +4,6 @@ use candle_core::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
-    aici::toktree::TokTrie,
     get_bias_if_not_allowed,
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
@@ -238,8 +237,6 @@ pub async fn sample_and_add_toks(
                 logits_per_seq,
                 seq,
                 return_logprobs,
-                this.get_metadata().repeat_last_n,
-                this.get_metadata().tok_trie.clone(),
                 rng.clone(),
                 use_async_pool,
                 true, // Append result to trie
@@ -271,15 +268,13 @@ pub async fn sample_sequence(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc<TokTrie>,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
     add_to_trie: bool,
     sample_speculative: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-    let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
+    let start_at = seq.get_toks().len().saturating_sub(seq.prompt_tokens());
 
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks()[start_at..].to_vec();
@@ -308,16 +303,16 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Regex(ref mut rx) => {
-            get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
+            get_bias_if_not_allowed!(seq.tok_trie, rx.as_mut(), first_lobprobs_response.token)
         }
         SequenceRecognizer::Cfg(ref mut cfg) => {
-            get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+            get_bias_if_not_allowed!(seq.tok_trie, cfg.as_mut(), first_lobprobs_response.token)
         }
         SequenceRecognizer::None => None,
     };
     let second_logprobs_response = match bias_if_not_allowed {
         Some(token_set) => {
-            let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
+            let mut acc = vec![-f32::INFINITY; seq.tok_trie.vocab_size()];
             token_set.apply_to(&mut acc);
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
@@ -351,12 +346,12 @@ pub async fn sample_sequence(
     if add_to_trie {
         match seq.recognizer {
             SequenceRecognizer::Regex(ref mut rx) => {
-                tok_trie
+                seq.tok_trie
                     .append_token(rx.as_mut(), second_logprobs_response.token)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
-                tok_trie
+                seq.tok_trie
                     .append_token(cfg.as_mut(), second_logprobs_response.token)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
@@ -376,8 +371,6 @@ pub async fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc<TokTrie>,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     n_toks: usize,
 ) -> Result<Vec<SpeculativeSample>> {
@@ -388,8 +381,6 @@ pub async fn sample_target_sequence_speculative(
                 chunk,
                 seq,
                 return_logprobs,
-                repeat_last_n,
-                tok_trie.clone(),
                 rng.clone(),
                 true,  // TODO(EricLBuehler): does this hurt perf?
                 false, // Do not append to trie (yet)

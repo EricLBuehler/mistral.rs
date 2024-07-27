@@ -19,6 +19,7 @@ use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
+    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
@@ -425,6 +426,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -539,6 +541,7 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -561,5 +564,6 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
+        trie,
     )
 }

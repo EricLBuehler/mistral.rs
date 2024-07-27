@@ -76,7 +76,6 @@ pub struct GGMLLoader {
 #[derive(Clone, Copy, Default)]
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
-    pub repeat_last_n: usize,
     pub gqa: usize,
 }
 
@@ -341,7 +340,6 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,

@@ -703,6 +703,7 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
+            let trie = (*get_mut_arcmutex!(self.pipeline).get_metadata().tok_trie).clone();
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -733,6 +734,7 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
+                trie,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

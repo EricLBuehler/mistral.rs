@@ -28,7 +28,7 @@ use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
 pub use isq::IsqModel;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
@@ -433,7 +433,6 @@ pub trait Loader {
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    pub repeat_last_n: usize,
     pub tok_trie: Arc<TokTrie>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,

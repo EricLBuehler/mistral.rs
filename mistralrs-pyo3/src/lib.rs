@@ -21,11 +21,11 @@ use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
     CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader, MistralRs,
+    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, Request as _Request, RequestMessage, Response, SamplingParams,
+    SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -92,14 +92,10 @@ fn parse_which(
     Ok(match which {
         Which::Plain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -108,16 +104,12 @@ fn parse_which(
         Which::XLora {
             model_id,
             xlora_model_id,
-            repeat_last_n,
             order,
             tokenizer_json,
             tgt_non_granular_index,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -137,14 +129,10 @@ fn parse_which(
             model_id,
             tokenizer_json,
             adapters_model_id,
-            repeat_last_n,
             order,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -162,9 +150,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -175,12 +161,10 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -201,11 +185,9 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -225,10 +207,9 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -241,13 +222,12 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -270,12 +250,11 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -293,14 +272,10 @@ fn parse_which(
         .build(),
         Which::VisionPlain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            VisionSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
