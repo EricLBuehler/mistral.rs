@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     iter::zip,
     sync::{Arc, Mutex},
 };
@@ -12,6 +12,7 @@ use pyo3::pyclass;
 
 use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
@@ -384,6 +385,71 @@ impl Sampler {
         }
         let vocab_size = logits.len();
         Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    fn apply_dry_penalty(&self, logits: &mut [f32], toks: &[u32]) -> Result<()> {
+        let match_indices = toks
+            .par_iter()
+            .enumerate()
+            .take(toks.len() - 1)
+            .filter(|(_i, x)| *toks.last().unwrap() == **x)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+
+        let mut match_lengths = HashMap::new();
+
+        let sequence_breakers: HashSet<u32> = Default::default();
+        let multiplier: f32 = Default::default();
+        let base: f32 = Default::default();
+        let allowed_length: usize = Default::default();
+
+        for i in match_indices {
+            let next_token = toks[i + 1];
+
+            if sequence_breakers.contains(&next_token) {
+                continue;
+            }
+
+            let mut match_length = 1;
+
+            loop {
+                if match_length > i {
+                    // Start of input
+                    break;
+                }
+
+                let j = i - match_length;
+
+                let prev_tok = toks[toks.len() - (match_length + 1)];
+                if toks[i] != prev_tok {
+                    // Start of match reached
+                    break;
+                }
+
+                if sequence_breakers.contains(&prev_tok) {
+                    // Seq breaking tok reached
+                    break;
+                }
+
+                match_length += 1;
+            }
+
+            if match_lengths.contains_key(&next_token) {
+                match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
+            } else {
+                match_lengths.insert(next_token, match_length);
+            }
+        }
+
+        // Actually apply penalties
+        for (tok, match_len) in match_lengths {
+            if match_len >= allowed_length {
+                let penalty = multiplier * base.powf((match_len - allowed_length) as f32);
+                logits[tok as usize] = penalty;
+            }
+        }
+
+        Ok(())
     }
 
     /// Sample the provided tokens.
