@@ -274,10 +274,9 @@ pub async fn sample_sequence(
     sample_speculative: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-    let start_at = seq.get_toks().len().saturating_sub(seq.prompt_tokens());
 
     let sampler = seq.sampler();
-    let ctx_clone = seq.get_toks()[start_at..].to_vec();
+    let ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
     let rng_clone = rng.clone();
     let logits_clone = logits.clone();
     let first_lobprobs_response = if use_async_pool {
@@ -316,7 +315,7 @@ pub async fn sample_sequence(
             token_set.apply_to(&mut acc);
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
-            let ctx_clone = seq.get_toks()[start_at..].to_vec();
+            let ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
             let rng_clone = rng.clone();
             let sampler = seq.sampler();
             if use_async_pool {

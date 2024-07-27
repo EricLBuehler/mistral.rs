@@ -64,7 +64,6 @@ pub struct Sampler {
     tokenizer: Arc<Tokenizer>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
-    logits_bias: Option<Tensor>,
     top_k: i64,
     top_p: f64,
     min_p: f64,
@@ -100,7 +99,6 @@ impl Sampler {
         tokenizer: Arc<Tokenizer>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
-        logits_bias: Option<Tensor>,
         top_k: i64,
         top_p: f64,
         min_p: f64,
@@ -116,7 +114,6 @@ impl Sampler {
             tokenizer,
             frequency_penalty,
             presence_penalty,
-            logits_bias,
             top_k,
             top_p,
             min_p,
@@ -400,10 +397,6 @@ impl Sampler {
         sample_speculative: bool,
     ) -> Result<Logprobs> {
         let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
-        let logits = match self.logits_bias {
-            Some(ref bias) => (logits + bias)?,
-            None => logits,
-        };
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
@@ -475,17 +468,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(
-            None,
-            10,
-            get_tokenizer().into(),
-            None,
-            None,
-            None,
-            32,
-            0.1,
-            0.05,
-        );
+        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, false).unwrap();
@@ -503,17 +486,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(
-            None,
-            10,
-            get_tokenizer().into(),
-            None,
-            None,
-            None,
-            32,
-            0.1,
-            0.05,
-        );
+        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, true).unwrap();
