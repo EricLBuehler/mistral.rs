@@ -170,13 +170,12 @@ fn apply_penalties(
 
 fn apply_topk_topp(logits: Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L266
-    let (mut logits_sort, logits_idx) = logits.to_device(&Device::Cpu)?.sort_last_dim(true)?;
+    let (mut logits_sort, logits_idx) = logits.sort_last_dim(true)?;
     // TODO(EricLBuehler): Can we avoid this GPU <> CPU sync? This is the big one.
 
     // Apply topk
-    let mut topk_mask = (k.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.neg()?
-        + logits_sort.dim(1)? as f64)?
-        .to_dtype(DType::U32)?;
+    let mut topk_mask =
+        (k.to_dtype(DType::F32)?.neg()? + logits_sort.dim(1)? as f64)?.to_dtype(DType::U32)?;
     // Get all topk values
     topk_mask = logits_sort.gather(&topk_mask, 1)?;
     topk_mask = logits_sort.broadcast_lt(&topk_mask)?;
@@ -185,8 +184,7 @@ fn apply_topk_topp(logits: Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
     // Apply topp
     let probs_sort = candle_nn::ops::softmax_last_dim(&logits_sort)?;
     let probs_sum = probs_sort.cumsum(D::Minus1)?;
-    let mut topp_mask = probs_sum
-        .broadcast_le(&(p.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.neg()? + 1f64)?)?;
+    let mut topp_mask = probs_sum.broadcast_le(&(p.to_dtype(DType::F32)?.neg()? + 1f64)?)?;
     // At least one
     // Equivalent of Pytorch `topp_mask[:, -1] = False`
     topp_mask = topp_mask.slice_assign(
@@ -206,9 +204,7 @@ fn apply_topk_topp(logits: Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
         .zeros_like()?
         .scatter_add(&logits_idx, &src, D::Minus1)?;
 
-    logits_sort
-        .gather(&logits_idx_inv, D::Minus1)?
-        .to_device(logits.device())
+    logits_sort.gather(&logits_idx_inv, D::Minus1)
 }
 
 fn apply_minp(logits: Tensor, minp: &Tensor) -> Result<Tensor> {
