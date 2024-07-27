@@ -27,7 +27,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,

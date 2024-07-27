@@ -36,10 +36,6 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
         arch: NormalLoaderType,
@@ -62,10 +58,6 @@ pub enum ModelSelected {
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         xlora_model_id: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
 
         /// Ordering JSON file
         #[arg(short, long)]
@@ -99,10 +91,6 @@ pub enum ModelSelected {
         #[arg(short, long)]
         adapters_model_id: String,
 
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
@@ -132,10 +120,6 @@ pub enum ModelSelected {
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
         quantized_filename: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -154,10 +138,6 @@ pub enum ModelSelected {
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
         quantized_filename: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
@@ -190,10 +170,6 @@ pub enum ModelSelected {
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
@@ -222,10 +198,6 @@ pub enum ModelSelected {
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
@@ -249,10 +221,6 @@ pub enum ModelSelected {
         /// Quantized filename, only applicable if `quantized` is set.
         #[arg(short = 'f', long)]
         quantized_filename: String,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
@@ -291,10 +259,6 @@ pub enum ModelSelected {
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
-
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
         adapters_model_id: String,
@@ -317,10 +281,6 @@ pub enum ModelSelected {
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
-
-        /// Control the application of repeat penalty for the last n tokens
-        #[arg(long, default_value_t = 64)]
-        repeat_last_n: usize,
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_vision_arch)]

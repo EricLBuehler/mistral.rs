@@ -19,6 +19,7 @@ use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
+    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
@@ -352,8 +353,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler =
-            Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0, 0.0);
+        let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, -1, 0.0, 0.0);
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
@@ -425,6 +425,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -539,6 +540,7 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -561,5 +563,6 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
+        trie,
     )
 }

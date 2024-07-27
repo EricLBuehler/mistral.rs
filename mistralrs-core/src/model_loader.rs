@@ -2,10 +2,7 @@ use std::fs::{self, File};
 
 use crate::{
     get_toml_selected_model_dtype,
-    pipeline::{
-        GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-        NormalSpecificConfig,
-    },
+    pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
@@ -110,15 +107,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         }
         ModelSelected::Plain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             tokenizer_json,
             Some(model_id),
@@ -127,17 +120,13 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         ModelSelected::XLora {
             model_id,
             xlora_model_id,
-            repeat_last_n,
             order,
             tokenizer_json,
             tgt_non_granular_index,
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -156,15 +145,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             model_id,
             tokenizer_json,
             adapters_model_id,
-            repeat_last_n,
             order,
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -181,9 +166,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tok_model_id,
             quantized_model_id,
@@ -194,12 +177,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tok_model_id,
             quantized_model_id,
@@ -219,11 +200,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             args.chat_template,
             tok_model_id,
             quantized_model_id,
@@ -242,10 +221,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -258,13 +236,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -286,12 +263,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -308,15 +284,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         .build(),
         ModelSelected::VisionPlain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
             dtype: _,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            VisionSpecificConfig { use_flash_attn },
             args.chat_template,
             tokenizer_json,
             Some(model_id),
