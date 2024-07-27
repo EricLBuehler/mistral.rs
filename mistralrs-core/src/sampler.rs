@@ -3,7 +3,7 @@
 use core::f64;
 use std::collections::HashMap;
 
-use candle_core::{DType, Error, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Error, IndexOp, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -91,7 +91,7 @@ impl NewSampler {
         logits: Tensor,
         metadata: SamplingMetadata,
     ) -> Result<Vec<Logprobs>> {
-        let logits = logits.to_dtype(DType::F32)?;
+        let logits = logits.to_dtype(DType::F32)?.squeeze(1)?;
 
         let logits = apply_penalties(
             logits,
@@ -100,7 +100,7 @@ impl NewSampler {
             &metadata.freq_penalties,
         )?;
 
-        let logits = (logits / metadata.temperature)?;
+        let logits = logits.broadcast_div(&metadata.temperature.to_dtype(DType::F32)?)?;
 
         let logits = apply_topk_topp(&logits, &metadata.topp, &metadata.topk)?;
         let logits = apply_minp(&logits, &metadata.minp)?;
@@ -138,7 +138,11 @@ fn get_bin_counts_and_mask(
 ) -> Result<(Tensor, Tensor)> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L179
     let bin_counts = Tensor::zeros((num_seqs, vocab_size + 1), DType::I64, tokens.device())?;
-    let bin_counts = bin_counts.scatter_add(tokens, &tokens.ones_like()?, 1)?;
+    let bin_counts = if !tokens.dims().contains(&0) {
+        bin_counts.scatter_add(tokens, &tokens.ones_like()?, 1)?
+    } else {
+        bin_counts
+    };
     let bin_counts = bin_counts.i((.., ..vocab_size))?;
     let mask = bin_counts.gt(0f64)?;
     Ok((bin_counts, mask))
@@ -155,26 +159,30 @@ fn apply_penalties(
     let (output_bin_counts, output_mask) =
         get_bin_counts_and_mask(output_tokens_tensor, vocab_size, num_seqs)?;
 
-    logits = (logits - (freq_penalties.unsqueeze(D::Minus1)? * output_bin_counts)?)?;
-    logits = (logits - (presence_penalties.unsqueeze(D::Minus1)? * output_mask)?)?;
+    logits = (logits - freq_penalties.broadcast_mul(&output_bin_counts.to_dtype(DType::F32)?)?)?;
+    logits = (logits - presence_penalties.broadcast_mul(&output_mask.to_dtype(DType::F32)?)?)?;
     Ok(logits)
 }
 
 fn apply_topk_topp(logits: &Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L266
-    let (logits_sort, logits_idx) = logits.sort_last_dim(true)?;
+    let (logits_sort, logits_idx) = logits.to_device(&Device::Cpu)?.sort_last_dim(true)?;
+    // TODO(EricLBuehler): Can we avoid this GPU <> CPU sync? This is the big one.
+    let logits_sort = logits_sort.to_device(logits.device())?;
+    let logits_idx = logits_idx.to_device(logits.device())?;
 
     // Apply topk
-    let topk_mask = (k.to_dtype(DType::I64)?.neg()? + logits_sort.dim(1)? as f64)?;
+    let topk_mask =
+        (k.to_dtype(DType::F32)?.neg()? + logits_sort.dim(1)? as f64)?.to_dtype(DType::U32)?;
     // Get all topk values
-    let topk_mask = logits_sort.gather(&topk_mask.unsqueeze(1)?, 1)?;
-    let topk_mask = logits_sort.lt(&topk_mask)?;
+    let topk_mask = logits_sort.gather(&topk_mask, 1)?;
+    let topk_mask = logits_sort.broadcast_lt(&topk_mask)?;
     let logits_sort = masked_fill(&logits_sort, &topk_mask, f64::NEG_INFINITY)?;
 
     // Apply topp
     let probs_sort = candle_nn::ops::softmax_last_dim(&logits_sort)?;
     let probs_sum = probs_sort.cumsum(D::Minus1)?;
-    let topp_mask = probs_sum.le(&(p.unsqueeze(1)?.neg()? + 1f64)?)?;
+    let topp_mask = probs_sum.broadcast_le(&(p.unsqueeze(1)?.neg()? + 1f64)?)?;
     // At least one
     // Equivalent of Pytorch `topp_mask[:, -1] = False`
     let topp_mask = topp_mask.slice_assign(

@@ -616,24 +616,25 @@ impl Engine {
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
 
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
         #[allow(clippy::cast_precision_loss)]
         let sampling_metadata = SequenceSamplingMetadata {
-            topp: Tensor::new(&[topp], &get_mut_arcmutex!(self.pipeline).device()).unwrap(),
-            topk: Tensor::new(&[topk as f32], &get_mut_arcmutex!(self.pipeline).device()).unwrap(),
-            minp: Tensor::new(&[minp], &get_mut_arcmutex!(self.pipeline).device()).unwrap(),
+            topp: Tensor::new(&[topp], &device).unwrap(),
+            topk: Tensor::new(&[topk as f32], &device).unwrap(),
+            minp: Tensor::new(&[minp], &device).unwrap(),
             freq_penalty: Tensor::new(
                 &[request.sampling_params.frequency_penalty.unwrap_or(0.)],
-                &get_mut_arcmutex!(self.pipeline).device(),
+                &device,
             )
             .unwrap(),
             presence_penalty: Tensor::new(
                 &[request.sampling_params.presence_penalty.unwrap_or(0.)],
-                &get_mut_arcmutex!(self.pipeline).device(),
+                &device,
             )
             .unwrap(),
             temperature: Tensor::new(
                 &[request.sampling_params.temperature.unwrap_or(1.0)],
-                &get_mut_arcmutex!(self.pipeline).device(),
+                &device,
             )
             .unwrap(),
             tokenizer: get_mut_arcmutex!(self.pipeline).tokenizer().clone(),

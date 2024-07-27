@@ -271,16 +271,26 @@ pub fn sample_sequences(
         .collect::<Vec<_>>();
     #[allow(clippy::cast_possible_truncation)]
     let seqs_without_grammar = (0..seqs.len())
-        .filter(|i| seqs_with_grammar.contains(&(*i as u32)))
+        .filter(|i| !seqs_with_grammar.contains(&(*i as u32)))
         .map(|x| x as u32)
         .collect::<Vec<_>>();
 
-    let seqs_without_grammar_t = Tensor::from_slice(
-        &seqs_without_grammar,
-        (seqs_without_grammar.len(),),
-        logits.device(),
-    )?;
-    let logits_without_grammar = logits.gather(&seqs_without_grammar_t, 0)?;
+    let logits_without_grammar = if seqs_without_grammar.len() == seqs_len {
+        let seqs_without_grammar_t = Tensor::from_slice(
+            &seqs_without_grammar,
+            (seqs_without_grammar.len(),),
+            logits.device(),
+        )?;
+        logits.gather(
+            &seqs_without_grammar_t
+                .reshape(((), 1, 1))?
+                .repeat((1, logits.dims()[1], logits.dims()[2]))?
+                .contiguous()?,
+            0,
+        )?
+    } else {
+        logits.clone()
+    };
 
     let mut all_sampling_results = vec![None; seqs_len];
 
@@ -369,6 +379,7 @@ pub async fn sample_and_add_toks(
     prefix_cacher: &mut PrefixCacheManager,
     disable_eos_stop: bool,
 ) -> Result<()> {
+    println!("START");
     for (next_token, seq) in std::iter::zip(sample_sequences(seqs, logits, true)?, seqs.iter_mut())
     {
         let metadata = this.get_metadata();
