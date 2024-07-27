@@ -805,6 +805,9 @@
 <a href="#805" id="805">805</a>
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -816,7 +819,7 @@
 };
 
 <span class="kw">use crate</span>::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
@@ -967,6 +970,7 @@
     prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
     is_tmp: bool,
     adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) tok_trie: TokTrie,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -1049,6 +1053,7 @@
         input_images: <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt;,
         <span class="comment">// Paged attention
         </span>block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        tok_trie: TokTrie,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
@@ -1102,6 +1107,7 @@
             adapters,
             input_images,
             custom_metadata,
+            tok_trie,
         }
     }
 

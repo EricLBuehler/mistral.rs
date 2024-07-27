@@ -1042,7 +1042,6 @@
 <a href="#1042" id="1042">1042</a>
 <a href="#1043" id="1043">1043</a>
 <a href="#1044" id="1044">1044</a>
-<a href="#1045" id="1045">1045</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -1073,7 +1072,7 @@
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
 <span class="kw">pub use </span>ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-<span class="kw">pub use </span>gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+<span class="kw">pub use </span>gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
 <span class="kw">pub use </span>isq::IsqModel;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">pub use </span>normal_loaders::{
@@ -1478,7 +1477,6 @@
 
 <span class="kw">pub struct </span>GeneralMetadata {
     <span class="kw">pub </span>max_seq_len: usize,
-    <span class="kw">pub </span>repeat_last_n: usize,
     <span class="kw">pub </span>tok_trie: Arc&lt;TokTrie&gt;,
     <span class="kw">pub </span>has_no_kv_cache: bool,
     <span class="kw">pub </span>num_hidden_layers: usize,

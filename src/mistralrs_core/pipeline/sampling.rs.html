@@ -390,23 +390,12 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
-<a href="#393" id="393">393</a>
-<a href="#394" id="394">394</a>
-<a href="#395" id="395">395</a>
-<a href="#396" id="396">396</a>
-<a href="#397" id="397">397</a>
-<a href="#398" id="398">398</a>
-<a href="#399" id="399">399</a>
-<a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 
 <span class="kw">use crate</span>::{
-    aici::toktree::TokTrie,
     get_bias_if_not_allowed,
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
@@ -640,8 +629,6 @@
                 logits_per_seq,
                 seq,
                 return_logprobs,
-                this.get_metadata().repeat_last_n,
-                this.get_metadata().tok_trie.clone(),
                 rng.clone(),
                 use_async_pool,
                 <span class="bool-val">true</span>, <span class="comment">// Append result to trie
@@ -673,18 +660,15 @@
     logits: Tensor,
     seq: <span class="kw-2">&amp;mut </span>Sequence,
     return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc&lt;TokTrie&gt;,
     rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     use_async_pool: bool,
     add_to_trie: bool,
     sample_speculative: bool,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
     <span class="kw">let </span>logits = logits.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-    <span class="kw">let </span>start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
 
     <span class="kw">let </span>sampler = seq.sampler();
-    <span class="kw">let </span>ctx_clone = seq.get_toks()[start_at..].to_vec();
+    <span class="kw">let </span>ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
     <span class="kw">let </span>rng_clone = rng.clone();
     <span class="kw">let </span>logits_clone = logits.clone();
     <span class="kw">let </span>first_lobprobs_response = <span class="kw">if </span>use_async_pool {
@@ -710,20 +694,20 @@
 
     <span class="kw">let </span>bias_if_not_allowed = <span class="kw">match </span><span class="kw-2">&amp;mut </span>seq.recognizer {
         SequenceRecognizer::Regex(<span class="kw-2">ref mut </span>rx) =&gt; {
-            <span class="macro">get_bias_if_not_allowed!</span>(tok_trie, rx.as_mut(), first_lobprobs_response.token)
+            <span class="macro">get_bias_if_not_allowed!</span>(seq.tok_trie, rx.as_mut(), first_lobprobs_response.token)
         }
         SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
-            <span class="macro">get_bias_if_not_allowed!</span>(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+            <span class="macro">get_bias_if_not_allowed!</span>(seq.tok_trie, cfg.as_mut(), first_lobprobs_response.token)
         }
         SequenceRecognizer::None =&gt; <span class="prelude-val">None</span>,
     };
     <span class="kw">let </span>second_logprobs_response = <span class="kw">match </span>bias_if_not_allowed {
         <span class="prelude-val">Some</span>(token_set) =&gt; {
-            <span class="kw">let </span><span class="kw-2">mut </span>acc = <span class="macro">vec!</span>[-f32::INFINITY; tok_trie.vocab_size()];
+            <span class="kw">let </span><span class="kw-2">mut </span>acc = <span class="macro">vec!</span>[-f32::INFINITY; seq.tok_trie.vocab_size()];
             token_set.apply_to(<span class="kw-2">&amp;mut </span>acc);
             <span class="kw">let </span>new_logits = (logits + Tensor::from_slice(<span class="kw-2">&amp;</span>acc, acc.len(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>ctx_clone = seq.get_toks()[start_at..].to_vec();
+            <span class="kw">let </span>ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
             <span class="kw">let </span>rng_clone = rng.clone();
             <span class="kw">let </span>sampler = seq.sampler();
             <span class="kw">if </span>use_async_pool {
@@ -753,12 +737,12 @@
     <span class="kw">if </span>add_to_trie {
         <span class="kw">match </span>seq.recognizer {
             SequenceRecognizer::Regex(<span class="kw-2">ref mut </span>rx) =&gt; {
-                tok_trie
+                seq.tok_trie
                     .append_token(rx.as_mut(), second_logprobs_response.token)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
             }
             SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
-                tok_trie
+                seq.tok_trie
                     .append_token(cfg.as_mut(), second_logprobs_response.token)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
             }
@@ -778,8 +762,6 @@
     logits: Tensor,
     seq: <span class="kw-2">&amp;mut </span>Sequence,
     return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc&lt;TokTrie&gt;,
     rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     n_toks: usize,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;SpeculativeSample&gt;&gt; {
@@ -790,8 +772,6 @@
                 chunk,
                 seq,
                 return_logprobs,
-                repeat_last_n,
-                tok_trie.clone(),
                 rng.clone(),
                 <span class="bool-val">true</span>,  <span class="comment">// TODO(EricLBuehler): does this hurt perf?
                 </span><span class="bool-val">false</span>, <span class="comment">// Do not append to trie (yet)

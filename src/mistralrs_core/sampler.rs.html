@@ -495,33 +495,6 @@
 <a href="#495" id="495">495</a>
 <a href="#496" id="496">496</a>
 <a href="#497" id="497">497</a>
-<a href="#498" id="498">498</a>
-<a href="#499" id="499">499</a>
-<a href="#500" id="500">500</a>
-<a href="#501" id="501">501</a>
-<a href="#502" id="502">502</a>
-<a href="#503" id="503">503</a>
-<a href="#504" id="504">504</a>
-<a href="#505" id="505">505</a>
-<a href="#506" id="506">506</a>
-<a href="#507" id="507">507</a>
-<a href="#508" id="508">508</a>
-<a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a>
-<a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a>
-<a href="#517" id="517">517</a>
-<a href="#518" id="518">518</a>
-<a href="#519" id="519">519</a>
-<a href="#520" id="520">520</a>
-<a href="#521" id="521">521</a>
-<a href="#522" id="522">522</a>
-<a href="#523" id="523">523</a>
-<a href="#524" id="524">524</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -588,7 +561,6 @@
     tokenizer: Arc&lt;Tokenizer&gt;,
     frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
-    logits_bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     top_k: i64,
     top_p: f64,
     min_p: f64,
@@ -624,7 +596,6 @@
         tokenizer: Arc&lt;Tokenizer&gt;,
         frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
-        logits_bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         top_k: i64,
         top_p: f64,
         min_p: f64,
@@ -640,7 +611,6 @@
             tokenizer,
             frequency_penalty,
             presence_penalty,
-            logits_bias,
             top_k,
             top_p,
             min_p,
@@ -924,10 +894,6 @@
         sample_speculative: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span>logits = <span class="self">self</span>.apply_penalties(logits.to_vec1()<span class="question-mark">?</span>, penalty_ctxt)<span class="question-mark">?</span>;
-        <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.logits_bias {
-            <span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bias) =&gt; (logits + bias)<span class="question-mark">?</span>,
-            <span class="prelude-val">None </span>=&gt; logits,
-        };
         <span class="kw">let </span>next_token = <span class="kw">if </span>sample_speculative {
             <span class="kw">match </span><span class="self">self</span>.temperature {
                 <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.sample_speculative_top_kp_min_p(
@@ -999,17 +965,7 @@
         <span class="kw">use </span>std::sync::Arc;
         <span class="kw">use </span>std::sync::Mutex;
 
-        <span class="kw">let </span>sampler = Sampler::new(
-            <span class="prelude-val">None</span>,
-            <span class="number">10</span>,
-            get_tokenizer().into(),
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="number">32</span>,
-            <span class="number">0.1</span>,
-            <span class="number">0.05</span>,
-        );
+        <span class="kw">let </span>sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">10</span>, get_tokenizer().into(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">32</span>, <span class="number">0.1</span>, <span class="number">0.05</span>);
         <span class="kw">let </span>logits = Tensor::arange(<span class="number">0f32</span>, <span class="number">1024f32</span>, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
         <span class="kw">let </span>rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(<span class="number">42</span>)));
         <span class="kw">let </span>res = sampler.sample(logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, rng, <span class="bool-val">false</span>).unwrap();
@@ -1027,17 +983,7 @@
         <span class="kw">use </span>std::sync::Arc;
         <span class="kw">use </span>std::sync::Mutex;
 
-        <span class="kw">let </span>sampler = Sampler::new(
-            <span class="prelude-val">None</span>,
-            <span class="number">10</span>,
-            get_tokenizer().into(),
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="prelude-val">None</span>,
-            <span class="number">32</span>,
-            <span class="number">0.1</span>,
-            <span class="number">0.05</span>,
-        );
+        <span class="kw">let </span>sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">10</span>, get_tokenizer().into(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">32</span>, <span class="number">0.1</span>, <span class="number">0.05</span>);
         <span class="kw">let </span>logits = Tensor::arange(<span class="number">0f32</span>, <span class="number">1024f32</span>, <span class="kw-2">&amp;</span>Device::Cpu).unwrap();
         <span class="kw">let </span>rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(<span class="number">42</span>)));
         <span class="kw">let </span>res = sampler.sample(logits, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, rng, <span class="bool-val">true</span>).unwrap();

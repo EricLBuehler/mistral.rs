@@ -780,20 +780,6 @@
 <a href="#780" id="780">780</a>
 <a href="#781" id="781">781</a>
 <a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -877,7 +863,6 @@
 <span class="doccomment">/// Loader for a GGUF model.
 </span><span class="kw">pub struct </span>GGUFLoader {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -916,17 +901,10 @@
     }
 }
 
-<span class="attr">#[derive(Clone, Copy, Default)]
-</span><span class="doccomment">/// A config for a GGUF loader.
-</span><span class="kw">pub struct </span>GGUFSpecificConfig {
-    <span class="kw">pub </span>repeat_last_n: usize,
-}
-
 <span class="attr">#[derive(Default)]
 </span><span class="doccomment">/// A builder for a GGUF loader.
 </span><span class="kw">pub struct </span>GGUFLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -942,7 +920,6 @@
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
     </span><span class="kw">pub fn </span>new(
-        config: GGUFSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
@@ -953,7 +930,6 @@
         };
 
         <span class="self">Self </span>{
-            config,
             chat_template,
             model_id: tok_model_id,
             kind,
@@ -1012,7 +988,6 @@
     <span class="kw">pub fn </span>build(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Loader&gt; {
         Box::new(GGUFLoader {
             model_id: <span class="self">self</span>.model_id,
-            config: <span class="self">self</span>.config,
             xlora_model_id: <span class="self">self</span>.xlora_model_id,
             kind: <span class="self">self</span>.kind,
             xlora_order: <span class="self">self</span>.xlora_order,
@@ -1029,7 +1004,6 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-        config: GGUFSpecificConfig,
         quantized_model_id: String,
         quantized_filename: String,
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -1052,7 +1026,6 @@
         </span>};
         <span class="self">Self </span>{
             model_id,
-            config,
             quantized_model_id,
             quantized_filename,
             xlora_model_id,
@@ -1374,7 +1347,6 @@
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
                 num_hidden_layers,

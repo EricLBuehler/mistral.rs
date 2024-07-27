@@ -522,8 +522,6 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
-<a href="#525" id="525">525</a>
-<a href="#526" id="526">526</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -603,7 +601,6 @@
 </span><span class="doccomment">/// Config specific to loading a vision model.
 </span><span class="kw">pub struct </span>VisionSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
-    <span class="kw">pub </span>repeat_last_n: usize,
 }
 
 <span class="kw">impl </span>VisionLoaderBuilder {
@@ -796,7 +793,6 @@
             model_id: <span class="self">self</span>.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
                 is_xlora: <span class="bool-val">false</span>,
                 num_hidden_layers,

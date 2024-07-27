@@ -528,8 +528,6 @@
 <a href="#528" id="528">528</a>
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
-<a href="#531" id="531">531</a>
-<a href="#532" id="532">532</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -608,7 +606,6 @@
 <span class="attr">#[derive(Clone, Copy, Default)]
 </span><span class="doccomment">/// Config for a GGML loader.
 </span><span class="kw">pub struct </span>GGMLSpecificConfig {
-    <span class="kw">pub </span>repeat_last_n: usize,
     <span class="kw">pub </span>gqa: usize,
 }
 
@@ -873,7 +870,6 @@
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: <span class="self">self</span>.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
                 num_hidden_layers,

@@ -563,6 +563,9 @@
 <a href="#563" id="563">563</a>
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -584,6 +587,7 @@
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use crate</span>::{
+    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
@@ -917,8 +921,7 @@
 
         <span class="comment">// Create several dummy objects for the sequences.
         </span><span class="kw">let </span>(dummy_sender, <span class="kw">_</span>) = tokio::sync::mpsc::channel(<span class="number">10000</span>);
-        <span class="kw">let </span>dummy_sampler =
-            Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>);
+        <span class="kw">let </span>dummy_sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>);
 
         <span class="kw">let </span>dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="number">0</span>,
@@ -990,6 +993,7 @@
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        (<span class="kw-2">*</span><span class="self">self</span>.get_metadata().tok_trie).clone(),
                     ));
                 }
                 <span class="kw">let </span><span class="kw-2">mut </span>input_seqs = seqs.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
@@ -1104,6 +1108,7 @@
     dummy_sampler: Sampler,
     dummy_group: Arc&lt;tokio::sync::Mutex&lt;SequenceGroup&gt;&gt;,
     images: <span class="prelude-ty">Option</span>&lt;Vec&lt;DynamicImage&gt;&gt;,
+    trie: TokTrie,
 ) -&gt; Sequence {
     Sequence::new_waiting(
         tokens,
@@ -1126,6 +1131,7 @@
         <span class="prelude-val">None</span>,
         images,
         <span class="prelude-val">None</span>, <span class="comment">// TODO incorrect for PagedAttention
-    </span>)
+        </span>trie,
+    )
 }
 </code></pre></div></section></main></body></html>

@@ -714,42 +714,7 @@
 <a href="#714" id="714">714</a>
 <a href="#715" id="715">715</a>
 <a href="#716" id="716">716</a>
-<a href="#717" id="717">717</a>
-<a href="#718" id="718">718</a>
-<a href="#719" id="719">719</a>
-<a href="#720" id="720">720</a>
-<a href="#721" id="721">721</a>
-<a href="#722" id="722">722</a>
-<a href="#723" id="723">723</a>
-<a href="#724" id="724">724</a>
-<a href="#725" id="725">725</a>
-<a href="#726" id="726">726</a>
-<a href="#727" id="727">727</a>
-<a href="#728" id="728">728</a>
-<a href="#729" id="729">729</a>
-<a href="#730" id="730">730</a>
-<a href="#731" id="731">731</a>
-<a href="#732" id="732">732</a>
-<a href="#733" id="733">733</a>
-<a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
-<a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a>
-<a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a>
-<a href="#746" id="746">746</a>
-<a href="#747" id="747">747</a>
-<a href="#748" id="748">748</a>
-<a href="#749" id="749">749</a>
-<a href="#750" id="750">750</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -769,7 +734,6 @@
     scheduler::{Scheduler, SchedulerOutput},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
-<span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand::SeedableRng;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>tracing::{info, warn};
@@ -1180,26 +1144,6 @@
         <span class="prelude-val">Ok</span>(recognizer)
     }
 
-    <span class="kw">fn </span>alloc_logits_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, logits_bias: <span class="prelude-ty">Option</span>&lt;HashMap&lt;u32, f32&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-        <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
-        <span class="kw">let </span>vocab_size = tokenizer.get_vocab_size(<span class="bool-val">true</span>);
-
-        <span class="kw">match </span>logits_bias {
-            <span class="prelude-val">Some</span>(bias) =&gt; {
-                <span class="kw">let </span><span class="kw-2">mut </span>logits_bias = <span class="macro">vec!</span>[<span class="number">0.0</span>; vocab_size];
-                <span class="kw">for </span>(k, v) <span class="kw">in </span>bias {
-                    logits_bias[k <span class="kw">as </span>usize] = v;
-                }
-                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Tensor::from_vec(
-                    logits_bias,
-                    vocab_size,
-                    <span class="kw-2">&amp;</span>Device::Cpu,
-                )<span class="question-mark">?</span>))
-            }
-            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
-        }
-    }
-
     <span class="kw">async fn </span>handle_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
         <span class="kw">match </span>request {
             Request::ActivateAdapters(adapters) =&gt; {
@@ -1394,19 +1338,6 @@
             .duration_since(UNIX_EPOCH)
             .expect(<span class="string">"Time travel has occurred!"</span>);
 
-        <span class="kw">let </span>logits_bias = <span class="kw">match </span><span class="self">self</span>.alloc_logits_bias(request.sampling_params.logits_bias) {
-            <span class="prelude-val">Ok</span>(logits_bias) =&gt; logits_bias,
-            <span class="prelude-val">Err</span>(err) =&gt; {
-                request
-                    .response
-                    .send(Response::ValidationError(
-                        <span class="macro">format!</span>(<span class="string">"Failed creation of logits bias. {}"</span>, err).into(),
-                    ))
-                    .<span class="kw">await
-                    </span>.expect(<span class="string">"Expected receiver."</span>);
-                <span class="kw">return</span>;
-            }
-        };
         <span class="kw">let </span>tokenizer = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer();
 
         <span class="kw">let </span>sampler = Sampler::new(
@@ -1415,7 +1346,6 @@
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
-            logits_bias,
             topk,
             topp,
             minp,
@@ -1453,6 +1383,7 @@
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
+            <span class="kw">let </span>trie = (<span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().tok_trie).clone();
             <span class="kw">let </span>seq = Sequence::new_waiting(
                 prompt.clone(),
                 <span class="self">self</span>.id,
@@ -1483,6 +1414,7 @@
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
+                trie,
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
