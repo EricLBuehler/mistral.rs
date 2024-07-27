@@ -30,7 +30,6 @@ use anyhow::Result;
 use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
@@ -392,9 +391,8 @@ impl Pipeline for VisionPipeline {
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop).await
     }
     fn category(&self) -> ModelCategory {
         let has_conv2d = self.model.has_conv2d();

@@ -1,12 +1,7 @@
-use std::{
-    any::Any,
-    iter::zip,
-    sync::{Arc, Mutex},
-};
+use std::{any::Any, iter::zip, sync::Arc};
 
 use anyhow::Result as anyhowResult;
 use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
-use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -14,7 +9,7 @@ use crate::{
     get_mut_arcmutex,
     pipeline::{
         sampling::{
-            finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
+            finish_or_add_toks_to_seq, sample_sequences, sample_target_sequence_speculative,
         },
         AdapterInstruction, Cache,
     },
@@ -301,7 +296,6 @@ impl Pipeline for SpeculativePipeline {
         _logits: Tensor,
         _prefix_cacher: &mut PrefixCacheManager,
         _disable_eos_stop: bool,
-        _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<()> {
         unreachable!()
     }
@@ -311,7 +305,6 @@ impl Pipeline for SpeculativePipeline {
         is_prompt: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
     ) -> Result<()> {
         match backend_metadata {
@@ -374,7 +367,6 @@ impl Pipeline for SpeculativePipeline {
                 // ======================= Run draft model gamma times producing tokens ============================
                 // ======================= Sample the `gamma` logits. ============================
                 let mut draft_samples = Vec::new();
-                let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
@@ -397,21 +389,7 @@ impl Pipeline for SpeculativePipeline {
                         .unwrap();
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
 
-                    let sample = sample_sequence(
-                        logits.clone(),
-                        seq,
-                        seq.return_logprobs(),
-                        repeat_last_n,
-                        get_mut_arcmutex!(self.draft)
-                            .get_metadata()
-                            .tok_trie
-                            .clone(),
-                        rng.clone(),
-                        false, // todo tune
-                        false, // do not add to tok trie yet
-                        true,
-                    )
-                    .await?;
+                    let sample = sample_sequences(&mut [seq], logits.clone(), false)?[0].clone();
                     seq.add_tmp_tok(sample.token);
                     draft_samples.push(SpeculativeSample { sample });
                 }
@@ -467,19 +445,7 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Rejection sampling. ============================
                 // Map from each target sample to corresponding in draft sample
-                let samples = sample_target_sequence_speculative(
-                    logits.clone(),
-                    seq,
-                    seq.return_logprobs(),
-                    repeat_last_n,
-                    get_mut_arcmutex!(self.draft)
-                        .get_metadata()
-                        .tok_trie
-                        .clone(),
-                    rng.clone(),
-                    self.gamma,
-                )
-                .await?;
+                let samples = sample_target_sequence_speculative(logits.clone(), seq, self.gamma)?;
 
                 let mut accepted_tokens = Vec::new();
                 for (target_sample, draft_sample) in zip(samples, draft_samples) {

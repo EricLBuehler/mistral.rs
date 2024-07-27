@@ -15,15 +15,15 @@ use indexmap::IndexMap;
 #[cfg(feature = "plotly")]
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
-use rand_isaac::Isaac64Rng;
+use tokenizers::Tokenizer;
 use tracing::{info, warn};
 
 use crate::{
+    aici::bintokens::build_tok_trie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
-    sampler::Sampler,
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceSamplingMetadata},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
@@ -248,10 +248,9 @@ impl Pipeline for AnyMoePipeline {
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         get_mut_arcmutex!(self.target)
-            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .sample(seqs, logits, prefix_cacher, disable_eos_stop)
             .await
     }
 
@@ -352,8 +351,16 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler =
-            Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0, 0.0);
+
+        let sampling_metadata = SequenceSamplingMetadata {
+            topp: Tensor::new(&[-1f32], &self.device()).unwrap(),
+            topk: Tensor::new(&[0.0f32], &self.device()).unwrap(),
+            minp: Tensor::new(&[0.0f32], &self.device()).unwrap(),
+            freq_penalty: Tensor::new(&[0.0f32], &self.device()).unwrap(),
+            presence_penalty: Tensor::new(&[0.0f32], &self.device()).unwrap(),
+            temperature: Tensor::new(&[1.0f32], &self.device()).unwrap(),
+            tokenizer: self.tokenizer().clone(),
+        };
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
@@ -422,9 +429,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     seqs.push(new_dummy_seq(
                         tokens,
                         dummy_sender.clone(),
-                        dummy_sampler.clone(),
+                        sampling_metadata.clone(),
                         dummy_group.clone(),
                         images,
+                        &self.tokenizer(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -536,9 +544,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 fn new_dummy_seq(
     tokens: Vec<u32>,
     dummy_sender: tokio::sync::mpsc::Sender<Response>,
-    dummy_sampler: Sampler,
+    dummy_sampling_metadata: SequenceSamplingMetadata,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    tokenizer: &Tokenizer,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -546,7 +555,7 @@ fn new_dummy_seq(
         0,
         1,
         dummy_sender,
-        dummy_sampler,
+        dummy_sampling_metadata,
         vec![],
         vec![],
         None,
@@ -561,5 +570,6 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
+        build_tok_trie((*tokenizer).clone()),
     )
 }

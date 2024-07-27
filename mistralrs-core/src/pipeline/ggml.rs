@@ -33,7 +33,6 @@ use anyhow::Result;
 use candle_core::quantized::{ggml_file, GgmlDType};
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
 use std::path::PathBuf;
@@ -519,9 +518,8 @@ impl Pipeline for GGMLPipeline {
         logits: Tensor,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text

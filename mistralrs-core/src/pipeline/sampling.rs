@@ -1,13 +1,9 @@
-use std::sync::Arc;
-
-use candle_core::{DType, Device, Result, Tensor};
-use rand_isaac::Isaac64Rng;
+use candle_core::{IndexOp, Result, Tensor};
 
 use crate::{
-    aici::toktree::TokTrie,
     get_bias_if_not_allowed,
     prefix_cacher::PrefixCacheManager,
-    sampler::Logprobs,
+    sampler::{Logprobs, NewSampler, SamplingMetadata},
     sequence::{Sequence, SequenceRecognizer},
 };
 
@@ -217,41 +213,174 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     Ok(())
 }
 
+fn prepare_sampling_metadata<'a>(
+    seqs: impl Iterator<Item = &'a Sequence>,
+) -> Result<SamplingMetadata<'a>> {
+    let mut topp_per_seq = Vec::new();
+    let mut topk_per_seq = Vec::new();
+    let mut minp_per_seq = Vec::new();
+    let mut completion_toks_per_seq = Vec::new();
+    let mut pres_penalty_per_seq = Vec::new();
+    let mut freq_penalty_per_seq = Vec::new();
+    let mut temperatures = Vec::new();
+    let mut tokenizers = Vec::new();
+    for seq in seqs {
+        let completion_toks = &seq.get_toks()[seq.prompt_tokens()..];
+        topp_per_seq.push(&seq.sampling_metadata().topp);
+        topk_per_seq.push(&seq.sampling_metadata().topk);
+        minp_per_seq.push(&seq.sampling_metadata().minp);
+        pres_penalty_per_seq.push(&seq.sampling_metadata().presence_penalty);
+        freq_penalty_per_seq.push(&seq.sampling_metadata().freq_penalty);
+        completion_toks_per_seq.push(Tensor::new(
+            completion_toks,
+            seq.sampling_metadata().topp.device(),
+        )?);
+        temperatures.push(&seq.sampling_metadata().temperature);
+        tokenizers.push(&*seq.sampling_metadata().tokenizer);
+    }
+    let sampling_metadata = SamplingMetadata {
+        output_tokens_tensor: Tensor::stack(&completion_toks_per_seq, 0)?,
+        presence_penalties: Tensor::stack(&pres_penalty_per_seq, 0)?,
+        freq_penalties: Tensor::stack(&freq_penalty_per_seq, 0)?,
+        topk: Tensor::stack(&topk_per_seq, 0)?,
+        topp: Tensor::stack(&topp_per_seq, 0)?,
+        minp: Tensor::stack(&minp_per_seq, 0)?,
+        temperature: Tensor::stack(&temperatures, 0)?,
+        tokenizers,
+    };
+    Ok(sampling_metadata)
+}
+
+pub fn sample_sequences(
+    seqs: &mut [&mut Sequence],
+    logits: Tensor,
+    add_to_trie: bool,
+) -> Result<Vec<Logprobs>> {
+    let seqs_len = seqs.len();
+    #[allow(clippy::cast_possible_truncation)]
+    let seqs_with_grammar = seqs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, seq)| {
+            if matches!(seq.recognizer, SequenceRecognizer::None) {
+                None
+            } else {
+                Some(i as u32)
+            }
+        })
+        .collect::<Vec<_>>();
+    #[allow(clippy::cast_possible_truncation)]
+    let seqs_without_grammar = (0..seqs.len())
+        .filter(|i| !seqs_with_grammar.contains(&(*i as u32)))
+        .map(|x| x as u32)
+        .collect::<Vec<_>>();
+
+    let logits_without_grammar = if seqs_without_grammar.len() == seqs_len {
+        let seqs_without_grammar_t = Tensor::from_slice(
+            &seqs_without_grammar,
+            (seqs_without_grammar.len(),),
+            logits.device(),
+        )?;
+        logits.gather(
+            &seqs_without_grammar_t
+                .reshape(((), 1, 1))?
+                .repeat((1, logits.dims()[1], logits.dims()[2]))?
+                .contiguous()?,
+            0,
+        )?
+    } else {
+        logits.clone()
+    };
+
+    let mut all_sampling_results = vec![None; seqs_len];
+
+    // Handle case with no grammar first
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        let metadata = prepare_sampling_metadata(
+            seqs.iter()
+                .enumerate()
+                .filter(|(i, _)| seqs_without_grammar.contains(&(*i as u32)))
+                .map(|(_, x)| &**x),
+        )?;
+        let sampled = NewSampler.sample_on_gpu(logits_without_grammar, metadata)?;
+        for (id, sampled) in seqs_without_grammar.into_iter().zip(sampled) {
+            all_sampling_results[id as usize] = Some(sampled);
+        }
+    }
+
+    // Grammars must be processed sequentially
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        for (i, seq) in seqs
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| seqs_with_grammar.contains(&(*i as u32)))
+        {
+            let logits = logits.i(i)?.unsqueeze(0)?;
+            let first_sampled_response = NewSampler.sample_on_gpu(
+                logits.clone(),
+                prepare_sampling_metadata(std::iter::once(&**seq))?,
+            )?[0]
+                .clone();
+            let tok_trie = &seq.tok_trie;
+
+            let bias_if_not_allowed = match &mut seq.recognizer {
+                SequenceRecognizer::Regex(ref mut rx) => {
+                    get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_sampled_response.token)
+                }
+                SequenceRecognizer::Cfg(ref mut cfg) => {
+                    get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_sampled_response.token)
+                }
+                SequenceRecognizer::None => None,
+            };
+            let second_logprobs_response = match bias_if_not_allowed {
+                Some(token_set) => {
+                    let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
+                    token_set.apply_to(&mut acc);
+                    let new_logits = (&logits + Tensor::new(acc, logits.device())?)?;
+
+                    NewSampler.sample_on_gpu(
+                        new_logits,
+                        prepare_sampling_metadata(std::iter::once(&**seq))?,
+                    )?[0]
+                        .clone()
+                }
+                None => first_sampled_response,
+            };
+
+            if add_to_trie {
+                match seq.recognizer {
+                    SequenceRecognizer::Regex(ref mut rx) => {
+                        tok_trie
+                            .append_token(rx.as_mut(), second_logprobs_response.token)
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    }
+                    SequenceRecognizer::Cfg(ref mut cfg) => {
+                        tok_trie
+                            .append_token(cfg.as_mut(), second_logprobs_response.token)
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    }
+                    SequenceRecognizer::None => {}
+                }
+            }
+        }
+    }
+    Ok(all_sampling_results
+        .into_iter()
+        .map(|x| x.expect("Somehow a sequence did not get a corresponding sampled output."))
+        .collect::<Vec<_>>())
+}
+
 pub async fn sample_and_add_toks(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],
     logits: Tensor,
     prefix_cacher: &mut PrefixCacheManager,
     disable_eos_stop: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
-    let seqs_len = seqs.len();
-    let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
-    debug_assert_eq!(logits_seq.len(), seqs_len);
-
-    let use_async_pool = seqs_len > 1;
-
-    let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
-        .map(|(logits_per_seq, seq)| {
-            let return_logprobs = seq.return_logprobs();
-            sample_sequence(
-                logits_per_seq,
-                seq,
-                return_logprobs,
-                this.get_metadata().repeat_last_n,
-                this.get_metadata().tok_trie.clone(),
-                rng.clone(),
-                use_async_pool,
-                true, // Append result to trie
-                false,
-            )
-        })
-        .collect();
-    let sampled_vec = futures::future::join_all(sampling_futures).await;
-
-    for (sampled, seq) in std::iter::zip(sampled_vec, seqs.iter_mut()) {
-        let next_token = crate::handle_seq_error_stateaware_ok!(sampled, seq);
-
+    for (next_token, seq) in std::iter::zip(sample_sequences(seqs, logits, true)?, seqs.iter_mut())
+    {
         let metadata = this.get_metadata();
         let eos_tok = if disable_eos_stop {
             None
@@ -265,137 +394,21 @@ pub async fn sample_and_add_toks(
     Ok(())
 }
 
-/// Async sample optionally adding to trie.
-#[allow(clippy::too_many_arguments)]
-pub async fn sample_sequence(
-    logits: Tensor,
-    seq: &mut Sequence,
-    return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc<TokTrie>,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    use_async_pool: bool,
-    add_to_trie: bool,
-    sample_speculative: bool,
-) -> Result<Logprobs> {
-    let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-    let start_at = seq.get_toks().len().saturating_sub(repeat_last_n);
-
-    let sampler = seq.sampler();
-    let ctx_clone = seq.get_toks()[start_at..].to_vec();
-    let rng_clone = rng.clone();
-    let logits_clone = logits.clone();
-    let first_lobprobs_response = if use_async_pool {
-        tokio_rayon::spawn(move || {
-            sampler.sample(
-                logits_clone,
-                Some(&ctx_clone),
-                return_logprobs,
-                rng_clone,
-                sample_speculative,
-            )
-        })
-        .await?
-    } else {
-        sampler.sample(
-            logits_clone,
-            Some(&ctx_clone),
-            return_logprobs,
-            rng_clone,
-            sample_speculative,
-        )?
-    };
-
-    let bias_if_not_allowed = match &mut seq.recognizer {
-        SequenceRecognizer::Regex(ref mut rx) => {
-            get_bias_if_not_allowed!(tok_trie, rx.as_mut(), first_lobprobs_response.token)
-        }
-        SequenceRecognizer::Cfg(ref mut cfg) => {
-            get_bias_if_not_allowed!(tok_trie, cfg.as_mut(), first_lobprobs_response.token)
-        }
-        SequenceRecognizer::None => None,
-    };
-    let second_logprobs_response = match bias_if_not_allowed {
-        Some(token_set) => {
-            let mut acc = vec![-f32::INFINITY; tok_trie.vocab_size()];
-            token_set.apply_to(&mut acc);
-            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
-
-            let ctx_clone = seq.get_toks()[start_at..].to_vec();
-            let rng_clone = rng.clone();
-            let sampler = seq.sampler();
-            if use_async_pool {
-                tokio_rayon::spawn(move || {
-                    sampler.sample(
-                        new_logits,
-                        Some(&ctx_clone),
-                        return_logprobs,
-                        rng_clone,
-                        sample_speculative,
-                    )
-                })
-                .await?
-            } else {
-                sampler.sample(
-                    new_logits,
-                    Some(&ctx_clone),
-                    return_logprobs,
-                    rng_clone,
-                    sample_speculative,
-                )?
-            }
-        }
-        None => first_lobprobs_response,
-    };
-
-    if add_to_trie {
-        match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                tok_trie
-                    .append_token(rx.as_mut(), second_logprobs_response.token)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                tok_trie
-                    .append_token(cfg.as_mut(), second_logprobs_response.token)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-            }
-            SequenceRecognizer::None => {}
-        }
-    }
-    Ok(second_logprobs_response)
-}
-
 #[derive(Clone)]
 pub struct SpeculativeSample {
     pub sample: Logprobs,
 }
 
-/// Async sample without modifying sequence.
-pub async fn sample_target_sequence_speculative(
+/// Sample without modifying sequence.
+pub fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
-    return_logprobs: bool,
-    repeat_last_n: usize,
-    tok_trie: Arc<TokTrie>,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     n_toks: usize,
 ) -> Result<Vec<SpeculativeSample>> {
     let mut sampled = Vec::new();
     for chunk in logits.chunk(n_toks, 1)? {
         sampled.push(SpeculativeSample {
-            sample: sample_sequence(
-                chunk,
-                seq,
-                return_logprobs,
-                repeat_last_n,
-                tok_trie.clone(),
-                rng.clone(),
-                true,  // TODO(EricLBuehler): does this hurt perf?
-                false, // Do not append to trie (yet)
-                true,
-            )
-            .await?,
+            sample: sample_sequences(&mut [seq], chunk, false)?[0].clone(),
         });
     }
     Ok(sampled)

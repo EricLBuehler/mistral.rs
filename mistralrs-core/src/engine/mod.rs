@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -9,7 +8,7 @@ use std::{
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    aici::{bintokens::build_tok_trie, cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
         CacheInstruction,
@@ -17,11 +16,10 @@ use crate::{
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::SequenceSamplingMetadata,
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
-use candle_core::{Device, Result, Tensor};
-use rand::SeedableRng;
-use rand_isaac::Isaac64Rng;
+use candle_core::Tensor;
 use tracing::{info, warn};
 
 use crate::{
@@ -30,12 +28,10 @@ use crate::{
     prefix_cacher::PrefixCacheManager,
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
-    sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState},
     Constraint, StopTokens,
 };
 
-const SEED: u64 = 0;
 /// Terminate all sequences on the next scheduling step. Be sure to reset this.
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 
@@ -96,7 +92,6 @@ impl Engine {
     }
 
     pub async fn run(&mut self) {
-        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
@@ -149,7 +144,6 @@ impl Engine {
                                     false,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
-                                    rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
                                 )
                                 .await
@@ -204,7 +198,6 @@ impl Engine {
                                     true,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
-                                    rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
                                         pre_op: CacheInstruction::Reset {
                                             reset_non_granular: false,
@@ -338,7 +331,6 @@ impl Engine {
                                     is_prompt,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
-                                    rng.clone(),
                                     CacheBackendMetadata::PagedAttention {
                                         metadata,
                                         blocks_to_copy: output.blocks_to_copy,
@@ -428,26 +420,6 @@ impl Engine {
             Constraint::None => SequenceRecognizer::None,
         };
         Ok(recognizer)
-    }
-
-    fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
-        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
-        let vocab_size = tokenizer.get_vocab_size(true);
-
-        match logits_bias {
-            Some(bias) => {
-                let mut logits_bias = vec![0.0; vocab_size];
-                for (k, v) in bias {
-                    logits_bias[k as usize] = v;
-                }
-                Ok(Some(Tensor::from_vec(
-                    logits_bias,
-                    vocab_size,
-                    &Device::Cpu,
-                )?))
-            }
-            None => Ok(None),
-        }
     }
 
     async fn handle_request(&mut self, request: Request) {
@@ -644,32 +616,29 @@ impl Engine {
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
 
-        let logits_bias = match self.alloc_logits_bias(request.sampling_params.logits_bias) {
-            Ok(logits_bias) => logits_bias,
-            Err(err) => {
-                request
-                    .response
-                    .send(Response::ValidationError(
-                        format!("Failed creation of logits bias. {}", err).into(),
-                    ))
-                    .await
-                    .expect("Expected receiver.");
-                return;
-            }
+        let device = get_mut_arcmutex!(self.pipeline).device().clone();
+        #[allow(clippy::cast_precision_loss)]
+        let sampling_metadata = SequenceSamplingMetadata {
+            topp: Tensor::new(&[topp], &device).unwrap(),
+            topk: Tensor::new(&[topk as f32], &device).unwrap(),
+            minp: Tensor::new(&[minp], &device).unwrap(),
+            freq_penalty: Tensor::new(
+                &[request.sampling_params.frequency_penalty.unwrap_or(0.)],
+                &device,
+            )
+            .unwrap(),
+            presence_penalty: Tensor::new(
+                &[request.sampling_params.presence_penalty.unwrap_or(0.)],
+                &device,
+            )
+            .unwrap(),
+            temperature: Tensor::new(
+                &[request.sampling_params.temperature.unwrap_or(1.0)],
+                &device,
+            )
+            .unwrap(),
+            tokenizer: get_mut_arcmutex!(self.pipeline).tokenizer().clone(),
         };
-        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
-
-        let sampler = Sampler::new(
-            Some(request.sampling_params.temperature.unwrap_or(1.0)),
-            request.sampling_params.top_n_logprobs,
-            tokenizer,
-            request.sampling_params.frequency_penalty,
-            request.sampling_params.presence_penalty,
-            logits_bias,
-            topk,
-            topp,
-            minp,
-        );
 
         if request.sampling_params.n_choices == 0 {
             request
@@ -703,13 +672,15 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
+            let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
+            let tok_trie = build_tok_trie((*tokenizer).clone());
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
-                sampler.clone(),
+                sampling_metadata.clone(),
                 stop_toks.clone(),
                 stop_strings.clone(),
                 request.sampling_params.max_len,
@@ -733,6 +704,7 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
+                tok_trie,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
