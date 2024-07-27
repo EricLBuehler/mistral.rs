@@ -379,7 +379,6 @@ pub async fn sample_and_add_toks(
     prefix_cacher: &mut PrefixCacheManager,
     disable_eos_stop: bool,
 ) -> Result<()> {
-    println!("START");
     for (next_token, seq) in std::iter::zip(sample_sequences(seqs, logits, true)?, seqs.iter_mut())
     {
         let metadata = this.get_metadata();

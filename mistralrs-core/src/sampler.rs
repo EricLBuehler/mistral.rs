@@ -88,30 +88,33 @@ pub struct NewSampler;
 impl NewSampler {
     pub fn sample_on_gpu(
         &self,
-        logits: Tensor,
+        mut logits: Tensor,
         metadata: SamplingMetadata,
     ) -> Result<Vec<Logprobs>> {
-        let logits = logits.to_dtype(DType::F32)?.squeeze(1)?;
+        logits = logits.to_dtype(DType::F32)?.squeeze(1)?;
 
-        let logits = apply_penalties(
+        logits = apply_penalties(
             logits,
             &metadata.output_tokens_tensor,
             &metadata.presence_penalties,
             &metadata.freq_penalties,
         )?;
 
-        let logits = logits.broadcast_div(&metadata.temperature.to_dtype(DType::F32)?)?;
+        logits = logits.broadcast_div(&metadata.temperature.to_dtype(DType::F32)?)?;
 
-        let logits = apply_topk_topp(&logits, &metadata.topp, &metadata.topk)?;
-        let logits = apply_minp(&logits, &metadata.minp)?;
+        logits = apply_topk_topp(logits, &metadata.topp, &metadata.topk)?;
+        logits = apply_minp(logits, &metadata.minp)?;
 
         let probs = candle_nn::ops::softmax_last_dim(&logits)?;
         let log_probs = probs.log()?;
 
-        let sampled = sample_gumbel(&logits)?;
+        let sampled = sample_gumbel(logits)?;
 
         let sampled_toks = sampled.to_vec1::<u32>()?;
-        let logprobs = log_probs.to_vec1::<f32>()?;
+        let gathered_logprobs = log_probs
+            .gather(&sampled.unsqueeze(D::Minus1)?, D::Minus1)?
+            .squeeze(D::Minus1)?;
+        let logprobs = gathered_logprobs.to_vec1::<f32>()?;
 
         let mut logprobs_collector = Vec::new();
         for (tok, (logprob, tokenizer)) in sampled_toks
@@ -139,7 +142,8 @@ fn get_bin_counts_and_mask(
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L179
     let bin_counts = Tensor::zeros((num_seqs, vocab_size + 1), DType::I64, tokens.device())?;
     let bin_counts = if !tokens.dims().contains(&0) {
-        bin_counts.scatter_add(tokens, &tokens.ones_like()?, 1)?
+        let tokens = tokens.to_dtype(DType::I64)?;
+        bin_counts.scatter_add(&tokens, &tokens.ones_like()?, 1)?
     } else {
         bin_counts
     };
@@ -164,58 +168,61 @@ fn apply_penalties(
     Ok(logits)
 }
 
-fn apply_topk_topp(logits: &Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
+fn apply_topk_topp(logits: Tensor, p: &Tensor, k: &Tensor) -> Result<Tensor> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L266
-    let (logits_sort, logits_idx) = logits.to_device(&Device::Cpu)?.sort_last_dim(true)?;
+    let (mut logits_sort, logits_idx) = logits.to_device(&Device::Cpu)?.sort_last_dim(true)?;
     // TODO(EricLBuehler): Can we avoid this GPU <> CPU sync? This is the big one.
-    let logits_sort = logits_sort.to_device(logits.device())?;
-    let logits_idx = logits_idx.to_device(logits.device())?;
 
     // Apply topk
-    let topk_mask =
-        (k.to_dtype(DType::F32)?.neg()? + logits_sort.dim(1)? as f64)?.to_dtype(DType::U32)?;
+    let mut topk_mask = (k.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.neg()?
+        + logits_sort.dim(1)? as f64)?
+        .to_dtype(DType::U32)?;
     // Get all topk values
-    let topk_mask = logits_sort.gather(&topk_mask, 1)?;
-    let topk_mask = logits_sort.broadcast_lt(&topk_mask)?;
-    let logits_sort = masked_fill(&logits_sort, &topk_mask, f64::NEG_INFINITY)?;
+    topk_mask = logits_sort.gather(&topk_mask, 1)?;
+    topk_mask = logits_sort.broadcast_lt(&topk_mask)?;
+    logits_sort = masked_fill(&logits_sort, &topk_mask, f64::NEG_INFINITY)?;
 
     // Apply topp
     let probs_sort = candle_nn::ops::softmax_last_dim(&logits_sort)?;
     let probs_sum = probs_sort.cumsum(D::Minus1)?;
-    let topp_mask = probs_sum.broadcast_le(&(p.unsqueeze(1)?.neg()? + 1f64)?)?;
+    let mut topp_mask = probs_sum
+        .broadcast_le(&(p.to_dtype(DType::F32)?.to_device(&Device::Cpu)?.neg()? + 1f64)?)?;
     // At least one
     // Equivalent of Pytorch `topp_mask[:, -1] = False`
-    let topp_mask = topp_mask.slice_assign(
-        &[&.., &(topk_mask.dim(1)? - 1..)],
+    topp_mask = topp_mask.slice_assign(
+        &[&.., &(topp_mask.dim(1)? - 1..)],
         &Tensor::zeros(
-            (topk_mask.dim(0)?, 1),
+            (topp_mask.dim(0)?, 1),
             topp_mask.dtype(),
             topp_mask.device(),
         )?,
     )?;
-    let logits_sort = masked_fill(&logits_sort, &topp_mask, f64::NEG_INFINITY)?;
+    logits_sort = masked_fill(&logits_sort, &topp_mask, f64::NEG_INFINITY)?;
 
     // Resort the probs
-    let src = Tensor::arange(0, logits_idx.dim(D::Minus1)? as u32, logits_idx.device())?;
+    let src = Tensor::arange(0, logits_idx.dim(D::Minus1)? as u32, logits_idx.device())?
+        .expand(logits_idx.shape())?;
     let logits_idx_inv = logits_idx
         .zeros_like()?
         .scatter_add(&logits_idx, &src, D::Minus1)?;
 
-    logits_sort.gather(&logits_idx_inv, D::Minus1)
+    logits_sort
+        .gather(&logits_idx_inv, D::Minus1)?
+        .to_device(logits.device())
 }
 
-fn apply_minp(logits: &Tensor, minp: &Tensor) -> Result<Tensor> {
+fn apply_minp(logits: Tensor, minp: &Tensor) -> Result<Tensor> {
     // https://github.com/vllm-project/vllm/blob/740374d456a638df98ffbc7d9dab328752330e62/vllm/model_executor/layers/sampler.py#L298
-    let probs = candle_nn::ops::softmax_last_dim(logits)?;
+    let probs = candle_nn::ops::softmax_last_dim(&logits)?;
     let top_probs = probs.max_keepdim(D::Minus1)?;
-    let scaled_minp = (minp.unsqueeze(1)? * top_probs)?;
-    let toks_to_remove = probs.lt(&scaled_minp)?;
-    masked_fill(logits, &toks_to_remove, f64::NEG_INFINITY)
+    let scaled_minp = minp.to_dtype(DType::F32)?.broadcast_mul(&top_probs)?;
+    let toks_to_remove = probs.broadcast_lt(&scaled_minp)?;
+    masked_fill(&logits, &toks_to_remove, f64::NEG_INFINITY)
 }
 
 // (bs, vocab) -> (bs)
 /// Approximation of multinomial
-fn sample_gumbel(probs: &Tensor) -> Result<Tensor> {
+fn sample_gumbel(probs: Tensor) -> Result<Tensor> {
     // https://github.com/lucidrains/speculative-decoding/blob/main/speculative_decoding/speculative_decoding.py#L36
     let uniform_dist = Tensor::rand(0f32, 1f32, probs.shape(), probs.device())?;
     let gumbel_noise = uniform_dist.log()?.neg()?.log()?.neg()?;
