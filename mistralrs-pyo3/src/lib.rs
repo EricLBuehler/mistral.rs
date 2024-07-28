@@ -300,6 +300,8 @@ impl Runner {
         in_situ_quant = None,
         anymoe_config = None,
         pa_gpu_mem = None,
+        pa_gpu_mem_usage = None,
+        pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
     ))]
@@ -315,7 +317,9 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<MemoryGpuConfig>,
+        pa_gpu_mem: Option<usize>,
+        pa_gpu_mem_usage: Option<f32>,
+        pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
     ) -> PyResult<Self> {
@@ -428,22 +432,44 @@ impl Runner {
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        let cache_config = match (
-            pa_blk_size,
-            pa_gpu_mem,
-            paged_attn_supported(),
-            no_paged_attn,
-        ) {
-            (block_size, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                512,
-                MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
-            )?),
-            (block_size, Some(either), true, false) => {
-                Some(PagedAttentionConfig::new(block_size, 512, either)?)
-            }
-            (_, _, _, _) => None,
-        };
+        let cache_config =
+            match (
+                pa_blk_size,
+                pa_gpu_mem,
+                pa_gpu_mem_usage,
+                pa_ctxt_len,
+                paged_attn_supported(),
+                no_paged_attn,
+            ) {
+                (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                )?),
+                (block_size, None, None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(f),
+                )?),
+                (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Amount(m),
+                )?),
+                (block_size, Some(_m), Some(f), None, true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (block_size, Some(_m), None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), Some(_ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (_, _, _, _, _, _) => None,
+            };
 
         let pipeline = loader
             .load_model_from_hf(
