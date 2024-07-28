@@ -110,13 +110,13 @@ pub fn calculate_cache_config(
             let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
             let used = total - free;
             let size = (total * f - used) as usize;
-            info!("Allocating {size} MB for PagedAttention KV cache");
             size
         }
         MemoryGpuConfig::ContextSize(toks) => {
             ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
         }
     };
+    info!("Allocating {mem_gpu} MB for PagedAttention KV cache");
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
