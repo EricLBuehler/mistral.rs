@@ -136,7 +136,7 @@ impl DrySamplingParamsInner {
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?
                     .into_iter()
-                    .filter_map(|x| x)
+                    .flatten()
                     .collect::<Vec<_>>(),
             ),
             multiplier: other.multiplier,
