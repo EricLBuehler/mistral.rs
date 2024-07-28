@@ -105,6 +105,26 @@
 <a href="#105" id="105">105</a>
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
 </pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
@@ -123,7 +143,6 @@
 <span class="kw">pub use </span>cache_engine::{CacheConfig, CacheEngine};
 <span class="kw">use </span>candle_core::{DType, Device};
 <span class="kw">pub use </span>config::{ModelConfigLike, ModelConfigMetadata};
-<span class="kw">use </span>either::Either;
 <span class="kw">pub use </span>layers::PagedAttention;
 <span class="kw">pub use </span>scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -137,14 +156,14 @@
 </span><span class="kw">pub struct </span>PagedAttentionConfig {
     <span class="kw">pub</span>(<span class="kw">crate</span>) block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) mem_cpu: usize,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) mem_gpu: Either&lt;usize, f32&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) mem_gpu: MemoryGpuConfig,
 }
 
 <span class="kw">impl </span>PagedAttentionConfig {
     <span class="kw">pub fn </span>new(
         _block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         _mem_cpu: usize,
-        _mem_gpu: Either&lt;usize, f32&gt;,
+        _mem_gpu: MemoryGpuConfig,
     ) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
         <span class="macro">anyhow::bail!</span>(<span class="string">"PagedAttention is only supported for CUDA, compile with feature `cuda`."</span>)
     }
@@ -153,6 +172,14 @@
 <span class="kw">pub enum </span>AttentionImplementation {
     Eager,
     PagedAttention,
+}
+
+<span class="attr">#[derive(Clone, Copy)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass)]
+</span><span class="kw">pub enum </span>MemoryGpuConfig {
+    Amount(usize),
+    Utilization(f32),
+    ContextSize(usize),
 }
 
 <span class="comment">// See `pagedattention.cu` CALL_V1_LAUNCHER_BLOCK_SIZE
@@ -172,9 +199,20 @@
     </span>};
 }
 
+<span class="macro">macro_rules!</span> ctxt_to_blocks {
+    (<span class="macro-nonterminal">$context_len</span>:expr, <span class="macro-nonterminal">$dtype_size</span>:expr, <span class="macro-nonterminal">$block_size</span>:expr, <span class="macro-nonterminal">$config</span>:expr) =&gt; {
+        <span class="macro-nonterminal">$context_len
+            </span>* <span class="macro-nonterminal">$dtype_size
+            </span>* <span class="macro-nonterminal">$config</span>.num_kv_heads()
+            * (<span class="macro-nonterminal">$config</span>.hidden_size() / <span class="macro-nonterminal">$config</span>.num_attn_heads())
+            * <span class="macro-nonterminal">$config</span>.num_layers()
+            * <span class="number">2
+    </span>};
+}
+
 <span class="doccomment">/// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 </span><span class="kw">pub fn </span>calculate_cache_config(
-    mem_gpu: Either&lt;usize, f32&gt;,
+    mem_gpu: MemoryGpuConfig,
     mem_cpu: usize,
     block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     dtype: DType,
@@ -189,16 +227,18 @@
 
     <span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     </span><span class="kw">let </span>mem_gpu = <span class="kw">match </span>mem_gpu {
-        Either::Left(v) =&gt; v,
-        Either::Right(f) =&gt; {
+        MemoryGpuConfig::Amount(v) =&gt; v,
+        MemoryGpuConfig::Utilization(f) =&gt; {
             <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
             <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
             <span class="kw">let </span>used = total - free;
-            <span class="kw">let </span>size = (total * f - used) <span class="kw">as </span>usize;
-            <span class="macro">info!</span>(<span class="string">"Allocating {size} MB for PagedAttention KV cache"</span>);
-            size
+            (total * f - used) <span class="kw">as </span>usize
+        }
+        MemoryGpuConfig::ContextSize(toks) =&gt; {
+            <span class="macro">ctxt_to_blocks!</span>(toks, dtype_size, block_size, config) / SIZE_IN_MB
         }
     };
+    <span class="macro">info!</span>(<span class="string">"Allocating {mem_gpu} MB for PagedAttention KV cache"</span>);
 
     <span class="kw">let </span>num_gpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     <span class="kw">let </span>num_cpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
