@@ -118,16 +118,17 @@ pub mod text_models_inputs_processor {
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
         let mut slot_mappings = Vec::new();
+        dbg!(&chunk_offset_toks);
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let offset = last_n_context_len.unwrap_or_default();
-            seqlen_offsets.push(offset.1);
+            seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
+            position_ids.push(ctxt.len() + chunk_offset_toks + 1);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
             context_lens.push((
                 seq.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 last_n_context_len.map(|(a, _)| a).unwrap_or(1),
             ));
-            position_ids.push(seq.len());
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
@@ -180,6 +181,7 @@ pub mod text_models_inputs_processor {
                 slot_mappings.push(slot_mapping);
             }
         }
+        dbg!(&seqlen_offsets);
 
         let mut tmp = Vec::new();
         if last_n_context_len.is_some() {
@@ -363,7 +365,7 @@ pub mod text_models_inputs_processor {
         })
     }
 
-    pub(crate) fn get_prompt_input<T: WithDType>(
+    pub(crate) fn get_prompt_input<T: WithDType+std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
@@ -371,6 +373,8 @@ pub mod text_models_inputs_processor {
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
+        dbg!(&toks);
+        let token_batchsize = Some(4);
         if let Some(token_batchsize) = token_batchsize {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();
@@ -394,6 +398,7 @@ pub mod text_models_inputs_processor {
                 .enumerate()
                 .map(|(i, chunk)| {
                     let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
+                    dbg!(&toks);
                     make_prompt_chunk(
                         i * token_batchsize,
                         toks,
@@ -420,7 +425,7 @@ pub mod text_models_inputs_processor {
         }
     }
 
-    pub(crate) fn get_completion_input<T: WithDType>(
+    pub(crate) fn get_completion_input<T: WithDType+std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
