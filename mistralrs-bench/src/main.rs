@@ -1,12 +1,11 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
-use either::Either;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -389,22 +388,24 @@ fn main() -> anyhow::Result<()> {
         (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
         )?),
-        (block_size, Some(m), None, true, false) => {
-            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
-        }
+        (block_size, Some(m), None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Amount(m),
+        )?),
         (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(f),
+            MemoryGpuConfig::Utilization(f),
         )?),
         (block_size, Some(_m), Some(f), true, false) => {
             info!("Both memory size and usage were specified, defaulting to the usage value.");
             Some(PagedAttentionConfig::new(
                 block_size,
                 512,
-                Either::Right(f),
+                MemoryGpuConfig::Utilization(f),
             )?)
         }
         (_, _, _, _, _) => None,

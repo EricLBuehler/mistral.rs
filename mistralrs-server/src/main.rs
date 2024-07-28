@@ -7,12 +7,11 @@ use axum::{
 };
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
-use either::Either;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
-    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
-    TokenSource,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
+    SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -357,22 +356,24 @@ async fn main() -> Result<()> {
         (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
         )?),
-        (block_size, Some(m), None, true, false) => {
-            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
-        }
+        (block_size, Some(m), None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Amount(m),
+        )?),
         (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(f),
+            MemoryGpuConfig::Utilization(f),
         )?),
         (block_size, Some(_m), Some(f), true, false) => {
             info!("Both memory size and usage were specified, defaulting to the usage value.");
             Some(PagedAttentionConfig::new(
                 block_size,
                 512,
-                Either::Right(f),
+                MemoryGpuConfig::Utilization(f),
             )?)
         }
         (_, _, _, _, _) => None,

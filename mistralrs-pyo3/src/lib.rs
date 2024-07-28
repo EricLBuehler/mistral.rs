@@ -21,10 +21,10 @@ use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
     CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader, MistralRs,
-    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request as _Request, RequestMessage, Response, SamplingParams,
-    SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
@@ -315,7 +315,7 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<Either<usize, f32>>,
+        pa_gpu_mem: Option<MemoryGpuConfig>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
     ) -> PyResult<Self> {
@@ -437,7 +437,7 @@ impl Runner {
             (block_size, None, true, false) => Some(PagedAttentionConfig::new(
                 block_size,
                 512,
-                Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
             )?),
             (block_size, Some(either), true, false) => {
                 Some(PagedAttentionConfig::new(block_size, 512, either)?)
