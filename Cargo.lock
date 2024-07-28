@@ -2319,7 +2319,6 @@ dependencies = [
  "candle-core",
  "clap",
  "cli-table",
- "either",
  "mistralrs-core",
  "serde",
  "serde_json",

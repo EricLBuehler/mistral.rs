@@ -59,7 +59,7 @@ mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
-pub use paged_attention::PagedAttentionConfig;
+pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GemmaLoader,

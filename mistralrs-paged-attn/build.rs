@@ -5,31 +5,28 @@ const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn main() -> Result<()> {
-    use std::fs;
-    use std::fs::read_to_string;
     use std::fs::OpenOptions;
     use std::io::prelude::*;
     use std::path::PathBuf;
 
     const OTHER_CONTENT: &str = r#"
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-mod ffi;
+pub const COPY_BLOCKS_KERNEL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/copy_blocks_kernel.ptx"));
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub const PAGEDATTENTION: &str = include_str!(concat!(env!("OUT_DIR"), "/pagedattention.ptx"));
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub const RESHAPE_AND_CACHE_KERNEL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/reshape_and_cache_kernel.ptx"));
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 mod backend;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+mod ffi;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}};
+pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     "#;
-
-    fn read_lines(filename: &str) -> Vec<String> {
-        let mut result = Vec::new();
-
-        for line in read_to_string(filename).unwrap().lines() {
-            result.push(line.to_string())
-        }
-
-        result
-    }
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/pagedattention.cu");
@@ -57,20 +54,11 @@ pub use backend::{{copy_blocks, paged_attention, reshape_and_cache, swap_blocks}
     println!("cargo:rustc-link-lib=pagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
-    let contents = read_lines("src/lib.rs");
-    for line in contents {
-        if line == "pub mod ffi;" {
-            return Ok(());
-        }
-    }
-    let ct = fs::read_to_string("src/lib.rs")?;
-    if !ct.contains(OTHER_CONTENT) {
-        let mut file = OpenOptions::new().append(true).open("src/lib.rs").unwrap();
+    let mut file = OpenOptions::new().write(true).open("src/lib.rs").unwrap();
 
-        // Add the other stuff back
-        if let Err(e) = writeln!(file, "{OTHER_CONTENT}") {
-            anyhow::bail!("Error while building dependencies: {:?}\n", e)
-        }
+    // Add the other stuff back
+    if let Err(e) = writeln!(file, "{OTHER_CONTENT}") {
+        anyhow::bail!("Error while building dependencies: {:?}\n", e)
     }
     Ok(())
 }
