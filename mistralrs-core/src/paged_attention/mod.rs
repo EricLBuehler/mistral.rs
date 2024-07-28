@@ -109,8 +109,7 @@ pub fn calculate_cache_config(
             let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
             let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
             let used = total - free;
-            let size = (total * f - used) as usize;
-            size
+            (total * f - used) as usize
         }
         MemoryGpuConfig::ContextSize(toks) => {
             ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
