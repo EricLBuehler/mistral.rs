@@ -101,7 +101,7 @@ pub mod text_models_inputs_processor {
     fn make_prompt_chunk<T: WithDType>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
-        input_seqs: &[&mut Sequence],
+        input_seqs: &[&Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
@@ -368,17 +368,56 @@ pub mod text_models_inputs_processor {
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
-        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
-        Box::new(std::iter::once(make_prompt_chunk(
-            0,
-            toks,
-            input_seqs,
-            device,
-            last_n_context_len,
-            paged_attn_metadata,
-        )))
+        if let Some(token_batchsize) = token_batchsize {
+            let mut seq_chunks = Vec::new();
+            let mut n_chunks = Vec::new();
+            // Pad each sequence by the padding token to the max len.
+            for ctxt in toks.iter() {
+                let chunks = ctxt.chunks(token_batchsize).collect::<Vec<_>>();
+                n_chunks.push(chunks.len());
+                seq_chunks.push(chunks);
+            }
+            let mut chunks_transposed: Vec<Vec<(Vec<T>, usize)>> = Vec::new();
+            for (seq_n, seq) in seq_chunks.into_iter().enumerate() {
+                for (i, chunk) in seq.into_iter().enumerate() {
+                    match chunks_transposed.get_mut(i) {
+                        Some(part) => part.push((chunk.to_vec(), seq_n)),
+                        None => chunks_transposed.push(vec![(chunk.to_vec(), seq_n)]),
+                    }
+                }
+            }
+            let chunks = chunks_transposed
+                .into_iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
+                    make_prompt_chunk(
+                        i * token_batchsize,
+                        toks,
+                        &seq_ns
+                            .into_iter()
+                            .map(|i| &*input_seqs[i])
+                            .collect::<Vec<_>>(),
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut().map(|x| &mut **x),
+                    )
+                })
+                .collect::<Vec<_>>();
+            Box::new(chunks.into_iter())
+        } else {
+            Box::new(std::iter::once(make_prompt_chunk(
+                0,
+                toks,
+                &input_seqs.into_iter().map(|s| &**s).collect::<Vec<_>>(),
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+            )))
+        }
     }
 
     pub(crate) fn get_completion_input<T: WithDType>(
