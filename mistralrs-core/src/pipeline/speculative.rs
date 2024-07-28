@@ -374,7 +374,6 @@ impl Pipeline for SpeculativePipeline {
                 // ======================= Run draft model gamma times producing tokens ============================
                 // ======================= Sample the `gamma` logits. ============================
                 let mut draft_samples = Vec::new();
-                let repeat_last_n = get_mut_arcmutex!(self.draft).get_metadata().repeat_last_n;
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
@@ -404,11 +403,6 @@ impl Pipeline for SpeculativePipeline {
                         logits.clone(),
                         seq,
                         seq.return_logprobs(),
-                        repeat_last_n,
-                        get_mut_arcmutex!(self.draft)
-                            .get_metadata()
-                            .tok_trie
-                            .clone(),
                         rng.clone(),
                         false, // todo tune
                         false, // do not add to tok trie yet
@@ -477,11 +471,6 @@ impl Pipeline for SpeculativePipeline {
                     logits.clone(),
                     seq,
                     seq.return_logprobs(),
-                    repeat_last_n,
-                    get_mut_arcmutex!(self.draft)
-                        .get_metadata()
-                        .tok_trie
-                        .clone(),
                     rng.clone(),
                     self.gamma,
                 )
@@ -585,11 +574,6 @@ impl Pipeline for SpeculativePipeline {
                     logits.clone(),
                     seq,
                     seq.return_logprobs(),
-                    repeat_last_n,
-                    get_mut_arcmutex!(self.draft)
-                        .get_metadata()
-                        .tok_trie
-                        .clone(),
                     rng.clone(),
                     false, // todo tune
                     true, // do not add to tok trie yet

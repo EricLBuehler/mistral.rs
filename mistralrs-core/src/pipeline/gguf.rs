@@ -81,7 +81,6 @@ pub struct GGUFPipeline {
 /// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -120,17 +119,10 @@ impl GGUFArchitecture {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-/// A config for a GGUF loader.
-pub struct GGUFSpecificConfig {
-    pub repeat_last_n: usize,
-}
-
 #[derive(Default)]
 /// A builder for a GGUF loader.
 pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -146,7 +138,6 @@ impl GGUFLoaderBuilder {
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
     pub fn new(
-        config: GGUFSpecificConfig,
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
@@ -157,7 +148,6 @@ impl GGUFLoaderBuilder {
         };
 
         Self {
-            config,
             chat_template,
             model_id: tok_model_id,
             kind,
@@ -216,7 +206,6 @@ impl GGUFLoaderBuilder {
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGUFLoader {
             model_id: self.model_id,
-            config: self.config,
             xlora_model_id: self.xlora_model_id,
             kind: self.kind,
             xlora_order: self.xlora_order,
@@ -233,7 +222,6 @@ impl GGUFLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: Option<String>,
-        config: GGUFSpecificConfig,
         quantized_model_id: String,
         quantized_filename: String,
         xlora_model_id: Option<String>,
@@ -256,7 +244,6 @@ impl GGUFLoader {
         };
         Self {
             model_id,
-            config,
             quantized_model_id,
             quantized_filename,
             xlora_model_id,
@@ -578,7 +565,6 @@ impl Loader for GGUFLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,

@@ -20,9 +20,13 @@ serde_json.workspace = true
 clap.workspace = true
 mistralrs-core = { version = "0.2.2", path = "../mistralrs-core" }
 tracing.workspace = true
-either.workspace = true
 tokio.workspace = true
 cli-table = "0.4.7"
 
 [features]
 cuda = ["mistralrs-core/cuda"]
+cudnn = ["mistralrs-core/cudnn"]
+metal = ["mistralrs-core/metal"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]

@@ -4,14 +4,10 @@ use serde::Deserialize;
 
 use crate::{
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig,
+    Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionSpecificConfig,
 };
-
-fn default_repeat_last_n() -> usize {
-    64
-}
 
 fn default_one() -> usize {
     1
@@ -263,10 +259,6 @@ pub struct TomlSelector {
     /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
     tokenizer_json: Option<String>,
 
-    /// Control the application of repeat penalty for the last n tokens
-    #[serde(default = "default_repeat_last_n")]
-    repeat_last_n: usize,
-
     /// Selected model
     model: TomlModelSelected,
 
@@ -283,7 +275,6 @@ struct TomlLoaderInnerParams {
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
-    repeat_last_n: usize,
 }
 
 pub struct TomlLoaderArgs {
@@ -318,10 +309,7 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: args.repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
@@ -335,10 +323,7 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: args.repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -360,10 +345,7 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: args.repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -381,9 +363,6 @@ fn loader_from_selected(
             quantized_model_id,
             quantized_filename,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-            },
             args.chat_template,
             Some(tok_model_id),
             quantized_model_id,
@@ -398,9 +377,6 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-            },
             args.chat_template,
             tok_model_id,
             quantized_model_id,
@@ -423,9 +399,6 @@ fn loader_from_selected(
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-            },
             args.chat_template,
             tok_model_id,
             quantized_model_id,
@@ -445,10 +418,7 @@ fn loader_from_selected(
             quantized_filename,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-                gqa,
-            },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             args.tokenizer_json,
             Some(tok_model_id),
@@ -465,10 +435,7 @@ fn loader_from_selected(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-                gqa,
-            },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -493,10 +460,7 @@ fn loader_from_selected(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: args.repeat_last_n,
-                gqa,
-            },
+            GGMLSpecificConfig { gqa },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -516,10 +480,7 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: args.repeat_last_n,
-            },
+            VisionSpecificConfig { use_flash_attn },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
@@ -538,7 +499,6 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
-            repeat_last_n: selector.repeat_last_n,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

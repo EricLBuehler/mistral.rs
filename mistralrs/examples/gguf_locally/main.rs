@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, GGUFLoaderBuilder,
-    GGUFSpecificConfig, MistralRs, MistralRsBuilder, ModelDType, NormalRequest, Request,
-    RequestMessage, Response, Result, SamplingParams, SchedulerConfig, TokenSource,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, GGUFLoaderBuilder, MistralRs,
+    MistralRsBuilder, ModelDType, NormalRequest, Request, RequestMessage, Response, Result,
+    SamplingParams, SchedulerConfig, TokenSource,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -27,7 +27,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // chat template from the specified file, and the tokenizer and model from a
     // local GGUF file at the path `.`
     let loader = GGUFLoaderBuilder::new(
-        GGUFSpecificConfig { repeat_last_n: 64 },
         Some("chat_templates/mistral.json".to_string()),
         None,
         ".".to_string(),
