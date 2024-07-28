@@ -2299,7 +2299,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2313,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2392,7 +2392,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "accelerate-src",
  "base64 0.22.1",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "candle-core",
  "image",

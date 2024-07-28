@@ -64,13 +64,13 @@ tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
 sysinfo = "0.30.12"
-mistralrs-vision = { version = "0.2.2", path = "../mistralrs-vision" }
+mistralrs-vision = { version = "0.2.3", path = "../mistralrs-vision" }
 csv = "1.3.0"
 reqwest.workspace = true
 base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
-mistralrs-paged-attn = { version = "0.2.2", path = "../mistralrs-paged-attn", optional = true }
+mistralrs-paged-attn = { version = "0.2.3", path = "../mistralrs-paged-attn", optional = true }
 
 [features]
 default = ["plotly"]
