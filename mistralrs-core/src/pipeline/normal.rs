@@ -89,7 +89,6 @@ pub struct NormalLoaderBuilder {
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
-    pub repeat_last_n: usize,
 }
 
 impl NormalLoaderBuilder {
@@ -355,7 +354,6 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,

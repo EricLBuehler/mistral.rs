@@ -10,8 +10,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
+    Constraint, Device, DeviceMapMetadata, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
     PagedAttentionConfig, Request, RequestMessage, Response, Result, SamplingParams,
     SchedulerConfig, TokenSource,
 };
@@ -33,7 +33,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = NormalLoaderBuilder::new(
         NormalSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,
@@ -52,7 +51,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         Some(PagedAttentionConfig::new(
             Some(32),
             1024,
-            Either::Right(0.9),
+            MemoryGpuConfig::Utilization(0.9),
         )?), // Automatically determine memory usage
     )?;
     let config = pipeline

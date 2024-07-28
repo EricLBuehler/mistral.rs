@@ -260,7 +260,7 @@ impl candle::CustomOp1 for PagedAttention {
 ///
 /// * `q` - Query tensor with shape `(num_sequences, num_heads_q, head_size)`.
 /// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads_kv, head_size / x, block_size, x)`
-/// with `x` being the size of an element in bytes.
+///   with `x` being the size of an element in bytes.
 /// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads_kv, head_size, block_size)`.
 /// * `block_tables` - Padded table associating blocks to each sequence of shape `(num_sequences, max_context_len // block_size)`
 /// * `context_lens` - Tensor associating lengths to each sequence of shape `(num_sequences)`
@@ -439,7 +439,7 @@ fn update_cache<
 /// * `key` - Key tensor of shape `(num_tokens, num_heads, head_size)`.
 /// * `value` - Value tensor of shape `(num_tokens, num_heads, head_size)`.
 /// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads, head_size / x, block_size, x)`
-/// with `x` being the size of an element in bytes.
+///   with `x` being the size of an element in bytes.
 /// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads, head_size, block_size)`.
 /// * `slot_mapping` - Mapping associating a slot to each token of shape `(num_tokens)`.
 pub fn reshape_and_cache(

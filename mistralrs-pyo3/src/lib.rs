@@ -21,11 +21,11 @@ use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
     CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -92,14 +92,10 @@ fn parse_which(
     Ok(match which {
         Which::Plain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -108,16 +104,12 @@ fn parse_which(
         Which::XLora {
             model_id,
             xlora_model_id,
-            repeat_last_n,
             order,
             tokenizer_json,
             tgt_non_granular_index,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -137,14 +129,10 @@ fn parse_which(
             model_id,
             tokenizer_json,
             adapters_model_id,
-            repeat_last_n,
             order,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -162,9 +150,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -175,12 +161,10 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -201,11 +185,9 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig { repeat_last_n },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -225,10 +207,9 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -241,13 +222,12 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -270,12 +250,11 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { repeat_last_n, gqa },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -293,14 +272,10 @@ fn parse_which(
         .build(),
         Which::VisionPlain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-            },
+            VisionSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -325,6 +300,8 @@ impl Runner {
         in_situ_quant = None,
         anymoe_config = None,
         pa_gpu_mem = None,
+        pa_gpu_mem_usage = None,
+        pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
     ))]
@@ -340,7 +317,9 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<Either<usize, f32>>,
+        pa_gpu_mem: Option<usize>,
+        pa_gpu_mem_usage: Option<f32>,
+        pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
     ) -> PyResult<Self> {
@@ -453,22 +432,44 @@ impl Runner {
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
         // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
-        let cache_config = match (
-            pa_blk_size,
-            pa_gpu_mem,
-            paged_attn_supported(),
-            no_paged_attn,
-        ) {
-            (block_size, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                512,
-                Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
-            )?),
-            (block_size, Some(either), true, false) => {
-                Some(PagedAttentionConfig::new(block_size, 512, either)?)
-            }
-            (_, _, _, _) => None,
-        };
+        let cache_config =
+            match (
+                pa_blk_size,
+                pa_gpu_mem,
+                pa_gpu_mem_usage,
+                pa_ctxt_len,
+                paged_attn_supported(),
+                no_paged_attn,
+            ) {
+                (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                )?),
+                (block_size, None, None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(f),
+                )?),
+                (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Amount(m),
+                )?),
+                (block_size, Some(_m), Some(f), None, true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (block_size, Some(_m), None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), Some(_ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (_, _, _, _, _, _) => None,
+            };
 
         let pipeline = loader
             .load_model_from_hf(

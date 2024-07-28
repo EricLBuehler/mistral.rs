@@ -57,14 +57,12 @@ pub enum Which {
     #[pyo3(constructor = (
         model_id,
         arch,
-        tokenizer_json = None,
-        repeat_last_n = 64
+        tokenizer_json = None
     ))]
     Plain {
         model_id: String,
         arch: Architecture,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
     },
 
     #[pyo3(constructor = (
@@ -73,7 +71,6 @@ pub enum Which {
         arch,
         model_id = None,
         tokenizer_json = None,
-        repeat_last_n = 64,
         tgt_non_granular_index = None
     ))]
     XLora {
@@ -82,7 +79,6 @@ pub enum Which {
         arch: Architecture,
         model_id: Option<String>,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -91,8 +87,7 @@ pub enum Which {
         order,
         arch,
         model_id = None,
-        tokenizer_json = None,
-        repeat_last_n = 64
+        tokenizer_json = None
     ))]
     Lora {
         adapters_model_id: String,
@@ -100,21 +95,18 @@ pub enum Which {
         arch: Architecture,
         model_id: Option<String>,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
     },
 
     #[pyo3(constructor = (
         quantized_model_id,
         quantized_filename,
         tok_model_id = None,
-        repeat_last_n = 64
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
         quantized_model_id: String,
         quantized_filename: String,
         tok_model_id: Option<String>,
-        repeat_last_n: usize,
     },
 
     #[pyo3(constructor = (
@@ -123,7 +115,6 @@ pub enum Which {
         xlora_model_id,
         order,
         tok_model_id = None,
-        repeat_last_n = 64,
         tgt_non_granular_index = None,
     ))]
     XLoraGGUF {
@@ -132,7 +123,6 @@ pub enum Which {
         xlora_model_id: String,
         order: String,
         tok_model_id: Option<String>,
-        repeat_last_n: usize,
         tgt_non_granular_index: Option<usize>,
     },
 
@@ -142,7 +132,6 @@ pub enum Which {
         adapters_model_id,
         order,
         tok_model_id = None,
-        repeat_last_n = 64
     ))]
     LoraGGUF {
         quantized_model_id: String,
@@ -150,7 +139,6 @@ pub enum Which {
         adapters_model_id: String,
         order: String,
         tok_model_id: Option<String>,
-        repeat_last_n: usize,
     },
 
     #[pyo3(constructor = (
@@ -158,7 +146,6 @@ pub enum Which {
         quantized_filename,
         tok_model_id,
         tokenizer_json = None,
-        repeat_last_n = 64,
         gqa = 1,
     ))]
     #[allow(clippy::upper_case_acronyms)]
@@ -167,7 +154,6 @@ pub enum Which {
         quantized_filename: String,
         tok_model_id: String,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
         gqa: usize,
     },
 
@@ -178,7 +164,6 @@ pub enum Which {
         order,
         tok_model_id = None,
         tokenizer_json = None,
-        repeat_last_n = 64,
         tgt_non_granular_index = None,
         gqa = 1,
     ))]
@@ -189,7 +174,6 @@ pub enum Which {
         order: String,
         tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
         tgt_non_granular_index: Option<usize>,
         gqa: usize,
     },
@@ -201,7 +185,6 @@ pub enum Which {
         order,
         tok_model_id = None,
         tokenizer_json = None,
-        repeat_last_n = 64,
         gqa = 1,
     ))]
     LoraGGML {
@@ -211,7 +194,6 @@ pub enum Which {
         order: String,
         tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
         gqa: usize,
     },
 
@@ -219,12 +201,10 @@ pub enum Which {
         model_id,
         arch,
         tokenizer_json = None,
-        repeat_last_n = 64
     ))]
     VisionPlain {
         model_id: String,
         arch: VisionArchitecture,
         tokenizer_json: Option<String>,
-        repeat_last_n: usize,
     },
 }

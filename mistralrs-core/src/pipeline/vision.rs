@@ -77,7 +77,6 @@ pub struct VisionLoaderBuilder {
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
-    pub repeat_last_n: usize,
 }
 
 impl VisionLoaderBuilder {
@@ -270,7 +269,6 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 is_xlora: false,
                 num_hidden_layers,

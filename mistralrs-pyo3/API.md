@@ -42,7 +42,6 @@ class Which(Enum):
         model_id: str
         arch: Architecture
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class XLora:
@@ -51,7 +50,6 @@ class Which(Enum):
         arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         tgt_non_granular_index: int | None = None
 
     @dataclass
@@ -61,14 +59,12 @@ class Which(Enum):
         arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class GGUF:
         quantized_model_id: str
         quantized_filename: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class XLoraGGUF:
@@ -77,7 +73,6 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
         tgt_non_granular_index: int | None = None
 
     @dataclass
@@ -87,7 +82,6 @@ class Which(Enum):
         adapters_model_id: str
         order: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class GGML:
@@ -95,7 +89,6 @@ class Which(Enum):
         quantized_filename: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         gqa: int | None = None
 
     @dataclass
@@ -107,7 +100,6 @@ class Which(Enum):
         tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         gqa: int | None = None
 
     @dataclass
@@ -118,14 +110,12 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class VisionPlain:
         model_id: str
         arch: VisionArchitecture
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 ```
 
 
