@@ -128,18 +128,16 @@ impl DrySamplingParamsInner {
                             .map(|enc| {
                                 let ids = enc.get_ids();
                                 if !ids.is_empty() {
-                                    anyhow::bail!(
-                                        "Encoding {breaker} has encoding of length {}, need 1.",
-                                        ids.len()
-                                    );
+                                    None
                                 } else {
-                                    Ok(ids[0])
+                                    Some(ids[0])
                                 }
                             })
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?
                     .into_iter()
-                    .collect::<anyhow::Result<Vec<_>>>()?,
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>(),
             ),
             multiplier: other.multiplier,
         })
