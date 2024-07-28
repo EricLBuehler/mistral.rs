@@ -47,7 +47,7 @@ fn get_device() -> Device {
         .clone()
 }
 #[cfg(feature = "metal")]
-fn get_device() -> Result<Device> {
+fn get_device() -> Device {
     DEVICE
         .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
         .clone()
