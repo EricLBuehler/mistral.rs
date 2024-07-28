@@ -3,9 +3,10 @@ use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
+    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    TokenSource, Usage,
 };
 use std::fmt::Display;
 use std::sync::Arc;
@@ -64,6 +65,7 @@ fn run_bench(
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
+        dry_params: Some(DrySamplingParams::default()),
     };
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -224,6 +226,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
+        dry_params: Some(DrySamplingParams::default()),
     };
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);

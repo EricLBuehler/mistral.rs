@@ -16,6 +16,8 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
+pub const SEQUENCE_BREAKERS: [&str; 4] = ["\n", ":", "\\", "*"];
+
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
 pub enum StopTokens {
@@ -37,6 +39,7 @@ pub struct SamplingParams {
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
+    pub dry_params: Option<DrySamplingParams>,
 }
 
 impl Default for SamplingParams {
@@ -53,7 +56,93 @@ impl Default for SamplingParams {
             max_len: None,
             logits_bias: None,
             n_choices: 1,
+            dry_params: None,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DrySamplingParams {
+    pub sequence_breakers: Vec<String>,
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: usize,
+}
+
+impl DrySamplingParams {
+    pub fn new_with_defaults(
+        multiplier: f32,
+        sequence_breakers: Option<Vec<String>>,
+        base: Option<f32>,
+        allowed_length: Option<usize>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            base: base.unwrap_or(1.75),
+            allowed_length: allowed_length.unwrap_or(2),
+            sequence_breakers: sequence_breakers.unwrap_or(
+                SEQUENCE_BREAKERS
+                    .map(|x| x.to_string())
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            ),
+            multiplier,
+        })
+    }
+}
+
+impl Default for DrySamplingParams {
+    fn default() -> Self {
+        Self {
+            multiplier: 1.0,
+            base: 1.75,
+            allowed_length: 2,
+            sequence_breakers: SEQUENCE_BREAKERS
+                .map(|x| x.to_string())
+                .into_iter()
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DrySamplingParamsInner {
+    pub sequence_breakers: HashSet<u32>,
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: usize,
+}
+
+impl DrySamplingParamsInner {
+    pub fn from(other: DrySamplingParams, tokenizer: &Tokenizer) -> anyhow::Result<Self> {
+        Ok(Self {
+            base: other.base,
+            allowed_length: other.allowed_length,
+            sequence_breakers: HashSet::from_iter(
+                other
+                    .sequence_breakers
+                    .into_iter()
+                    .map(|breaker| {
+                        tokenizer
+                            .encode(breaker.clone(), true)
+                            .map_err(anyhow::Error::msg)
+                            .map(|enc| {
+                                let ids = enc.get_ids();
+                                if !ids.is_empty() {
+                                    anyhow::bail!(
+                                        "Encoding {breaker} has encoding of length {}, need 1.",
+                                        ids.len()
+                                    );
+                                } else {
+                                    Ok(ids[0])
+                                }
+                            })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
+                    .collect::<anyhow::Result<Vec<_>>>()?,
+            ),
+            multiplier: other.multiplier,
+        })
     }
 }
 
@@ -65,6 +154,7 @@ pub struct Sampler {
     tokenizer: Arc<Tokenizer>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
+    dry_params: Option<DrySamplingParamsInner>,
     top_k: i64,
     top_p: f64,
     min_p: f64,
@@ -100,25 +190,32 @@ impl Sampler {
         tokenizer: Arc<Tokenizer>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
+        dry_params: Option<DrySamplingParams>,
         top_k: i64,
         top_p: f64,
         min_p: f64,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
         } else {
             temperature
         };
-        Self {
+        let dry_params = dry_params.map(|params| DrySamplingParamsInner::from(params, &tokenizer));
+        let dry_params = match dry_params {
+            Some(fallible) => Some(fallible?),
+            None => None,
+        };
+        Ok(Self {
             temperature,
             top_n_logprobs,
             tokenizer,
             frequency_penalty,
             presence_penalty,
+            dry_params,
             top_k,
             top_p,
             min_p,
-        }
+        })
     }
 
     fn get_top_logprobs(
@@ -384,68 +481,70 @@ impl Sampler {
         Tensor::from_vec(logits, vocab_size, &Device::Cpu)
     }
 
-    fn apply_dry_penalty(&self, logits: &mut [f32], toks: &[u32]) -> Result<()> {
-        let match_indices = toks
-            .par_iter()
-            .enumerate()
-            .take(toks.len() - 1)
-            .filter(|(_i, x)| *toks.last().unwrap() == **x)
-            .map(|(i, _)| i)
-            .collect::<Vec<_>>();
+    fn apply_dry_penalty(&self, logits: &mut [f32], context: Option<&[u32]>) -> Result<()> {
+        if let Some(ref params) = self.dry_params {
+            if context.is_none() {
+                bail!("Must specify penalty context.");
+            }
+            let toks = context.as_ref().unwrap();
 
-        let mut match_lengths = HashMap::new();
+            let match_indices = toks
+                .par_iter()
+                .enumerate()
+                .take(toks.len() - 1)
+                .filter(|(_i, x)| *toks.last().unwrap() == **x)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
 
-        let sequence_breakers: HashSet<u32> = Default::default();
-        let multiplier: f32 = Default::default();
-        let base: f32 = Default::default();
-        let allowed_length: usize = Default::default();
+            let mut match_lengths = HashMap::new();
 
-        for i in match_indices {
-            let next_token = toks[i + 1];
+            for i in match_indices {
+                let next_token = toks[i + 1];
 
-            if sequence_breakers.contains(&next_token) {
-                continue;
+                if params.sequence_breakers.contains(&next_token) {
+                    continue;
+                }
+
+                let mut match_length = 1;
+
+                loop {
+                    if match_length > i {
+                        // Start of input
+                        break;
+                    }
+
+                    let j = i - match_length;
+
+                    let prev_tok = toks[toks.len() - (match_length + 1)];
+                    if toks[j] != prev_tok {
+                        // Start of match reached
+                        break;
+                    }
+
+                    if params.sequence_breakers.contains(&prev_tok) {
+                        // Seq breaking tok reached
+                        break;
+                    }
+
+                    match_length += 1;
+                }
+
+                if match_lengths.contains_key(&next_token) {
+                    match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
+                } else {
+                    match_lengths.insert(next_token, match_length);
+                }
             }
 
-            let mut match_length = 1;
-
-            loop {
-                if match_length > i {
-                    // Start of input
-                    break;
+            // Actually apply penalties
+            for (tok, match_len) in match_lengths {
+                if match_len >= params.allowed_length {
+                    let penalty = params.multiplier
+                        * params.base.powf((match_len - params.allowed_length) as f32);
+                    logits[tok as usize] = penalty;
                 }
-
-                let j = i - match_length;
-
-                let prev_tok = toks[toks.len() - (match_length + 1)];
-                if toks[i] != prev_tok {
-                    // Start of match reached
-                    break;
-                }
-
-                if sequence_breakers.contains(&prev_tok) {
-                    // Seq breaking tok reached
-                    break;
-                }
-
-                match_length += 1;
-            }
-
-            if match_lengths.contains_key(&next_token) {
-                match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
-            } else {
-                match_lengths.insert(next_token, match_length);
             }
         }
-
-        // Actually apply penalties
-        for (tok, match_len) in match_lengths {
-            if match_len >= allowed_length {
-                let penalty = multiplier * base.powf((match_len - allowed_length) as f32);
-                logits[tok as usize] = penalty;
-            }
-        }
-
         Ok(())
     }
 
@@ -462,7 +561,9 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
-        let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
+        let mut logits = logits.to_vec1()?;
+        self.apply_dry_penalty(&mut logits, penalty_ctxt)?;
+        let logits = self.apply_penalties(logits, penalty_ctxt)?;
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
@@ -534,7 +635,18 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, false).unwrap();
@@ -552,7 +664,18 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler.sample(logits, None, false, rng, true).unwrap();

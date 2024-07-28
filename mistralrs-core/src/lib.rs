@@ -72,7 +72,7 @@ pub use pipeline::{
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
-pub use sampler::{SamplingParams, StopTokens, TopLogprob};
+pub use sampler::{DrySamplingParams, SamplingParams, StopTokens, TopLogprob};
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;

@@ -630,10 +630,12 @@ impl Engine {
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
+            request.sampling_params.dry_params,
             topk,
             topp,
             minp,
         );
+        let sampler = handle_seq_error!(sampler, request.response);
 
         if request.sampling_params.n_choices == 0 {
             request

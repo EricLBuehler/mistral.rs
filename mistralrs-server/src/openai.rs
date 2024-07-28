@@ -107,6 +107,14 @@ pub struct ChatCompletionRequest {
     pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -173,4 +181,12 @@ pub struct CompletionRequest {
     pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
 }
