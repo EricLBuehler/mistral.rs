@@ -150,7 +150,7 @@ Python API for mistral.rs.
 OpenAI API compatible API server
 
 - [API Docs](docs/HTTP.md).
-- [Running](README.md#run)
+- [Running](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 
 
