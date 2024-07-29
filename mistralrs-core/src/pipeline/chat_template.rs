@@ -8,10 +8,9 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::MessageContent;
+use crate::{tools::ToolCallingModel, MessageContent, Tool};
 
-const SUPPORTED_ALTERNATE_EOS: [&str; 3] = [
-    "<|eot_id|>",    // Handle Llama3 chat case
+const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",    // Handle ChatML case
     "<end_of_turn>", // Handle Gemma2 chat case
 ];
@@ -101,7 +100,10 @@ pub fn calculate_eos_tokens(
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(alternate) {
+        if tokenizer
+            .get_vocab(true)
+            .contains_key(&alternate.to_string())
+        {
             eos_tok_ids.push(alternate.to_string())
         }
     }
@@ -179,6 +181,8 @@ pub fn apply_chat_template_to(
     bos_tok: Option<String>,
     eos_tok: Option<String>,
     unk_tok: Option<String>,
+    tools: Vec<Tool>,
+    model: ToolCallingModel,
 ) -> Result<String> {
     let mut env = Environment::new();
 
@@ -203,11 +207,24 @@ pub fn apply_chat_template_to(
     env.add_template("chat_template", template)?;
     env.add_function("raise_exception", raise_exception);
     let tmpl = env.get_template("chat_template").unwrap();
-    Ok(tmpl.render(context! {
-        messages => new_messages,
-        add_generation_prompt => add_generation_prompt,
-        bos_token => bos_tok,
-        eos_token => eos_tok,
-        unk_token => unk_tok,
-    })?)
+    if tools.is_empty() {
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+        })?)
+    } else {
+        match model {
+            ToolCallingModel::Llama3 => Ok(tmpl.render(context! {
+                messages => new_messages,
+                add_generation_prompt => add_generation_prompt,
+                bos_token => bos_tok,
+                eos_token => eos_tok,
+                unk_token => unk_tok,
+                custom_tools => tools,
+            })?),
+        }
+    }
 }

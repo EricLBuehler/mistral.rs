@@ -488,6 +488,20 @@ impl Engine {
             _ => None,
         };
 
+        // TODO
+        let tool_calling_model = ToolCallingModel::Llama3;
+        let matcher = if request.tools.is_some() {
+            Some(Arc::new(handle_seq_error!(
+                ToolCallingMatcher::new(
+                    &tool_calling_model,
+                    request.tool_choice.unwrap_or(ToolChoice::Auto),
+                ),
+                request.response
+            )))
+        } else {
+            None
+        };
+
         let mut prompt = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
@@ -495,7 +509,13 @@ impl Engine {
                 messages,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let template = pipeline.get_processor().process(pipeline, messages, true);
+                let template = pipeline.get_processor().process(
+                    pipeline,
+                    messages,
+                    true,
+                    request.tools.unwrap_or(Vec::new()),
+                    tool_calling_model,
+                );
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
@@ -648,19 +668,6 @@ impl Engine {
                 .expect("Expected receiver.");
             return;
         }
-
-        let matcher = if let Some(tools) = request.tools {
-            Some(Arc::new(handle_seq_error!(
-                ToolCallingMatcher::new(
-                    &ToolCallingModel::Llama3, // TODO
-                    request.tool_choice.unwrap_or(ToolChoice::Auto),
-                    tools
-                ),
-                request.response
-            )))
-        } else {
-            None
-        };
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {

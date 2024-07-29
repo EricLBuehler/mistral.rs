@@ -17,8 +17,9 @@ use crate::{
         InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
+    tools::ToolCallingModel,
     vision_models::ModelInputs,
-    MessageContent, Pipeline,
+    MessageContent, Pipeline, Tool,
 };
 
 use super::{
@@ -54,12 +55,16 @@ impl Processor for Idefics2Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        tools: Vec<Tool>,
+        model: ToolCallingModel,
     ) -> anyhow::Result<Vec<u32>> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
             add_generation_prompt,
             self.template_action(),
+            tools,
+            model,
         )?;
 
         let mut image_str = format!(

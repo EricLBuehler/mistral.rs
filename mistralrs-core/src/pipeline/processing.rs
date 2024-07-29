@@ -5,8 +5,9 @@ use either::Either;
 use indexmap::IndexMap;
 
 use crate::{
+    tools::ToolCallingModel,
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
-    MessageContent, Pipeline,
+    MessageContent, Pipeline, Tool,
 };
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
@@ -35,12 +36,16 @@ pub trait Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        tools: Vec<Tool>,
+        model: ToolCallingModel,
     ) -> Result<Vec<u32>> {
         let prompt = apply_chat_template(
             pipeline,
             messages,
             add_generation_prompt,
             self.template_action(),
+            tools,
+            model,
         )?;
         let encoding = pipeline
             .tokenizer()
@@ -58,6 +63,8 @@ pub(crate) fn apply_chat_template(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
     action: MessagesAction,
+    tools: Vec<Tool>,
+    model: ToolCallingModel,
 ) -> Result<String> {
     let messages = match action {
         MessagesAction::Keep => messages,
@@ -126,6 +133,8 @@ pub(crate) fn apply_chat_template(
         bos_tok,
         eos_tok,
         unk_tok,
+        tools,
+        model,
     )
 }
 
