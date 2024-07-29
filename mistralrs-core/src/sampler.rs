@@ -498,7 +498,8 @@ impl Sampler {
 
                 let mut match_length = 1;
 
-                loop {
+                // Limit match length to avoid quadratic runtime and potential DoS with adversarial inputs.
+                while match_length < 50 {
                     if match_length > i {
                         // Start of input
                         break;
