@@ -527,6 +527,7 @@ impl Sampler {
                     match_length += 1;
                 }
 
+                #[allow(clippy::map_entry)]
                 if match_lengths.contains_key(&next_token) {
                     match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
                 } else {
