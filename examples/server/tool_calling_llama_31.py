@@ -10,7 +10,7 @@ tools = [
             "name": "get_current_weather",
             "description": "Get the current weather in a given location",
             "parameters": {
-                "type": "object",
+                "type": "string",
                 "properties": {
                     "location": {
                         "type": "string",

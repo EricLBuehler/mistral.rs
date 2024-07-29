@@ -223,7 +223,7 @@ pub fn apply_chat_template_to(
                 bos_token => bos_tok,
                 eos_token => eos_tok,
                 unk_token => unk_tok,
-                custom_tools => tools,
+                tools => tools,
             })?),
         }
     }
