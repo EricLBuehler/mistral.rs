@@ -16,7 +16,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
-pub const SEQUENCE_BREAKERS: [&str; 4] = ["\n", ":", "\\", "*"];
+const SEQUENCE_BREAKERS: &[&str] = &["\n", ":", "\\", "*"];
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -79,12 +79,8 @@ impl DrySamplingParams {
         Ok(Self {
             base: base.unwrap_or(1.75),
             allowed_length: allowed_length.unwrap_or(2),
-            sequence_breakers: sequence_breakers.unwrap_or(
-                SEQUENCE_BREAKERS
-                    .map(|x| x.to_string())
-                    .into_iter()
-                    .collect::<Vec<_>>(),
-            ),
+            sequence_breakers: sequence_breakers
+                .unwrap_or(SEQUENCE_BREAKERS.iter().map(|x| x.to_string()).collect()),
             multiplier,
         })
     }
@@ -96,10 +92,7 @@ impl Default for DrySamplingParams {
             multiplier: 1.0,
             base: 1.75,
             allowed_length: 2,
-            sequence_breakers: SEQUENCE_BREAKERS
-                .map(|x| x.to_string())
-                .into_iter()
-                .collect::<Vec<_>>(),
+            sequence_breakers: SEQUENCE_BREAKERS.iter().map(|x| x.to_string()).collect(),
         }
     }
 }
@@ -123,14 +116,19 @@ impl DrySamplingParamsInner {
                     .into_iter()
                     .map(|breaker| {
                         tokenizer
-                            .encode(breaker.clone(), true)
+                            // Prefix with 'a' to get the correct encoding of the token at the end of a text.
+                            //
+                            // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
+                            //        for the correct solution which covers multi-token sequence breakers
+                            //        and ambiguous encodings.
+                            .encode(format!("a{breaker}"), true)
                             .map_err(anyhow::Error::msg)
                             .map(|enc| {
                                 let ids = enc.get_ids();
                                 if !ids.is_empty() {
                                     None
                                 } else {
-                                    Some(ids[0])
+                                    Some(ids[ids.len() - 1])
                                 }
                             })
                     })
@@ -505,7 +503,8 @@ impl Sampler {
 
                 let mut match_length = 1;
 
-                loop {
+                // Limit match length to avoid quadratic runtime and potential DoS with adversarial inputs.
+                while match_length < 50 {
                     if match_length > i {
                         // Start of input
                         break;
@@ -527,6 +526,7 @@ impl Sampler {
                     match_length += 1;
                 }
 
+                #[allow(clippy::map_entry)]
                 if match_lengths.contains_key(&next_token) {
                     match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
                 } else {
