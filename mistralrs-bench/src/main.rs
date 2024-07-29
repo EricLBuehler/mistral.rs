@@ -78,6 +78,8 @@ fn run_bench(
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
 
     let mut usages = Vec::new();
@@ -242,6 +244,8 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
 
     sender

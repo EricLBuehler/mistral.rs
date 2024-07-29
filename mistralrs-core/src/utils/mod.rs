@@ -108,8 +108,9 @@ macro_rules! handle_pipeline_forward_error {
                             finish_reason: "error".to_string(),
                             index: seq.get_response_index(),
                             message: ResponseMessage {
-                                content: res,
+                                content: Some(res),
                                 role: "assistant".to_string(),
+                                tool_calls: Vec::new(),
                             },
                             logprobs: None,
                         };

@@ -2,7 +2,11 @@ use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 
-use crate::{response::Response, sampler::SamplingParams};
+use crate::{
+    response::Response,
+    sampler::SamplingParams,
+    tools::{Tool, ToolChoice},
+};
 use std::fmt::Debug;
 use tokio::sync::mpsc::Sender;
 
@@ -44,6 +48,8 @@ pub struct NormalRequest {
     pub constraint: Constraint,
     pub suffix: Option<String>,
     pub adapters: Option<Vec<String>>,
+    pub tools: Option<Vec<Tool>>,
+    pub tool_choice: Option<ToolChoice>,
 }
 
 #[derive(Clone)]
@@ -68,6 +74,8 @@ impl Debug for Request {
                 constraint: _,
                 suffix: _,
                 adapters,
+                tool_choice: _,
+                tools: _,
             }) => {
                 write!(
                     f,

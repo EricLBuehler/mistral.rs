@@ -16,6 +16,7 @@ use crate::{
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    tools::{ToolCallingMatcher, ToolCallingModel, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
 use rand::SeedableRng;
@@ -161,6 +162,7 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+
                         let throughput_end = Instant::now();
                         #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
@@ -222,6 +224,7 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+
                         let throughput_end = Instant::now();
                         #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
@@ -646,6 +649,19 @@ impl Engine {
             return;
         }
 
+        let matcher = if let Some(tools) = request.tools {
+            Some(Arc::new(handle_seq_error!(
+                ToolCallingMatcher::new(
+                    &ToolCallingModel::Llama3, // TODO
+                    request.tool_choice.unwrap_or(ToolChoice::Auto),
+                    tools
+                ),
+                request.response
+            )))
+        } else {
+            None
+        };
+
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
             let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
@@ -699,6 +715,7 @@ impl Engine {
                 images.clone(),
                 block_size,
                 trie,
+                matcher.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

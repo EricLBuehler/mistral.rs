@@ -747,6 +747,8 @@ impl Runner {
                 constraint,
                 suffix: None,
                 adapters: request.adapters.clone(),
+                tool_choice: None, // TODO
+                tools: None,       // TODO
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -838,6 +840,8 @@ impl Runner {
                 constraint,
                 suffix: request.suffix.clone(),
                 adapters: request.adapters.clone(),
+                tool_choice: None, // TODO
+                tools: None,       // TODO
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

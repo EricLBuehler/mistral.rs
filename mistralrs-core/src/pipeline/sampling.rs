@@ -150,12 +150,24 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
+                let mut tool_calls = Vec::new();
+                let mut text_new = Some(text.clone());
+                if let Some(ref matcher) = seq.tools {
+                    let calls = matcher
+                        .get_call(&text)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    if !calls.is_empty() {
+                        text_new = None;
+                    }
+                    tool_calls = calls;
+                }
                 let choice = crate::Choice {
                     finish_reason: reason.to_string(),
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
-                        content: text,
+                        content: text_new,
                         role: "assistant".to_string(),
+                        tool_calls,
                     },
                     logprobs: logprobs.map(|l| crate::Logprobs { content: Some(l) }),
                 };

@@ -564,5 +564,6 @@ fn new_dummy_seq(
         images,
         None, // TODO incorrect for PagedAttention
         trie,
+        None,
     )
 }
