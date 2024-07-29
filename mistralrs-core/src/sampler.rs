@@ -83,7 +83,7 @@ impl DrySamplingParams {
                 SEQUENCE_BREAKERS
                     .map(|x| x.to_string())
                     .into_iter()
-                    .collect::<Vec<_>>(),
+                    .collect(),
             ),
             multiplier,
         })
@@ -99,7 +99,7 @@ impl Default for DrySamplingParams {
             sequence_breakers: SEQUENCE_BREAKERS
                 .map(|x| x.to_string())
                 .into_iter()
-                .collect::<Vec<_>>(),
+                .collect(),
         }
     }
 }
