@@ -53,6 +53,7 @@ mod sampler;
 mod scheduler;
 mod sequence;
 mod toml_selector;
+mod tools;
 mod utils;
 mod vision_models;
 mod xlora_models;
