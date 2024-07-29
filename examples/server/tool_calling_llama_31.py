@@ -1,6 +1,7 @@
-from openai import OpenAI
+import openai
 
-client = OpenAI(api_key = "FAKE")
+openai.api_key = "EMPTY"
+openai.base_url = "http://localhost:1234/v1/"
 
 tools = [
     {
@@ -24,7 +25,8 @@ tools = [
 ]
 
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
-completion = client.chat.completions.create(
+
+completion = openai.chat.completions.create(
     model="llama-31", messages=messages, tools=tools, tool_choice="auto"
 )
 
