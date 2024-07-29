@@ -16,7 +16,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIter
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 
-pub const SEQUENCE_BREAKERS: &[&str] = &["\n", ":", "\\", "*"];
+const SEQUENCE_BREAKERS: &[&str] = &["\n", ":", "\\", "*"];
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
