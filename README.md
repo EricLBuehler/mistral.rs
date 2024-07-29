@@ -23,7 +23,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3) Deploy with our easy to use APIs
     - [Python](examples/python)
     - [Rust](mistralrs/examples)
-    - [OpenAI compatible HTTP server](examples/http.md)
+    - [OpenAI compatible HTTP server](docs/HTTP.md)
 
 ## Quick examples
 
@@ -149,7 +149,7 @@ Python API for mistral.rs.
 
 OpenAI API compatible API server
 
-- [API Docs](examples/http.md).
+- [API Docs](docs/HTTP.md).
 - [Running](README.md#run)
 - [Example](examples/server/chat.py)
 
