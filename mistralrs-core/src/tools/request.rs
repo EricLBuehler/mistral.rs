@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(untagged)]
 pub enum ToolType {
     #[serde(rename = "function")]
     Function,
