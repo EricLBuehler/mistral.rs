@@ -116,14 +116,19 @@ impl DrySamplingParamsInner {
                     .into_iter()
                     .map(|breaker| {
                         tokenizer
-                            .encode(breaker.clone(), true)
+                            // Prefix with 'a' to get the correct encoding of the token at the end of a text.
+                            //
+                            // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
+                            //        for the correct solution which covers multi-token sequence breakers
+                            //        and ambiguous encodings.
+                            .encode(format!("a{breaker}"), true)
                             .map_err(anyhow::Error::msg)
                             .map(|enc| {
                                 let ids = enc.get_ids();
                                 if !ids.is_empty() {
                                     None
                                 } else {
-                                    Some(ids[0])
+                                    Some(ids[ids.len() - 1])
                                 }
                             })
                     })
