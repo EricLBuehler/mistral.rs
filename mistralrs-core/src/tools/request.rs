@@ -10,12 +10,12 @@ pub enum ToolType {
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(untagged)]
 pub enum ToolChoice {
     #[serde(rename = "none")]
     None,
     #[serde(rename = "auto")]
     Auto,
+    #[serde(untagged)]
     Tool(Tool),
 }
 
@@ -28,6 +28,7 @@ pub struct Function {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Tool {
+    #[serde(rename = "type")]
     pub tp: ToolType,
     pub function: Function,
 }
