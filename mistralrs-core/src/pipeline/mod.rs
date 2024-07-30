@@ -830,8 +830,6 @@ mod tests {
         expected_outputs: &[&str],
         inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
-        use crate::tools::ToolCallingModel;
-
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();
         let n_templates = templates.len();
@@ -850,7 +848,6 @@ mod tests {
                 Some(eos.to_string()),
                 Some(unk.to_string()),
                 Vec::new(),
-                ToolCallingModel::default(),
             ) {
                 Ok(v) => v,
                 Err(e) => {

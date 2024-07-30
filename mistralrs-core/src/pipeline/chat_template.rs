@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::{tools::ToolCallingModel, MessageContent, Tool};
+use crate::{MessageContent, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",    // Handle ChatML case
@@ -100,10 +100,7 @@ pub fn calculate_eos_tokens(
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer
-            .get_vocab(true)
-            .contains_key(&alternate.to_string())
-        {
+        if tokenizer.get_vocab(true).contains_key(*alternate) {
             eos_tok_ids.push(alternate.to_string())
         }
     }
@@ -216,7 +213,6 @@ pub fn apply_chat_template_to(
     eos_tok: Option<String>,
     unk_tok: Option<String>,
     tools: Vec<Tool>,
-    model: ToolCallingModel,
 ) -> Result<String> {
     let mut env = Environment::new();
 
@@ -243,6 +239,9 @@ pub fn apply_chat_template_to(
     env.add_filter("tojson", tojson);
     let tmpl = env.get_template("chat_template").unwrap();
 
+    let date = chrono::Utc::now();
+    let date_string = date.format("%d, %B, %Y").to_string();
+
     if tools.is_empty() {
         Ok(tmpl.render(context! {
             messages => new_messages,
@@ -250,17 +249,17 @@ pub fn apply_chat_template_to(
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
+            date_string => date_string,
         })?)
     } else {
-        match model {
-            ToolCallingModel::Llama3 => Ok(tmpl.render(context! {
-                messages => new_messages,
-                add_generation_prompt => add_generation_prompt,
-                bos_token => bos_tok,
-                eos_token => eos_tok,
-                unk_token => unk_tok,
-                tools => tools,
-            })?),
-        }
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+            tools => tools,
+            date_string => date_string,
+        })?)
     }
 }

@@ -25,7 +25,6 @@ use crate::{
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
-    tools::ToolCallingModel,
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
@@ -388,7 +387,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             ])],
                             true,
                             Vec::new(),
-                            ToolCallingModel::default(),
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     let images = image_urls.as_ref().map(|urls| {

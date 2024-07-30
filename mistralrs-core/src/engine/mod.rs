@@ -513,8 +513,7 @@ impl Engine {
                     pipeline,
                     messages,
                     true,
-                    request.tools.unwrap_or(Vec::new()),
-                    tool_calling_model,
+                    request.tools.unwrap_or_default(),
                 );
                 handle_seq_error!(template, request.response)
             }
