@@ -38,7 +38,7 @@ def custom_serializer(obj):
         res = json.dumps(obj)
     except:
         # Handle serializing, for example, an imported module
-        res = str(type(obj))
+        res = None
     return res
 
 
