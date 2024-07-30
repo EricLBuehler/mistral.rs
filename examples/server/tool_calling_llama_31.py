@@ -1,7 +1,7 @@
 """
 Important note:
 
-We recomend you use Llama 3.1 70B or larger for this example as it incorporates multi-turn chat.
+We recommend you use Llama 3.1 70B or larger for this example as it incorporates multi-turn chat.
 
 Llama 3.1 8B can call the tool, but not maintain the chat with the tool.
 """
