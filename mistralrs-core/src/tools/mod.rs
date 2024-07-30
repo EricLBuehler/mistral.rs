@@ -3,18 +3,28 @@ mod response;
 
 pub use request::*;
 pub use response::*;
-use std::sync::{Arc, Mutex};
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 pub struct ToolCallingMatcher {
     id: Arc<Mutex<usize>>,
     tool_choice: ToolChoice,
 }
 
-// Same as CalledFunction, but uses `parameters` instead of arguments.
+// Same as CalledFunction, but uses `parameters`
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalledFunctionParameters {
     pub name: String,
-    pub parameters: String,
+    pub parameters: HashMap<String, Value>,
+}
+// Same as CalledFunction, but uses `arguments``
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CalledFunctionArguments {
+    pub name: String,
+    pub arguments: HashMap<String, Value>,
 }
 
 impl ToolCallingMatcher {
@@ -38,7 +48,7 @@ impl ToolCallingMatcher {
                 tp: ToolCallType::Function,
                 function: CalledFunction {
                     name: deser.name,
-                    arguments: deser.parameters,
+                    arguments: serde_json::to_string(&deser.parameters)?,
                 },
             }])
         } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionParameters>>(message) {
@@ -47,37 +57,43 @@ impl ToolCallingMatcher {
                 .map(|deser| {
                     let mut id = self.id.lock().unwrap();
                     *id += 1;
-                    ToolCallResponse {
+                    Ok(ToolCallResponse {
                         id: format!("fn_call_{}", *id),
                         tp: ToolCallType::Function,
                         function: CalledFunction {
                             name: deser.name,
-                            arguments: deser.parameters,
+                            arguments: serde_json::to_string(&deser.parameters)?,
                         },
-                    }
+                    })
                 })
-                .collect::<Vec<_>>())
-        } else if let Ok(deser) = serde_json::from_str::<CalledFunction>(message) {
+                .collect::<anyhow::Result<Vec<_>>>()?)
+        } else if let Ok(deser) = serde_json::from_str::<CalledFunctionArguments>(message) {
             let mut id = self.id.lock().unwrap();
             *id += 1;
             Ok(vec![ToolCallResponse {
                 id: format!("fn_call_{}", *id),
                 tp: ToolCallType::Function,
-                function: deser,
+                function: CalledFunction {
+                    name: deser.name,
+                    arguments: serde_json::to_string(&deser.arguments)?,
+                },
             }])
-        } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunction>>(message) {
+        } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionArguments>>(message) {
             Ok(deser
                 .into_iter()
                 .map(|deser| {
                     let mut id = self.id.lock().unwrap();
                     *id += 1;
-                    ToolCallResponse {
+                    Ok(ToolCallResponse {
                         id: format!("fn_call_{}", *id),
                         tp: ToolCallType::Function,
-                        function: deser,
-                    }
+                        function: CalledFunction {
+                            name: deser.name,
+                            arguments: serde_json::to_string(&deser.arguments)?,
+                        },
+                    })
                 })
-                .collect::<Vec<_>>())
+                .collect::<anyhow::Result<Vec<_>>>()?)
         } else {
             if matches!(self.tool_choice, ToolChoice::Tool(_)) {
                 anyhow::bail!("Tool choice was required but no tools were called.")
