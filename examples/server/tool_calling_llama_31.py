@@ -30,4 +30,4 @@ completion = openai.chat.completions.create(
     model="llama-31", messages=messages, tools=tools, tool_choice="auto"
 )
 
-print(completion)
+print(completion.choices[0].message)
