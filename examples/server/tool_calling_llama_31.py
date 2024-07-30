@@ -1,3 +1,11 @@
+"""
+Important note:
+
+We recomend you use Llama 3.1 70B or larger for this example as it incorporates multi-turn chat.
+
+Llama 3.1 8B can call the tool, but not maintain the chat with the tool.
+"""
+
 import openai
 import json
 
@@ -15,7 +23,7 @@ tools = [
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The Python code to evaluate. Returns a JSON of the global and local variables.",
+                        "description": "The Python code to evaluate. Returns a JSON of the local variables.",
                     },
                 },
                 "required": ["code"],
@@ -25,22 +33,36 @@ tools = [
 ]
 
 
+def custom_serializer(obj):
+    try:
+        res = json.dumps(obj)
+    except:
+        # Handle serializing, for example, an imported module
+        res = str(type(obj))
+    return res
+
+
 def run_python(code: str) -> str:
-    glbls = dict()
     lcls = dict()
+    # No opening of files
+    glbls = {"open": None}
     exec(code, glbls, lcls)
     res = {
-        "globals": glbls,
         "locals": lcls,
     }
-    return json.dumps(res)
+    return json.dumps(res, default=custom_serializer)
 
 
 functions = {
     "run_python": run_python,
 }
 
-messages = [{"role": "user", "content": "Write some Python code to calculate the arctan of 1rad."}]
+messages = [
+    {
+        "role": "user",
+        "content": "Write some Python code to calculate the area of a circle with radius 4. Store the result in `A`. What is `A`?",
+    }
+]
 
 completion = openai.chat.completions.create(
     model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
@@ -54,7 +76,8 @@ tool_called = completion.choices[0].message.tool_calls[0].function
 
 if tool_called.name in functions:
     args = json.loads(tool_called.arguments)
-    result = functions[functions](**args)
+    result = functions[tool_called.name](**args)
+    print(f"Called {tool_called.name}, result is {result}")
 
     messages.append(
         {
