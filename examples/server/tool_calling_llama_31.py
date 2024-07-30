@@ -8,51 +8,65 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
+            "name": "run_python",
+            "description": "Run some Python code",
             "parameters": {
                 "type": "string",
                 "properties": {
-                    "location": {
+                    "code": {
                         "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
+                        "description": "The Python code to evaluate. Returns a JSON of the global and local variables.",
                     },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
                 },
-                "required": ["location"],
+                "required": ["code"],
             },
         },
     }
 ]
 
-messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+
+def run_python(code: str) -> str:
+    glbls = dict()
+    lcls = dict()
+    exec(code, glbls, lcls)
+    res = {
+        "globals": glbls,
+        "locals": lcls,
+    }
+    return json.dumps(res)
+
+
+functions = {
+    "run_python": run_python,
+}
+
+messages = [{"role": "user", "content": "Write some Python code to calculate the arctan of 1rad."}]
 
 completion = openai.chat.completions.create(
-    model="llama-31", messages=messages, tools=tools, tool_choice="auto"
+    model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
 )
 
 print(completion.usage)
+print(completion.choices[0].message)
 
 tool_called = completion.choices[0].message.tool_calls[0].function
 
 
-def get_current_weather(unit: str = None, location: str = None) -> str:
-    return f"The weather in {location} is 40 degrees {unit}."
-
-
-if tool_called.name == "get_current_weather":
+if tool_called.name in functions:
     args = json.loads(tool_called.arguments)
-    result = get_current_weather(**args)
+    result = functions[functions](**args)
+
     messages.append(
         {
             "role": "assistant",
             "content": json.dumps({"name": tool_called.name, "parameters": args}),
         }
     )
+
     messages.append({"role": "ipython", "content": result})
-    print(messages)
+
     completion = openai.chat.completions.create(
-        model="llama-31", messages=messages, tools=tools, tool_choice="auto"
+        model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
     )
     print(completion.usage)
     print(completion.choices[0].message)
