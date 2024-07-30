@@ -4,13 +4,10 @@ mod response;
 pub use request::*;
 pub use response::*;
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 pub struct ToolCallingMatcher {
-    id: Arc<Mutex<usize>>,
     tool_choice: ToolChoice,
 }
 
@@ -29,10 +26,7 @@ pub struct CalledFunctionArguments {
 
 impl ToolCallingMatcher {
     pub fn new(tool_choice: ToolChoice) -> anyhow::Result<Self> {
-        Ok(Self {
-            id: Arc::new(Mutex::new(0)),
-            tool_choice,
-        })
+        Ok(Self { tool_choice })
     }
 
     pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
@@ -41,10 +35,9 @@ impl ToolCallingMatcher {
         }
 
         if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(message) {
-            let mut id = self.id.lock().unwrap();
-            *id += 1;
+            let id = format!("call-{}", Uuid::new_v4());
             Ok(vec![ToolCallResponse {
-                id: format!("fn_call_{}", *id),
+                id,
                 tp: ToolCallType::Function,
                 function: CalledFunction {
                     name: deser.name,
@@ -55,10 +48,9 @@ impl ToolCallingMatcher {
             Ok(deser
                 .into_iter()
                 .map(|deser| {
-                    let mut id = self.id.lock().unwrap();
-                    *id += 1;
+                    let id = format!("call-{}", Uuid::new_v4());
                     Ok(ToolCallResponse {
-                        id: format!("fn_call_{}", *id),
+                        id,
                         tp: ToolCallType::Function,
                         function: CalledFunction {
                             name: deser.name,
@@ -68,10 +60,9 @@ impl ToolCallingMatcher {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?)
         } else if let Ok(deser) = serde_json::from_str::<CalledFunctionArguments>(message) {
-            let mut id = self.id.lock().unwrap();
-            *id += 1;
+            let id = format!("call-{}", Uuid::new_v4());
             Ok(vec![ToolCallResponse {
-                id: format!("fn_call_{}", *id),
+                id,
                 tp: ToolCallType::Function,
                 function: CalledFunction {
                     name: deser.name,
@@ -82,10 +73,9 @@ impl ToolCallingMatcher {
             Ok(deser
                 .into_iter()
                 .map(|deser| {
-                    let mut id = self.id.lock().unwrap();
-                    *id += 1;
+                    let id = format!("call-{}", Uuid::new_v4());
                     Ok(ToolCallResponse {
-                        id: format!("fn_call_{}", *id),
+                        id,
                         tp: ToolCallType::Function,
                         function: CalledFunction {
                             name: deser.name,

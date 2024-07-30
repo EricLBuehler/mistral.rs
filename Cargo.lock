@@ -2372,7 +2372,6 @@ dependencies = [
  "rand",
  "rand_isaac",
  "rayon",
- "regex",
  "regex-automata 0.4.7",
  "reqwest",
  "rustc-hash 2.0.0",
@@ -2388,6 +2387,7 @@ dependencies = [
  "tqdm",
  "tracing",
  "tracing-subscriber",
+ "uuid 1.10.0",
  "variantly",
  "vob",
 ]
