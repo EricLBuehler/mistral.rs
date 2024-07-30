@@ -5,62 +5,84 @@ pub use request::*;
 pub use response::*;
 use std::sync::{Arc, Mutex};
 
-use regex::Regex;
-
-// https://docs.together.ai/docsllama/llama-3-function-calling
-const LLAMA3_FUNCTION_CALL: &str = r"<function=(\w+)>(.*?)</function>";
-
-#[derive(Clone, Copy, Default)]
-pub enum ToolCallingModel {
-    #[default]
-    Llama3,
-}
-
 pub struct ToolCallingMatcher {
-    pattern: Regex,
     id: Arc<Mutex<usize>>,
     tool_choice: ToolChoice,
 }
 
+// Same as CalledFunction, but uses `parameters` instead of arguments.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CalledFunctionParameters {
+    pub name: String,
+    pub parameters: String,
+}
+
 impl ToolCallingMatcher {
-    pub fn new(model: &ToolCallingModel, tool_choice: ToolChoice) -> anyhow::Result<Self> {
-        let pattern = match model {
-            ToolCallingModel::Llama3 => LLAMA3_FUNCTION_CALL.to_string(),
-        };
+    pub fn new(tool_choice: ToolChoice) -> anyhow::Result<Self> {
         Ok(Self {
-            pattern: Regex::new(&pattern)?,
             id: Arc::new(Mutex::new(0)),
             tool_choice,
         })
     }
 
     pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
-        let mut calls = Vec::new();
         if matches!(self.tool_choice, ToolChoice::None) {
-            return Ok(calls);
+            return Ok(Vec::new());
         }
-        if let Some(captures) = self.pattern.captures(message) {
-            let n_calls = captures.len() / 2;
-            for call in 0..n_calls {
-                let function_name = captures.get(call * 2).unwrap().as_str().to_string();
-                let args_string = captures.get(call * 2 + 1).unwrap().as_str().to_string();
-                let mut id = self.id.lock().unwrap();
-                *id += 1;
-                calls.push(ToolCallResponse {
-                    id: format!("fn_call_{}", *id),
-                    tp: ToolCallType::Function,
-                    function: CalledFunction {
-                        name: function_name,
-                        arguments: args_string,
-                    },
-                });
-            }
-            Ok(calls)
+
+        if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(message) {
+            let mut id = self.id.lock().unwrap();
+            *id += 1;
+            Ok(vec![ToolCallResponse {
+                id: format!("fn_call_{}", *id),
+                tp: ToolCallType::Function,
+                function: CalledFunction {
+                    name: deser.name,
+                    arguments: deser.parameters,
+                },
+            }])
+        } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionParameters>>(message) {
+            Ok(deser
+                .into_iter()
+                .map(|deser| {
+                    let mut id = self.id.lock().unwrap();
+                    *id += 1;
+                    ToolCallResponse {
+                        id: format!("fn_call_{}", *id),
+                        tp: ToolCallType::Function,
+                        function: CalledFunction {
+                            name: deser.name,
+                            arguments: deser.parameters,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>())
+        } else if let Ok(deser) = serde_json::from_str::<CalledFunction>(message) {
+            let mut id = self.id.lock().unwrap();
+            *id += 1;
+            Ok(vec![ToolCallResponse {
+                id: format!("fn_call_{}", *id),
+                tp: ToolCallType::Function,
+                function: deser,
+            }])
+        } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunction>>(message) {
+            Ok(deser
+                .into_iter()
+                .map(|deser| {
+                    let mut id = self.id.lock().unwrap();
+                    *id += 1;
+                    ToolCallResponse {
+                        id: format!("fn_call_{}", *id),
+                        tp: ToolCallType::Function,
+                        function: deser,
+                    }
+                })
+                .collect::<Vec<_>>())
         } else {
             if matches!(self.tool_choice, ToolChoice::Tool(_)) {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
-            Ok(calls)
+            Ok(Vec::new())
         }
     }
 }

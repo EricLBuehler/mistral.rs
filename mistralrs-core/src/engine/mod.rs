@@ -16,7 +16,7 @@ use crate::{
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    tools::{ToolCallingMatcher, ToolCallingModel, ToolChoice},
+    tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
 use rand::SeedableRng;
@@ -488,14 +488,9 @@ impl Engine {
             _ => None,
         };
 
-        // TODO
-        let tool_calling_model = ToolCallingModel::Llama3;
         let matcher = if request.tools.is_some() {
             Some(Arc::new(handle_seq_error!(
-                ToolCallingMatcher::new(
-                    &tool_calling_model,
-                    request.tool_choice.unwrap_or(ToolChoice::Auto),
-                ),
+                ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
                 request.response
             )))
         } else {
