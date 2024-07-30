@@ -63,7 +63,7 @@ def run_python(code: str) -> str:
     # No opening of files
     glbls = {"open": None}
 
-    print(f"Running:\n```py\n{code}```")
+    print(f"Running:\n```py\n{code}\n```")
 
     old_stdout = sys.stdout
     sys.stdout = StringIO()
