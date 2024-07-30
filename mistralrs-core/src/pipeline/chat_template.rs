@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
-use minijinja::{context, Environment, ErrorKind};
+use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -174,6 +174,40 @@ pub struct GenerationConfig {
     eos_token_id: Either<u32, Vec<u32>>,
 }
 
+fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
+    if let Ok(indent) = kwargs.get("indent") {
+        let mut buf = Vec::new();
+        let repeat = b" ".repeat(indent);
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+        value.serialize(&mut ser).unwrap();
+        String::from_utf8(buf).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })
+    } else {
+        serde_json::to_string(&value).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })
+    }
+    .map_err(|err| {
+        Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
+    })
+    .map(|s| {
+        // When this filter is used the return value is safe for both HTML and JSON
+        let mut rv = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '<' => rv.push_str("\\u003c"),
+                '>' => rv.push_str("\\u003e"),
+                '&' => rv.push_str("\\u0026"),
+                '\'' => rv.push_str("\\u0027"),
+                _ => rv.push(c),
+            }
+        }
+        Value::from_safe_string(rv)
+    })
+}
+
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
@@ -206,7 +240,9 @@ pub fn apply_chat_template_to(
 
     env.add_template("chat_template", template)?;
     env.add_function("raise_exception", raise_exception);
+    env.add_filter("tojson", tojson);
     let tmpl = env.get_template("chat_template").unwrap();
+
     if tools.is_empty() {
         Ok(tmpl.render(context! {
             messages => new_messages,
