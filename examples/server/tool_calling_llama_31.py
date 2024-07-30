@@ -31,3 +31,4 @@ completion = openai.chat.completions.create(
 )
 
 print(completion.choices[0].message)
+print(completion.usage)
