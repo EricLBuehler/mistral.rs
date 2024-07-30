@@ -12,10 +12,18 @@ And then:
 ```
 python3 examples/server/tool_calling_llama_31.py
 ```
+
+The output should be something like:
+```
+Called tool `run_python`
+The final answer is $\boxed{50.26548245743669}$.
+```
 """
 
 import openai
 import json
+import sys
+from io import StringIO
 
 openai.api_key = "EMPTY"
 openai.base_url = "http://localhost:1234/v1/"
@@ -54,7 +62,12 @@ def run_python(code: str) -> str:
     lcls = dict()
     # No opening of files
     glbls = {"open": None}
+
+    old_stdout = sys.stdout
+    sys.stdout = StringIO()
     exec(code, glbls, lcls)
+    sys.stdout = old_stdout
+
     res = {
         "locals": lcls,
     }
@@ -76,16 +89,15 @@ completion = openai.chat.completions.create(
     model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
 )
 
-print(completion.usage)
-print(completion.choices[0].message)
+# print(completion.usage)
+# print(completion.choices[0].message)
 
 tool_called = completion.choices[0].message.tool_calls[0].function
-
 
 if tool_called.name in functions:
     args = json.loads(tool_called.arguments)
     result = functions[tool_called.name](**args)
-    print(f"Called {tool_called.name}, result is {result}")
+    print(f"Called tool `{tool_called.name}`")
 
     messages.append(
         {
@@ -99,5 +111,5 @@ if tool_called.name in functions:
     completion = openai.chat.completions.create(
         model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
     )
-    print(completion.usage)
-    print(completion.choices[0].message)
+    # print(completion.usage)
+    print(completion.choices[0].message.content)
