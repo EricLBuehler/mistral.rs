@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
@@ -132,6 +133,9 @@ pub fn calculate_eos_tokens(
             }
         }
     }
+
+    eos_tok_ids = eos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
+    bos_tok_ids = bos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
 
     let bos_render = bos_tok_ids
         .iter()

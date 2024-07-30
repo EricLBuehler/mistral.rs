@@ -3,7 +3,15 @@ Important note:
 
 We recommend you use Llama 3.1 70B or larger for this example as it incorporates multi-turn chat.
 
-Llama 3.1 8B can call the tool, but not maintain the chat with the tool.
+Llama 3.1 may also be used:
+```
+cargo run --release --features cuda -- --port 1234 --isq Q4K plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
+```
+
+And then:
+```
+python3 examples/server/tool_calling_llama_31.py
+```
 """
 
 import openai
