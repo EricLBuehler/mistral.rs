@@ -186,6 +186,15 @@
 <a href="#186" id="186">186</a>
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
@@ -198,6 +207,7 @@
     fs::{<span class="self">self</span>, File},
     io::{<span class="self">self</span>, Read, Write},
     sync::{atomic::Ordering, Arc, Mutex},
+    time::Instant,
 };
 <span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
@@ -213,7 +223,7 @@
 <span class="kw">static </span>CTRLC_HANDLER: Lazy&lt;Mutex&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>(<span class="kw">dyn </span>Fn() + Sync)&gt;&gt; =
     Lazy::new(|| Mutex::new(<span class="kw-2">&amp;</span>exit_handler));
 
-<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, vision_chat: bool) {
+<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, vision_chat: bool, throughput: bool) {
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
@@ -334,13 +344,16 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
 
+        <span class="kw">let </span>start = Instant::now();
+        <span class="kw">let </span><span class="kw-2">mut </span>toks = <span class="number">0</span>;
         <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
             <span class="kw">match </span>resp {
                 Response::Chunk(chunk) =&gt; {
                     <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
                     assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
                     <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                    io::stdout().flush().unwrap();
+                    toks += <span class="number">3usize</span>; <span class="comment">// NOTE: we send toks every 3.
+                    </span>io::stdout().flush().unwrap();
                     <span class="kw">if </span>choice.finish_reason.is_some() {
                         <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
                             <span class="macro">print!</span>(<span class="string">"..."</span>);
@@ -365,6 +378,11 @@
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             }
+        }
+        <span class="kw">if </span>throughput {
+            <span class="kw">let </span>time = Instant::now().duration_since(start).as_secs_f64();
+            <span class="macro">println!</span>();
+            <span class="macro">info!</span>(<span class="string">"Average T/s: {}"</span>, toks <span class="kw">as </span>f64 / time);
         }
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
             IndexMap::new();

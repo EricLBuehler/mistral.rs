@@ -629,7 +629,7 @@
     </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
     </span>no_paged_attn: bool,
 
-    <span class="doccomment">/// Enable server throughput logging when not using interactive mode
+    <span class="doccomment">/// Enable server throughput logging, supported in the server and with interactive mode
     </span><span class="attr">#[arg(long = <span class="string">"throughput"</span>, default_value_t = <span class="bool-val">false</span>)]
     </span>throughput_log: bool,
 }
@@ -927,10 +927,10 @@
     <span class="kw">if </span>args.interactive_mode &amp;&amp; args.vision_interactive_mode {
         <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode and vision interactive mode are exclusive."</span>);
     } <span class="kw">else if </span>args.interactive_mode {
-        interactive_mode(builder.build(), <span class="bool-val">false</span>).<span class="kw">await</span>;
+        interactive_mode(builder.build(), <span class="bool-val">false</span>, args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     } <span class="kw">else if </span>args.vision_interactive_mode {
-        interactive_mode(builder.build(), <span class="bool-val">true</span>).<span class="kw">await</span>;
+        interactive_mode(builder.build(), <span class="bool-val">true</span>, args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
 
