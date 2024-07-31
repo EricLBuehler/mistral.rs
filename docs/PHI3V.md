@@ -171,6 +171,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

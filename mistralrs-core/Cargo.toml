@@ -24,7 +24,7 @@ thiserror = "1.0.57"
 tokenizers = "0.19.1"
 tqdm = "0.7.0"
 chrono = "0.4.34"
-minijinja = "2.0.2"
+minijinja = { version = "2.0.2", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
@@ -71,6 +71,8 @@ base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
 mistralrs-paged-attn = { version = "0.2.3", path = "../mistralrs-paged-attn", optional = true }
+uuid = { version = "1.10.0", features = ["v4"] }
+schemars = "0.8.21"
 
 [features]
 default = ["plotly"]
