@@ -592,6 +592,28 @@
 <a href="#592" id="592">592</a>
 <a href="#593" id="593">593</a>
 <a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
@@ -904,6 +926,8 @@
     <span class="kw">pub </span>rms_norm_eps: f32,
     <span class="kw">pub </span>max_seq_len: usize,
     <span class="kw">pub </span>rope_freq_base: f32,
+    <span class="kw">pub </span>key_length: usize,
+    <span class="kw">pub </span>value_length: usize,
 }
 
 <span class="kw">impl </span>TryFrom&lt;ContentMetadata&lt;<span class="lifetime">'_</span>&gt;&gt; <span class="kw">for </span>PropsGGUF {
@@ -922,15 +946,18 @@
         ];
         c.has_required_keys(<span class="kw-2">&amp;</span>required)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>embed_len = c.get_value::&lt;u32&gt;(<span class="string">"embedding_length"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">let </span>head_count = c.get_value::&lt;u32&gt;(<span class="string">"attention.head_count"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize;
+
         <span class="comment">// NOTE: Values are not aligned with GGUFv3 types
         // TODO: Normalize value types to spec
         </span><span class="kw">let </span>props = <span class="self">Self </span>{
             n_expert: c.get_value::&lt;u32&gt;(<span class="string">"expert_count"</span>).ok().unwrap_or(<span class="number">0</span>) <span class="kw">as </span>usize,
             n_expert_used: c.get_value::&lt;u32&gt;(<span class="string">"expert_used_count"</span>).ok().unwrap_or(<span class="number">0</span>) <span class="kw">as </span>usize,
-            head_count: c.get_value::&lt;u32&gt;(<span class="string">"attention.head_count"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize,
+            head_count,
             head_count_kv: c.get_value::&lt;u32&gt;(<span class="string">"attention.head_count_kv"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize,
             block_count: c.get_value::&lt;u32&gt;(<span class="string">"block_count"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize,
-            embedding_length: c.get_value::&lt;u32&gt;(<span class="string">"embedding_length"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize,
+            embedding_length: embed_len,
             rope_dim: c.get_value::&lt;u32&gt;(<span class="string">"rope.dimension_count"</span>)<span class="question-mark">? </span><span class="kw">as </span>usize,
             <span class="comment">// Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
             </span>rms_norm_eps: c.get_value(<span class="string">"attention.layer_norm_rms_epsilon"</span>)<span class="question-mark">?</span>,
@@ -939,6 +966,16 @@
                 .ok()
                 .unwrap_or(MAX_SEQ_LEN <span class="kw">as </span>u64) <span class="kw">as </span>usize,
             rope_freq_base: c.get_value(<span class="string">"rope.freq_base"</span>).ok().unwrap_or(<span class="number">10_000_f32</span>),
+            key_length: c
+                .get_value::&lt;u32&gt;(<span class="string">"attention.key_length"</span>)
+                .ok()
+                .map(|x| x <span class="kw">as </span>usize)
+                .unwrap_or(embed_len / head_count),
+            value_length: c
+                .get_value::&lt;u32&gt;(<span class="string">"attention.value_length"</span>)
+                .ok()
+                .map(|x| x <span class="kw">as </span>usize)
+                .unwrap_or(embed_len / head_count),
         };
 
         <span class="prelude-val">Ok</span>(props)
@@ -969,9 +1006,10 @@
             rms_norm_eps,
             max_seq_len,
             rope_freq_base,
+            key_length,
+            value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>head_dim = embedding_length / head_count;
         <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(
@@ -983,12 +1021,18 @@
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>head_dim = key_length;
+        <span class="kw">if </span>key_length != value_length {
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"Expected key_length == value_length, got {key_length} != {value_length}"
+            </span>);
+        }
+
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
-            <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
+            <span class="kw">let </span>rotary = RotaryEmbedding::new(
                 rope_freq_base,
-                head_dim,
                 rope_dim,
                 max_seq_len,
                 device,
