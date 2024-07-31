@@ -5,6 +5,7 @@ use base64::{engine::general_purpose, Engine};
 use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
+use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -72,6 +73,7 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
 }
 
 #[pyclass]
+#[derive(Str, Repr, Dir, Dict, Getattr)]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
     runner: Arc<MistralRs>,
@@ -882,7 +884,7 @@ impl Runner {
 }
 
 #[pyclass]
-#[derive(Debug)]
+#[derive(Debug, Str, Repr, Dir, Dict, Getattr)]
 /// An OpenAI API compatible completion request.
 struct CompletionRequest {
     _model: String,
@@ -972,7 +974,7 @@ impl CompletionRequest {
 }
 
 #[pyclass]
-#[derive(Debug)]
+#[derive(Debug, Str, Repr, Dir, Dict, Getattr)]
 /// An OpenAI API compatible chat completion request.
 struct ChatCompletionRequest {
     #[allow(clippy::type_complexity)]

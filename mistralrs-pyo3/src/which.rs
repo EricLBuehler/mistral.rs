@@ -1,8 +1,9 @@
 use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
+use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Str, Repr, Dir, Dict, Getattr)]
 pub enum Architecture {
     Mistral,
     Gemma,
@@ -32,7 +33,7 @@ impl From<Architecture> for NormalLoaderType {
 }
 
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Str, Repr, Dir, Dict, Getattr)]
 pub enum VisionArchitecture {
     Phi3V,
     Idefics2,
@@ -52,7 +53,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
 }
 
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone, Str, Repr, Dir, Dict, Getattr)]
 pub enum Which {
     #[pyo3(constructor = (
         model_id,

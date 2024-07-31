@@ -1,7 +1,8 @@
 use pyo3::{pyclass, pymethods};
+use pyo3_special_method_derive::{Dict, Dir, Getattr, Repr, Str};
 
 #[pyclass]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Str, Repr, Dir, Dict, Getattr)]
 pub enum AnyMoeExpertType {
     FineTuned {},
     LoraAdapter {
@@ -28,7 +29,7 @@ impl From<AnyMoeExpertType> for mistralrs_core::AnyMoeExpertType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Str, Repr, Dir, Dict, Getattr)]
 #[pyclass]
 pub struct AnyMoeConfig {
     pub(crate) hidden_size: usize,
