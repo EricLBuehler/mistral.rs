@@ -13,3 +13,6 @@ Please see [our example here](../examples/server/tool_calling.py).
 
 ## Rust example
 Please see [our example here](../mistralrs/examples/tools/main.rs).
+
+## Python example
+Please see [our notebook here](../examples/python/tool_calling.ipynb).

@@ -37,7 +37,7 @@ tools = [
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The Python code to evaluate. Returns a JSON of the local variables.",
+                        "description": "The Python code to evaluate. The return value whatever was printed out from `print`.",
                     },
                 },
                 "required": ["code"],
@@ -64,14 +64,12 @@ def run_python(code: str) -> str:
     print(f"Running:\n```py\n{code}\n```")
 
     old_stdout = sys.stdout
-    sys.stdout = StringIO()
+    out = StringIO()
+    sys.stdout = out
     exec(code, glbls, lcls)
     sys.stdout = old_stdout
 
-    res = {
-        "locals": lcls,
-    }
-    return json.dumps(res, default=custom_serializer)
+    return out.getvalue()
 
 
 functions = {
@@ -81,7 +79,7 @@ functions = {
 messages = [
     {
         "role": "user",
-        "content": "Write some Python code to calculate the area of a circle with radius 4. Store the result in `A`. What is `A`?",
+        "content": "What is the value of the area of a circle with radius 4?",
     }
 ]
 
