@@ -338,7 +338,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
         let props = Self {
             n_expert: c.get_value::<u32>("expert_count").ok().unwrap_or(0) as usize,
             n_expert_used: c.get_value::<u32>("expert_used_count").ok().unwrap_or(0) as usize,
-            head_count: head_count,
+            head_count,
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
             block_count: c.get_value::<u32>("block_count")? as usize,
             embedding_length: embed_len,
