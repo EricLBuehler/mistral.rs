@@ -522,6 +522,9 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -563,7 +566,7 @@
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">pub struct </span>VisionPipeline {
     model: Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;,
@@ -681,7 +684,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
@@ -693,6 +696,9 @@
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
+        } <span class="kw">else if </span>paged_attn_config.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
         }
 
         <span class="macro">info!</span>(

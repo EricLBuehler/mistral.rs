@@ -624,6 +624,9 @@
 <a href="#624" id="624">624</a>
 <a href="#625" id="625">625</a>
 <a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -851,7 +854,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
@@ -862,6 +865,9 @@
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
+        } <span class="kw">else if </span>paged_attn_config.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
         }
 
         <span class="macro">info!</span>(

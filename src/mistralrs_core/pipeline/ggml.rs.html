@@ -528,6 +528,11 @@
 <a href="#528" id="528">528</a>
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -763,7 +768,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
-        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
@@ -773,6 +778,11 @@
         <span class="kw">if </span>!mapper.is_dummy() {
             <span class="macro">warn!</span>(<span class="string">"GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model."</span>);
         }
+        <span class="kw">if </span>!mapper.is_dummy() &amp;&amp; paged_attn_config.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
+        }
+
         <span class="macro">info!</span>(
             <span class="string">"Loading model `{}` on {}."</span>,
             <span class="self">self</span>.get_id(),
