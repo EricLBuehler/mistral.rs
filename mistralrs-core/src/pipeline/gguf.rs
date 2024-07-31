@@ -363,7 +363,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -377,6 +377,9 @@ impl Loader for GGUFLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
+        } else if paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
