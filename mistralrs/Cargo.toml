@@ -17,6 +17,7 @@ anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 image.workspace = true
 indexmap.workspace = true
 either.workspace = true
@@ -87,4 +88,8 @@ required-features = []
 
 [[example]]
 name = "paged_attn"
+required-features = []
+
+[[example]]
+name = "tools"
 required-features = []

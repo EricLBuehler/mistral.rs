@@ -2308,6 +2308,7 @@ dependencies = [
  "image",
  "indexmap 2.2.6",
  "mistralrs-core",
+ "serde",
  "serde_json",
  "tokio",
 ]

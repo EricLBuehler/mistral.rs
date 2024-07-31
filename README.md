@@ -96,6 +96,7 @@ Mistal.rs supports several model categories:
     - Top P
     - Min P
     - Please suggest more by raising an issue!
+- Tool calling: [docs](docs/TOOL_CALLING.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
