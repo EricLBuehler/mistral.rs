@@ -390,6 +390,18 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -542,12 +554,24 @@
             };
 
             <span class="kw">if </span>seq.get_mut_group().is_chat {
+                <span class="kw">let </span><span class="kw-2">mut </span>tool_calls = Vec::new();
+                <span class="kw">let </span><span class="kw-2">mut </span>text_new = <span class="prelude-val">Some</span>(text.clone());
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>matcher) = seq.tools {
+                    <span class="kw">let </span>calls = matcher
+                        .get_call(<span class="kw-2">&amp;</span>text)
+                        .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+                    <span class="kw">if </span>!calls.is_empty() {
+                        text_new = <span class="prelude-val">None</span>;
+                    }
+                    tool_calls = calls;
+                }
                 <span class="kw">let </span>choice = <span class="kw">crate</span>::Choice {
                     finish_reason: reason.to_string(),
                     index: seq.get_response_index(),
                     message: <span class="kw">crate</span>::ResponseMessage {
-                        content: text,
+                        content: text_new,
                         role: <span class="string">"assistant"</span>.to_string(),
+                        tool_calls,
                     },
                     logprobs: logprobs.map(|l| <span class="kw">crate</span>::Logprobs { content: <span class="prelude-val">Some</span>(l) }),
                 };

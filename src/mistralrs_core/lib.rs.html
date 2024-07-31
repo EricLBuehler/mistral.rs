@@ -444,6 +444,10 @@
 <a href="#444" id="444">444</a>
 <a href="#445" id="445">445</a>
 <a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -499,6 +503,7 @@
 <span class="kw">mod </span>scheduler;
 <span class="kw">mod </span>sequence;
 <span class="kw">mod </span>toml_selector;
+<span class="kw">mod </span>tools;
 <span class="kw">mod </span>utils;
 <span class="kw">mod </span>vision_models;
 <span class="kw">mod </span>xlora_models;
@@ -523,6 +528,9 @@
 <span class="kw">use </span>serde::Serialize;
 <span class="kw">use </span>tokio::runtime::Runtime;
 <span class="kw">use </span>toml_selector::{TomlLoaderArgs, TomlSelector};
+<span class="kw">pub use </span>tools::{
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
+};
 <span class="kw">pub use </span>utils::debug::initialize_logging;
 <span class="kw">pub use </span>utils::memory_usage::MemoryUsage;
 <span class="kw">pub use </span>utils::normal::{ModelDType, TryIntoDType};

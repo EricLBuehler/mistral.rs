@@ -566,6 +566,8 @@
 <a href="#566" id="566">566</a>
 <a href="#567" id="567">567</a>
 <a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -954,6 +956,7 @@
                                 (<span class="string">"content"</span>.to_string(), Either::Left(prompt.clone())),
                             ])],
                             <span class="bool-val">true</span>,
+                            Vec::new(),
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
                     <span class="kw">let </span>images = image_urls.as_ref().map(|urls| {
@@ -1132,6 +1135,7 @@
         images,
         <span class="prelude-val">None</span>, <span class="comment">// TODO incorrect for PagedAttention
         </span>trie,
+        <span class="prelude-val">None</span>,
     )
 }
 </code></pre></div></section></main></body></html>

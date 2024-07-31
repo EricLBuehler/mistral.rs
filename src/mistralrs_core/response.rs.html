@@ -213,13 +213,14 @@
 <a href="#213" id="213">213</a>
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
 
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::{pyclass, pymethods};
 <span class="kw">use </span>serde::Serialize;
 
-<span class="kw">use </span><span class="kw">crate</span>::sampler::TopLogprob;
+<span class="kw">use crate</span>::{sampler::TopLogprob, tools::ToolCallResponse};
 
 <span class="kw">pub const </span>SYSTEM_FINGERPRINT: <span class="kw-2">&amp;</span>str = <span class="string">"local"</span>;
 
@@ -240,8 +241,9 @@
 #[derive(Debug, Clone, Serialize)]
 </span><span class="doccomment">/// Chat completion response message.
 </span><span class="kw">pub struct </span>ResponseMessage {
-    <span class="kw">pub </span>content: String,
+    <span class="kw">pub </span>content: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>role: String,
+    <span class="kw">pub </span>tool_calls: Vec&lt;ToolCallResponse&gt;,
 }
 
 <span class="macro">generate_repr!</span>(ResponseMessage);

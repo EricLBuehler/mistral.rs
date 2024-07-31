@@ -273,6 +273,8 @@
 <a href="#273" id="273">273</a>
 <a href="#274" id="274">274</a>
 <a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     env,
     error::Error,
@@ -466,6 +468,8 @@
                 <span class="prelude-val">None </span>=&gt; Constraint::None,
             },
             adapters: oairequest.adapters,
+            tool_choice: oairequest.tool_choice,
+            tools: oairequest.tools,
         }),
         is_streaming,
     )

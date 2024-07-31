@@ -518,6 +518,10 @@
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
 <a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -598,6 +602,8 @@
         constraint: Constraint::None,
         suffix: <span class="prelude-val">None</span>,
         adapters: <span class="prelude-val">None</span>,
+        tools: <span class="prelude-val">None</span>,
+        tool_choice: <span class="prelude-val">None</span>,
     });
 
     <span class="kw">let </span><span class="kw-2">mut </span>usages = Vec::new();
@@ -762,6 +768,8 @@
         constraint: Constraint::None,
         suffix: <span class="prelude-val">None</span>,
         adapters: <span class="prelude-val">None</span>,
+        tools: <span class="prelude-val">None</span>,
+        tool_choice: <span class="prelude-val">None</span>,
     });
 
     sender

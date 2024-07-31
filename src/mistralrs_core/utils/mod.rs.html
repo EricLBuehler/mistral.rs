@@ -229,6 +229,7 @@
 <a href="#229" id="229">229</a>
 <a href="#230" id="230">230</a>
 <a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gguf_metadata;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>memory_usage;
@@ -339,8 +340,9 @@
                             finish_reason: <span class="string">"error"</span>.to_string(),
                             index: seq.get_response_index(),
                             message: ResponseMessage {
-                                content: res,
+                                content: <span class="prelude-val">Some</span>(res),
                                 role: <span class="string">"assistant"</span>.to_string(),
+                                tool_calls: Vec::new(),
                             },
                             logprobs: <span class="prelude-val">None</span>,
                         };

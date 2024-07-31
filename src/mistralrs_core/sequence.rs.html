@@ -808,6 +808,13 @@
 <a href="#808" id="808">808</a>
 <a href="#809" id="809">809</a>
 <a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -822,6 +829,7 @@
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
+    tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 <span class="kw">use crate</span>::{
@@ -999,6 +1007,9 @@
 
     <span class="comment">// Custom backend metadata
     </span>custom_metadata: SequenceCustomMetadata,
+
+    <span class="comment">// Tool calls
+    </span><span class="kw">pub </span>tools: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
 }
 
 <span class="kw">impl </span>BlockEngineSequence <span class="kw">for </span>Sequence {
@@ -1053,7 +1064,9 @@
         input_images: <span class="prelude-ty">Option</span>&lt;Vec&lt;image::DynamicImage&gt;&gt;,
         <span class="comment">// Paged attention
         </span>block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-        tok_trie: TokTrie,
+        <span class="comment">//
+        </span>tok_trie: TokTrie,
+        tools: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
@@ -1108,6 +1121,7 @@
             input_images,
             custom_metadata,
             tok_trie,
+            tools,
         }
     }
 

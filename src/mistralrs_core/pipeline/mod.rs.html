@@ -1042,6 +1042,9 @@
 <a href="#1042" id="1042">1042</a>
 <a href="#1043" id="1043">1043</a>
 <a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -1874,6 +1877,8 @@
         expected_outputs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str],
         inputs: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     ) {
+        <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::ChatTemplateValue;
+
         <span class="kw">use </span><span class="kw">super</span>::chat_template::apply_chat_template_to;
         <span class="kw">let </span><span class="kw-2">mut </span>failed = Vec::new();
         <span class="kw">let </span>n_templates = templates.len();
@@ -1887,10 +1892,11 @@
                     inputs.clone()
                 },
                 <span class="bool-val">true</span>,
-                template,
+                <span class="kw-2">&amp;</span>ChatTemplateValue(Either::Left(template.to_string())),
                 <span class="prelude-val">Some</span>(bos.to_string()),
                 <span class="prelude-val">Some</span>(eos.to_string()),
                 <span class="prelude-val">Some</span>(unk.to_string()),
+                Vec::new(),
             ) {
                 <span class="prelude-val">Ok</span>(v) =&gt; v,
                 <span class="prelude-val">Err</span>(e) =&gt; {
