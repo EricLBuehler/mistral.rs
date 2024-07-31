@@ -52,6 +52,31 @@ pub struct NormalRequest {
     pub tool_choice: Option<ToolChoice>,
 }
 
+impl NormalRequest {
+    pub fn new_simple(
+        messages: RequestMessage,
+        sampling_params: SamplingParams,
+        response: Sender<Response>,
+        id: usize,
+        tools: Option<Vec<Tool>>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Self {
+        Self {
+            messages,
+            sampling_params,
+            response,
+            id,
+            tools,
+            tool_choice,
+            return_logprobs: false,
+            is_streaming: false,
+            constraint: Constraint::None,
+            suffix: None,
+            adapters: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mspc` response `Sender` used to return the [`Response`].

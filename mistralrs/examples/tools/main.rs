@@ -5,10 +5,10 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, Function, MistralRs,
-    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
-    NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource, Tool, ToolChoice, ToolType,
+    DefaultSchedulerMethod, Device, DeviceMapMetadata, Function, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
+    Request, RequestMessage, Response, Result, SamplingParams, SchedulerConfig, TokenSource, Tool,
+    ToolChoice, ToolType,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -98,19 +98,14 @@ fn main() -> anyhow::Result<()> {
     }];
 
     let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::Chat(messages.clone()),
-        sampling_params: SamplingParams::default(),
-        response: tx.clone(),
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: Some(tools.clone()),
-        tool_choice: Some(ToolChoice::Auto),
-    });
+    let request = Request::Normal(NormalRequest::new_simple(
+        RequestMessage::Chat(messages.clone()),
+        SamplingParams::default(),
+        tx.clone(),
+        0,
+        Some(tools.clone()),
+        Some(ToolChoice::Auto),
+    ));
     mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
@@ -146,19 +141,14 @@ fn main() -> anyhow::Result<()> {
                 ("content".to_string(), Either::Left(result)),
             ]));
 
-            let request = Request::Normal(NormalRequest {
-                messages: RequestMessage::Chat(messages.clone()),
-                sampling_params: SamplingParams::default(),
-                response: tx,
-                return_logprobs: false,
-                is_streaming: false,
-                id: 0,
-                constraint: Constraint::None,
-                suffix: None,
-                adapters: None,
-                tools: Some(tools.clone()),
-                tool_choice: Some(ToolChoice::Auto),
-            });
+            let request = Request::Normal(NormalRequest::new_simple(
+                RequestMessage::Chat(messages.clone()),
+                SamplingParams::default(),
+                tx,
+                0,
+                Some(tools.clone()),
+                Some(ToolChoice::Auto),
+            ));
             mistralrs.get_sender()?.blocking_send(request)?;
 
             let response = rx.blocking_recv().unwrap();
