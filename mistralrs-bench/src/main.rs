@@ -456,15 +456,20 @@ fn main() -> anyhow::Result<()> {
     info!("Model loaded.");
 
     let scheduler_config = if cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
-            config: pipeline
-                .blocking_lock()
-                .get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        // Handle case where we may have device mapping
+        if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+                config: cache_config.clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                        .try_into()
+                        .unwrap(),
+                ),
+            }
         }
     } else {
         SchedulerConfig::DefaultScheduler {
