@@ -483,15 +483,20 @@ impl Runner {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let scheduler_config = if cache_config.is_some() {
-            SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs: max_seqs,
-                config: pipeline
-                    .blocking_lock()
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone(),
+            // Handle case where we may have device mapping
+            if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+                SchedulerConfig::PagedAttentionMeta {
+                    max_num_seqs: max_seqs,
+                    config: cache_config.clone(),
+                }
+            } else {
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(
+                        max_seqs
+                            .try_into()
+                            .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                    ),
+                }
             }
         } else {
             SchedulerConfig::DefaultScheduler {

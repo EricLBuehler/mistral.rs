@@ -422,16 +422,16 @@ async fn main() -> Result<()> {
     info!("Model loaded.");
 
     let scheduler_config = if cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: args.max_seqs,
-            config: pipeline
-                .lock()
-                .await
-                .get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        // Handle case where we may have device mapping
+        if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: args.max_seqs,
+                config: cache_config.clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+            }
         }
     } else {
         SchedulerConfig::DefaultScheduler {
