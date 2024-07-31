@@ -108,7 +108,7 @@ if tool_called.name in functions:
         }
     )
 
-    messages.append({"role": "ipython", "content": result})
+    messages.append({"role": "tool", "content": result})
 
     completion = openai.chat.completions.create(
         model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
