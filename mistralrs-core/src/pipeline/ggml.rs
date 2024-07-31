@@ -233,7 +233,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -243,6 +243,11 @@ impl Loader for GGMLLoader {
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
+        if !mapper.is_dummy() && paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
         info!(
             "Loading model `{}` on {}.",
             self.get_id(),
