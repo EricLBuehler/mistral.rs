@@ -37,6 +37,11 @@ pub struct BeginEndUnkTok(
     #[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>,
 );
 
+#[derive(Debug, Deserialize)]
+pub struct ChatTemplateValue(
+    #[serde(with = "either::serde_untagged")] pub Either<String, Vec<HashMap<String, String>>>,
+);
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 /// Template for chat models including bos/eos/unk as well as the chat template.
@@ -50,7 +55,7 @@ pub struct ChatTemplate {
     /// Jinja format [chat templating] for chat completion.
     ///
     /// [chat templating]: https://huggingface.co/docs/transformers/chat_templating
-    pub chat_template: Option<String>,
+    pub chat_template: Option<ChatTemplateValue>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
     pub eos_token: Option<BeginEndUnkTok>,
@@ -212,7 +217,7 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
-    template: &str,
+    template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
     unk_tok: Option<String>,
@@ -238,7 +243,27 @@ pub fn apply_chat_template_to(
         new_messages.push(new_message);
     }
 
-    env.add_template("chat_template", template)?;
+    let template = match &template.0 {
+        Either::Left(x) => x.clone(),
+        Either::Right(map) => {
+            let mut template = "".to_string();
+            for t in map {
+                if t.contains_key("tool_use") && !tools.is_empty() {
+                    template = t["tool_use"].clone();
+                    break;
+                } else if t.contains_key("default") {
+                    template = t["default"].clone();
+                    break;
+                }
+            }
+            if template.is_empty() {
+                anyhow::bail!("Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools.");
+            }
+            template
+        }
+    };
+
+    env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
     env.add_filter("tojson", tojson);
     let tmpl = env.get_template("chat_template").unwrap();

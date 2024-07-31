@@ -17,6 +17,7 @@ pub struct CalledFunctionParameters {
     pub name: String,
     pub parameters: HashMap<String, Value>,
 }
+
 // Same as CalledFunction, but uses `arguments``
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalledFunctionArguments {

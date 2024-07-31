@@ -1,9 +1,7 @@
 """
-Important note:
+https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1/
 
-We recommend you use Llama 3.1 70B or larger for this example as it incorporates multi-turn chat.
-
-Llama 3.1 may also be used:
+Llama 3.1 may be used:
 ```
 cargo run --release --features cuda -- --port 1234 --isq Q4K plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
 ```
