@@ -924,6 +924,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VisionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
+    m.add_class::<ToolChoice>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

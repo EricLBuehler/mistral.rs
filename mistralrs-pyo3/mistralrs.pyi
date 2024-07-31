@@ -316,9 +316,25 @@ class Usage:
     total_completion_time_sec: float
 
 @dataclass
+class ToolCallType(Enum):
+    Function = "function"
+
+@dataclass
+class CalledFunction:
+    name: str
+    arguments: str
+
+@dataclass
+class ToolCallResponse:
+    id: str
+    type: ToolCallType
+    function: CalledFunction
+
+@dataclass
 class ResponseMessage:
     content: str
     role: str
+    tool_calls: list[ToolCallResponse]
 
 @dataclass
 class TopLogprob:
