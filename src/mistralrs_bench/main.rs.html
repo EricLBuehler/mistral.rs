@@ -522,6 +522,11 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -980,15 +985,20 @@
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
     <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: <span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap(),
-            config: pipeline
-                .blocking_lock()
-                .get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        <span class="comment">// Handle case where we may have device mapping
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: <span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+                config: cache_config.clone(),
+            }
+        } <span class="kw">else </span>{
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    (<span class="kw-2">*</span>args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                        .try_into()
+                        .unwrap(),
+                ),
+            }
         }
     } <span class="kw">else </span>{
         SchedulerConfig::DefaultScheduler {

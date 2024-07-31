@@ -901,16 +901,16 @@
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
 
     <span class="kw">let </span>scheduler_config = <span class="kw">if </span>cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: args.max_seqs,
-            config: pipeline
-                .lock()
-                .<span class="kw">await
-                </span>.get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        <span class="comment">// Handle case where we may have device mapping
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>cache_config) = pipeline.lock().<span class="kw">await</span>.get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: args.max_seqs,
+                config: cache_config.clone(),
+            }
+        } <span class="kw">else </span>{
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+            }
         }
     } <span class="kw">else </span>{
         SchedulerConfig::DefaultScheduler {
