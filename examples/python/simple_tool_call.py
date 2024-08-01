@@ -1,6 +1,4 @@
-from io import StringIO
 import json
-import sys
 from mistralrs import Runner, ToolChoice, Which, ChatCompletionRequest, Architecture
 
 tools = [
