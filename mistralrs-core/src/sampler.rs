@@ -81,8 +81,7 @@ impl DrySamplingParams {
         Ok(Self {
             base: base.unwrap_or(1.75),
             allowed_length: allowed_length.unwrap_or(2),
-            sequence_breakers: sequence_breakers
-                .unwrap_or(SEQUENCE_BREAKERS.iter().map(|x| x.to_string()).collect()),
+            sequence_breakers: sequence_breakers.unwrap_or(SEQUENCE_BREAKERS.clone()),
             multiplier,
         })
     }
@@ -94,7 +93,7 @@ impl Default for DrySamplingParams {
             multiplier: 1.0,
             base: 1.75,
             allowed_length: 2,
-            sequence_breakers: SEQUENCE_BREAKERS.iter().map(|x| x.to_string()).collect(),
+            sequence_breakers: SEQUENCE_BREAKERS.clone(),
         }
     }
 }
