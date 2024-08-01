@@ -2245,6 +2245,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45f7e8e35b6c7b169bf40b0176d2c79291ab8ee53290b84e0668ab21d841aa9d"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2299,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2307,13 +2308,14 @@ dependencies = [
  "image",
  "indexmap 2.2.6",
  "mistralrs-core",
+ "serde",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2328,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2374,6 +2376,7 @@ dependencies = [
  "regex-automata 0.4.7",
  "reqwest",
  "rustc-hash 2.0.0",
+ "schemars",
  "serde",
  "serde_json",
  "strum",
@@ -2386,13 +2389,14 @@ dependencies = [
  "tqdm",
  "tracing",
  "tracing-subscriber",
+ "uuid 1.10.0",
  "variantly",
  "vob",
 ]
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2402,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "accelerate-src",
  "base64 0.22.1",
@@ -2423,7 +2427,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2451,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "candle-core",
  "image",
@@ -3619,6 +3623,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09c024468a378b7e36765cd36702b7a90cc3cba11654f6685c8f233408e89e92"
+dependencies = [
+ "dyn-clone",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1eee588578aff73f856ab961cd2f79e36bc45d7ded33a7562adba4667aecc0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.72",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3673,6 +3701,17 @@ name = "serde_derive"
 version = "1.0.204"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0cd7e117be63d3c3678776753929474f3b04a43a080c744d6b0ae2a8c28e222"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.72",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
 dependencies = [
  "proc-macro2",
  "quote",

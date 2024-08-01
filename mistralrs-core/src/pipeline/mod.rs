@@ -830,6 +830,8 @@ mod tests {
         expected_outputs: &[&str],
         inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
+        use crate::pipeline::chat_template::ChatTemplateValue;
+
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();
         let n_templates = templates.len();
@@ -843,10 +845,11 @@ mod tests {
                     inputs.clone()
                 },
                 true,
-                template,
+                &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),
                 Some(unk.to_string()),
+                Vec::new(),
             ) {
                 Ok(v) => v,
                 Err(e) => {

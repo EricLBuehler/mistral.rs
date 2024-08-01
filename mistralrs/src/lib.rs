@@ -34,6 +34,8 @@
 //!         constraint: Constraint::None,
 //!         suffix: None,
 //!         adapters: None,
+//!         tool_choice: None,
+//!         tools: None,
 //!     });
 //!     mistralrs.get_sender()?.blocking_send(request)?;
 //!

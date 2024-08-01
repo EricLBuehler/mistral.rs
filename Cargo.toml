@@ -13,7 +13,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.4"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -73,3 +73,7 @@ opt-level = 3
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

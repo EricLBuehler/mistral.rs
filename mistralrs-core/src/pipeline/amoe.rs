@@ -388,6 +388,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
                             true,
+                            Vec::new(),
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     let images = image_urls.as_ref().map(|urls| {
@@ -566,5 +567,6 @@ fn new_dummy_seq(
         images,
         None, // TODO incorrect for PagedAttention
         trie,
+        None,
     )
 }

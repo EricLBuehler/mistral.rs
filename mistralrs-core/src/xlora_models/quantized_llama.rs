@@ -503,9 +503,16 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             rms_norm_eps,
             max_seq_len,
             rope_freq_base,
+            key_length,
+            value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let head_dim = embedding_length / head_count;
+        let head_dim = key_length;
+        if key_length != value_length {
+            candle_core::bail!(
+                "Expected key_length == value_length, got {key_length} != {value_length}"
+            );
+        }
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

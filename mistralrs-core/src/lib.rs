@@ -53,6 +53,7 @@ mod sampler;
 mod scheduler;
 mod sequence;
 mod toml_selector;
+mod tools;
 mod utils;
 mod vision_models;
 mod xlora_models;
@@ -77,6 +78,9 @@ pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
+pub use tools::{
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
+};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};

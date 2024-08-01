@@ -1,4 +1,5 @@
 use either::Either;
+use mistralrs_core::{Tool, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -97,6 +98,10 @@ pub struct ChatCompletionRequest {
     pub top_p: Option<f64>,
     #[schema(example = true)]
     pub stream: Option<bool>,
+    #[schema(example = json!(Option::None::<Vec<Tool>>))]
+    pub tools: Option<Vec<Tool>>,
+    #[schema(example = json!(Option::None::<ToolChoice>))]
+    pub tool_choice: Option<ToolChoice>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
@@ -171,6 +176,10 @@ pub struct CompletionRequest {
     pub suffix: Option<String>,
     #[serde(rename = "user")]
     pub _user: Option<String>,
+    #[schema(example = json!(Option::None::<Vec<Tool>>))]
+    pub tools: Option<Vec<Tool>>,
+    #[schema(example = json!(Option::None::<ToolChoice>))]
+    pub tool_choice: Option<ToolChoice>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

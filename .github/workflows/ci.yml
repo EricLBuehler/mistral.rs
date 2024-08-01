@@ -113,8 +113,9 @@ jobs:
         with:
           config: .typos.toml
   
+  # run `mlc` (`cargo install mlc`)
   # markdown-link-check:
   #   runs-on: ubuntu-latest
   #   steps:
-  #   - uses: actions/checkout@master
-  #   - uses: gaurav-nelson/github-action-markdown-link-check@v1
+  #     - uses: actions/checkout@master
+  #     - uses: gaurav-nelson/github-action-markdown-link-check@v1

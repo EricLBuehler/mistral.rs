@@ -3,6 +3,11 @@ from enum import Enum
 from typing import Iterator
 
 @dataclass
+class ToolChoice(Enum):
+    NoTools = "None"
+    Auto = "Auto"
+
+@dataclass
 class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -31,6 +36,9 @@ class ChatCompletionRequest:
     grammar_type: str | None = None
     adapters: list[str] | None = None
     min_p: float | None = None
+    min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
 
 @dataclass
 class CompletionRequest:
@@ -57,6 +65,8 @@ class CompletionRequest:
     grammar_type: str | None = None
     adapters: list[str] | None = None
     min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
 
 @dataclass
 class Architecture(Enum):
@@ -306,9 +316,25 @@ class Usage:
     total_completion_time_sec: float
 
 @dataclass
+class ToolCallType(Enum):
+    Function = "function"
+
+@dataclass
+class CalledFunction:
+    name: str
+    arguments: str
+
+@dataclass
+class ToolCallResponse:
+    id: str
+    type: ToolCallType
+    function: CalledFunction
+
+@dataclass
 class ResponseMessage:
     content: str
     role: str
+    tool_calls: list[ToolCallResponse]
 
 @dataclass
 class TopLogprob:
