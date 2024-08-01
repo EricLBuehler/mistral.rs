@@ -10,12 +10,6 @@ And then:
 ```
 python3 examples/server/tool_calling_llama_31.py
 ```
-
-The output should be something like:
-```
-Called tool `run_python`
-The final answer is $\boxed{50.26548245743669}$.
-```
 """
 
 import openai
