@@ -67,7 +67,6 @@ runner = Runner(
         model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
         arch=Architecture.Llama,
     ),
-    in_situ_quant="Q4K",
 )
 
 res = runner.send_chat_completion_request(
