@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
+use either::Either;
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
@@ -14,8 +15,12 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
-    api_dir_list, api_get_file, lora::LoraConfig, pipeline::chat_template::ChatTemplate,
-    utils::tokens::get_token, xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
+    api_dir_list, api_get_file,
+    lora::LoraConfig,
+    pipeline::chat_template::{ChatTemplate, ChatTemplateValue},
+    utils::tokens::get_token,
+    xlora_models::XLoraConfig,
+    ModelPaths, Ordering, TokenSource,
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
@@ -362,7 +367,7 @@ pub(crate) fn get_chat_template(
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
             let mut template = ChatTemplate::default();
-            template.chat_template = Some(chat_template);
+            template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
@@ -374,7 +379,9 @@ pub(crate) fn get_chat_template(
         .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
     if let Some(processor_conf) = processor_conf {
         if processor_conf.chat_template.is_some() {
-            template.chat_template = processor_conf.chat_template;
+            template.chat_template = processor_conf
+                .chat_template
+                .map(|x| ChatTemplateValue(Either::Left(x)));
         }
     }
 

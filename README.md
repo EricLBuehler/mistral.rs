@@ -7,7 +7,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
@@ -23,7 +23,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3) Deploy with our easy to use APIs
     - [Python](examples/python)
     - [Rust](mistralrs/examples)
-    - [OpenAI compatible HTTP server](examples/http.md)
+    - [OpenAI compatible HTTP server](docs/HTTP.md)
 
 ## Quick examples
 
@@ -96,6 +96,7 @@ Mistal.rs supports several model categories:
     - Top P
     - Min P
     - Please suggest more by raising an issue!
+- Tool calling: [docs](docs/TOOL_CALLING.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -149,8 +150,8 @@ Python API for mistral.rs.
 
 OpenAI API compatible API server
 
-- [API Docs](examples/http.md).
-- [Running](README.md#run)
+- [API Docs](docs/HTTP.md).
+- [Running](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 
 
@@ -194,7 +195,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.2)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.4)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 

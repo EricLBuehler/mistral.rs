@@ -10,6 +10,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Write},
     sync::{atomic::Ordering, Arc, Mutex},
+    time::Instant,
 };
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
@@ -25,7 +26,7 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, throughput: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
@@ -141,17 +142,22 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
             constraint: Constraint::None,
             suffix: None,
             adapters: None,
+            tool_choice: None,
+            tools: None,
         });
         sender.send(req).await.unwrap();
 
         let mut assistant_output = String::new();
 
+        let start = Instant::now();
+        let mut toks = 0;
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
                     let choice = &chunk.choices[0];
                     assistant_output.push_str(&choice.delta.content);
                     print!("{}", choice.delta.content);
+                    toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
                         if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -177,6 +183,11 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool) {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
             }
+        }
+        if throughput {
+            let time = Instant::now().duration_since(start).as_secs_f64();
+            println!();
+            info!("Average T/s: {}", toks as f64 / time);
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
             IndexMap::new();

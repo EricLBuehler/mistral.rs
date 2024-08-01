@@ -310,6 +310,8 @@ pub(crate) struct PropsGGUF {
     pub rms_norm_eps: f32,
     pub max_seq_len: usize,
     pub rope_freq_base: f32,
+    pub key_length: usize,
+    pub value_length: usize,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -328,15 +330,18 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
         ];
         c.has_required_keys(&required)?;
 
+        let embed_len = c.get_value::<u32>("embedding_length")? as usize;
+        let head_count = c.get_value::<u32>("attention.head_count")? as usize;
+
         // NOTE: Values are not aligned with GGUFv3 types
         // TODO: Normalize value types to spec
         let props = Self {
             n_expert: c.get_value::<u32>("expert_count").ok().unwrap_or(0) as usize,
             n_expert_used: c.get_value::<u32>("expert_used_count").ok().unwrap_or(0) as usize,
-            head_count: c.get_value::<u32>("attention.head_count")? as usize,
+            head_count,
             head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
             block_count: c.get_value::<u32>("block_count")? as usize,
-            embedding_length: c.get_value::<u32>("embedding_length")? as usize,
+            embedding_length: embed_len,
             rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
             // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
             rms_norm_eps: c.get_value("attention.layer_norm_rms_epsilon")?,
@@ -345,6 +350,16 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
                 .ok()
                 .unwrap_or(MAX_SEQ_LEN as u64) as usize,
             rope_freq_base: c.get_value("rope.freq_base").ok().unwrap_or(10_000_f32),
+            key_length: c
+                .get_value::<u32>("attention.key_length")
+                .ok()
+                .map(|x| x as usize)
+                .unwrap_or(embed_len / head_count),
+            value_length: c
+                .get_value::<u32>("attention.value_length")
+                .ok()
+                .map(|x| x as usize)
+                .unwrap_or(embed_len / head_count),
         };
 
         Ok(props)
@@ -375,9 +390,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rms_norm_eps,
             max_seq_len,
             rope_freq_base,
+            key_length,
+            value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let head_dim = embedding_length / head_count;
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = QRmsNorm::new(
@@ -389,12 +405,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device)?;
 
+        let head_dim = key_length;
+        if key_length != value_length {
+            candle_core::bail!(
+                "Expected key_length == value_length, got {key_length} != {value_length}"
+            );
+        }
+
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new_partial(
+            let rotary = RotaryEmbedding::new(
                 rope_freq_base,
-                head_dim,
                 rope_dim,
                 max_seq_len,
                 device,

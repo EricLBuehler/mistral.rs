@@ -225,7 +225,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         let dtype = dtype.try_into_dtype(device)?;
@@ -236,6 +236,9 @@ impl Loader for NormalLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
+        } else if paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         info!(
