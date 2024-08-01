@@ -93,6 +93,7 @@ pub trait AnyMoeBaseModelMixin {
 pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul>;
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>>;
     fn clone(&self) -> Box<dyn MlpLayer>;
     /// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
@@ -290,6 +291,18 @@ impl MlpLayer for MoeMlp {
         let mut accum = Vec::new();
         for expert in &mut self.experts {
             accum.extend(expert.get_isq_tensors());
+        }
+        accum
+    }
+
+    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        if self.training {
+            unreachable!("Should not be applying ISQ before training is complete.");
+        }
+
+        let mut accum = Vec::new();
+        for expert in &mut self.experts {
+            accum.extend(expert.get_isq_biases());
         }
         accum
     }

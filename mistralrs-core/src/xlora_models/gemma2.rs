@@ -11,9 +11,13 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, MatMul},
-    lora::{linear_b, LinearLayerLike, LoraConfig},
+    lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata, NormalModel},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
     Ordering,
 };
@@ -248,8 +252,9 @@ impl Attention {
             rotary_emb,
             query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
-            use_sliding_window: layer_idx % 2 != 0,
-            sliding_window: if layer_idx % 2 != 0 {
+            use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
+            sliding_window: if layer_idx % 2 == 0 {
+                // ^ Order is SWA, global, SWA
                 Some(cfg.sliding_window)
             } else {
                 None
@@ -511,7 +516,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
@@ -521,6 +526,7 @@ pub struct Model {
     final_logit_softcapping: Option<f64>,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
+    cfg: ModelConfigMetadata,
 }
 
 impl Model {
@@ -609,10 +615,22 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
-            embed_tokens.embeddings(),
-            normal_loading_metadata.loading_isq,
-        )?);
+
+        let lm_head = linear_no_bias(
+            embed_tokens.embeddings().dim(1)?,
+            embed_tokens.embeddings().dim(0)?,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            lora_config,
+            &mut count,
+            &xlora_ordering,
+            preload_adapters,
+        )?;
+        if xlora_config.is_some() && lm_head.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
+
         Ok(Self {
             embed_tokens,
             layers,
@@ -629,6 +647,13 @@ impl Model {
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 
@@ -660,14 +685,14 @@ impl Model {
         };
         let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
         )?;
         let sliding_attention_mask = CausalMasker
             .make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
-                &cache,
+                &*cache,
                 Some(self.sliding_window),
                 xs.dtype(),
                 self.layers[0].self_attn.num_heads,
@@ -697,11 +722,11 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
+        if self.lm_head.is_quant() {
             xs = xs.to_dtype(DType::F32)?;
         }
 
-        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+        let mut xs = self.lm_head.lora_forward(&xs, None, 1.0, None)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = (xs / final_logit_softcapping)?;
@@ -750,10 +775,13 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if matches!(self.lm_head, QMatMul::QTensor(_)) {
+                if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -767,10 +795,13 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if matches!(self.lm_head, QMatMul::QTensor(_)) {
+                if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             }
         } else {
             let mut res = self
@@ -784,18 +815,21 @@ impl Model {
                     None,
                 )?
                 .contiguous()?;
-            if matches!(self.lm_head, QMatMul::QTensor(_)) {
+            if self.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(
+                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                context_lens,
+            )
         }
     }
 }
 
 impl IsqModel for Model {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
@@ -828,6 +862,49 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        let mut tensors = Vec::new();
+        tensors.push((None, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().bias_mut(),
+                Some(i),
+            ));
+        }
+        (tensors, &*self.mapper)
+    }
 }
 
 impl NormalModel for Model {
@@ -838,6 +915,7 @@ impl NormalModel for Model {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -908,6 +986,9 @@ impl NormalModel for Model {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

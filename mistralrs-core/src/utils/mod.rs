@@ -108,8 +108,9 @@ macro_rules! handle_pipeline_forward_error {
                             finish_reason: "error".to_string(),
                             index: seq.get_response_index(),
                             message: ResponseMessage {
-                                content: res,
+                                content: Some(res),
                                 role: "assistant".to_string(),
+                                tool_calls: Vec::new(),
                             },
                             logprobs: None,
                         };
@@ -212,45 +213,20 @@ macro_rules! get_bias_if_not_allowed {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! sample_async {
-    (
-        $use_async_pool: expr,
-        $sampler: expr,
-        $logits: expr,
-        $ctx: expr,
-        $return_logprobs: expr,
-        $rng: expr,
-        $sample_speculative: expr
-     ) => {
-        if $use_async_pool {
-            tokio_rayon::spawn(move || {
-                $sampler.sample(
-                    $logits,
-                    Some(&$ctx),
-                    $return_logprobs,
-                    $rng,
-                    $sample_speculative,
-                )
-            })
-            .await?
-        } else {
-            $sampler.sample(
-                $logits,
-                Some(&$ctx),
-                $return_logprobs,
-                $rng,
-                $sample_speculative,
-            )?
-        }
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
 macro_rules! serde_default_fn {
     ($t:ty, $name:ident, $v:expr) => {
         fn $name() -> $t {
             $v
         }
     };
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub const fn paged_attn_supported() -> bool {
+    true
+}
+
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+pub const fn paged_attn_supported() -> bool {
+    false
 }

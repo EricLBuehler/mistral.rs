@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig, Request,
-    RequestMessage, Response, Result, SamplingParams, SchedulerMethod, TokenSource,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
+    Request, RequestMessage, Response, Result, SamplingParams, SchedulerConfig, TokenSource,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -26,7 +26,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = NormalLoaderBuilder::new(
         NormalSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,
@@ -42,9 +41,16 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         false,
         DeviceMapMetadata::dummy(),
         None,
+        None, // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+    Ok(MistralRsBuilder::new(
+        pipeline,
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        },
+    )
+    .build())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -64,6 +70,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
@@ -71,7 +79,7 @@ fn main() -> anyhow::Result<()> {
     match response {
         Response::Done(c) => println!(
             "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),
@@ -79,7 +87,7 @@ fn main() -> anyhow::Result<()> {
         Response::ValidationError(e) => panic!("Validation error: {e}"),
         Response::ModelError(e, c) => panic!(
             "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),

@@ -11,12 +11,14 @@ use tokenizers::Tokenizer;
 use crate::{
     pipeline::{
         apply_chat_template,
-        text_models_inputs_processor::{self, get_completion_input, get_prompt_input},
+        text_models_inputs_processor::{
+            self, get_completion_input, get_prompt_input, PagedAttentionMeta,
+        },
         InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::ModelInputs,
-    MessageContent, Pipeline,
+    MessageContent, Pipeline, Tool,
 };
 
 use super::{
@@ -52,12 +54,14 @@ impl Processor for Idefics2Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        tools: Vec<Tool>,
     ) -> anyhow::Result<Vec<u32>> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
             add_generation_prompt,
             self.template_action(),
+            tools,
         )?;
 
         let mut image_str = format!(
@@ -116,6 +120,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
     ) -> anyhow::Result<Box<dyn std::any::Any>> {
         if is_xlora {
             anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
@@ -129,6 +134,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             positions_kernel,
             context_lens,
             position_ids,
+            paged_attn_meta,
         } = if is_prompt {
             get_prompt_input(
                 input_seqs
@@ -138,6 +144,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                paged_attn_metadata.as_mut(),
             )?
         } else {
             get_completion_input(
@@ -149,6 +156,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                paged_attn_metadata.as_mut(),
             )?
         };
         let config = other_config.expect("Need a PreProcessorConfig config.");
@@ -188,6 +196,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             position_ids,
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
+            paged_attn_meta,
         }))
     }
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
-use candle_core::{DType, IndexOp, Result, Shape, Tensor, D};
+use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
 
 use crate::{layers::FusedBiasLinear, serde_default_fn};
@@ -148,23 +148,19 @@ impl ClipAttention {
     }
 
     fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
-        let in_dtype = xs.dtype();
         let (bsz, seq_len, hidden_size) = xs.dims3()?;
 
         let query_states = (self.q_proj.forward(xs)? * self.scale)?;
         let proj_shape = (bsz * self.num_attention_heads, seq_len, self.head_dim);
         let query_states = self
             .shape(&query_states, seq_len, bsz)?
-            .reshape(proj_shape)?
-            .to_dtype(DType::F32)?;
+            .reshape(proj_shape)?;
         let key_states = self
             .shape(&self.k_proj.forward(xs)?, seq_len, bsz)?
-            .reshape(proj_shape)?
-            .to_dtype(DType::F32)?;
+            .reshape(proj_shape)?;
         let value_states = self
             .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
-            .reshape(proj_shape)?
-            .to_dtype(DType::F32)?;
+            .reshape(proj_shape)?;
         let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
 
         let src_len = key_states.dim(1)?;
@@ -178,9 +174,9 @@ impl ClipAttention {
             attn_weights
         };
 
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
-        let attn_output = attn_weights.matmul(&value_states)?.to_dtype(in_dtype)?;
+        let attn_output = attn_weights.matmul(&value_states)?;
         let attn_output = attn_output
             .reshape((bsz, self.num_attention_heads, seq_len, self.head_dim))?
             .transpose(1, 2)?
@@ -262,7 +258,7 @@ impl ClipEncoder {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
-            let layer = ClipEncoderLayer::new(vs.pp(&index.to_string()), c)?;
+            let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
         }
         Ok(ClipEncoder { layers })

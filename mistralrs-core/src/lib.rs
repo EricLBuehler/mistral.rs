@@ -27,17 +27,24 @@ mod lora;
 mod model_loader;
 mod ops;
 pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
+
 mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
 mod cublaslt;
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+mod paged_attention;
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+use dummy_paged_attention as paged_attention;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -46,32 +53,38 @@ mod sampler;
 mod scheduler;
 mod sequence;
 mod toml_selector;
+mod tools;
 mod utils;
 mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
+    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GemmaLoader,
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
+    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
+    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource,
+    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
 };
 pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 pub use response::Response;
 pub use response::*;
 pub use sampler::{SamplingParams, StopTokens, TopLogprob};
-pub use scheduler::SchedulerMethod;
+pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
+pub use tools::{
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
+};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
+pub use utils::paged_attn_supported;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
@@ -93,12 +106,13 @@ pub struct MistralRs {
 #[derive(Clone)]
 struct RebootState {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     truncate_sequence: bool,
     no_kv_cache: bool,
     no_prefix_cache: bool,
     prefix_cache_n: usize,
     disable_eos_stop: bool,
+    throughput_logging_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -127,7 +141,7 @@ impl From<MistralRsError> for pyo3::PyErr {
 /// instance stays on the calling thread.
 pub struct MistralRsBuilder {
     pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
-    method: SchedulerMethod,
+    method: SchedulerConfig,
     log: Option<String>,
     truncate_sequence: Option<bool>,
     no_kv_cache: Option<bool>,
@@ -135,10 +149,11 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     gemm_full_precision_f16: Option<bool>,
+    throughput_logging_enabled: Option<()>,
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerMethod) -> Self {
+    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerConfig) -> Self {
         Self {
             pipeline,
             method,
@@ -149,6 +164,7 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             gemm_full_precision_f16: None,
+            throughput_logging_enabled: None,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -181,6 +197,10 @@ impl MistralRsBuilder {
     }
     pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
+        self
+    }
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging_enabled = Some(());
         self
     }
 
@@ -238,6 +258,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             gemm_full_precision_f16,
+            throughput_logging_enabled,
         } = config;
 
         let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
@@ -263,6 +284,7 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
+            throughput_logging_enabled: throughput_logging_enabled.is_some(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -283,6 +305,9 @@ impl MistralRs {
                     prefix_cache_n,
                     disable_eos_stop,
                 );
+                if throughput_logging_enabled.is_some() {
+                    engine.enable_throughput_logging();
+                }
                 engine.run().await;
             });
         });
@@ -333,6 +358,9 @@ impl MistralRs {
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                     );
+                    if reboot_state.throughput_logging_enabled {
+                        engine.enable_throughput_logging();
+                    }
                     engine.run().await;
                 });
             });

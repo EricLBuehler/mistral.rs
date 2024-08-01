@@ -5,17 +5,27 @@ use std::{
 };
 
 use anyhow::Result;
+use either::Either;
 use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
+use regex_automata::meta::Regex;
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
-    api_dir_list, api_get_file, lora::LoraConfig, pipeline::chat_template::ChatTemplate,
-    utils::tokens::get_token, xlora_models::XLoraConfig, ModelPaths, Ordering, TokenSource,
+    api_dir_list, api_get_file,
+    lora::LoraConfig,
+    pipeline::chat_template::{ChatTemplate, ChatTemplateValue},
+    utils::tokens::get_token,
+    xlora_models::XLoraConfig,
+    ModelPaths, Ordering, TokenSource,
 };
+
+// Match files against these, avoids situations like `consolidated.safetensors`
+const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}";
+const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}";
 
 pub(crate) struct XLoraPaths {
     pub adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -273,8 +283,38 @@ pub fn get_model_paths(
             Ok(files)
         }
         None => {
+            // We only match these patterns for model names
+            let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
+            let pickle_match = Regex::new(PICKLE_MATCH)?;
+
             let mut filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
+            let listing = api_dir_list!(api, model_id)
+                .filter(|x| safetensor_match.is_match(x) || pickle_match.is_match(x));
+            let safetensors = listing
+                .clone()
+                .filter(|x| x.ends_with(".safetensors"))
+                .collect::<Vec<_>>();
+            let pickles = listing
+                .clone()
+                .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
+                .collect::<Vec<_>>();
+            let files = if !safetensors.is_empty() {
+                // Always prefer safetensors
+                safetensors
+            } else if !pickles.is_empty() {
+                // Fall back to pickle
+                pickles
+            } else {
+                anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
+            };
+            info!(
+                "Found model weight filenames {:?}",
+                files
+                    .iter()
+                    .map(|x| x.split('/').last().unwrap())
+                    .collect::<Vec<_>>()
+            );
+            for rfilename in files {
                 filenames.push(api_get_file!(api, &rfilename, model_id));
             }
             Ok(filenames)
@@ -319,7 +359,7 @@ pub(crate) fn get_chat_template(
     } else if chat_template_ovrd.is_some() {
         None
     } else {
-        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there.");
+        panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
     };
 
     let mut template: ChatTemplate = match chat_template_ovrd {
@@ -327,7 +367,7 @@ pub(crate) fn get_chat_template(
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
             let mut template = ChatTemplate::default();
-            template.chat_template = Some(chat_template);
+            template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
@@ -339,7 +379,9 @@ pub(crate) fn get_chat_template(
         .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
     if let Some(processor_conf) = processor_conf {
         if processor_conf.chat_template.is_some() {
-            template.chat_template = processor_conf.chat_template;
+            template.chat_template = processor_conf
+                .chat_template
+                .map(|x| ChatTemplateValue(Either::Left(x)));
         }
     }
 
@@ -400,5 +442,63 @@ pub(crate) fn get_chat_template(
                 .expect("Serialization of modified chat template failed.");
             serde_json::from_str(&ser).unwrap()
         }
+    }
+}
+
+mod tests {
+    #[test]
+    fn match_safetensors() -> anyhow::Result<()> {
+        use regex_automata::meta::Regex;
+
+        use super::SAFETENSOR_MATCH;
+        let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
+
+        let positive_ids = [
+            "model-00001-of-00001.safetensors",
+            "model-00002-of-00002.safetensors",
+            "model-00003-of-00003.safetensors",
+            "model-00004-of-00004.safetensors",
+            "model-00005-of-00005.safetensors",
+            "model-00006-of-00006.safetensors",
+        ];
+        let negative_ids = [
+            "model-000001-of-00001.safetensors",
+            "model-0000a-of-00002.safetensors",
+            "model-000-of-00003.safetensors",
+            "consolidated.safetensors",
+        ];
+        for id in positive_ids {
+            assert!(safetensor_match.is_match(id));
+        }
+        for id in negative_ids {
+            assert!(!safetensor_match.is_match(id));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn match_pickle() -> anyhow::Result<()> {
+        use regex_automata::meta::Regex;
+
+        use super::PICKLE_MATCH;
+        let pickle_match = Regex::new(PICKLE_MATCH)?;
+
+        let positive_ids = [
+            "pytorch_model-00001-of-00002.bin",
+            "pytorch_model-00002-of-00002.bin",
+        ];
+        let negative_ids = [
+            "pytorch_model-000001-of-00001.bin",
+            "pytorch_model-0000a-of-00002.bin",
+            "pytorch_model-000-of-00003.bin",
+            "pytorch_consolidated.bin",
+        ];
+        for id in positive_ids {
+            assert!(pickle_match.is_match(id));
+        }
+        for id in negative_ids {
+            assert!(!pickle_match.is_match(id));
+        }
+        Ok(())
     }
 }

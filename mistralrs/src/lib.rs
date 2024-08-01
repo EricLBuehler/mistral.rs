@@ -8,7 +8,7 @@
 //! use mistralrs::{
 //!     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder,
 //!     NormalLoaderType, NormalRequest, Request, RequestMessage, Response,
-//!     SamplingParams, SchedulerMethod, TokenSource,
+//!     SamplingParams, SchedulerConfig, DefaultSchedulerMethod, TokenSource,
 //! };
 //!
 //! fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -34,6 +34,8 @@
 //!         constraint: Constraint::None,
 //!         suffix: None,
 //!         adapters: None,
+//!         tool_choice: None,
+//!         tools: None,
 //!     });
 //!     mistralrs.get_sender()?.blocking_send(request)?;
 //!

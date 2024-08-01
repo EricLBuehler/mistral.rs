@@ -202,6 +202,9 @@ impl LinearLayerLike for LoraLinear {
     fn bias(&self) -> Option<&Tensor> {
         self.old.bias()
     }
+    fn bias_mut(&mut self) -> Option<&mut Tensor> {
+        self.old.bias_mut()
+    }
     fn weight(&self) -> &Tensor {
         unreachable!()
     }
@@ -290,5 +293,8 @@ impl LinearLayerLike for LoraLinear {
             let out = out.sum(0)?;
             out + result
         }
+    }
+    fn is_lora(&self) -> bool {
+        !self.adapters.is_empty()
     }
 }

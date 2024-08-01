@@ -16,7 +16,9 @@ use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -26,8 +28,9 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, do_sample, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, Pipeline, TryIntoDType,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -42,12 +45,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct NormalPipeline {
     model: Box<dyn NormalModel + Send + Sync>,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     non_granular_state: Option<NonGranularState>,
@@ -87,7 +89,6 @@ pub struct NormalLoaderBuilder {
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
-    pub repeat_last_n: usize,
 }
 
 impl NormalLoaderBuilder {
@@ -193,6 +194,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -203,7 +205,15 @@ impl Loader for NormalLoader {
             None,
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -215,6 +225,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
 
         let config = std::fs::read_to_string(paths.get_config_filename())?;
@@ -226,6 +237,9 @@ impl Loader for NormalLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
+        } else if paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         info!(
@@ -242,6 +256,12 @@ impl Loader for NormalLoader {
 
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
+        let attention_mechanism = if paged_attn_config.is_some() {
+            AttentionImplementation::PagedAttention
+        } else {
+            AttentionImplementation::Eager
+        };
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
@@ -253,7 +273,8 @@ impl Loader for NormalLoader {
                 silent,
                 mapper,
                 in_situ_quant.is_some(),
-                device.clone()
+                device.clone(),
+                attention_mechanism
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -296,13 +317,35 @@ impl Loader for NormalLoader {
             model.quantize(in_situ_quant, device.clone())?;
         }
 
+        let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
+            warn!("Adapter models do not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                dtype,
+                model.config(),
+                device,
+            )?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
+        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -315,7 +358,6 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
@@ -323,6 +365,9 @@ impl Loader for NormalLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: dtype,
+                sliding_window,
+                cache_config,
+                cache_engine,
             }),
         })))
     }
@@ -416,6 +461,7 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
+            mut paged_attn_meta,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
@@ -424,6 +470,12 @@ impl Pipeline for NormalPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
             true => self.model.xlora_forward(
                 &input_ids,
@@ -447,7 +499,7 @@ impl Pipeline for NormalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text

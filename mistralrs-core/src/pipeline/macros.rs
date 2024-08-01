@@ -299,7 +299,7 @@ macro_rules! get_paths_gguf {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr, $attention_mechanism:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -318,6 +318,7 @@ macro_rules! normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
             },
+            $attention_mechanism,
         )?
     }};
 }
@@ -325,7 +326,7 @@ macro_rules! normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vision_normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr, $attention_mechanism:expr) => {{
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
@@ -344,6 +345,7 @@ macro_rules! vision_normal_model_loader {
                 loading_isq: $loading_isq,
                 real_device: $real_device,
             },
+            $attention_mechanism,
         )?
     }};
 }

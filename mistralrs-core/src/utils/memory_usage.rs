@@ -29,4 +29,28 @@ impl MemoryUsage {
             }
         }
     }
+
+    pub fn get_total_memory(&self, device: &Device) -> Result<usize> {
+        match device {
+            Device::Cpu => {
+                let mut sys = System::new_all();
+                sys.refresh_cpu();
+                Ok(usize::try_from(sys.total_memory())? * KB_TO_BYTES)
+            }
+            #[cfg(feature = "cuda")]
+            Device::Cuda(_) => {
+                use candle_core::cuda_backend::WrapErr;
+                Ok(candle_core::cuda::cudarc::driver::result::mem_get_info()
+                    .w()?
+                    .1)
+            }
+            #[cfg(not(feature = "cuda"))]
+            Device::Cuda(_) => {
+                candle_core::bail!("Cannot get total memory for CUDA device")
+            }
+            Device::Metal(_) => {
+                candle_core::bail!("Cannot get total memory for Metal device")
+            }
+        }
+    }
 }

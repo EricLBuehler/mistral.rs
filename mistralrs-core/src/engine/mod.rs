@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -10,12 +9,16 @@ use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
-    pipeline::{AdapterInstruction, CacheInstruction},
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
+        CacheInstruction,
+    },
     request::NormalRequest,
     response::CompletionChoice,
-    CompletionResponse, RequestMessage, Response, DEBUG,
+    scheduler::{Scheduler, SchedulerOutput},
+    tools::{ToolCallingMatcher, ToolChoice},
+    CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
-use candle_core::{Device, Result, Tensor};
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -27,7 +30,6 @@ use crate::{
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
-    scheduler::{Scheduler, SchedulerMethod},
     sequence::{Sequence, SequenceGroup, SequenceRecognizer, SequenceState},
     Constraint, StopTokens,
 };
@@ -39,13 +41,14 @@ pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
 pub struct Engine {
     rx: Receiver<Request>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    scheduler: Scheduler<VecDeque<Sequence>>,
+    scheduler: Box<dyn Scheduler>,
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
     prefix_cacher: PrefixCacheManager,
     is_debug: bool,
     disable_eos_stop: bool,
+    throughput_logging_enabled: bool,
 }
 
 impl Engine {
@@ -53,7 +56,7 @@ impl Engine {
     pub fn new(
         rx: Receiver<Request>,
         pipeline: Arc<Mutex<dyn Pipeline>>,
-        method: SchedulerMethod,
+        config: SchedulerConfig,
         truncate_sequence: bool,
         no_kv_cache: bool,
         no_prefix_cache: bool,
@@ -62,10 +65,14 @@ impl Engine {
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
+        // Prefix caching is always disabled if using PagedAttention for now.
+        // TODO
+        let no_prefix_cache =
+            matches!(config, SchedulerConfig::PagedAttentionMeta { .. }) || no_prefix_cache;
         Self {
             rx,
             pipeline,
-            scheduler: Scheduler::new(method),
+            scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
             no_kv_cache,
@@ -77,7 +84,14 @@ impl Engine {
             ),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
+            throughput_logging_enabled: false,
         }
+    }
+
+    // TODO(EricLBuehler): On v0.3.0 move this into the Engine constructor
+    /// Enable throughput logging.
+    pub fn enable_throughput_logging(&mut self) {
+        self.throughput_logging_enabled = true;
     }
 
     pub async fn run(&mut self) {
@@ -88,157 +102,321 @@ impl Engine {
                 self.handle_request(request).await;
             }
             let run_start = Instant::now();
-            let mut scheduled = self.scheduler.schedule();
+            let scheduled = self.scheduler.schedule();
 
-            if scheduled.completion.len() > 0 {
-                let current_completion_ids: Vec<usize> =
-                    scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                let res = {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                    let pre_op =
-                        if !self.no_kv_cache && last_completion_ids != current_completion_ids {
-                            CacheInstruction::In(
-                                scheduled.completion[0]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
-                        } else {
-                            CacheInstruction::Nothing(
-                                scheduled.completion[0]
-                                    .get_adapters()
-                                    .map(AdapterInstruction::Activate)
-                                    .unwrap_or(AdapterInstruction::None),
-                            )
+            match scheduled {
+                SchedulerOutput::DefaultScheduler {
+                    output: mut scheduled,
+                } => {
+                    let mut prompt_ts = None;
+                    let mut completion_ts = None;
+                    if scheduled.completion.len() > 0 {
+                        let throughput_start = Instant::now();
+                        let current_completion_ids: Vec<usize> =
+                            scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        let res = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                            let pre_op = if !self.no_kv_cache
+                                && last_completion_ids != current_completion_ids
+                            {
+                                CacheInstruction::In(
+                                    scheduled.completion[0]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            } else {
+                                CacheInstruction::Nothing(
+                                    scheduled.completion[0]
+                                        .get_adapters()
+                                        .map(AdapterInstruction::Activate)
+                                        .unwrap_or(AdapterInstruction::None),
+                                )
+                            };
+                            let post_op = if !self.no_kv_cache {
+                                CacheInstruction::Out
+                            } else {
+                                CacheInstruction::Reset {
+                                    reset_non_granular: false,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
+
+                            pipeline
+                                .step(
+                                    &mut scheduled.completion,
+                                    false,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                                )
+                                .await
                         };
-                    let post_op = if !self.no_kv_cache {
-                        CacheInstruction::Out
-                    } else {
-                        CacheInstruction::Reset {
-                            reset_non_granular: false,
-                            adapter_inst: AdapterInstruction::None,
-                        }
-                    };
 
-                    pipeline
-                        .step(
+                        handle_pipeline_forward_error!(
+                            "completion step",
+                            res,
                             &mut scheduled.completion,
-                            false,
-                            &mut self.prefix_cacher,
-                            self.disable_eos_stop,
-                            rng.clone(),
-                            pre_op,
-                            post_op,
-                        )
-                        .await
-                };
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
 
-                handle_pipeline_forward_error!(
-                    "completion step",
-                    res,
-                    &mut scheduled.completion,
-                    self.pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
-
-                last_completion_ids = current_completion_ids;
-            }
-
-            if scheduled.prompt.len() > 0 {
-                let logits = {
-                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
-
-                    // Run the prompt seqs
-                    let post_op = if !self.no_kv_cache {
-                        CacheInstruction::Out
-                    } else {
-                        CacheInstruction::Reset {
-                            reset_non_granular: false,
-                            adapter_inst: AdapterInstruction::None,
+                        let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
+                        if self.throughput_logging_enabled {
+                            completion_ts = Some(
+                                scheduled.completion.len() as f64
+                                    / throughput_end
+                                        .duration_since(throughput_start)
+                                        .as_secs_f64(),
+                            );
                         }
-                    };
-                    let adapter_inst = scheduled.prompt[0]
-                        .get_adapters()
-                        .map(AdapterInstruction::Activate)
-                        .unwrap_or(AdapterInstruction::None);
 
-                    // Reset non granular state because the old sequence must be dead.
-                    // Technically we don't need to do this but it is better to be safe.
-                    pipeline
-                        .step(
+                        last_completion_ids = current_completion_ids;
+                    }
+
+                    if scheduled.prompt.len() > 0 {
+                        let throughput_start = Instant::now();
+                        let logits = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+                            // Run the prompt seqs
+                            let post_op = if !self.no_kv_cache {
+                                CacheInstruction::Out
+                            } else {
+                                CacheInstruction::Reset {
+                                    reset_non_granular: false,
+                                    adapter_inst: AdapterInstruction::None,
+                                }
+                            };
+                            let adapter_inst = scheduled.prompt[0]
+                                .get_adapters()
+                                .map(AdapterInstruction::Activate)
+                                .unwrap_or(AdapterInstruction::None);
+
+                            // Reset non granular state because the old sequence must be dead.
+                            // Technically we don't need to do this but it is better to be safe.
+                            pipeline
+                                .step(
+                                    &mut scheduled.prompt,
+                                    true,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::DefaultInstructions {
+                                        pre_op: CacheInstruction::Reset {
+                                            reset_non_granular: false,
+                                            adapter_inst,
+                                        },
+                                        post_op,
+                                    },
+                                )
+                                .await
+                        };
+
+                        handle_pipeline_forward_error!(
+                            "prompt step",
+                            logits,
                             &mut scheduled.prompt,
-                            true,
-                            &mut self.prefix_cacher,
-                            self.disable_eos_stop,
-                            rng.clone(),
-                            CacheInstruction::Reset {
-                                reset_non_granular: false,
-                                adapter_inst,
-                            },
-                            post_op,
-                        )
-                        .await
-                };
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
 
-                handle_pipeline_forward_error!(
-                    "prompt step",
-                    logits,
-                    &mut scheduled.prompt,
-                    self.pipeline,
-                    'lp,
-                    self.prefix_cacher
-                );
+                        let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
+                        if self.throughput_logging_enabled {
+                            prompt_ts = Some(
+                                scheduled
+                                    .prompt
+                                    .iter()
+                                    .map(|seq| seq.get_toks().len())
+                                    .sum::<usize>() as f64
+                                    / throughput_end
+                                        .duration_since(throughput_start)
+                                        .as_secs_f64(),
+                            );
+                        }
 
-                for seq in scheduled.prompt.iter_mut() {
-                    seq.set_state(SequenceState::RunningCompletion);
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time travel has occurred!")
-                        .as_millis();
-                    #[allow(clippy::cast_precision_loss)]
-                    let prompt_tok_per_sec = seq.len() as f32 / (now - seq.timestamp()) as f32;
-                    seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                    seq.prompt_timestamp = Some(now);
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.set_state(SequenceState::RunningCompletion);
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Time travel has occurred!")
+                                .as_millis();
+                            #[allow(clippy::cast_precision_loss)]
+                            let prompt_tok_per_sec =
+                                seq.len() as f32 / (now - seq.timestamp()) as f32;
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                            seq.prompt_timestamp = Some(now);
+                        }
+                        last_completion_ids = vec![];
+                    }
+
+                    if self.is_debug {
+                        let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                        let total_len = scheduled.prompt.len() + scheduled.completion.len();
+                        if total_len > 0 {
+                            let prompt_lengths = scheduled
+                                .prompt
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            let completion_lengths = scheduled
+                                .completion
+                                .iter()
+                                .map(|seq| seq.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            tracing::info!(
+                                "Prompt[{}] Completion[{}] - {}ms",
+                                prompt_lengths,
+                                completion_lengths,
+                                ms_from_last_run * 1000.,
+                            );
+                        }
+                    }
+
+                    if self.throughput_logging_enabled {
+                        match (prompt_ts, completion_ts) {
+                            (Some(prompt), Some(completion)) => {
+                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s");
+                            }
+                            (None, Some(completion)) => {
+                                info!("Throughput (scheduler V1): Completion {completion} T/s");
+                            }
+                            (Some(prompt), None) => {
+                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s");
+                            }
+                            (None, None) => (),
+                        }
+                    }
+
+                    if scheduled.prompt.len() == 0
+                        && scheduled.completion.len() == 0
+                        && self.scheduler.waiting_len() == 0
+                    {
+                        // If there is nothing to do, sleep until a request comes in
+                        if let Some(request) = self.rx.recv().await {
+                            self.handle_request(request).await;
+                        }
+                    }
                 }
-                last_completion_ids = vec![];
+                SchedulerOutput::PagedAttention { mut output } => {
+                    if !output.scheduled.is_empty() {
+                        let throughput_start = Instant::now();
+
+                        let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
+
+                        let mut guards = output
+                            .scheduled
+                            .iter_mut()
+                            .map(|seq| seq.lock().unwrap())
+                            .collect::<Vec<_>>();
+
+                        let mut guards_mut =
+                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
+                        let res = {
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+                            let block_size = self.scheduler.block_size().unwrap();
+
+                            let metadata = PagedAttentionMeta {
+                                block_size,
+                                sliding_window: pipeline.get_metadata().sliding_window,
+                                block_engine: self.scheduler.block_engine().unwrap(),
+                            };
+
+                            pipeline
+                                .step(
+                                    &mut guards_mut,
+                                    is_prompt,
+                                    &mut self.prefix_cacher,
+                                    self.disable_eos_stop,
+                                    rng.clone(),
+                                    CacheBackendMetadata::PagedAttention {
+                                        metadata,
+                                        blocks_to_copy: output.blocks_to_copy,
+                                        blocks_to_swap_in: output.blocks_to_swap_in,
+                                        blocks_to_swap_out: output.blocks_to_swap_out,
+                                    },
+                                )
+                                .await
+                        };
+
+                        handle_pipeline_forward_error!(
+                            "step",
+                            res,
+                            &mut guards_mut,
+                            self.pipeline,
+                            'lp,
+                            self.prefix_cacher
+                        );
+
+                        if self.is_debug {
+                            let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                            let total_len = guards.len();
+                            if total_len > 0 {
+                                let lengths = guards
+                                    .iter()
+                                    .map(|seq| seq.len().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+
+                                let (prompt_lengths, completion_lengths) = if is_prompt {
+                                    (lengths, "".to_string())
+                                } else {
+                                    ("".to_string(), lengths)
+                                };
+
+                                tracing::info!(
+                                    "Prompt[{}] Completion[{}] - {}ms",
+                                    prompt_lengths,
+                                    completion_lengths,
+                                    ms_from_last_run * 1000.,
+                                );
+                            }
+                        }
+
+                        let throughput_end = Instant::now();
+                        #[allow(clippy::cast_precision_loss)]
+                        if self.throughput_logging_enabled {
+                            let n_toks = if is_prompt {
+                                guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
+                            } else {
+                                guards.len()
+                            };
+                            let ts = n_toks as f64
+                                / throughput_end
+                                    .duration_since(throughput_start)
+                                    .as_secs_f64();
+                            info!("Throughput (scheduler V2): {ts} T/s");
+                        }
+
+                        if is_prompt {
+                            for mut seq in guards {
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .expect("Time travel has occurred!")
+                                    .as_millis();
+                                #[allow(clippy::cast_precision_loss)]
+                                let prompt_tok_per_sec =
+                                    seq.len() as f32 / (now - seq.timestamp()) as f32;
+                                seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                seq.prompt_timestamp = Some(now);
+                            }
+                        }
+                    }
+                }
             }
 
-            if self.is_debug {
-                let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                let total_len = scheduled.prompt.len() + scheduled.completion.len();
-                if total_len > 0 {
-                    let prompt_lengths = scheduled
-                        .prompt
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    let completion_lengths = scheduled
-                        .completion
-                        .iter()
-                        .map(|seq| seq.len().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    tracing::info!(
-                        "Prompt[{}] Completion[{}] - {}ms",
-                        prompt_lengths,
-                        completion_lengths,
-                        ms_from_last_run * 1000.,
-                    );
-                }
-            }
-            if scheduled.prompt.len() == 0
-                && scheduled.completion.len() == 0
-                && self.scheduler.waiting_len() == 0
-            {
-                // If there is nothing to do, sleep until a request comes in
-                if let Some(request) = self.rx.recv().await {
-                    self.handle_request(request).await;
-                }
-            }
+            self.scheduler.free_finished_sequence_groups();
         }
     }
 
@@ -251,26 +429,6 @@ impl Engine {
             Constraint::None => SequenceRecognizer::None,
         };
         Ok(recognizer)
-    }
-
-    fn alloc_logits_bias(&self, logits_bias: Option<HashMap<u32, f32>>) -> Result<Option<Tensor>> {
-        let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
-        let vocab_size = tokenizer.get_vocab_size(true);
-
-        match logits_bias {
-            Some(bias) => {
-                let mut logits_bias = vec![0.0; vocab_size];
-                for (k, v) in bias {
-                    logits_bias[k as usize] = v;
-                }
-                Ok(Some(Tensor::from_vec(
-                    logits_bias,
-                    vocab_size,
-                    &Device::Cpu,
-                )?))
-            }
-            None => Ok(None),
-        }
     }
 
     async fn handle_request(&mut self, request: Request) {
@@ -330,6 +488,15 @@ impl Engine {
             _ => None,
         };
 
+        let matcher = if request.tools.is_some() {
+            Some(Arc::new(handle_seq_error!(
+                ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
+                request.response
+            )))
+        } else {
+            None
+        };
+
         let mut prompt = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
@@ -337,7 +504,12 @@ impl Engine {
                 messages,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let template = pipeline.get_processor().process(pipeline, messages, true);
+                let template = pipeline.get_processor().process(
+                    pipeline,
+                    messages,
+                    true,
+                    request.tools.unwrap_or_default(),
+                );
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
@@ -398,6 +570,7 @@ impl Engine {
             .map(|x| x as i64)
             .unwrap_or(-1);
         let topp = request.sampling_params.top_p.unwrap_or(1.0);
+        let minp = request.sampling_params.min_p.unwrap_or(0.0);
         let num_hidden_layers = get_mut_arcmutex!(self.pipeline)
             .get_metadata()
             .num_hidden_layers;
@@ -466,19 +639,6 @@ impl Engine {
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!");
 
-        let logits_bias = match self.alloc_logits_bias(request.sampling_params.logits_bias) {
-            Ok(logits_bias) => logits_bias,
-            Err(err) => {
-                request
-                    .response
-                    .send(Response::ValidationError(
-                        format!("Failed creation of logits bias. {}", err).into(),
-                    ))
-                    .await
-                    .expect("Expected receiver.");
-                return;
-            }
-        };
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
         let sampler = Sampler::new(
@@ -487,9 +647,9 @@ impl Engine {
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
-            logits_bias,
             topk,
             topp,
+            minp,
         );
 
         if request.sampling_params.n_choices == 0 {
@@ -519,6 +679,12 @@ impl Engine {
                 }
             };
 
+            let block_size = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .cache_config
+                .clone()
+                .map(|conf| conf.block_size);
+            let trie = (*get_mut_arcmutex!(self.pipeline).get_metadata().tok_trie).clone();
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -548,6 +714,9 @@ impl Engine {
                 },
                 request.adapters.clone(),
                 images.clone(),
+                block_size,
+                trie,
+                matcher.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

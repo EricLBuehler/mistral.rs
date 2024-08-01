@@ -303,6 +303,7 @@ async fn parse_request(
                 temperature: oairequest.temperature,
                 top_k: oairequest.top_k,
                 top_p: oairequest.top_p,
+                min_p: oairequest.min_p,
                 top_n_logprobs: oairequest.top_logprobs.unwrap_or(1),
                 frequency_penalty: oairequest.frequency_penalty,
                 presence_penalty: oairequest.presence_penalty,
@@ -321,6 +322,8 @@ async fn parse_request(
                 None => Constraint::None,
             },
             adapters: oairequest.adapters,
+            tool_choice: oairequest.tool_choice,
+            tools: oairequest.tools,
         }),
         is_streaming,
     ))

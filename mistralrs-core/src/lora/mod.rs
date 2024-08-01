@@ -100,8 +100,10 @@ fn make_adapter(
 pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
     fn inner(&mut self) -> &mut QMatMul;
     fn is_quant(&self) -> bool;
+    fn is_lora(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
+    fn bias_mut(&mut self) -> Option<&mut Tensor>;
     fn lora_forward(
         &self,
         x: &Tensor,
@@ -156,6 +158,9 @@ impl LinearLayerLike for Linear {
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
     }
+    fn bias_mut(&mut self) -> Option<&mut Tensor> {
+        unreachable!()
+    }
     fn weight(&self) -> &Tensor {
         self.weight()
     }
@@ -169,6 +174,9 @@ impl LinearLayerLike for Linear {
         self.forward(x)
     }
     fn is_quant(&self) -> bool {
+        false
+    }
+    fn is_lora(&self) -> bool {
         false
     }
 }

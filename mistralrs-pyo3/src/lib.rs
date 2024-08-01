@@ -2,65 +2,52 @@
 
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
-use candle_core::{quantized::GgmlDType, Result};
+use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
+use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fmt::Debug,
     fs,
     io::Read,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, AnyMoeLoader, ChatCompletionResponse, CompletionResponse, Constraint,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerMethod, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
+    CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    Tool, VisionLoaderBuilder, VisionSpecificConfig,
 };
-use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
-    prelude::*,
-    types::{PyList, PyString},
-};
+use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
 mod anymoe;
+mod requests;
 mod stream;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
 
-#[cfg(not(feature = "metal"))]
-static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
-#[cfg(feature = "metal")]
-static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static DEVICE: OnceLock<Device> = OnceLock::new();
 
 #[cfg(not(feature = "metal"))]
-fn get_device() -> Result<Device> {
-    let mut device = CUDA_DEVICE.lock().unwrap();
-    if let Some(device) = device.as_ref() {
-        return Ok(device.clone());
-    };
-    let res = Device::cuda_if_available(0)?;
-    *device = Some(res.clone());
-    Ok(res)
+fn get_device() -> Device {
+    DEVICE
+        .get_or_init(|| Device::cuda_if_available(0).expect("Failed to create device"))
+        .clone()
 }
 #[cfg(feature = "metal")]
-fn get_device() -> Result<Device> {
-    let mut device = METAL_DEVICE.lock().unwrap();
-    if let Some(device) = device.as_ref() {
-        return Ok(device.clone());
-    };
-    let res = Device::new_metal(0)?;
-    *device = Some(res.clone());
-    Ok(res)
+fn get_device() -> Device {
+    DEVICE
+        .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
+        .clone()
 }
 
 fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
@@ -77,7 +64,7 @@ fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
         "Q5K" => Ok(GgmlDType::Q5K),
         "Q6K" => Ok(GgmlDType::Q6K),
         "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown")),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
     }
 }
 
@@ -94,9 +81,6 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
 ) -> PyResult<Box<dyn Loader>> {
-    const REPEAT_LAST_N_DEFAULT: usize = 64;
-    const GQA_DEFAULT: usize = 1;
-
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -105,14 +89,10 @@ fn parse_which(
     Ok(match which {
         Which::Plain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -121,16 +101,12 @@ fn parse_which(
         Which::XLora {
             model_id,
             xlora_model_id,
-            repeat_last_n,
             order,
             tokenizer_json,
             tgt_non_granular_index,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -150,14 +126,10 @@ fn parse_which(
             model_id,
             tokenizer_json,
             adapters_model_id,
-            repeat_last_n,
             order,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            NormalSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             model_id,
@@ -175,11 +147,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -190,14 +158,10 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -218,13 +182,9 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
         } => GGUFLoaderBuilder::new(
-            GGUFSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
             chat_template,
             tok_model_id,
             quantized_model_id,
@@ -244,13 +204,9 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -263,16 +219,12 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             xlora_model_id,
             order,
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -295,15 +247,11 @@ fn parse_which(
             tokenizer_json,
             quantized_model_id,
             quantized_filename,
-            repeat_last_n,
             adapters_model_id,
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig {
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-                gqa: gqa.unwrap_or(GQA_DEFAULT),
-            },
+            GGMLSpecificConfig { gqa },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -321,14 +269,10 @@ fn parse_which(
         .build(),
         Which::VisionPlain {
             model_id,
-            repeat_last_n,
             tokenizer_json,
             arch,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig {
-                use_flash_attn,
-                repeat_last_n: repeat_last_n.unwrap_or(REPEAT_LAST_N_DEFAULT),
-            },
+            VisionSpecificConfig { use_flash_attn },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -339,7 +283,6 @@ fn parse_which(
 
 #[pymethods]
 impl Runner {
-    // TODO(EricLBuehler): on version 0.2.0 remove the Either for device layers.
     #[new]
     #[pyo3(signature = (
         which,
@@ -353,6 +296,11 @@ impl Runner {
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
+        pa_gpu_mem = None,
+        pa_gpu_mem_usage = None,
+        pa_ctxt_len = None,
+        pa_blk_size = None,
+        no_paged_attn = false,
     ))]
     fn new(
         which: Which,
@@ -363,9 +311,14 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
-        num_device_layers: Option<Either<usize, Vec<String>>>,
+        num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
+        pa_gpu_mem: Option<usize>,
+        pa_gpu_mem_usage: Option<f32>,
+        pa_ctxt_len: Option<usize>,
+        pa_blk_size: Option<usize>,
+        no_paged_attn: bool,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -430,7 +383,7 @@ impl Runner {
             loader
         };
 
-        let device = get_device().map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let device = get_device();
         let isq = if let Some(isq) = in_situ_quant {
             Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
         } else {
@@ -438,12 +391,13 @@ impl Runner {
         };
 
         let mapper = match num_device_layers {
-            Some(Either::Right(device_layers)) => {
+            Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![
-                        DeviceLayerMapMetadata { ordinal: 0, layers },
-                    ])
+                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
+                        ordinal: 0,
+                        layers,
+                    }])
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -467,18 +421,52 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers_multi_gpu(mapping)
+                    DeviceMapMetadata::from_num_device_layers(mapping)
                 }
-            }
-            Some(Either::Left(n_device_layers)) => {
-                // TODO(EricLBuehler): Hardcoding is bad but we are creating the device on ord 0 anyway.
-                DeviceMapMetadata::from_num_device_layers_multi_gpu(vec![DeviceLayerMapMetadata {
-                    ordinal: 0,
-                    layers: n_device_layers,
-                }])
             }
             None => DeviceMapMetadata::dummy(),
         };
+
+        // Allocate 0.5 GB of CPU memory just as a placeholder.
+        // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
+        let cache_config =
+            match (
+                pa_blk_size,
+                pa_gpu_mem,
+                pa_gpu_mem_usage,
+                pa_ctxt_len,
+                paged_attn_supported(),
+                no_paged_attn,
+            ) {
+                (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                )?),
+                (block_size, None, None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Utilization(f),
+                )?),
+                (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+                    block_size,
+                    512,
+                    MemoryGpuConfig::Amount(m),
+                )?),
+                (block_size, Some(_m), Some(f), None, true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (block_size, Some(_m), None, Some(ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,
+                ),
+                (block_size, None, Some(f), Some(_ctxt), true, false) => Some(
+                    PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,
+                ),
+                (_, _, _, _, _, _) => None,
+            };
 
         let pipeline = loader
             .load_model_from_hf(
@@ -490,20 +478,39 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
+                cache_config,
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let mistralrs = MistralRsBuilder::new(
-            pipeline,
-            SchedulerMethod::Fixed(
-                max_seqs
-                    .try_into()
-                    .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
-            ),
-        )
-        .with_no_kv_cache(no_kv_cache)
-        .with_prefix_cache_n(prefix_cache_n)
-        .build();
+        let scheduler_config = if cache_config.is_some() {
+            // Handle case where we may have device mapping
+            if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+                SchedulerConfig::PagedAttentionMeta {
+                    max_num_seqs: max_seqs,
+                    config: cache_config.clone(),
+                }
+            } else {
+                SchedulerConfig::DefaultScheduler {
+                    method: DefaultSchedulerMethod::Fixed(
+                        max_seqs
+                            .try_into()
+                            .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                    ),
+                }
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    max_seqs
+                        .try_into()
+                        .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                ),
+            }
+        };
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+            .with_no_kv_cache(no_kv_cache)
+            .with_prefix_cache_n(prefix_cache_n)
+            .build();
 
         Ok(Self { runner: mistralrs })
     }
@@ -541,6 +548,190 @@ impl Runner {
             } else {
                 Constraint::None
             };
+
+            let messages = match request.messages {
+                Either::Left(ref messages) => {
+                    let mut messages_vec = Vec::new();
+                    let mut image_urls = Vec::new();
+                    for message in messages {
+                        match &message["content"] {
+                            Either::Left(content) => {
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, String>>>,
+                                > = IndexMap::new();
+                                message_map.insert(
+                                    "role".to_string(),
+                                    Either::Left(message["role"].as_ref().left().unwrap().clone()),
+                                );
+                                message_map.insert(
+                                    "content".to_string(),
+                                    Either::Left(content.to_string()),
+                                );
+                                messages_vec.push(message_map);
+                            }
+                            Either::Right(image_messages) => {
+                                if image_messages.len() != 2 {
+                                    return Err(PyValueError::new_err(
+                                    "Expected 2 items for the content of a message with an image."
+                                .to_string()));
+                                }
+                                if message["role"].as_ref().left().unwrap() != "user" {
+                                    return Err(PyValueError::new_err(format!(
+                                        "Role for an image message must be `user`, but it is {}",
+                                        &message["role"].as_ref().left().unwrap()
+                                    )));
+                                }
+
+                                let mut items = Vec::new();
+                                for image_message in image_messages {
+                                    if image_message.len() != 2 {
+                                        return Err(PyValueError::new_err("Expected 2 items for the sub-content of a message with an image.".to_string()));
+                                    }
+                                    if !image_message.contains_key("type") {
+                                        return Err(PyValueError::new_err(
+                                            "Expected `type` key in input message.".to_string(),
+                                        ));
+                                    }
+                                    if image_message["type"].is_right() {
+                                        return Err(PyValueError::new_err(
+                                            "Expected string value in `type`.".to_string(),
+                                        ));
+                                    }
+                                    items.push(image_message["type"].as_ref().unwrap_left().clone())
+                                }
+
+                                #[allow(clippy::type_complexity)]
+                                fn get_content_and_url(
+                                    text_idx: usize,
+                                    url_idx: usize,
+                                    image_messages: &[HashMap<
+                                        String,
+                                        Either<String, HashMap<String, String>>,
+                                    >],
+                                ) -> PyResult<(String, String)> {
+                                    if image_messages[text_idx]["text"].is_right() {
+                                        return Err(PyValueError::new_err(
+                                            "Expected string value in `text`.".to_string(),
+                                        ));
+                                    }
+                                    let content = image_messages[text_idx]["text"]
+                                        .as_ref()
+                                        .unwrap_left()
+                                        .clone();
+                                    if image_messages[url_idx]["image_url"].is_left()
+                                        || !image_messages[url_idx]["image_url"]
+                                            .as_ref()
+                                            .unwrap_right()
+                                            .contains_key("url")
+                                    {
+                                        return Err(PyValueError::new_err("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
+                                    }
+                                    let url = image_messages[url_idx]["image_url"]
+                                        .as_ref()
+                                        .unwrap_right()["url"]
+                                        .clone();
+                                    Ok((content, url))
+                                }
+                                let mut message_map: IndexMap<
+                                    String,
+                                    Either<String, Vec<IndexMap<String, String>>>,
+                                > = IndexMap::new();
+                                message_map.insert(
+                                    "role".to_string(),
+                                    Either::Left(message["role"].as_ref().left().unwrap().clone()),
+                                );
+                                let (content, url) = if items[0] == "text" {
+                                    get_content_and_url(0, 1, image_messages)?
+                                } else {
+                                    get_content_and_url(1, 0, image_messages)?
+                                };
+
+                                let mut content_map = Vec::new();
+                                let mut content_image_map = IndexMap::new();
+                                content_image_map.insert("type".to_string(), "image".to_string());
+                                content_map.push(content_image_map);
+                                let mut content_text_map = IndexMap::new();
+                                content_text_map.insert("type".to_string(), "text".to_string());
+                                content_text_map.insert("text".to_string(), content);
+                                content_map.push(content_text_map);
+
+                                message_map
+                                    .insert("content".to_string(), Either::Right(content_map));
+                                messages_vec.push(message_map);
+                                image_urls.push(url);
+                            }
+                        }
+                    }
+                    if !image_urls.is_empty() {
+                        let mut images = Vec::new();
+                        for url in image_urls {
+                            let bytes = if url.contains("http") {
+                                // Read from http
+                                match reqwest::blocking::get(url.clone()) {
+                                    Ok(http_resp) => http_resp
+                                        .bytes()
+                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
+                                        .to_vec(),
+                                    Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
+                                }
+                            } else if let Ok(mut f) = File::open(&url) {
+                                // Read from local file
+                                let metadata = fs::metadata(&url)
+                                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                                let mut buffer = vec![0; metadata.len() as usize];
+                                f.read_exact(&mut buffer)?;
+                                buffer
+                            } else {
+                                // Decode with base64
+                                general_purpose::STANDARD
+                                    .decode(url)
+                                    .map_err(|e| PyValueError::new_err(e.to_string()))?
+                            };
+                            images.push(
+                                image::load_from_memory(&bytes)
+                                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                            );
+                        }
+                        RequestMessage::VisionChat {
+                            messages: messages_vec,
+                            images,
+                        }
+                    } else {
+                        RequestMessage::Chat(messages_vec)
+                    }
+                }
+                Either::Right(ref prompt) => {
+                    let mut messages = Vec::new();
+                    let mut message_map: IndexMap<
+                        String,
+                        Either<String, Vec<IndexMap<String, String>>>,
+                    > = IndexMap::new();
+                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
+                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+                    messages.push(message_map);
+                    RequestMessage::Chat(messages)
+                }
+            };
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(
+                        serde_json::from_str::<Tool>(schema)
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                    );
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
             let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
@@ -549,180 +740,7 @@ impl Runner {
                     *last += 1;
                     last_v
                 },
-                messages: match request.messages {
-                    Either::Left(ref messages) => {
-                        let mut messages_vec = Vec::new();
-                        let mut image_urls = Vec::new();
-                        for message in messages {
-                            match &message["content"] {
-                                Either::Left(content) => {
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, String>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert(
-                                        "role".to_string(),
-                                        Either::Left(
-                                            message["role"].as_ref().left().unwrap().clone(),
-                                        ),
-                                    );
-                                    message_map.insert(
-                                        "content".to_string(),
-                                        Either::Left(content.to_string()),
-                                    );
-                                    messages_vec.push(message_map);
-                                }
-                                Either::Right(image_messages) => {
-                                    if image_messages.len() != 2 {
-                                        return Err(PyValueError::new_err(
-                                        "Expected 2 items for the content of a message with an image."
-                                    .to_string()));
-                                    }
-                                    if message["role"].as_ref().left().unwrap() != "user" {
-                                        return Err(PyValueError::new_err(format!(
-                                        "Role for an image message must be `user`, but it is {}",
-                                        &message["role"].as_ref().left().unwrap()
-                                    )));
-                                    }
-
-                                    let mut items = Vec::new();
-                                    for image_message in image_messages {
-                                        if image_message.len() != 2 {
-                                            return Err(PyValueError::new_err("Expected 2 items for the sub-content of a message with an image.".to_string()));
-                                        }
-                                        if !image_message.contains_key("type") {
-                                            return Err(PyValueError::new_err(
-                                                "Expected `type` key in input message.".to_string(),
-                                            ));
-                                        }
-                                        if image_message["type"].is_right() {
-                                            return Err(PyValueError::new_err(
-                                                "Expected string value in `type`.".to_string(),
-                                            ));
-                                        }
-                                        items.push(
-                                            image_message["type"].as_ref().unwrap_left().clone(),
-                                        )
-                                    }
-
-                                    #[allow(clippy::type_complexity)]
-                                    fn get_content_and_url(
-                                        text_idx: usize,
-                                        url_idx: usize,
-                                        image_messages: &[HashMap<
-                                            String,
-                                            Either<String, HashMap<String, String>>,
-                                        >],
-                                    ) -> PyResult<(String, String)>
-                                    {
-                                        if image_messages[text_idx]["text"].is_right() {
-                                            return Err(PyValueError::new_err(
-                                                "Expected string value in `text`.".to_string(),
-                                            ));
-                                        }
-                                        let content = image_messages[text_idx]["text"]
-                                            .as_ref()
-                                            .unwrap_left()
-                                            .clone();
-                                        if image_messages[url_idx]["image_url"].is_left()
-                                            || !image_messages[url_idx]["image_url"]
-                                                .as_ref()
-                                                .unwrap_right()
-                                                .contains_key("url")
-                                        {
-                                            return Err(PyValueError::new_err("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
-                                        }
-                                        let url = image_messages[url_idx]["image_url"]
-                                            .as_ref()
-                                            .unwrap_right()["url"]
-                                            .clone();
-                                        Ok((content, url))
-                                    }
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, String>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert(
-                                        "role".to_string(),
-                                        Either::Left(
-                                            message["role"].as_ref().left().unwrap().clone(),
-                                        ),
-                                    );
-                                    let (content, url) = if items[0] == "text" {
-                                        get_content_and_url(0, 1, image_messages)?
-                                    } else {
-                                        get_content_and_url(1, 0, image_messages)?
-                                    };
-
-                                    let mut content_map = Vec::new();
-                                    let mut content_image_map = IndexMap::new();
-                                    content_image_map
-                                        .insert("type".to_string(), "image".to_string());
-                                    content_map.push(content_image_map);
-                                    let mut content_text_map = IndexMap::new();
-                                    content_text_map.insert("type".to_string(), "text".to_string());
-                                    content_text_map.insert("text".to_string(), content);
-                                    content_map.push(content_text_map);
-
-                                    message_map
-                                        .insert("content".to_string(), Either::Right(content_map));
-                                    messages_vec.push(message_map);
-                                    image_urls.push(url);
-                                }
-                            }
-                        }
-                        if !image_urls.is_empty() {
-                            let mut images = Vec::new();
-                            for url in image_urls {
-                                let bytes = if url.contains("http") {
-                                    // Read from http
-                                    match reqwest::blocking::get(url.clone()) {
-                                        Ok(http_resp) => http_resp
-                                            .bytes()
-                                            .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                            .to_vec(),
-                                        Err(e) => {
-                                            return Err(PyValueError::new_err(format!("{e}")))
-                                        }
-                                    }
-                                } else if let Ok(mut f) = File::open(&url) {
-                                    // Read from local file
-                                    let metadata = fs::metadata(&url)
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                                    let mut buffer = vec![0; metadata.len() as usize];
-                                    f.read_exact(&mut buffer)?;
-                                    buffer
-                                } else {
-                                    // Decode with base64
-                                    general_purpose::STANDARD
-                                        .decode(url)
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                };
-                                images.push(
-                                    image::load_from_memory(&bytes)
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                                );
-                            }
-                            RequestMessage::VisionChat {
-                                messages: messages_vec,
-                                images,
-                            }
-                        } else {
-                            RequestMessage::Chat(messages_vec)
-                        }
-                    }
-                    Either::Right(ref prompt) => {
-                        let mut messages = Vec::new();
-                        let mut message_map: IndexMap<
-                            String,
-                            Either<String, Vec<IndexMap<String, String>>>,
-                        > = IndexMap::new();
-                        message_map.insert("role".to_string(), Either::Left("user".to_string()));
-                        message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
-                        messages.push(message_map);
-                        RequestMessage::Chat(messages)
-                    }
-                },
+                messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
                     top_k: request.top_k,
@@ -734,6 +752,7 @@ impl Runner {
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
+                    min_p: request.min_p,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -741,6 +760,8 @@ impl Runner {
                 constraint,
                 suffix: None,
                 adapters: request.adapters.clone(),
+                tool_choice,
+                tools,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -800,6 +821,25 @@ impl Runner {
             } else {
                 Constraint::None
             };
+
+            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
+                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
+                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
+            });
+
+            let tools = if let Some(tools) = &request.tool_schemas {
+                let mut new_tools = Vec::new();
+                for schema in tools {
+                    new_tools.push(
+                        serde_json::from_str::<Tool>(schema)
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                    );
+                }
+                Some(new_tools)
+            } else {
+                None
+            };
+
             let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
@@ -824,6 +864,7 @@ impl Runner {
                     stop_toks,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
+                    min_p: request.min_p,
                 },
                 response: tx,
                 return_logprobs: false,
@@ -831,6 +872,8 @@ impl Runner {
                 constraint,
                 suffix: request.suffix.clone(),
                 adapters: request.adapters.clone(),
+                tool_choice,
+                tools,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -874,235 +917,6 @@ impl Runner {
     }
 }
 
-#[pyclass]
-#[derive(Debug)]
-/// An OpenAI API compatible completion request.
-struct CompletionRequest {
-    _model: String,
-    prompt: String,
-    best_of: usize,
-    echo_prompt: bool,
-    presence_penalty: Option<f32>,
-    frequency_penalty: Option<f32>,
-    logit_bias: Option<HashMap<u32, f32>>,
-    max_tokens: Option<usize>,
-    n_choices: usize,
-    stop_seqs: Option<Vec<String>>,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    suffix: Option<String>,
-    top_k: Option<usize>,
-    grammar: Option<String>,
-    grammar_type: Option<String>,
-    adapters: Option<Vec<String>>,
-}
-
-#[pymethods]
-impl CompletionRequest {
-    #[new]
-    #[pyo3(signature = (
-        prompt,
-        model,
-        best_of = 1,
-        echo_prompt = false,
-        presence_penalty=None,
-        frequency_penalty=None,
-        logit_bias=None,
-        max_tokens=None,
-        n_choices=1,
-        stop_seqs=None,
-        temperature=None,
-        top_p=None,
-        suffix=None,
-        top_k=None,
-        grammar = None,
-        grammar_type = None,
-        adapters = None
-    ))]
-    fn new(
-        prompt: String,
-        model: String,
-        best_of: usize,
-        echo_prompt: bool,
-        presence_penalty: Option<f32>,
-        frequency_penalty: Option<f32>,
-        logit_bias: Option<HashMap<u32, f32>>,
-        max_tokens: Option<usize>,
-        n_choices: usize,
-        stop_seqs: Option<Vec<String>>,
-        temperature: Option<f64>,
-        top_p: Option<f64>,
-        suffix: Option<String>,
-        top_k: Option<usize>,
-        grammar: Option<String>,
-        grammar_type: Option<String>,
-        adapters: Option<Vec<String>>,
-    ) -> PyResult<Self> {
-        Ok(Self {
-            prompt,
-            best_of,
-            echo_prompt,
-            suffix,
-            _model: model,
-            logit_bias,
-            max_tokens,
-            n_choices,
-            presence_penalty,
-            frequency_penalty,
-            stop_seqs,
-            temperature,
-            top_p,
-            top_k,
-            grammar,
-            grammar_type,
-            adapters,
-        })
-    }
-}
-
-#[pyclass]
-#[derive(Debug)]
-/// An OpenAI API compatible chat completion request.
-struct ChatCompletionRequest {
-    #[allow(clippy::type_complexity)]
-    messages: Either<
-        Vec<
-            HashMap<
-                String,
-                Either<String, Vec<HashMap<String, Either<String, HashMap<String, String>>>>>,
-            >,
-        >,
-        String,
-    >,
-    _model: String,
-    logit_bias: Option<HashMap<u32, f32>>,
-    logprobs: bool,
-    top_logprobs: Option<usize>,
-    max_tokens: Option<usize>,
-    n_choices: usize,
-    presence_penalty: Option<f32>,
-    frequency_penalty: Option<f32>,
-    stop_seqs: Option<Vec<String>>,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    stream: bool,
-    top_k: Option<usize>,
-    grammar: Option<String>,
-    grammar_type: Option<String>,
-    adapters: Option<Vec<String>>,
-}
-
-#[pymethods]
-impl ChatCompletionRequest {
-    #[new]
-    #[pyo3(signature = (
-        messages,
-        model,
-        logprobs = false,
-        n_choices = 1,
-        logit_bias = None,
-        top_logprobs = None,
-        max_tokens = None,
-        presence_penalty = None,
-        frequency_penalty = None,
-        stop_seqs = None,
-        temperature = None,
-        top_p = None,
-        top_k = None,
-        stream=false,
-        grammar = None,
-        grammar_type = None,
-        adapters = None
-    ))]
-    fn new(
-        messages: Py<PyAny>,
-        model: String,
-        logprobs: bool,
-        n_choices: usize,
-        logit_bias: Option<HashMap<u32, f32>>,
-        top_logprobs: Option<usize>,
-        max_tokens: Option<usize>,
-        presence_penalty: Option<f32>,
-        frequency_penalty: Option<f32>,
-        stop_seqs: Option<Vec<String>>,
-        temperature: Option<f64>,
-        top_p: Option<f64>,
-        top_k: Option<usize>,
-        stream: Option<bool>,
-        grammar: Option<String>,
-        grammar_type: Option<String>,
-        adapters: Option<Vec<String>>,
-    ) -> PyResult<Self> {
-        let messages = Python::with_gil(|py| {
-            if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
-                let mut messages_vec = Vec::new();
-                for message in messages {
-                    messages_vec.push(message.extract::<HashMap<
-                        String,
-                        Either<
-                            String,
-                            Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                        >,
-                    >>()?);
-                }
-                Ok::<
-                    Either<
-                        Vec<
-                            HashMap<
-                                String,
-                                Either<
-                                    String,
-                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                                >,
-                            >,
-                        >,
-                        String,
-                    >,
-                    PyErr,
-                >(Either::Left(messages_vec))
-            } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
-                let prompt = messages.extract::<String>()?;
-                Ok::<
-                    Either<
-                        Vec<
-                            HashMap<
-                                String,
-                                Either<
-                                    String,
-                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                                >,
-                            >,
-                        >,
-                        String,
-                    >,
-                    PyErr,
-                >(Either::Right(prompt))
-            } else {
-                return Err(PyTypeError::new_err("Expected a string or list of dicts."));
-            }
-        })?;
-        Ok(Self {
-            messages,
-            _model: model,
-            logit_bias,
-            logprobs,
-            top_logprobs,
-            max_tokens,
-            n_choices,
-            presence_penalty,
-            frequency_penalty,
-            stop_seqs,
-            temperature,
-            top_p,
-            top_k,
-            stream: stream.unwrap_or(false),
-            grammar,
-            grammar_type,
-            adapters,
-        })
-    }
-}
-
 #[pymodule]
 fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
@@ -1115,6 +929,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VisionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
+    m.add_class::<ToolChoice>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
     m.add_class::<mistralrs_core::Delta>()?;

@@ -7,7 +7,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
 
 Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
@@ -23,7 +23,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 3) Deploy with our easy to use APIs
     - [Python](examples/python)
     - [Rust](mistralrs/examples)
-    - [OpenAI compatible HTTP server](examples/http.md)
+    - [OpenAI compatible HTTP server](docs/HTTP.md)
 
 ## Quick examples
 
@@ -35,10 +35,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
     ```
 
-- 💎 Run the Gemma 2 model
+- 🦙 Run the Llama 3.1 model
 
     ```
-    ./mistralrs_server -i plain -m google/gemma-2-9b-it -a gemma2
+    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
     ```
 
 - φ³ Run the Phi 3 model with 128K context window
@@ -65,7 +65,7 @@ Mistal.rs supports several model categories:
 ## Description
 **Fast**:
 - Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Continuous batching.
+- Continuous batching and PagedAttention support.
 - Prefix caching.
 - [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
@@ -90,6 +90,13 @@ Mistal.rs supports several model categories:
 - AnyMoE: Build a memory-efficient MoE model from anything, in seconds
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
+- PagedAttention: [docs](docs/PAGED_ATTENTION.md)
+- Various sampling techniques:
+    - Top K
+    - Top P
+    - Min P
+    - Please suggest more by raising an issue!
+- Tool calling: [docs](docs/TOOL_CALLING.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -112,10 +119,12 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
 |Qwen 2|✅| |✅|✅|
-|Phi 3 Vision|✅| |✅| |
-|Idefics 2|✅| |✅| |
+|Phi 3 Vision|✅| |✅|✅|
+|Idefics 2|✅| |✅|✅|
 |Gemma 2|✅|✅|✅|✅|
 |Starcoder 2|✅|✅|✅|✅|
+|LLaVa Next|✅| |✅|✅|
+|LLaVa|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -141,8 +150,8 @@ Python API for mistral.rs.
 
 OpenAI API compatible API server
 
-- [API Docs](examples/http.md).
-- [Running](README.md#run)
+- [API Docs](docs/HTTP.md).
+- [Running](README.md#run-with-the-cli)
 - [Example](examples/server/chat.py)
 
 
@@ -171,10 +180,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
 ## Benchmarks
 |Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
 |-|-|-|-|-|
-|A10 GPU, CUDA|89|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
 |Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|119|102|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+
+> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
 
 Please submit more benchmarks via raising an issue!
 
@@ -183,7 +195,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.1.25)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.3)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
@@ -292,7 +304,7 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
   - `config.json`
   - `tokenizer_config.json`
   - `tokenizer.json` (if not specified separately)
-  - `.safetensors` files.
+  - `.safetensors`/`.bin`/`.pth`/`.pt` files (defaults to `.safetensors`)
   - `preprocessor_config.json` (required for vision models).
   - `processor_config.json` (optional for vision models).
 - `--quantized-model-id` (server) or `quantized_model_id` (python/rust):
@@ -356,6 +368,22 @@ Additionally, for models without quantization, the model architecture should be 
 
 - `phi3v`
 - `idefics2`
+- `llava_next`
+- `llava`
+
+### Supported GGUF architectures
+
+**Plain:**
+
+- `llama`
+- `phi2`
+- `phi3`
+- `starcoder2`
+
+**With adapters:**
+
+- `llama`
+- `phi3`
 
 **Interactive mode:**
 
@@ -442,7 +470,9 @@ Example:
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
-|Starcoder 2| | |✅|
+|Starcoder 2| |✅|✅|
+|LLaVa Next| | |✅|
+|LLaVa| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -466,6 +496,8 @@ Example:
 |Idefics 2| | | |
 |Gemma 2|✅| | |
 |Starcoder 2|✅| | |
+|LLaVa Next| | | |
+|LLaVa| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -481,6 +513,8 @@ Example:
 |Idefics 2| |
 |Gemma 2|✅|
 |Starcoder 2|✅|
+|LLaVa Next|✅|
+|LLaVa|✅|
 
 
 ### Using derivative model

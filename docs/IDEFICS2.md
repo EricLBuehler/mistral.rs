@@ -91,35 +91,53 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, SchedulerMethod, TokenSource, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
+    ModelDType, NormalRequest, Request, RequestMessage, Response, Result, SamplingParams,
+    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
+
+/// Gets the best device, cpu, cuda if compiled with CUDA
+pub(crate) fn best_device() -> Result<Device> {
+    #[cfg(not(feature = "metal"))]
+    {
+        Device::cuda_if_available(0)
+    }
+    #[cfg(feature = "metal")]
+    {
+        Device::new_metal(0)
+    }
+}
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,
-        Some("lamm-mit/Cephalo-Idefics-2-vision-8b-beta".to_string()),
+        Some("HuggingFaceM4/idefics2-8b-chatty".to_string()),
     )
     .build(VisionLoaderType::Idefics2);
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
         TokenSource::CacheToken,
-        None,
-        &Device::cuda_if_available(0)?,
+        &ModelDType::Auto,
+        &best_device()?,
         false,
         DeviceMapMetadata::dummy(),
         None,
+        None, // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(pipeline, SchedulerMethod::Fixed(5.try_into().unwrap())).build())
+    Ok(MistralRsBuilder::new(
+        pipeline,
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        },
+    )
+    .build())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -145,6 +163,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
@@ -170,8 +190,6 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 runner = Runner(
     which=Which.VisionPlain(
         model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        tokenizer_json=None,
-        repeat_last_n=64,
         arch=VisionArchitecture.Idefics2,
     ),
 )

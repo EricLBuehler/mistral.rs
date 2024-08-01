@@ -27,87 +27,95 @@ Additionally, for models without quantization, the model architecture should be 
 ### Architecture for vision models
 - `Phi3V`
 - `Idefics2`
+- `LLaVaNext`
+- `LLaVa`
 
 ```py
 class Which(Enum):
+    """
+    Which model to select. See the docs for the `Which` enum in API.md for more details.
+    Usage:
+    >>> Which.Plain(...)
+    """
     @dataclass
     class Plain:
         model_id: str
         arch: Architecture
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+
     @dataclass
     class XLora:
-        arch: Architecture
         xlora_model_id: str
         order: str
-        tgt_non_granular_index: int | None = None
+        arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+        tgt_non_granular_index: int | None = None
+
     @dataclass
     class Lora:
-        arch: Architecture
         adapters_model_id: str
         order: str
+        arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+
     @dataclass
     class GGUF:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
-        repeat_last_n: int = 64
+        tok_model_id: str | None = None
+
     @dataclass
     class XLoraGGUF:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         xlora_model_id: str
         order: str
+        tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
-        repeat_last_n: int = 64
+
     @dataclass
     class LoraGGUF:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         adapters_model_id: str
         order: str
-        repeat_last_n: int = 64
+        tok_model_id: str | None = None
+
     @dataclass
     class GGML:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
+        tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+        gqa: int | None = None
+
     @dataclass
     class XLoraGGML:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         xlora_model_id: str
         order: str
+        tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+        gqa: int | None = None
+
     @dataclass
     class LoraGGML:
-        tok_model_id: str
         quantized_model_id: str
         quantized_filename: str
         adapters_model_id: str
         order: str
+        tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
+
     @dataclass
     class VisionPlain:
         model_id: str
-        tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         arch: VisionArchitecture
+        tokenizer_json: str | None = None
 ```
 
 
@@ -120,8 +128,6 @@ runner = Runner(
         tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
         quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
         quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-        tokenizer_json=None,
-        repeat_last_n=64,
     )
 )
 

@@ -2,20 +2,21 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::IsqModel,
+    paged_attention::ModelConfigMetadata,
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
     utils::progress::NiceProgressBar,
 };
 use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -32,7 +33,7 @@ struct CausalSelfAttention {
     num_key_value_heads: usize,
     head_dim: usize,
     use_flash_attn: bool,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
 }
 
@@ -157,7 +158,7 @@ impl CausalSelfAttention {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
@@ -368,7 +369,7 @@ impl Block {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: Arc<RotaryEmbedding>,
+        rope: Arc<Llama3RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
@@ -417,12 +418,13 @@ pub struct XLoraLlama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: QLinear,
+    lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     pub kv_cache: pipeline::Cache,
     pub device: Device,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraLlama {
@@ -453,7 +455,7 @@ impl XLoraLlama {
         };
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
@@ -519,7 +521,10 @@ impl XLoraLlama {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -536,7 +541,10 @@ impl XLoraLlama {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             }
         } else {
             let mut res = self
@@ -553,7 +561,10 @@ impl XLoraLlama {
             if self.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(
+                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                context_lens,
+            )
         }
     }
 
@@ -573,38 +584,44 @@ impl XLoraLlama {
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
         let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let dtype = vb.dtype();
+        let mut count = 0;
 
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = candle_nn::linear(
+        let lm_head = linear(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), false),
+            lora_config,
+            &mut count,
+            &xlora_ordering,
+            preload_adapters,
         )?;
+        if xlora_config.is_some() && lm_head.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
-        let mut count = 0;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
                     let rotary_emb = Arc::new(
-                        RotaryEmbedding::new(
-                            cfg.rope_theta,
-                            head_dim,
-                            cfg.max_position_embeddings,
+                        Llama3RotaryEmbedding::new(
+                            vb.dtype(),
+                            cfg,
                             mapper
                                 .device_for(i, false)
                                 .unwrap_or(&normal_loading_metadata.real_device),
                             is_gptx,
-                            vb.dtype(),
                         )
                         .expect("Failed to create RoPE"),
                     );
@@ -656,7 +673,7 @@ impl XLoraLlama {
             wte,
             blocks,
             ln_f,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
@@ -664,14 +681,21 @@ impl XLoraLlama {
             }),
             dtype,
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+            },
         })
     }
 }
 
 impl IsqModel for XLoraLlama {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),
@@ -698,6 +722,9 @@ impl IsqModel for XLoraLlama {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
+    }
 }
 
 impl NormalModel for XLoraLlama {
@@ -708,6 +735,7 @@ impl NormalModel for XLoraLlama {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -778,6 +806,9 @@ impl NormalModel for XLoraLlama {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

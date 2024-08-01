@@ -17,25 +17,24 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/spiceai/candle.git", rev = "41aaac4dd80e64af6b9b8e02197fa58feb5809b3", optional = true }
+candle-flash-attn = { git = "https://github.com/spiceai/candle.git", rev = "30a1278a4a12516c151a14f6ee17c109305e8995", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
 tokenizers = "0.19.1"
 tqdm = "0.7.0"
-range-checked = { git = "https://github.com/EricLBuehler/range-checked.git", version = "0.1.0" }
 chrono = "0.4.34"
-minijinja = "2.0.2"
+minijinja = { version = "2.0.2", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2.0.2", features = ["pycompat"] }
 either.workspace = true
 indexmap.workspace = true
-half = "2.4.0"
+half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
 rand = "0.8.5"
 regex-automata = { version = "0.4.6", features = ["meta"] }
-rustc-hash = "1.1.0"
+rustc-hash = "2.0.0"
 vob = "3.0.3"
 cfgrammar = "0.13.3"
 lrtable = "0.13.3"
@@ -65,16 +64,21 @@ tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
 sysinfo = "0.30.12"
-mistralrs-vision = { version = "0.1.13", path = "../mistralrs-vision" }
+mistralrs-vision = { version = "0.2.3", path = "../mistralrs-vision" }
 csv = "1.3.0"
 reqwest.workspace = true
 base64.workspace = true
 bytemuck_derive = "1.7.0"
-plotly = { version = "0.9.0", features = ["kaleido"] }
+plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
+mistralrs-paged-attn = { version = "0.2.3", path = "../mistralrs-paged-attn", optional = true }
+uuid = { version = "1.10.0", features = ["v4"] }
+schemars = "0.8.21"
 
 [features]
+default = ["plotly"]
+plotly = ["dep:plotly"]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]

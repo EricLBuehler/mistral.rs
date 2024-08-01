@@ -12,11 +12,12 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.1.25", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.2.3", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 image.workspace = true
 indexmap.workspace = true
 either.workspace = true
@@ -70,9 +71,25 @@ name = "idefics2"
 required-features = []
 
 [[example]]
+name = "llava"
+required-features = []
+
+[[example]]
+name = "llava_next"
+required-features = []
+
+[[example]]
 name = "anymoe"
 required-features = []
 
 [[example]]
 name = "anymoe_lora"
+required-features = []
+
+[[example]]
+name = "paged_attn"
+required-features = []
+
+[[example]]
+name = "tools"
 required-features = []

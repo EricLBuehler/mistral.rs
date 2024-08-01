@@ -4,7 +4,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::ScaledDotProductAttention,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
-    pipeline::{IsqModel, NormalLoadingMetadata},
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+    },
     utils::progress::NiceProgressBar,
 };
 /// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -16,7 +19,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, CausalMasker, RmsNorm},
     models::mistral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
 };
@@ -158,7 +161,7 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
+        let head_dim = cfg.head_dim();
         let q_proj = linear_no_bias(
             hidden_sz,
             num_heads * head_dim,
@@ -432,7 +435,7 @@ pub struct XLoraModel {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QLinear,
+    lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     sliding_window: Option<usize>,
     dtype: DType,
     pub device: Device,
@@ -440,6 +443,7 @@ pub struct XLoraModel {
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    cfg: ModelConfigMetadata,
 }
 
 impl XLoraModel {
@@ -465,7 +469,7 @@ impl XLoraModel {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let head_dim = cfg.head_dim();
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         let mut count = 0;
@@ -529,16 +533,25 @@ impl XLoraModel {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
+        let lm_head = linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            mapper.set_nm_device(vb.pp("lm_head"), false),
+            lora_config,
+            &mut count,
+            &xlora_ordering,
+            preload_adapters,
         )?;
+        if xlora_config.is_some() && lm_head.is_lora() {
+            // This is why we can pass dummy values (..., None, 1.0, None)?
+            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+        }
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
@@ -548,6 +561,13 @@ impl XLoraModel {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
             }),
             mapper,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -578,7 +598,7 @@ impl XLoraModel {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
             input_ids,
-            &cache,
+            &*cache,
             self.sliding_window,
             xs.dtype(),
             self.layers[0].self_attn.num_heads,
@@ -647,7 +667,10 @@ impl XLoraModel {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
                 let mut res = self
@@ -664,7 +687,10 @@ impl XLoraModel {
                 if self.lm_head.is_quant() {
                     res = res.to_dtype(DType::F32)?;
                 }
-                extract_logits(&res.apply(&self.lm_head)?, context_lens)
+                extract_logits(
+                    &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                    context_lens,
+                )
             }
         } else {
             let mut res = self
@@ -681,15 +707,18 @@ impl XLoraModel {
             if self.lm_head.is_quant() {
                 res = res.to_dtype(DType::F32)?;
             }
-            extract_logits(&res.apply(&self.lm_head)?, context_lens)
+            extract_logits(
+                &self.lm_head.lora_forward(&res, None, 1.0, None)?,
+                context_lens,
+            )
         }
     }
 }
 
 impl IsqModel for XLoraModel {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
@@ -722,6 +751,9 @@ impl IsqModel for XLoraModel {
         }
         (tensors, &*self.mapper)
     }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        (Vec::new(), &*self.mapper)
+    }
 }
 
 impl NormalModel for XLoraModel {
@@ -732,6 +764,7 @@ impl NormalModel for XLoraModel {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -802,6 +835,9 @@ impl NormalModel for XLoraModel {
                 .activate(&adapter_names)?;
         }
         Ok(sum)
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
     }
 }
 

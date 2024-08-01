@@ -13,7 +13,11 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
-    pipeline::{Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{
+        text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
+        NormalLoadingMetadata, NormalModel, VisionModel,
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -183,6 +187,7 @@ impl From<TextConfig> for mistral::Config {
             rope_theta: val.rope_theta,
             sliding_window: val.sliding_window,
             use_flash_attn: val.use_flash_attn,
+            head_dim: None,
         }
     }
 }
@@ -870,6 +875,7 @@ impl Idefics2 {
         vb: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let text_model = Mistral::new_inner(
@@ -878,6 +884,7 @@ impl Idefics2 {
             vb.pp("lm_head"),
             is_gptx,
             normal_loading_metadata,
+            attention_mechanism,
         )?;
         let vision_model = VisionTransformer::new(
             &config.vision_config,
@@ -937,6 +944,7 @@ impl Idefics2 {
         Ok(new_inputs_embeds)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
         input_ids: &Tensor,
@@ -945,6 +953,7 @@ impl Idefics2 {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
@@ -1048,13 +1057,17 @@ impl Idefics2 {
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
 }
 
 impl IsqModel for Idefics2 {
-    fn get_tensors(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.text_model.get_tensors()
+    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_matmuls()
+    }
+    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
+        self.text_model.get_biases()
     }
 }
 
@@ -1099,6 +1112,7 @@ impl VisionModel for Idefics2 {
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> candle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args
             .downcast()
@@ -1110,6 +1124,7 @@ impl VisionModel for Idefics2 {
             start_offsets_kernel,
             context_lens,
             pixel_attention_mask,
+            metadata,
         )
     }
     fn cache(&self) -> &Cache {
@@ -1123,5 +1138,8 @@ impl VisionModel for Idefics2 {
     }
     fn has_conv2d(&self) -> bool {
         true
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        self.text_model.config()
     }
 }

@@ -1,8 +1,8 @@
 use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
-#[pyclass]
-#[derive(Debug, Clone)]
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Architecture {
     Mistral,
     Gemma,
@@ -31,11 +31,13 @@ impl From<Architecture> for NormalLoaderType {
     }
 }
 
-#[pyclass]
-#[derive(Debug, Clone)]
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum VisionArchitecture {
     Phi3V,
     Idefics2,
+    LLaVANext,
+    LLaVA,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -43,6 +45,8 @@ impl From<VisionArchitecture> for VisionLoaderType {
         match value {
             VisionArchitecture::Phi3V => VisionLoaderType::Phi3V,
             VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
+            VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
+            VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
         }
     }
 }
@@ -50,96 +54,157 @@ impl From<VisionArchitecture> for VisionLoaderType {
 #[pyclass]
 #[derive(Clone)]
 pub enum Which {
+    #[pyo3(constructor = (
+        model_id,
+        arch,
+        tokenizer_json = None
+    ))]
     Plain {
         model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
         arch: Architecture,
+        tokenizer_json: Option<String>,
     },
 
+    #[pyo3(constructor = (
+        xlora_model_id,
+        order,
+        arch,
+        model_id = None,
+        tokenizer_json = None,
+        tgt_non_granular_index = None
+    ))]
     XLora {
-        model_id: Option<String>,
-        tokenizer_json: Option<String>,
         xlora_model_id: String,
-        repeat_last_n: Option<usize>,
         order: String,
-        tgt_non_granular_index: Option<usize>,
         arch: Architecture,
-    },
-
-    Lora {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
-        adapters_model_id: String,
-        repeat_last_n: Option<usize>,
-        order: String,
-        arch: Architecture,
+        tgt_non_granular_index: Option<usize>,
     },
 
+    #[pyo3(constructor = (
+        adapters_model_id,
+        order,
+        arch,
+        model_id = None,
+        tokenizer_json = None
+    ))]
+    Lora {
+        adapters_model_id: String,
+        order: String,
+        arch: Architecture,
+        model_id: Option<String>,
+        tokenizer_json: Option<String>,
+    },
+
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        tok_model_id = None,
+    ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
-        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
-        repeat_last_n: Option<usize>,
+        tok_model_id: Option<String>,
     },
 
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        xlora_model_id,
+        order,
+        tok_model_id = None,
+        tgt_non_granular_index = None,
+    ))]
     XLoraGGUF {
-        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
-        repeat_last_n: Option<usize>,
         xlora_model_id: String,
         order: String,
+        tok_model_id: Option<String>,
         tgt_non_granular_index: Option<usize>,
     },
 
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        adapters_model_id,
+        order,
+        tok_model_id = None,
+    ))]
     LoraGGUF {
-        tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
-        repeat_last_n: Option<usize>,
         adapters_model_id: String,
         order: String,
+        tok_model_id: Option<String>,
     },
 
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        tok_model_id,
+        tokenizer_json = None,
+        gqa = 1,
+    ))]
     #[allow(clippy::upper_case_acronyms)]
     GGML {
+        quantized_model_id: String,
+        quantized_filename: String,
         tok_model_id: String,
         tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        gqa: Option<usize>,
+        gqa: usize,
     },
 
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        xlora_model_id,
+        order,
+        tok_model_id = None,
+        tokenizer_json = None,
+        tgt_non_granular_index = None,
+        gqa = 1,
+    ))]
     XLoraGGML {
-        tok_model_id: Option<String>,
-        tokenizer_json: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
-        repeat_last_n: Option<usize>,
         xlora_model_id: String,
         order: String,
-        tgt_non_granular_index: Option<usize>,
-        gqa: Option<usize>,
-    },
-
-    LoraGGML {
         tok_model_id: Option<String>,
         tokenizer_json: Option<String>,
-        quantized_model_id: String,
-        quantized_filename: String,
-        repeat_last_n: Option<usize>,
-        adapters_model_id: String,
-        order: String,
-        gqa: Option<usize>,
+        tgt_non_granular_index: Option<usize>,
+        gqa: usize,
     },
 
+    #[pyo3(constructor = (
+        quantized_model_id,
+        quantized_filename,
+        adapters_model_id,
+        order,
+        tok_model_id = None,
+        tokenizer_json = None,
+        gqa = 1,
+    ))]
+    LoraGGML {
+        quantized_model_id: String,
+        quantized_filename: String,
+        adapters_model_id: String,
+        order: String,
+        tok_model_id: Option<String>,
+        tokenizer_json: Option<String>,
+        gqa: usize,
+    },
+
+    #[pyo3(constructor = (
+        model_id,
+        arch,
+        tokenizer_json = None,
+    ))]
     VisionPlain {
         model_id: String,
-        tokenizer_json: Option<String>,
-        repeat_last_n: Option<usize>,
         arch: VisionArchitecture,
+        tokenizer_json: Option<String>,
     },
 }

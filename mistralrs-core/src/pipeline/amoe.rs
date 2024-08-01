@@ -12,20 +12,22 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+#[cfg(feature = "plotly")]
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
+    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, Pipeline, Response,
-    TokenSource, TryIntoDType,
+    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
+    Pipeline, Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -59,7 +61,15 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!("AnyMoE does not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
         let target = self.target.load_model_from_hf(
             revision.clone(),
             token_source.clone(),
@@ -68,6 +78,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -92,7 +103,15 @@ impl Loader for AnyMoeLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let paged_attn_config = if paged_attn_config.is_none() {
+            warn!("AnyMoE does not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
         let target = self.target.load_model_from_path(
             paths,
             dtype,
@@ -100,6 +119,7 @@ impl Loader for AnyMoeLoader {
             silent,
             mapper.clone(),
             in_situ_quant,
+            paged_attn_config,
         )?;
         Ok(Arc::new(tokio::sync::Mutex::new(AnyMoePipeline::new(
             target,
@@ -333,7 +353,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0);
+        let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, -1, 0.0, 0.0);
+
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
         )));
@@ -365,6 +386,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
                             true,
+                            Vec::new(),
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     let images = image_urls.as_ref().map(|urls| {
@@ -404,6 +426,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -417,6 +440,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         metadata.has_no_kv_cache,
                         None,
                         input_processor_cfg.clone(),
+                        None, // TODO: get block tables/handle it for PagedAttention
                     )
                     .unwrap();
 
@@ -462,6 +486,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
+        #[cfg(feature = "plotly")]
         if let Some(loss_svg) = loss_svg {
             let mut plot = Plot::new();
             for gate in 0..all_losses[0].len() {
@@ -498,6 +523,8 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             }
             plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
         }
+        #[cfg(not(feature = "plotly"))]
+        if let Some(_loss_svg) = loss_svg {}
 
         Ok(Some(AnyMoeTrainingResult {
             steps,
@@ -514,6 +541,7 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -535,5 +563,8 @@ fn new_dummy_seq(
         None,
         None,
         images,
+        None, // TODO incorrect for PagedAttention
+        trie,
+        None,
     )
 }

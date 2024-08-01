@@ -14,7 +14,11 @@ use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::lora::Ordering;
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
+};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -24,17 +28,19 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, Pipeline,
-    TryIntoDType, DEBUG,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
+    Pipeline, TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
+    models::quantized_starcoder2::ModelWeights as QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Context, Result};
+use candle_core::quantized::gguf_file::Content;
 use candle_core::quantized::{
     gguf_file::{self, Value as GgufValue},
     GgmlDType,
@@ -51,7 +57,7 @@ use std::sync::Arc;
 use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 enum Model {
     Llama(QLlama),
@@ -59,12 +65,12 @@ enum Model {
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
+    Starcoder2(QStarcoder2),
 }
 
 pub struct GGUFPipeline {
     model: Model,
     tokenizer: Arc<Tokenizer>,
-    tok_trie: Arc<TokTrie>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
     model_id: String,
@@ -75,7 +81,6 @@ pub struct GGUFPipeline {
 /// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -100,6 +105,7 @@ pub enum GGUFArchitecture {
     Rwkv,
     Phi2,
     Phi3,
+    Starcoder2,
 }
 
 // Wraps from_str() for some convenience:
@@ -113,17 +119,10 @@ impl GGUFArchitecture {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-/// A config for a GGUF loader.
-pub struct GGUFSpecificConfig {
-    pub repeat_last_n: usize,
-}
-
 #[derive(Default)]
 /// A builder for a GGUF loader.
 pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -139,7 +138,6 @@ impl GGUFLoaderBuilder {
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
     pub fn new(
-        config: GGUFSpecificConfig,
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
@@ -150,7 +148,6 @@ impl GGUFLoaderBuilder {
         };
 
         Self {
-            config,
             chat_template,
             model_id: tok_model_id,
             kind,
@@ -209,7 +206,6 @@ impl GGUFLoaderBuilder {
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGUFLoader {
             model_id: self.model_id,
-            config: self.config,
             xlora_model_id: self.xlora_model_id,
             kind: self.kind,
             xlora_order: self.xlora_order,
@@ -226,7 +222,6 @@ impl GGUFLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: Option<String>,
-        config: GGUFSpecificConfig,
         quantized_model_id: String,
         quantized_filename: String,
         xlora_model_id: Option<String>,
@@ -249,7 +244,6 @@ impl GGUFLoader {
         };
         Self {
             model_id,
-            config,
             quantized_model_id,
             quantized_filename,
             xlora_model_id,
@@ -284,6 +278,49 @@ fn parse_gguf_value(value: &GgufValue) -> String {
     }
 }
 
+struct ContentConfig {
+    hidden_size: usize,
+    num_attn_heads: usize,
+    num_kv_heads: usize,
+    num_layers: usize,
+}
+
+#[allow(clippy::cast_possible_truncation)]
+impl<'a> From<&'a Content> for ContentConfig {
+    fn from(value: &'a Content) -> Self {
+        let arch = value.metadata["general.architecture"].to_string().unwrap();
+        Self {
+            hidden_size: value.metadata[&format!("{arch}.embedding_length")]
+                .to_u64()
+                .unwrap() as usize,
+            num_attn_heads: value.metadata[&format!("{arch}.attention.head_count")]
+                .to_u64()
+                .unwrap() as usize,
+            num_kv_heads: value.metadata[&format!("{arch}.attention.head_count_kv")]
+                .to_u64()
+                .unwrap() as usize,
+            num_layers: value.metadata[&format!("{arch}.block_count")]
+                .to_u64()
+                .unwrap() as usize,
+        }
+    }
+}
+
+impl ModelConfigLike for ContentConfig {
+    fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.num_attn_heads
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.num_kv_heads
+    }
+    fn num_layers(&self) -> usize {
+        self.num_layers
+    }
+}
+
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -295,6 +332,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
@@ -305,7 +343,15 @@ impl Loader for GGUFLoader {
             self.quantized_filename.clone(),
             silent
         );
-        self.load_model_from_path(&paths?, dtype, device, silent, mapper, in_situ_quant)
+        self.load_model_from_path(
+            &paths?,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -317,6 +363,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -331,6 +378,9 @@ impl Loader for GGUFLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
+        } else if paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -395,9 +445,26 @@ impl Loader for GGUFLoader {
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
+        let paged_attn_config = if matches!(self.kind, ModelKind::AdapterQuantized { .. }) {
+            warn!("Adapter models do not currently support PagedAttention, running without");
+            None
+        } else {
+            paged_attn_config
+        };
+
+        let model_config_metadata: ContentConfig = (&model).into();
+
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGUF((model, &mut file).into(), (device, mapper).into());
+            let quant = ModelConfig::ParamsGGUF(
+                (model, &mut file).into(),
+                (device, mapper).into(),
+                if paged_attn_config.is_some() {
+                    AttentionImplementation::PagedAttention
+                } else {
+                    AttentionImplementation::Eager
+                },
+            );
 
             // With optional adapter config:
             let mut adapter = None;
@@ -419,6 +486,9 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
+                GGUFArchitecture::Starcoder2 => {
+                    Model::Starcoder2(QStarcoder2::try_from(model_config)?)
+                }
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::AdapterQuantized { adapter, .. } => match arch {
@@ -432,6 +502,22 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            let model_config: &dyn ModelConfigLike = &model_config_metadata;
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                DType::F32,
+                model_config,
+                device,
+            )?;
+            let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            (None, None)
+        };
+
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
@@ -443,6 +529,7 @@ impl Loader for GGUFLoader {
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
             Model::Phi3(ref p) => p.max_seq_len,
             Model::XLoraPhi3(ref p) => p.max_seq_len,
+            Model::Starcoder2(ref p) => p.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
@@ -451,6 +538,7 @@ impl Loader for GGUFLoader {
             Model::XLoraLlama(ref model) => model.cache.lock().len(),
             Model::Phi3(ref model) => model.cache.lock().len(),
             Model::XLoraPhi3(ref model) => model.cache.lock().len(),
+            Model::Starcoder2(ref model) => model.cache.lock().len(),
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
@@ -466,7 +554,6 @@ impl Loader for GGUFLoader {
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
-            tok_trie: tok_trie.clone(),
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -482,7 +569,6 @@ impl Loader for GGUFLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
@@ -490,6 +576,9 @@ impl Loader for GGUFLoader {
                 kind: self.kind.clone(),
                 is_xlora,
                 activation_dtype: DType::F32,
+                sliding_window: None,
+                cache_config,
+                cache_engine,
             }),
         })))
     }
@@ -543,6 +632,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::XLoraLlama(ref model) => &model.cache,
             Model::Phi3(ref model) => &model.cache,
             Model::XLoraPhi3(ref model) => &model.cache,
+            Model::Starcoder2(ref model) => &model.cache,
         }
     }
 }
@@ -574,6 +664,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::XLoraLlama(ref model) => model.device.clone(),
             Model::Phi3(ref model) => model.device.clone(),
             Model::XLoraPhi3(ref model) => model.device.clone(),
+            Model::Starcoder2(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
@@ -605,6 +696,7 @@ impl Pipeline for GGUFPipeline {
             seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
+            mut paged_attn_meta,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -612,8 +704,24 @@ impl Pipeline for GGUFPipeline {
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
             ),
-            Model::Phi2(ref model) => model.forward(&input_ids, &seqlen_offsets, context_lens),
+            Model::Phi2(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                context_lens,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -625,7 +733,16 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
-            Model::Phi3(ref model) => model.forward(&input_ids, &seqlen_offsets),
+            Model::Phi3(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
             Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -637,6 +754,17 @@ impl Pipeline for GGUFPipeline {
                 &self.non_granular_state,
                 context_lens,
             ),
+            Model::Starcoder2(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
         }
     }
     async fn sample(
@@ -647,7 +775,7 @@ impl Pipeline for GGUFPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
