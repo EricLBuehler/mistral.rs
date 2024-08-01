@@ -9,9 +9,9 @@ use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
-    SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
+    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
@@ -36,24 +36,6 @@ const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
-}
-
-fn parse_isq(s: &str) -> Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
 }
 
 #[derive(Parser)]
@@ -119,7 +101,7 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
-    #[arg(long = "isq", value_parser = parse_isq)]
+    #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<GgmlDType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
@@ -226,7 +208,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }

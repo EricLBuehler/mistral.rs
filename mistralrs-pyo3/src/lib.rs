@@ -2,7 +2,6 @@
 
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
-use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
@@ -19,13 +18,14 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
-    CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    Tool, VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
+    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -48,24 +48,6 @@ fn get_device() -> Device {
     DEVICE
         .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
         .clone()
-}
-
-fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
 }
 
 #[pyclass]
@@ -385,7 +367,7 @@ impl Runner {
 
         let device = get_device();
         let isq = if let Some(isq) = in_situ_quant {
-            Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
+            Some(parse_isq_value(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
         } else {
             None
         };
@@ -900,8 +882,9 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        let request =
-            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        let request = _Request::ReIsq(
+            parse_isq_value(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?,
+        );
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
