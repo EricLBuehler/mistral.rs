@@ -29,7 +29,7 @@ use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
-pub use isq::IsqModel;
+pub use isq::{parse_isq_value, IsqModel};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
