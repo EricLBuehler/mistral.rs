@@ -14,9 +14,11 @@ use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use tokenizers::Tokenizer;
 
-const SEQUENCE_BREAKERS: &[&str] = &["\n", ":", "\\", "*"];
+static SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
+    LazyLock::new(|| ["\n", ":", "\\", "*"].map(String::from).to_vec());
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -121,7 +123,7 @@ impl DrySamplingParamsInner {
                             // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
                             //        for the correct solution which covers multi-token sequence breakers
                             //        and ambiguous encodings.
-                            .encode(format!("a{breaker}"), true)
+                            .encode(["a", &breaker].concat(), true)
                             .map_err(anyhow::Error::msg)
                             .map(|enc| {
                                 let ids = enc.get_ids();
