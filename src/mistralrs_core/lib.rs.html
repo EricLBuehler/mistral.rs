@@ -448,6 +448,7 @@
 <a href="#448" id="448">448</a>
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -512,13 +513,14 @@
 <span class="kw">pub use </span>device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
 <span class="kw">pub use </span>paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 <span class="kw">pub use </span>pipeline::{
-    chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GemmaLoader,
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource,
-    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
+    chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline, GGMLLoader,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder,
+    GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionModelLoader, VisionSpecificConfig,
 };
 <span class="kw">pub use </span>request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 <span class="kw">pub use </span>response::Response;

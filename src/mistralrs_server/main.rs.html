@@ -459,24 +459,6 @@
 <a href="#459" id="459">459</a>
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
-<a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a>
-<a href="#464" id="464">464</a>
-<a href="#465" id="465">465</a>
-<a href="#466" id="466">466</a>
-<a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a>
-<a href="#469" id="469">469</a>
-<a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a>
-<a href="#474" id="474">474</a>
-<a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a>
-<a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -488,9 +470,9 @@
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
-    SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
+    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
@@ -515,24 +497,6 @@
 
 </span><span class="kw">fn </span>parse_token_source(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;TokenSource, String&gt; {
     s.parse()
-}
-
-<span class="kw">fn </span>parse_isq(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;GgmlDType, String&gt; {
-    <span class="kw">match </span>s {
-        <span class="string">"Q4_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4_0),
-        <span class="string">"Q4_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4_1),
-        <span class="string">"Q5_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5_0),
-        <span class="string">"Q5_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5_1),
-        <span class="string">"Q8_0" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8_0),
-        <span class="string">"Q8_1" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8_1),
-        <span class="string">"Q2K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q2K),
-        <span class="string">"Q3K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q3K),
-        <span class="string">"Q4K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q4K),
-        <span class="string">"Q5K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q5K),
-        <span class="string">"Q6K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q6K),
-        <span class="string">"Q8K" </span>=&gt; <span class="prelude-val">Ok</span>(GgmlDType::Q8K),
-        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`."</span>)),
-    }
 }
 
 <span class="attr">#[derive(Parser)]
@@ -598,7 +562,7 @@
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
     <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
-    </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq)]
+    </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
 
     <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs.
@@ -705,7 +669,7 @@
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String, String&gt; {
     <span class="kw">let </span>repr = <span class="macro">format!</span>(<span class="string">"Re ISQ: {:?}"</span>, request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    <span class="kw">let </span>request = Request::ReIsq(parse_isq(<span class="kw-2">&amp;</span>request.ggml_type)<span class="question-mark">?</span>);
+    <span class="kw">let </span>request = Request::ReIsq(parse_isq_value(<span class="kw-2">&amp;</span>request.ggml_type)<span class="question-mark">?</span>);
     state.get_sender().unwrap().send(request).<span class="kw">await</span>.unwrap();
     <span class="prelude-val">Ok</span>(repr)
 }
