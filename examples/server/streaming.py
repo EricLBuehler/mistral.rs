@@ -15,7 +15,7 @@ while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
     resp = ""
-    response = openai.chat.completions.create(
+    response = client.chat.completions.create(
         model="mistral",
         messages=messages,
         max_tokens=256,

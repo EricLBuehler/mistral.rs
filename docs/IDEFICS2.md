@@ -45,7 +45,7 @@ cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m Hugg
 ```py
 import openai
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="idefics2",
     messages=[
         {

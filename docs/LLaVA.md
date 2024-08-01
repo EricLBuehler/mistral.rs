@@ -54,7 +54,7 @@ cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_temp
 ```py
 import openai
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="llava_next",
     messages=[
         {
