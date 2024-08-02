@@ -52,7 +52,7 @@ import openai
 openai.api_key = "EMPTY"
 openai.base_url = "http://localhost:1234/v1/"
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="phi3v",
     messages=[
         {

@@ -44,6 +44,7 @@ tools = [
     }
 ]
 
+
 def add_2_numbers(x, y):
     return x + y
 
@@ -59,7 +60,7 @@ messages = [
     }
 ]
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
 )
 
@@ -82,7 +83,7 @@ if tool_called.name in functions:
 
     messages.append({"role": "tool", "content": result})
 
-    completion = openai.chat.completions.create(
+    completion = client.chat.completions.create(
         model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
     )
     # print(completion.usage)

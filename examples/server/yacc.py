@@ -6,7 +6,7 @@ openai.base_url = "http://localhost:1234/v1/"
 with open("examples/server/c.y", "r") as f:
     c_yacc = f.read()
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="mistral",
     messages=[
         {

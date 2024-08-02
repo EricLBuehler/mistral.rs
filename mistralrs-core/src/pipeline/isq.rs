@@ -17,6 +17,37 @@ pub enum QuantizationBehaviour {
     Skip,
 }
 
+/// Parse ISQ value: one of
+/// - `Q4_0`
+/// - `Q4_1`
+/// - `Q5_0`
+/// - `Q5_1`
+/// - `Q8_0`
+/// - `Q8_1`
+/// - `Q2K`
+/// - `Q3K`
+/// - `Q4K`
+/// - `Q5K`
+/// - `Q6K`
+/// - `Q8K`
+pub fn parse_isq_value(s: &str) -> Result<GgmlDType, String> {
+    match s.to_lowercase().as_str() {
+        "q4_0" => Ok(GgmlDType::Q4_0),
+        "q4_1" => Ok(GgmlDType::Q4_1),
+        "q5_0" => Ok(GgmlDType::Q5_0),
+        "q5_1" => Ok(GgmlDType::Q5_1),
+        "q8_0" => Ok(GgmlDType::Q8_0),
+        "q8_1" => Ok(GgmlDType::Q8_1),
+        "q2k" => Ok(GgmlDType::Q2K),
+        "q3k" => Ok(GgmlDType::Q3K),
+        "q4k" => Ok(GgmlDType::Q4K),
+        "q5k" => Ok(GgmlDType::Q5K),
+        "q6k" => Ok(GgmlDType::Q6K),
+        "q8k" => Ok(GgmlDType::Q8K),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
+    }
+}
+
 /// Return the fallback dtype for the given dtype.
 fn get_fallback(dtype: GgmlDType) -> QuantizationBehaviour {
     // The normal `Q` quants are a bit more lenient than the `K` quants.
