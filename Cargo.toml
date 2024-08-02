@@ -74,6 +74,6 @@ opt-level = 3
 inherits = "release"
 lto = "thin"
 
-[profile.release]
-codegen-units = 1
-lto = "fat"
+#[profile.release]
+#codegen-units = 1
+#lto = "fat"

@@ -614,60 +614,66 @@ pub trait Pipeline:
 
                 let mut logits = None;
 
+                let mut i = 0;
                 for inputs in inputs_iter {
                     let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-                    match pre_op {
-                        CacheInstruction::In(ref adapter_inst) => {
-                            match adapter_inst {
-                                AdapterInstruction::Activate(adapters) => {
-                                    self.activate_adapters(adapters.clone()).map_err(|e| {
-                                        candle_core::Error::msg(<anyhow::Error as AsRef<
-                                            dyn std::error::Error,
-                                        >>::as_ref(
-                                            &e
-                                        ))
-                                    })?
-                                }
-                                AdapterInstruction::None => 0,
-                            };
-                            self.clone_in_cache(input_seqs, false)
+                    dbg!(i);
+                    if i == 0 {
+                        match pre_op {
+                            CacheInstruction::In(ref adapter_inst) => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
+                                self.clone_in_cache(input_seqs, false)
+                            }
+                            CacheInstruction::Nothing(ref adapter_inst) => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
+                            }
+                            CacheInstruction::Reset {
+                                reset_non_granular,
+                                ref adapter_inst,
+                            } => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
+                                self.set_none_cache(reset_non_granular, false)
+                            }
+                            _ => unreachable!("Unreachable PRE cache op."),
                         }
-                        CacheInstruction::Nothing(ref adapter_inst) => {
-                            match adapter_inst {
-                                AdapterInstruction::Activate(adapters) => {
-                                    self.activate_adapters(adapters.clone()).map_err(|e| {
-                                        candle_core::Error::msg(<anyhow::Error as AsRef<
-                                            dyn std::error::Error,
-                                        >>::as_ref(
-                                            &e
-                                        ))
-                                    })?
-                                }
-                                AdapterInstruction::None => 0,
-                            };
-                        }
-                        CacheInstruction::Reset {
-                            reset_non_granular,
-                            ref adapter_inst,
-                        } => {
-                            match adapter_inst {
-                                AdapterInstruction::Activate(adapters) => {
-                                    self.activate_adapters(adapters.clone()).map_err(|e| {
-                                        candle_core::Error::msg(<anyhow::Error as AsRef<
-                                            dyn std::error::Error,
-                                        >>::as_ref(
-                                            &e
-                                        ))
-                                    })?
-                                }
-                                AdapterInstruction::None => 0,
-                            };
-                            self.set_none_cache(reset_non_granular, false)
-                        }
-                        _ => unreachable!("Unreachable PRE cache op."),
                     }
 
                     logits = Some(self.forward_inputs(inputs)?);
+
+                    i += 1;
                 }
 
                 let logits = logits.expect("Did not get any inputs. This is shocking.");
