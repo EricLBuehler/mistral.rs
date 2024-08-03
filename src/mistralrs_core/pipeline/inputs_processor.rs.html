@@ -541,7 +541,204 @@
 <a href="#541" id="541">541</a>
 <a href="#542" id="542">542</a>
 <a href="#543" id="543">543</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, sync::Arc};
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::Device;
@@ -554,6 +751,11 @@
 </span><span class="kw">pub enum </span>InputsProcessorType {
     Text,
     Vision,
+}
+
+<span class="kw">pub struct </span>InputProcessorOutput {
+    <span class="kw">pub </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+    <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
 }
 
 <span class="doccomment">/// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
@@ -574,7 +776,8 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt;;
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt;;
 
     <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType;
 }
@@ -582,7 +785,7 @@
 <span class="comment">// ========================= Test models input processor
 
 </span><span class="kw">pub mod </span>text_models_inputs_processor {
-    <span class="kw">use </span>std::{any::Any, iter::repeat, sync::Arc};
+    <span class="kw">use </span>std::{any::Any, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     <span class="kw">use </span>anyhow::Result;
     <span class="kw">use </span>candle_core::{Device, Tensor, WithDType};
@@ -594,7 +797,7 @@
         sequence::Sequence,
     };
 
-    <span class="kw">use super</span>::{InputsProcessor, InputsProcessorType};
+    <span class="kw">use super</span>::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
     <span class="kw">const </span>VIA_F16_TOK_THRESHOLD: usize = <span class="number">512</span>;
 
@@ -638,14 +841,22 @@
         <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;, <span class="comment">// For paged attention
     </span>}
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType&gt;(
+    <span class="kw">pub struct </span>InnerInputProcessorOutput {
+        <span class="kw">pub </span>inputs: InputMetadata,
+        <span class="kw">pub </span>seq_indices: Vec&lt;usize&gt;,
+    }
+
+    <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
+    // chunk_offset_toks / prompt_batchsize = number of batches
+    </span><span class="kw">fn </span>make_prompt_chunk&lt;T: WithDType&gt;(
+        chunk_offset_toks: usize,
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
-        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
-        <span class="kw">let </span>max_len = input_seqs
+        <span class="kw">let </span>max_len = toks
             .iter()
             .map(|seq| seq.len())
             .max()
@@ -657,22 +868,24 @@
         <span class="kw">let </span><span class="kw-2">mut </span>context_lens = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>position_ids = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
         <span class="kw">for </span>(seq, <span class="kw-2">mut </span>ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
+            <span class="kw">let </span>prompt_len = ctxt.len();
             <span class="kw">let </span>offset = last_n_context_len.unwrap_or_default();
-            seqlen_offsets.push(offset.<span class="number">1</span>);
+            seqlen_offsets.push(offset.<span class="number">1 </span>+ chunk_offset_toks);
 
+            position_ids.push(ctxt.len() + chunk_offset_toks);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
             context_lens.push((
-                seq.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
+                ctxt.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
                 last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
             ));
-            position_ids.push(seq.len());
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
             <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
                 <span class="kw">let </span>table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
-                <span class="kw">let </span>prompt_len = seq.len();
 
                 <span class="kw">if </span>table.is_none() {
                     <span class="comment">// Will be None during profiling.
@@ -687,20 +900,22 @@
 
                 <span class="kw">let </span>start_idx = <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = paged_attn_metadata.sliding_window {
                     <span class="kw">if </span>prompt_len &gt; sliding_window {
-                        <span class="number">0</span>.min(prompt_len - sliding_window)
+                        chunk_offset_toks.min(prompt_len - sliding_window)
                     } <span class="kw">else </span>{
-                        <span class="number">0
-                    </span>}
+                        chunk_offset_toks
+                    }
                 } <span class="kw">else </span>{
-                    <span class="number">0
-                </span>};
+                    chunk_offset_toks
+                };
 
                 <span class="kw">let </span><span class="kw-2">mut </span>slot_mapping = Vec::new();
-                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..prompt_len {
+                <span class="kw">let </span><span class="kw-2">mut </span>ctxt_len = Vec::new();
+                <span class="kw">for </span>i <span class="kw">in </span>chunk_offset_toks..prompt_len + chunk_offset_toks {
                     <span class="kw">if </span>i &lt; start_idx {
                         <span class="comment">// Pad [0,start_idx) with _PAD_TOKEN_ID
                         </span>slot_mapping.push(_PAD_SLOT_ID);
                     }
+                    ctxt_len.push(i);
 
                     <span class="kw">let </span>block_number = <span class="kw">if </span>i / paged_attn_metadata.block_size &gt;= table.len() {
                         <span class="macro">panic!</span>(
@@ -715,8 +930,10 @@
                     <span class="kw">let </span>block_offset = i % paged_attn_metadata.block_size;
                     <span class="kw">let </span>slot = block_number * paged_attn_metadata.block_size + block_offset;
                     slot_mapping.push(slot.try_into().unwrap());
+                    block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
+                paged_attn_context_lens.push(ctxt_len);
             }
         }
 
@@ -750,17 +967,45 @@
         }
 
         <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
-            <span class="kw">let </span>slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                <span class="kw-2">*</span>position_ids.iter().max().unwrap(),
-                _PAD_SLOT_ID,
+            <span class="kw">let </span>max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
+            <span class="kw">let </span>slot_mappings =
+                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+            <span class="attr">#[allow(clippy::cast_possible_truncation)]
+            </span><span class="kw">let </span>block_tables = _make_tensor_with_pad(
+                block_tables
+                    .iter()
+                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                max_block_table_len,
+                <span class="number">0</span>,
                 device,
             )<span class="question-mark">?</span>;
+            <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>max_context_len = paged_attn_context_lens
+                .iter()
+                .map(|x| x.len())
+                .max()
+                .unwrap();
+            <span class="attr">#[allow(clippy::cast_possible_truncation)]
+            </span><span class="kw">let </span>context_lens = _make_tensor_with_pad(
+                paged_attn_context_lens
+                    .iter()
+                    .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                max_context_len,
+                <span class="number">0</span>,
+                device,
+            )<span class="question-mark">?
+            </span>.reshape(((),))<span class="question-mark">?</span>;
+
             <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
                 slot_mappings,
-                block_tables: <span class="prelude-val">None</span>,
-                context_lens: <span class="prelude-val">None</span>,
-                max_context_len: <span class="prelude-val">None</span>,
+                block_tables: <span class="prelude-val">Some</span>(block_tables),
+                context_lens: <span class="prelude-val">Some</span>(context_lens),
+                max_context_len: <span class="prelude-val">Some</span>(max_context_len),
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -776,23 +1021,12 @@
         })
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType&gt;(
+    <span class="kw">fn </span>make_completion_chunk&lt;T: WithDType&gt;(
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
-        no_kv_cache: bool,
-        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
-        <span class="kw">if </span>no_kv_cache {
-            <span class="kw">return </span>get_prompt_input(
-                toks,
-                input_seqs,
-                device,
-                last_n_context_len,
-                paged_attn_metadata,
-            );
-        }
         <span class="comment">// Pad each sequence by the padding token to the max len.
         </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>seqlen_offsets = Vec::new();
@@ -913,6 +1147,103 @@
         })
     }
 
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType + std::fmt::Debug&gt;(
+        toks: Vec&lt;Vec&lt;T&gt;&gt;,
+        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        device: <span class="kw-2">&amp;</span>Device,
+        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(prompt_batchsize) = prompt_batchsize {
+            <span class="kw">let </span><span class="kw-2">mut </span>seq_chunks = Vec::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>n_chunks = Vec::new();
+            <span class="kw">let </span>prompt_batchsize: usize = prompt_batchsize.into();
+
+            <span class="comment">// Pad each sequence by the padding token to the max len.
+            </span><span class="kw">for </span>ctxt <span class="kw">in </span>toks.iter() {
+                <span class="kw">let </span>chunks = ctxt.chunks(prompt_batchsize).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+                n_chunks.push(chunks.len());
+                seq_chunks.push(chunks);
+            }
+            <span class="comment">// Basically convert the sequences and tok chunks into chunks of seqs and the corresp toks
+            </span><span class="kw">let </span><span class="kw-2">mut </span>chunks_transposed: Vec&lt;Vec&lt;(Vec&lt;T&gt;, usize)&gt;&gt; = Vec::new();
+            <span class="kw">for </span>(seq_n, seq) <span class="kw">in </span>seq_chunks.into_iter().enumerate() {
+                <span class="kw">for </span>(i, chunk) <span class="kw">in </span>seq.into_iter().enumerate() {
+                    <span class="kw">match </span>chunks_transposed.get_mut(i) {
+                        <span class="prelude-val">Some</span>(part) =&gt; part.push((chunk.to_vec(), seq_n)),
+                        <span class="prelude-val">None </span>=&gt; chunks_transposed.push(<span class="macro">vec!</span>[(chunk.to_vec(), seq_n)]),
+                    }
+                }
+            }
+            <span class="kw">let </span>chunks = chunks_transposed
+                .into_iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    <span class="kw">let </span>(toks, seq_ns): (Vec&lt;Vec&lt;T&gt;&gt;, Vec&lt;usize&gt;) = chunk.into_iter().unzip();
+                    make_prompt_chunk(
+                        i * prompt_batchsize,
+                        toks,
+                        <span class="kw-2">&amp;</span>seq_ns.iter().map(|i| <span class="kw-2">&amp;*</span>input_seqs[<span class="kw-2">*</span>i]).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_deref_mut(),
+                    )
+                    .map(|inputs| InnerInputProcessorOutput {
+                        inputs,
+                        seq_indices: seq_ns,
+                    })
+                })
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            Box::new(chunks.into_iter())
+        } <span class="kw">else </span>{
+            Box::new(std::iter::once(
+                make_prompt_chunk(
+                    <span class="number">0</span>,
+                    toks,
+                    <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">&amp;**</span>s).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    device,
+                    last_n_context_len,
+                    paged_attn_metadata,
+                )
+                .map(|inputs| InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
+                }),
+            ))
+        }
+    }
+
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType + std::fmt::Debug&gt;(
+        toks: Vec&lt;Vec&lt;T&gt;&gt;,
+        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
+        device: <span class="kw-2">&amp;</span>Device,
+        no_kv_cache: bool,
+        last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
+        <span class="kw">if </span>no_kv_cache {
+            <span class="kw">return </span>get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+                prompt_batchsize,
+            );
+        }
+
+        Box::new(std::iter::once(
+            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata).map(|inputs| {
+                InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
+                }
+            }),
+        ))
+    }
+
     <span class="attr">#[derive(Clone)]
     </span><span class="kw">pub struct </span>ModelInputs {
         <span class="kw">pub </span>input_ids: Tensor,
@@ -940,142 +1271,205 @@
             last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
             <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
             <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+            prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {
             <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
-                <span class="kw">let </span>InputMetadata {
-                    input: input_ids_full,
-                    positions: seqlen_offsets_full,
-                    positions_kernel: seqlen_offsets_kernel_full,
-                    context_lens: <span class="kw">_</span>,
-                    position_ids,
-                    paged_attn_meta: <span class="kw">_</span>,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )<span class="question-mark">?</span>;
-                <span class="kw">let </span>InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids: <span class="kw">_</span>,
-                    paged_attn_meta,
-                } = get_completion_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                    input_seqs,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
-                    seqlen_offsets,
-                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets_full),
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel_full),
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .zip(get_completion_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        input_seqs,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    ))
+                    .map(|(prompt, completion)| {
+                        <span class="kw">let </span>InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids_full,
+                                    positions: seqlen_offsets_full,
+                                    positions_kernel: seqlen_offsets_kernel_full,
+                                    context_lens: <span class="kw">_</span>,
+                                    position_ids,
+                                    paged_attn_meta: <span class="kw">_</span>,
+                                },
+                            seq_indices,
+                        } = prompt<span class="question-mark">?</span>;
+                        <span class="kw">let </span>InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids: <span class="kw">_</span>,
+                                    paged_attn_meta,
+                                },
+                            seq_indices: <span class="kw">_</span>,
+                        } = completion<span class="question-mark">?</span>;
+                        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: <span class="prelude-val">Some</span>(input_ids_full),
+                            seqlen_offsets,
+                            seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets_full),
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel_full),
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } <span class="kw">else if </span>is_xlora &amp;&amp; is_prompt {
-                <span class="kw">let </span>InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-                    input_ids: input_ids.clone(),
-                    input_ids_full: <span class="prelude-val">Some</span>(input_ids),
-                    seqlen_offsets: seqlen_offsets.clone(),
-                    seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets),
-                    seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
-                    seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel),
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        <span class="kw">let </span>InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata<span class="question-mark">?</span>;
+                        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                            input_ids: input_ids.clone(),
+                            input_ids_full: <span class="prelude-val">Some</span>(input_ids),
+                            seqlen_offsets: seqlen_offsets.clone(),
+                            seqlen_offsets_full: <span class="prelude-val">Some</span>(seqlen_offsets),
+                            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
+                            seqlen_offsets_kernel_full: <span class="prelude-val">Some</span>(seqlen_offsets_kernel),
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } <span class="kw">else if </span>is_prompt {
-                <span class="kw">let </span>InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: <span class="prelude-val">None</span>,
-                    seqlen_offsets,
-                    seqlen_offsets_full: <span class="prelude-val">None</span>,
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        <span class="kw">let </span>InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata<span class="question-mark">?</span>;
+                        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: <span class="prelude-val">None</span>,
+                            seqlen_offsets,
+                            seqlen_offsets_full: <span class="prelude-val">None</span>,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } <span class="kw">else </span>{
-                <span class="kw">let </span>InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_completion_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                    input_seqs,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: <span class="prelude-val">None</span>,
-                    seqlen_offsets,
-                    seqlen_offsets_full: <span class="prelude-val">None</span>,
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_completion_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        input_seqs,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        <span class="kw">let </span>InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata<span class="question-mark">?</span>;
+                        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: <span class="prelude-val">None</span>,
+                            seqlen_offsets,
+                            seqlen_offsets_full: <span class="prelude-val">None</span>,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: <span class="prelude-val">None</span>,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             }
         }
 

@@ -374,8 +374,53 @@
 <a href="#374" id="374">374</a>
 <a href="#375" id="375">375</a>
 <a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
+<span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::Result;
@@ -384,12 +429,14 @@
 <span class="kw">use </span>itertools::Itertools;
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>tokenizers::Tokenizer;
+<span class="kw">use </span>tracing::warn;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{
     get_completion_input, get_prompt_input, PagedAttentionMeta,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{
-    text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+    text_models_inputs_processor, InputProcessorOutput, InputsProcessor, InputsProcessorType,
+    MessagesAction, Processor,
 };
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::image_processor::{<span class="self">self</span>, ImagePreProcessor, PreprocessedImages};
@@ -465,12 +512,21 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-    ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = anyhow::Result&lt;InputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>is_xlora {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
+            <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                <span class="string">"Cannot make inputs for X-LoRA vision model."</span>,
+            ))));
         }
         <span class="kw">if </span>no_kv_cache {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"Vision model must have kv cache."</span>);
+            <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                <span class="string">"Vision model must have kv cache."</span>,
+            ))));
+        }
+        <span class="comment">// TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        </span><span class="kw">if </span>prompt_batchsize.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"`prompt_batchsize` is set. Idefics 2 does not support prompt batching."</span>);
         }
 
         <span class="kw">let </span>config = other_config
@@ -500,7 +556,9 @@
                     pixel_attention_mask: <span class="kw">_</span>,
                     image_sizes,
                     num_img_tokens,
-                } = <span class="self">self</span>.preprocess(imgs.clone(), config, device)<span class="question-mark">?</span>;
+                } = <span class="self">self
+                    </span>.preprocess(imgs.clone(), config, device)
+                    .expect(<span class="string">"Preprocessor failed"</span>);
                 <span class="kw">let </span>image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
@@ -516,50 +574,66 @@
                 num_image_samples_accum.push(num_img_samples);
             }
             (
-                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>)<span class="question-mark">?</span>),
+                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
                 <span class="prelude-val">Some</span>(image_sizes_accum),
                 <span class="prelude-val">Some</span>(num_img_tokens_accum),
                 <span class="prelude-val">Some</span>(num_image_samples_accum),
             )
         } <span class="kw">else </span>{
-            <span class="kw">let </span>text_models_inputs_processor::ModelInputs {
-                input_ids,
-                input_ids_full: <span class="kw">_</span>,
-                seqlen_offsets,
-                seqlen_offsets_full: <span class="kw">_</span>,
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full: <span class="kw">_</span>,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-            } = <span class="kw-2">*</span>text_models_inputs_processor::TextInputsProcessor
-                .process_inputs(
-                    tokenizer,
-                    input_seqs,
-                    is_prompt,
-                    is_xlora,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    other_config,
-                    paged_attn_metadata,
-                )<span class="question-mark">?
-                </span>.downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
-                .expect(<span class="string">"Downcast failed."</span>);
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-                input_ids,
-                seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                position_ids,
-                pixel_values: <span class="prelude-val">None</span>,
-                model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
-                    image_sizes: <span class="prelude-val">None</span>,
-                    num_image_tokens: <span class="prelude-val">None</span>,
-                    num_image_samples: <span class="prelude-val">None</span>,
-                }),
-                paged_attn_meta,
-            }));
+            <span class="kw">return </span>Box::new(
+                text_models_inputs_processor::TextInputsProcessor
+                    .process_inputs(
+                        tokenizer,
+                        input_seqs,
+                        is_prompt,
+                        is_xlora,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        other_config,
+                        paged_attn_metadata,
+                        <span class="prelude-val">None</span>, <span class="comment">// TODO
+                    </span>)
+                    .map(|metadata| {
+                        <span class="kw">let </span>InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        } = metadata<span class="question-mark">?</span>;
+
+                        <span class="kw">let </span>text_models_inputs_processor::ModelInputs {
+                            input_ids,
+                            input_ids_full: <span class="kw">_</span>,
+                            seqlen_offsets,
+                            seqlen_offsets_full: <span class="kw">_</span>,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: <span class="kw">_</span>,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        } = <span class="kw-2">*</span>inputs
+                            .downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
+                            .expect(<span class="string">"Downcast failed."</span>);
+
+                        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                            input_ids,
+                            seqlen_offsets,
+                            seqlen_offsets_kernel,
+                            context_lens,
+                            position_ids,
+                            pixel_values: <span class="prelude-val">None</span>,
+                            model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
+                                image_sizes: <span class="prelude-val">None</span>,
+                                num_image_tokens: <span class="prelude-val">None</span>,
+                                num_image_samples: <span class="prelude-val">None</span>,
+                            }),
+                            paged_attn_meta,
+                        });
+                        <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+            );
         };
 
         <span class="kw">let </span>num_image_tokens_flat = num_img_tokens
@@ -585,7 +659,7 @@
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                 <span class="bool-val">false</span>,
             )
-            .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
+            .expect(<span class="string">"Decode failed"</span>);
 
         <span class="kw">for </span>(detokenized, (seq, num_img_tokens)) <span class="kw">in </span>detokenized.into_iter().zip(
             input_seqs
@@ -641,22 +715,16 @@
             toks.push(input_ids);
         }
 
-        <span class="kw">let </span>text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
-        } = <span class="kw">if </span>is_prompt {
+        <span class="kw">let </span>iter = <span class="kw">if </span>is_prompt {
             get_prompt_input(
                 toks,
                 input_seqs,
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
+                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+            </span>)
+        } <span class="kw">else </span>{
             get_completion_input(
                 toks,
                 input_seqs,
@@ -664,21 +732,41 @@
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )<span class="question-mark">?
-        </span>};
-        <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
-            input_ids: input,
-            seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
-            context_lens,
-            position_ids,
-            pixel_values,
-            model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
-                image_sizes,
-                num_image_tokens: <span class="prelude-val">Some</span>(num_image_tokens_flat),
-                num_image_samples: <span class="prelude-val">Some</span>(num_image_samples),
-            }),
-            paged_attn_meta,
+                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+            </span>)
+        };
+
+        Box::new(iter.into_iter().map(<span class="kw">move </span>|metadata| {
+            <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        positions_kernel,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                    },
+                seq_indices,
+            } = metadata<span class="question-mark">?</span>;
+            <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                seqlen_offsets_kernel: positions_kernel,
+                context_lens,
+                position_ids,
+                pixel_values: pixel_values.clone(),
+                model_specific_args: Box::new(LLaVANextVisionSpecificArgs {
+                    image_sizes: image_sizes.clone(),
+                    num_image_tokens: <span class="prelude-val">Some</span>(num_image_tokens_flat.clone()),
+                    num_image_samples: <span class="prelude-val">Some</span>(num_image_samples.clone()),
+                }),
+                paged_attn_meta,
+            });
+            <span class="prelude-val">Ok</span>(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            })
         }))
     }
 }

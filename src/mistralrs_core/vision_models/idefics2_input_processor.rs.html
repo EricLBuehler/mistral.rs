@@ -317,15 +317,46 @@
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::{any::Any, sync::Arc};
+</span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::{DynamicImage, GenericImageView};
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 <span class="kw">use </span>tokenizers::Tokenizer;
+<span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
     pipeline::{
@@ -333,7 +364,7 @@
         text_models_inputs_processor::{
             <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::ModelInputs,
@@ -440,20 +471,34 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-    ) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>std::any::Any&gt;&gt; {
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = anyhow::Result&lt;InputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>is_xlora {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot make inputs for X-LoRA vision model."</span>);
+            <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                <span class="string">"Cannot make inputs for X-LoRA vision model."</span>,
+            ))));
         }
         <span class="kw">if </span>no_kv_cache {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"Vision model must have kv cache."</span>);
+            <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                <span class="string">"Vision model must have kv cache."</span>,
+            ))));
         }
-        <span class="kw">let </span>text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
+        <span class="comment">// TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        </span><span class="kw">if </span>prompt_batchsize.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"`prompt_batchsize` is set. Idefics 2 does not support prompt batching."</span>);
+        }
+
+        <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    positions_kernel,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                },
+            seq_indices,
         } = <span class="kw">if </span>is_prompt {
             get_prompt_input(
                 input_seqs
@@ -464,8 +509,12 @@
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
+                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+            </span>)
+            .nth(<span class="number">0</span>)
+            .unwrap()
+            .unwrap()
+        } <span class="kw">else </span>{
             get_completion_input(
                 input_seqs
                     .iter()
@@ -476,8 +525,12 @@
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )<span class="question-mark">?
-        </span>};
+                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+            </span>)
+            .nth(<span class="number">0</span>)
+            .unwrap()
+            .unwrap()
+        };
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
 
@@ -490,24 +543,27 @@
                     pixel_attention_mask,
                     image_sizes: <span class="kw">_</span>,
                     num_img_tokens: <span class="kw">_</span>,
-                } = <span class="self">self</span>.preprocess(
-                    seq.take_images()
-                        .expect(<span class="string">"Need to have images by this point."</span>),
-                    config,
-                    device,
-                )<span class="question-mark">?</span>;
-                pixel_values_accum.push(pixel_values.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
-                pixel_attention_mask_accum.push(pixel_attention_mask.unwrap().unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+                } = <span class="self">self
+                    </span>.preprocess(
+                        seq.take_images()
+                            .expect(<span class="string">"Need to have images by this point."</span>),
+                        config,
+                        device,
+                    )
+                    .expect(<span class="string">"Preprocessing failed"</span>);
+                pixel_values_accum.push(pixel_values.unsqueeze(<span class="number">0</span>).unwrap());
+                pixel_attention_mask_accum
+                    .push(pixel_attention_mask.unwrap().unsqueeze(<span class="number">0</span>).unwrap());
             }
             (
-                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>)<span class="question-mark">?</span>),
-                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_attention_mask_accum, <span class="number">0</span>)<span class="question-mark">?</span>),
+                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
+                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_attention_mask_accum, <span class="number">0</span>).unwrap()),
             )
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
 
-        <span class="prelude-val">Ok</span>(Box::new(ModelInputs {
+        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
             seqlen_offsets_kernel: positions_kernel,
@@ -516,7 +572,11 @@
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
             paged_attn_meta,
-        }))
+        });
+        Box::new(std::iter::once(<span class="prelude-val">Ok</span>(InputProcessorOutput {
+            inputs,
+            seq_indices,
+        })))
     }
 }
 

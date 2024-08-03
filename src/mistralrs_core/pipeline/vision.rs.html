@@ -525,6 +525,9 @@
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
 <a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -561,6 +564,7 @@
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
+<span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
@@ -604,6 +608,7 @@
 </span><span class="doccomment">/// Config specific to loading a vision model.
 </span><span class="kw">pub struct </span>VisionSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
+    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">impl </span>VisionLoaderBuilder {
@@ -809,6 +814,7 @@
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
@@ -917,7 +923,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        logits: Tensor,
+        logits: Vec&lt;Tensor&gt;,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,

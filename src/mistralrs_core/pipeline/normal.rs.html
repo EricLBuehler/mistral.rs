@@ -627,6 +627,9 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -669,6 +672,7 @@
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
+<span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
@@ -718,6 +722,7 @@
 </span><span class="doccomment">/// Config specific to loading a normal model.
 </span><span class="kw">pub struct </span>NormalSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
+    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
@@ -996,6 +1001,7 @@
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
         })))
     }
@@ -1122,7 +1128,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        logits: Tensor,
+        logits: Vec&lt;Tensor&gt;,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,

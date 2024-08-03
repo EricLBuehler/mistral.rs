@@ -537,7 +537,34 @@
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::File;
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize};
 
 <span class="kw">use </span>serde::Deserialize;
 
@@ -814,12 +841,14 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     no_kv_cache: bool,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">pub struct </span>TomlLoaderArgs {
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>no_kv_cache: bool,
+    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">pub fn </span>get_toml_selected_model_dtype(model: <span class="kw-2">&amp;</span>TomlSelector) -&gt; ModelDType {
@@ -848,7 +877,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),
@@ -862,7 +894,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -884,7 +919,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -906,6 +944,7 @@
             <span class="prelude-val">Some</span>(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -920,6 +959,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_xlora(
             xlora_model_id,
@@ -942,6 +982,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_lora(
             adapters_model_id,
@@ -957,7 +998,10 @@
             quantized_filename,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             <span class="prelude-val">Some</span>(tok_model_id),
@@ -974,7 +1018,10 @@
             tgt_non_granular_index,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -999,7 +1046,10 @@
             order,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -1019,7 +1069,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),
@@ -1038,6 +1091,7 @@
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
+            prompt_batchsize: args.prompt_batchsize,
         };
         <span class="kw">let </span>loader = loader_from_selected(args.clone(), selector.model)<span class="question-mark">?</span>;
         <span class="kw">let </span>loader = <span class="kw">if let </span><span class="prelude-val">Some</span>(speculative) = selector.speculative {

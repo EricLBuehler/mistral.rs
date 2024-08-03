@@ -783,6 +783,15 @@
 <a href="#783" id="783">783</a>
 <a href="#784" id="784">784</a>
 <a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -836,6 +845,7 @@
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
+<span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
@@ -874,6 +884,7 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="attr">#[derive(Debug, EnumString)]
@@ -916,6 +927,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">impl </span>GGUFLoaderBuilder {
@@ -927,6 +939,7 @@
         tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
         quantized_filename: String,
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -938,6 +951,7 @@
             kind,
             quantized_filename,
             quantized_model_id,
+            prompt_batchsize,
             ..Default::default()
         }
     }
@@ -999,6 +1013,7 @@
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
             quantized_filename: <span class="self">self</span>.quantized_filename,
             quantized_model_id: <span class="self">self</span>.quantized_model_id,
+            prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
         })
     }
 }
@@ -1015,6 +1030,7 @@
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
             <span class="prelude-val">Some</span>(id)
@@ -1037,6 +1053,7 @@
             chat_template,
             kind,
             tgt_non_granular_index,
+            prompt_batchsize,
         }
     }
 }
@@ -1363,6 +1380,7 @@
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
             }),
         })))
     }
@@ -1554,7 +1572,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        logits: Tensor,
+        logits: Vec&lt;Tensor&gt;,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,

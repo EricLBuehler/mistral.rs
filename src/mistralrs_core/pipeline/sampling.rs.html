@@ -401,7 +401,6 @@
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
 <a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -635,13 +634,12 @@
 <span class="kw">pub async fn </span>sample_and_add_toks(
     this: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
     seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-    logits: Tensor,
+    logits_seq: Vec&lt;Tensor&gt;,
     prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
     disable_eos_stop: bool,
     rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
     <span class="kw">let </span>seqs_len = seqs.len();
-    <span class="kw">let </span>logits_seq = logits.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>.chunk(seqs_len, <span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="macro">debug_assert_eq!</span>(logits_seq.len(), seqs_len);
 
     <span class="kw">let </span>use_async_pool = seqs_len &gt; <span class="number">1</span>;

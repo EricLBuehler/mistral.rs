@@ -568,6 +568,8 @@
 <a href="#568" id="568">568</a>
 <a href="#569" id="569">569</a>
 <a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -816,7 +818,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        logits: Tensor,
+        logits: Vec&lt;Tensor&gt;,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
@@ -1011,13 +1013,15 @@
                         <span class="prelude-val">None</span>,
                         input_processor_cfg.clone(),
                         <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it for PagedAttention
+                        </span><span class="prelude-val">None</span>, <span class="comment">// TODO: prompt chunking doesn't work.
                     </span>)
+                    .nth(<span class="number">0</span>)
                     .unwrap();
 
                 <span class="comment">// === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                </span><span class="kw">let _ </span>= target.forward_inputs(inputs)<span class="question-mark">?</span>;
+                </span><span class="kw">let _ </span>= target.forward_inputs(inputs.unwrap().inputs)<span class="question-mark">?</span>;
 
                 <span class="comment">// Clear the KV cache
                 </span>target.set_none_cache(<span class="bool-val">true</span>, <span class="bool-val">true</span>);

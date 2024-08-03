@@ -615,6 +615,12 @@
 <a href="#615" id="615">615</a>
 <a href="#616" id="616">616</a>
 <a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -915,7 +921,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        _logits: Tensor,
+        _logits: Vec&lt;Tensor&gt;,
         _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         _disable_eos_stop: bool,
         _rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
@@ -1009,7 +1015,10 @@
                             <span class="prelude-val">None</span>,
                             <span class="prelude-val">None</span>,
                             <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it
+                            </span><span class="prelude-val">None</span>, <span class="comment">// TODO: do we support???
                         </span>)
+                        .nth(<span class="number">0</span>)
+                        .unwrap()
                         .unwrap();
                     <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;
 
@@ -1068,7 +1077,10 @@
                         <span class="prelude-val">Some</span>((<span class="self">self</span>.gamma, initial_cache_len)), <span class="comment">// Get the last gamma, see above
                         </span><span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it
+                        </span><span class="prelude-val">None</span>, <span class="comment">// TODO: do we support???
                     </span>)
+                    .nth(<span class="number">0</span>)
+                    .unwrap()
                     .unwrap();
 
                 <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;

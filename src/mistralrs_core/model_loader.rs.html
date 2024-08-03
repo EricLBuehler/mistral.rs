@@ -297,7 +297,44 @@
 <a href="#297" id="297">297</a>
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::fs::{<span class="self">self</span>, File};
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    fs::{<span class="self">self</span>, File},
+    num::NonZeroUsize,
+};
 
 <span class="kw">use crate</span>::{
     get_toml_selected_model_dtype,
@@ -312,6 +349,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     use_flash_attn: bool,
+    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">impl </span>LoaderBuilder {
@@ -321,6 +359,7 @@
             no_kv_cache: <span class="bool-val">false</span>,
             chat_template: <span class="prelude-val">None</span>,
             use_flash_attn: <span class="bool-val">false</span>,
+            prompt_batchsize: <span class="prelude-val">None</span>,
         }
     }
 
@@ -334,6 +373,10 @@
     </span>}
     <span class="kw">pub fn </span>with_use_flash_attn(<span class="kw-2">mut </span><span class="self">self</span>, use_flash_attn: bool) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.use_flash_attn = use_flash_attn;
+        <span class="self">self
+    </span>}
+    <span class="kw">pub fn </span>with_prompt_batchsize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.prompt_batchsize = prompt_batchsize;
         <span class="self">self
     </span>}
 
@@ -401,6 +444,7 @@
                 use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
+                prompt_batchsize: args.prompt_batchsize,
             };
             (selector, args).try_into()<span class="question-mark">?
         </span>}
@@ -410,7 +454,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),
@@ -425,7 +472,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -448,7 +498,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -470,6 +523,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -484,6 +538,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_xlora(
             xlora_model_id,
@@ -506,6 +561,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_lora(
             adapters_model_id,
@@ -522,7 +578,10 @@
             quantized_filename,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             <span class="prelude-val">Some</span>(tok_model_id),
@@ -540,7 +599,10 @@
             tgt_non_granular_index,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -566,7 +628,10 @@
             order,
             gqa,
         } =&gt; GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -587,7 +652,10 @@
             arch,
             dtype: <span class="kw">_</span>,
         } =&gt; VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),

@@ -533,6 +533,9 @@
 <a href="#533" id="533">533</a>
 <a href="#534" id="534">534</a>
 <a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -571,6 +574,7 @@
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
+<span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
@@ -612,6 +616,7 @@
 </span><span class="doccomment">/// Config for a GGML loader.
 </span><span class="kw">pub struct </span>GGMLSpecificConfig {
     <span class="kw">pub </span>gqa: usize,
+    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -890,6 +895,7 @@
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config: <span class="prelude-val">None</span>,
                 cache_engine: <span class="prelude-val">None</span>,
+                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
         })))
     }
@@ -1054,7 +1060,7 @@
     <span class="kw">async fn </span>sample(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-        logits: Tensor,
+        logits: Vec&lt;Tensor&gt;,
         prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
