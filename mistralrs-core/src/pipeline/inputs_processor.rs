@@ -216,12 +216,8 @@ pub mod text_models_inputs_processor {
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
-            let slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                max_slot_mapping_len,
-                _PAD_SLOT_ID,
-                device,
-            )?;
+            let slot_mappings =
+                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
             #[allow(clippy::cast_possible_truncation)]
@@ -236,17 +232,22 @@ pub mod text_models_inputs_processor {
             )?;
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
-            let max_context_len = paged_attn_context_lens.iter().map(|x| x.len()).max().unwrap();
+            let max_context_len = paged_attn_context_lens
+                .iter()
+                .map(|x| x.len())
+                .max()
+                .unwrap();
             #[allow(clippy::cast_possible_truncation)]
             let context_lens = _make_tensor_with_pad(
                 paged_attn_context_lens
                     .iter()
                     .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
                     .collect::<Vec<_>>(),
-                    max_context_len,
+                max_context_len,
                 0,
                 device,
-            )?.reshape(((),))?;
+            )?
+            .reshape(((),))?;
 
             Some(PagedAttentionInputMetadata {
                 slot_mappings,
