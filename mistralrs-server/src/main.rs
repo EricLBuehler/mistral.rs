@@ -15,7 +15,7 @@ use mistralrs_core::{
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 mod chat_completion;
 mod completions;
 use crate::{chat_completion::__path_chatcompletions, completions::completions};
@@ -135,6 +135,10 @@ struct Args {
     /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
     throughput_log: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 #[utoipa::path(
@@ -270,10 +274,19 @@ async fn main() -> Result<()> {
         args.max_seqs = 1;
     }
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
 
     #[cfg(feature = "metal")]

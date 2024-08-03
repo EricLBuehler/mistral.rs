@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -31,7 +31,7 @@ pub trait InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<Box<dyn Any>>>>;
 
     fn get_type(&self) -> InputsProcessorType;
@@ -40,7 +40,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, iter::repeat, sync::Arc};
+    use std::{any::Any, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{Device, Tensor, WithDType};
@@ -403,11 +403,13 @@ pub mod text_models_inputs_processor {
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
         if let Some(prompt_batchsize) = prompt_batchsize {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();
+            let prompt_batchsize: usize = prompt_batchsize.into();
+
             // Pad each sequence by the padding token to the max len.
             for ctxt in toks.iter() {
                 let chunks = ctxt.chunks(prompt_batchsize).collect::<Vec<_>>();
@@ -462,7 +464,7 @@ pub mod text_models_inputs_processor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
         if no_kv_cache {
             return get_prompt_input(
@@ -510,7 +512,7 @@ pub mod text_models_inputs_processor {
             last_n_context_len: Option<(usize, usize)>,
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-            prompt_batchsize: Option<usize>,
+            prompt_batchsize: Option<NonZeroUsize>,
         ) -> Box<dyn Iterator<Item = Result<Box<dyn Any>>>> {
             if is_xlora && !is_prompt {
                 Box::new(

@@ -34,6 +34,7 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -77,6 +78,7 @@ pub struct VisionLoaderBuilder {
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl VisionLoaderBuilder {
@@ -282,6 +284,7 @@ impl Loader for VisionLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),

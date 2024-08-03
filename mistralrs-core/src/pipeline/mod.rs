@@ -44,6 +44,7 @@ use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
@@ -445,6 +446,7 @@ pub struct GeneralMetadata {
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub enum AdapterInstruction {
@@ -710,7 +712,7 @@ pub trait Pipeline:
                     None,
                     self.get_input_processor_config(),
                     Some(metadata),
-                    None, // TODO
+                    self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = None;

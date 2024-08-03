@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
@@ -78,7 +78,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(

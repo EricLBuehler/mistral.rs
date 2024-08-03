@@ -7,8 +7,8 @@ use mistralrs_core::{
     MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
     RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
-use std::fmt::Display;
 use std::sync::Arc;
+use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
@@ -309,6 +309,10 @@ struct Args {
     /// Disable PagedAttention on CUDA.
     #[arg(long = "no_paged_attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -322,8 +326,17 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
     let model_name = loader.get_id();
 

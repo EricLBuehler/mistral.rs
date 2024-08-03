@@ -31,6 +31,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         ".".to_string(),
         "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
+        None,
     )
     .build();
     // Load, into a Pipeline

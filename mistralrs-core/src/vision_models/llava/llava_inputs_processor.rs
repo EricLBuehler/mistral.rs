@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use candle_core::Result;
@@ -83,7 +84,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(

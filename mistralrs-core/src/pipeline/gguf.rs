@@ -51,6 +51,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -89,6 +90,7 @@ pub struct GGUFLoader {
     chat_template: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, EnumString)]
@@ -131,6 +133,7 @@ pub struct GGUFLoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl GGUFLoaderBuilder {
@@ -142,6 +145,7 @@ impl GGUFLoaderBuilder {
         tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Self {
         let kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -153,6 +157,7 @@ impl GGUFLoaderBuilder {
             kind,
             quantized_filename,
             quantized_model_id,
+            prompt_batchsize,
             ..Default::default()
         }
     }
@@ -214,6 +219,7 @@ impl GGUFLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: self.quantized_filename,
             quantized_model_id: self.quantized_model_id,
+            prompt_batchsize: self.prompt_batchsize,
         })
     }
 }
@@ -230,6 +236,7 @@ impl GGUFLoader {
         no_kv_cache: bool,
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             Some(id)
@@ -252,6 +259,7 @@ impl GGUFLoader {
             chat_template,
             kind,
             tgt_non_granular_index,
+            prompt_batchsize,
         }
     }
 }
@@ -578,6 +586,7 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.prompt_batchsize,
             }),
         })))
     }
