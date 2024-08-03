@@ -611,7 +611,7 @@ pub trait Pipeline:
                     None,
                     self.get_input_processor_config(),
                     None,
-                    None, // TODO
+                    self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = None;
