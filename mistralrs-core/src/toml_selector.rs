@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{fs::File, num::NonZeroUsize};
 
 use serde::Deserialize;
 
@@ -275,12 +275,14 @@ struct TomlLoaderInnerParams {
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub struct TomlLoaderArgs {
     pub use_flash_attn: bool,
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -309,7 +311,10 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
@@ -323,7 +328,10 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -345,7 +353,10 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -367,6 +378,7 @@ fn loader_from_selected(
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -381,6 +393,7 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_xlora(
             xlora_model_id,
@@ -403,6 +416,7 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_lora(
             adapters_model_id,
@@ -418,7 +432,10 @@ fn loader_from_selected(
             quantized_filename,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(tok_model_id),
@@ -435,7 +452,10 @@ fn loader_from_selected(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -460,7 +480,10 @@ fn loader_from_selected(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -480,7 +503,10 @@ fn loader_from_selected(
             arch,
             dtype: _,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
@@ -499,6 +525,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
+            prompt_batchsize: args.prompt_batchsize,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

@@ -40,6 +40,7 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -89,6 +90,7 @@ pub struct NormalLoaderBuilder {
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl NormalLoaderBuilder {
@@ -367,6 +369,7 @@ impl Loader for NormalLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -493,7 +496,7 @@ impl Pipeline for NormalPipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,

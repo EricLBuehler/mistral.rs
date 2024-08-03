@@ -298,7 +298,7 @@ impl Pipeline for SpeculativePipeline {
     async fn sample(
         &self,
         _seqs: &mut [&mut Sequence],
-        _logits: Tensor,
+        _logits: Vec<Tensor>,
         _prefix_cacher: &mut PrefixCacheManager,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -392,7 +392,10 @@ impl Pipeline for SpeculativePipeline {
                             None,
                             None,
                             None, // TODO: get block tables/handle it
+                            None, // TODO: do we support???
                         )
+                        .nth(0)
+                        .unwrap()
                         .unwrap();
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
 
@@ -451,7 +454,10 @@ impl Pipeline for SpeculativePipeline {
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         None,
                         None, // TODO: get block tables/handle it
+                        None, // TODO: do we support???
                     )
+                    .nth(0)
+                    .unwrap()
                     .unwrap();
 
                 let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;

@@ -472,16 +472,20 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
-            self.sliding_window,
-            xs.dtype(),
-            self.layers[0].self_attn.num_heads,
-        )?;
+        let attention_mask = if seqlen_offsets[0] == 0 {
+            CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+                input_ids,
+                metadata
+                    .as_ref()
+                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                    .unwrap_or(&*cache as &dyn PastKvLenCache),
+                self.sliding_window,
+                xs.dtype(),
+                self.layers[0].self_attn.num_heads,
+            )?
+        } else {
+            None
+        };
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

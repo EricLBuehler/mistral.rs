@@ -246,7 +246,7 @@ impl Pipeline for AnyMoePipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -441,13 +441,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         None,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
+                        None, // TODO: prompt chunking doesn't work.
                     )
+                    .nth(0)
                     .unwrap();
 
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
 
                 // Clear the KV cache
                 target.set_none_cache(true, true);

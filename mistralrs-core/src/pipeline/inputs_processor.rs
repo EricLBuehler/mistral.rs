@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -11,6 +11,11 @@ use crate::sequence::Sequence;
 pub enum InputsProcessorType {
     Text,
     Vision,
+}
+
+pub struct InputProcessorOutput {
+    pub inputs: Box<dyn Any>,
+    pub seq_indices: Vec<usize>,
 }
 
 /// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
@@ -31,7 +36,8 @@ pub trait InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-    ) -> Result<Box<dyn Any>>;
+        prompt_batchsize: Option<NonZeroUsize>,
+    ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>>;
 
     fn get_type(&self) -> InputsProcessorType;
 }
@@ -39,7 +45,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, iter::repeat, sync::Arc};
+    use std::{any::Any, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{Device, Tensor, WithDType};
@@ -51,7 +57,7 @@ pub mod text_models_inputs_processor {
         sequence::Sequence,
     };
 
-    use super::{InputsProcessor, InputsProcessorType};
+    use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
     const VIA_F16_TOK_THRESHOLD: usize = 512;
 
@@ -95,14 +101,22 @@ pub mod text_models_inputs_processor {
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>, // For paged attention
     }
 
-    pub(crate) fn get_prompt_input<T: WithDType>(
+    pub struct InnerInputProcessorOutput {
+        pub inputs: InputMetadata,
+        pub seq_indices: Vec<usize>,
+    }
+
+    // chunk_offset_toks is the number of tokens by which the tokens are offset,
+    // chunk_offset_toks / prompt_batchsize = number of batches
+    fn make_prompt_chunk<T: WithDType>(
+        chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
-        input_seqs: &[&mut Sequence],
+        input_seqs: &[&Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
-        let max_len = input_seqs
+        let max_len = toks
             .iter()
             .map(|seq| seq.len())
             .max()
@@ -114,22 +128,24 @@ pub mod text_models_inputs_processor {
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
         let mut slot_mappings = Vec::new();
+        let mut block_tables = Vec::new();
+        let mut paged_attn_context_lens = Vec::new();
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
+            let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
-            seqlen_offsets.push(offset.1);
+            seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
+            position_ids.push(ctxt.len() + chunk_offset_toks);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
             context_lens.push((
-                seq.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+                ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 last_n_context_len.map(|(a, _)| a).unwrap_or(1),
             ));
-            position_ids.push(seq.len());
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
                 let table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
-                let prompt_len = seq.len();
 
                 if table.is_none() {
                     // Will be None during profiling.
@@ -144,20 +160,22 @@ pub mod text_models_inputs_processor {
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
                     if prompt_len > sliding_window {
-                        0.min(prompt_len - sliding_window)
+                        chunk_offset_toks.min(prompt_len - sliding_window)
                     } else {
-                        0
+                        chunk_offset_toks
                     }
                 } else {
-                    0
+                    chunk_offset_toks
                 };
 
                 let mut slot_mapping = Vec::new();
-                for i in 0..prompt_len {
+                let mut ctxt_len = Vec::new();
+                for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
                     if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
+                    ctxt_len.push(i);
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
@@ -172,8 +190,10 @@ pub mod text_models_inputs_processor {
                     let block_offset = i % paged_attn_metadata.block_size;
                     let slot = block_number * paged_attn_metadata.block_size + block_offset;
                     slot_mapping.push(slot.try_into().unwrap());
+                    block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
+                paged_attn_context_lens.push(ctxt_len);
             }
         }
 
@@ -207,17 +227,45 @@ pub mod text_models_inputs_processor {
         }
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
-            let slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                *position_ids.iter().max().unwrap(),
-                _PAD_SLOT_ID,
+            let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
+            let slot_mappings =
+                _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)?;
+
+            let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
+            let block_tables = _make_tensor_with_pad(
+                block_tables
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                max_block_table_len,
+                0,
                 device,
             )?;
+            let block_tables = block_tables.reshape(((), max_block_table_len))?;
+
+            let max_context_len = paged_attn_context_lens
+                .iter()
+                .map(|x| x.len())
+                .max()
+                .unwrap();
+            #[allow(clippy::cast_possible_truncation)]
+            let context_lens = _make_tensor_with_pad(
+                paged_attn_context_lens
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                max_context_len,
+                0,
+                device,
+            )?
+            .reshape(((),))?;
+
             Some(PagedAttentionInputMetadata {
                 slot_mappings,
-                block_tables: None,
-                context_lens: None,
-                max_context_len: None,
+                block_tables: Some(block_tables),
+                context_lens: Some(context_lens),
+                max_context_len: Some(max_context_len),
             })
         } else {
             None
@@ -233,23 +281,12 @@ pub mod text_models_inputs_processor {
         })
     }
 
-    pub(crate) fn get_completion_input<T: WithDType>(
+    fn make_completion_chunk<T: WithDType>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
-        no_kv_cache: bool,
-        last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
-        if no_kv_cache {
-            return get_prompt_input(
-                toks,
-                input_seqs,
-                device,
-                last_n_context_len,
-                paged_attn_metadata,
-            );
-        }
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
@@ -370,6 +407,103 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
+        toks: Vec<Vec<T>>,
+        input_seqs: &[&mut Sequence],
+        device: &Device,
+        last_n_context_len: Option<(usize, usize)>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        prompt_batchsize: Option<NonZeroUsize>,
+    ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
+        if let Some(prompt_batchsize) = prompt_batchsize {
+            let mut seq_chunks = Vec::new();
+            let mut n_chunks = Vec::new();
+            let prompt_batchsize: usize = prompt_batchsize.into();
+
+            // Pad each sequence by the padding token to the max len.
+            for ctxt in toks.iter() {
+                let chunks = ctxt.chunks(prompt_batchsize).collect::<Vec<_>>();
+                n_chunks.push(chunks.len());
+                seq_chunks.push(chunks);
+            }
+            // Basically convert the sequences and tok chunks into chunks of seqs and the corresp toks
+            let mut chunks_transposed: Vec<Vec<(Vec<T>, usize)>> = Vec::new();
+            for (seq_n, seq) in seq_chunks.into_iter().enumerate() {
+                for (i, chunk) in seq.into_iter().enumerate() {
+                    match chunks_transposed.get_mut(i) {
+                        Some(part) => part.push((chunk.to_vec(), seq_n)),
+                        None => chunks_transposed.push(vec![(chunk.to_vec(), seq_n)]),
+                    }
+                }
+            }
+            let chunks = chunks_transposed
+                .into_iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
+                    make_prompt_chunk(
+                        i * prompt_batchsize,
+                        toks,
+                        &seq_ns.iter().map(|i| &*input_seqs[*i]).collect::<Vec<_>>(),
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_deref_mut(),
+                    )
+                    .map(|inputs| InnerInputProcessorOutput {
+                        inputs,
+                        seq_indices: seq_ns,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Box::new(chunks.into_iter())
+        } else {
+            Box::new(std::iter::once(
+                make_prompt_chunk(
+                    0,
+                    toks,
+                    &input_seqs.iter().map(|s| &**s).collect::<Vec<_>>(),
+                    device,
+                    last_n_context_len,
+                    paged_attn_metadata,
+                )
+                .map(|inputs| InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices: (0..input_seqs.len()).collect(),
+                }),
+            ))
+        }
+    }
+
+    pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
+        toks: Vec<Vec<T>>,
+        input_seqs: &[&mut Sequence],
+        device: &Device,
+        no_kv_cache: bool,
+        last_n_context_len: Option<(usize, usize)>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        prompt_batchsize: Option<NonZeroUsize>,
+    ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
+        if no_kv_cache {
+            return get_prompt_input(
+                toks,
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata,
+                prompt_batchsize,
+            );
+        }
+
+        Box::new(std::iter::once(
+            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata).map(|inputs| {
+                InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices: (0..input_seqs.len()).collect(),
+                }
+            }),
+        ))
+    }
+
     #[derive(Clone)]
     pub struct ModelInputs {
         pub input_ids: Tensor,
@@ -397,142 +531,205 @@ pub mod text_models_inputs_processor {
             last_n_context_len: Option<(usize, usize)>,
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        ) -> Result<Box<dyn Any>> {
+            prompt_batchsize: Option<NonZeroUsize>,
+        ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
             if is_xlora && !is_prompt {
-                let InputMetadata {
-                    input: input_ids_full,
-                    positions: seqlen_offsets_full,
-                    positions_kernel: seqlen_offsets_kernel_full,
-                    context_lens: _,
-                    position_ids,
-                    paged_attn_meta: _,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::<Vec<_>>(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )?;
-                let InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids: _,
-                    paged_attn_meta,
-                } = get_completion_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::<Vec<_>>(),
-                    input_seqs,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )?;
-                Ok(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: Some(input_ids_full),
-                    seqlen_offsets,
-                    seqlen_offsets_full: Some(seqlen_offsets_full),
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::<Vec<_>>(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .zip(get_completion_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::<Vec<_>>(),
+                        input_seqs,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    ))
+                    .map(|(prompt, completion)| {
+                        let InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids_full,
+                                    positions: seqlen_offsets_full,
+                                    positions_kernel: seqlen_offsets_kernel_full,
+                                    context_lens: _,
+                                    position_ids,
+                                    paged_attn_meta: _,
+                                },
+                            seq_indices,
+                        } = prompt?;
+                        let InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids: _,
+                                    paged_attn_meta,
+                                },
+                            seq_indices: _,
+                        } = completion?;
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: Some(input_ids_full),
+                            seqlen_offsets,
+                            seqlen_offsets_full: Some(seqlen_offsets_full),
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } else if is_xlora && is_prompt {
-                let InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::<Vec<_>>(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )?;
-                Ok(Box::new(ModelInputs {
-                    input_ids: input_ids.clone(),
-                    input_ids_full: Some(input_ids),
-                    seqlen_offsets: seqlen_offsets.clone(),
-                    seqlen_offsets_full: Some(seqlen_offsets),
-                    seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
-                    seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::<Vec<_>>(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        let InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata?;
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids: input_ids.clone(),
+                            input_ids_full: Some(input_ids),
+                            seqlen_offsets: seqlen_offsets.clone(),
+                            seqlen_offsets_full: Some(seqlen_offsets),
+                            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
+                            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } else if is_prompt {
-                let InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_prompt_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::<Vec<_>>(),
-                    input_seqs,
-                    device,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )?;
-                Ok(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: None,
-                    seqlen_offsets,
-                    seqlen_offsets_full: None,
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: None,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_prompt_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::<Vec<_>>(),
+                        input_seqs,
+                        device,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        let InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata?;
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: None,
+                            seqlen_offsets,
+                            seqlen_offsets_full: None,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: None,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             } else {
-                let InputMetadata {
-                    input: input_ids,
-                    positions: seqlen_offsets,
-                    positions_kernel: seqlen_offsets_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = get_completion_input(
-                    input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks().to_vec())
-                        .collect::<Vec<_>>(),
-                    input_seqs,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    paged_attn_metadata.as_mut(),
-                )?;
-                Ok(Box::new(ModelInputs {
-                    input_ids,
-                    input_ids_full: None,
-                    seqlen_offsets,
-                    seqlen_offsets_full: None,
-                    seqlen_offsets_kernel,
-                    seqlen_offsets_kernel_full: None,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                }))
+                Box::new(
+                    get_completion_input(
+                        input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().to_vec())
+                            .collect::<Vec<_>>(),
+                        input_seqs,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        paged_attn_metadata.as_mut(),
+                        prompt_batchsize,
+                    )
+                    .map(|metadata| {
+                        let InnerInputProcessorOutput {
+                            inputs:
+                                InputMetadata {
+                                    input: input_ids,
+                                    positions: seqlen_offsets,
+                                    positions_kernel: seqlen_offsets_kernel,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta,
+                                },
+                            seq_indices,
+                        } = metadata?;
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids,
+                            input_ids_full: None,
+                            seqlen_offsets,
+                            seqlen_offsets_full: None,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: None,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+                )
             }
         }
 
