@@ -101,7 +101,7 @@ pub mod text_models_inputs_processor {
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>, // For paged attention
     }
 
-    pub struct InnerInputProcesserOutput {
+    pub struct InnerInputProcessorOutput {
         pub inputs: InputMetadata,
         pub seq_indices: Vec<usize>,
     }
@@ -414,7 +414,7 @@ pub mod text_models_inputs_processor {
         last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-    ) -> Box<dyn Iterator<Item = Result<InnerInputProcesserOutput>>> {
+    ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if let Some(prompt_batchsize) = prompt_batchsize {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();
@@ -449,7 +449,7 @@ pub mod text_models_inputs_processor {
                         last_n_context_len,
                         paged_attn_metadata.as_deref_mut(),
                     )
-                    .map(|inputs| InnerInputProcesserOutput {
+                    .map(|inputs| InnerInputProcessorOutput {
                         inputs,
                         seq_indices: seq_ns,
                     })
@@ -466,7 +466,7 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     paged_attn_metadata,
                 )
-                .map(|inputs| InnerInputProcesserOutput {
+                .map(|inputs| InnerInputProcessorOutput {
                     inputs,
                     seq_indices: (0..input_seqs.len()).collect(),
                 }),
@@ -482,7 +482,7 @@ pub mod text_models_inputs_processor {
         last_n_context_len: Option<(usize, usize)>,
         paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-    ) -> Box<dyn Iterator<Item = Result<InnerInputProcesserOutput>>> {
+    ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if no_kv_cache {
             return get_prompt_input(
                 toks,
@@ -496,7 +496,7 @@ pub mod text_models_inputs_processor {
 
         Box::new(std::iter::once(
             make_completion_chunk(toks, input_seqs, device, paged_attn_metadata).map(|inputs| {
-                InnerInputProcesserOutput {
+                InnerInputProcessorOutput {
                     inputs,
                     seq_indices: (0..input_seqs.len()).collect(),
                 }
@@ -559,7 +559,7 @@ pub mod text_models_inputs_processor {
                         prompt_batchsize,
                     ))
                     .map(|(prompt, completion)| {
-                        let InnerInputProcesserOutput {
+                        let InnerInputProcessorOutput {
                             inputs:
                                 InputMetadata {
                                     input: input_ids_full,
@@ -571,7 +571,7 @@ pub mod text_models_inputs_processor {
                                 },
                             seq_indices,
                         } = prompt?;
-                        let InnerInputProcesserOutput {
+                        let InnerInputProcessorOutput {
                             inputs:
                                 InputMetadata {
                                     input: input_ids,
@@ -614,7 +614,7 @@ pub mod text_models_inputs_processor {
                         prompt_batchsize,
                     )
                     .map(|metadata| {
-                        let InnerInputProcesserOutput {
+                        let InnerInputProcessorOutput {
                             inputs:
                                 InputMetadata {
                                     input: input_ids,
@@ -657,7 +657,7 @@ pub mod text_models_inputs_processor {
                         prompt_batchsize,
                     )
                     .map(|metadata| {
-                        let InnerInputProcesserOutput {
+                        let InnerInputProcessorOutput {
                             inputs:
                                 InputMetadata {
                                     input: input_ids,
@@ -701,7 +701,7 @@ pub mod text_models_inputs_processor {
                         prompt_batchsize,
                     )
                     .map(|metadata| {
-                        let InnerInputProcesserOutput {
+                        let InnerInputProcessorOutput {
                             inputs:
                                 InputMetadata {
                                     input: input_ids,

@@ -139,7 +139,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
 
-        let text_models_inputs_processor::InnerInputProcesserOutput {
+        let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:
                 text_models_inputs_processor::InputMetadata {
                     input,

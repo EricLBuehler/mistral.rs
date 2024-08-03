@@ -310,7 +310,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         };
 
         Box::new(iter.into_iter().map(move |metadata| {
-            let text_models_inputs_processor::InnerInputProcesserOutput {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
                 inputs:
                     text_models_inputs_processor::InputMetadata {
                         input,
