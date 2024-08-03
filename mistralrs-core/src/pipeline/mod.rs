@@ -614,8 +614,7 @@ pub trait Pipeline:
 
                 let mut logits = None;
 
-                let mut i = 0;
-                for inputs in inputs_iter {
+                for (i, inputs) in inputs_iter.enumerate() {
                     let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     if i == 0 {
                         match pre_op {
@@ -671,8 +670,6 @@ pub trait Pipeline:
                     }
 
                     logits = Some(self.forward_inputs(inputs)?);
-
-                    i += 1;
                 }
 
                 let logits = logits.expect("Did not get any inputs. This is shocking.");

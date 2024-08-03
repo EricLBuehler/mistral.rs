@@ -8,6 +8,7 @@ use image::GenericImageView;
 use itertools::Itertools;
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use crate::pipeline::text_models_inputs_processor::{
     get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -89,7 +90,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        token_batchsize: Option<usize>,
+        prompt_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -100,6 +101,10 @@ impl InputsProcessor for LLaVANextInputProcessor {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Vision model must have kv cache.",
             ))));
+        }
+        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        if prompt_batchsize.is_some() {
+            warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
 
         let config = other_config

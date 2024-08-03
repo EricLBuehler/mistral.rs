@@ -7,6 +7,7 @@ use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
 use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use crate::{
     pipeline::{
@@ -121,7 +122,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        token_batchsize: Option<usize>,
+        prompt_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -132,6 +133,10 @@ impl InputsProcessor for Idefics2ImageProcessor {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Vision model must have kv cache.",
             ))));
+        }
+        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        if prompt_batchsize.is_some() {
+            warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
 
         let text_models_inputs_processor::InputMetadata {

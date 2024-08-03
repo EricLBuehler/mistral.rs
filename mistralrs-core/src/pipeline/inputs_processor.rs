@@ -31,7 +31,7 @@ pub trait InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        token_batchsize: Option<usize>,
+        prompt_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<Box<dyn Any>>>>;
 
     fn get_type(&self) -> InputsProcessorType;
@@ -97,7 +97,7 @@ pub mod text_models_inputs_processor {
     }
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
-    // chunk_offset_toks / token_batchsize = number of batches
+    // chunk_offset_toks / prompt_batchsize = number of batches
     fn make_prompt_chunk<T: WithDType>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
@@ -157,14 +157,15 @@ pub mod text_models_inputs_processor {
                 } else {
                     chunk_offset_toks
                 };
-                paged_attn_context_lens.push(vec![start_idx; prompt_len]);
 
                 let mut slot_mapping = Vec::new();
+                let mut ctxt_len = Vec::new();
                 for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
                     if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
+                    ctxt_len.push(i);
 
                     let block_number = if i / paged_attn_metadata.block_size >= table.len() {
                         panic!(
@@ -182,6 +183,7 @@ pub mod text_models_inputs_processor {
                     block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
+                paged_attn_context_lens.push(ctxt_len);
             }
         }
 
@@ -401,18 +403,18 @@ pub mod text_models_inputs_processor {
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
-        token_batchsize: Option<usize>,
+        prompt_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
-        let token_batchsize = Some(3);
-        if let Some(token_batchsize) = token_batchsize {
+        if let Some(prompt_batchsize) = prompt_batchsize {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();
             // Pad each sequence by the padding token to the max len.
             for ctxt in toks.iter() {
-                let chunks = ctxt.chunks(token_batchsize).collect::<Vec<_>>();
+                let chunks = ctxt.chunks(prompt_batchsize).collect::<Vec<_>>();
                 n_chunks.push(chunks.len());
                 seq_chunks.push(chunks);
             }
+            // Basically convert the sequences and tok chunks into chunks of seqs and the corresp toks
             let mut chunks_transposed: Vec<Vec<(Vec<T>, usize)>> = Vec::new();
             for (seq_n, seq) in seq_chunks.into_iter().enumerate() {
                 for (i, chunk) in seq.into_iter().enumerate() {
@@ -428,7 +430,7 @@ pub mod text_models_inputs_processor {
                 .map(|(i, chunk)| {
                     let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
                     make_prompt_chunk(
-                        i * token_batchsize,
+                        i * prompt_batchsize,
                         toks,
                         &seq_ns
                             .into_iter()
@@ -436,7 +438,7 @@ pub mod text_models_inputs_processor {
                             .collect::<Vec<_>>(),
                         device,
                         last_n_context_len,
-                        paged_attn_metadata.as_mut().map(|x| &mut **x),
+                        paged_attn_metadata.as_deref_mut(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -445,7 +447,7 @@ pub mod text_models_inputs_processor {
             Box::new(std::iter::once(make_prompt_chunk(
                 0,
                 toks,
-                &input_seqs.into_iter().map(|s| &**s).collect::<Vec<_>>(),
+                &input_seqs.iter().map(|s| &**s).collect::<Vec<_>>(),
                 device,
                 last_n_context_len,
                 paged_attn_metadata,
@@ -460,7 +462,7 @@ pub mod text_models_inputs_processor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
-        token_batchsize: Option<usize>,
+        prompt_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
         if no_kv_cache {
             return get_prompt_input(
@@ -469,7 +471,7 @@ pub mod text_models_inputs_processor {
                 device,
                 last_n_context_len,
                 paged_attn_metadata,
-                token_batchsize,
+                prompt_batchsize,
             );
         }
 
@@ -508,7 +510,7 @@ pub mod text_models_inputs_processor {
             last_n_context_len: Option<(usize, usize)>,
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-            token_batchsize: Option<usize>,
+            prompt_batchsize: Option<usize>,
         ) -> Box<dyn Iterator<Item = Result<Box<dyn Any>>>> {
             if is_xlora && !is_prompt {
                 Box::new(
@@ -521,7 +523,7 @@ pub mod text_models_inputs_processor {
                         device,
                         last_n_context_len,
                         paged_attn_metadata.as_mut(),
-                        token_batchsize,
+                        prompt_batchsize,
                     )
                     .zip(get_completion_input(
                         input_seqs
@@ -533,7 +535,7 @@ pub mod text_models_inputs_processor {
                         no_kv_cache,
                         last_n_context_len,
                         paged_attn_metadata.as_mut(),
-                        token_batchsize,
+                        prompt_batchsize,
                     ))
                     .map(|(prompt, completion)| {
                         let InputMetadata {
@@ -577,7 +579,7 @@ pub mod text_models_inputs_processor {
                         device,
                         last_n_context_len,
                         paged_attn_metadata.as_mut(),
-                        token_batchsize,
+                        prompt_batchsize,
                     )
                     .map(|x| {
                         x.map(|metadata| {
@@ -615,7 +617,7 @@ pub mod text_models_inputs_processor {
                         device,
                         last_n_context_len,
                         paged_attn_metadata.as_mut(),
-                        token_batchsize,
+                        prompt_batchsize,
                     )
                     .map(|x| {
                         x.map(|metadata| {
@@ -654,7 +656,7 @@ pub mod text_models_inputs_processor {
                         no_kv_cache,
                         last_n_context_len,
                         paged_attn_metadata.as_mut(),
-                        token_batchsize,
+                        prompt_batchsize,
                     )
                     .map(|x| {
                         x.map(|metadata| {
