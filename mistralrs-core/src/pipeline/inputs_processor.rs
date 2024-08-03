@@ -118,12 +118,14 @@ pub mod text_models_inputs_processor {
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
         let mut slot_mappings = Vec::new();
+        let mut block_tables = Vec::new();
+        let mut paged_attn_context_lens = Vec::new();
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
-            position_ids.push(ctxt.len() + chunk_offset_toks + 1);
+            position_ids.push(ctxt.len() + chunk_offset_toks);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
             context_lens.push((
                 ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
@@ -148,17 +150,18 @@ pub mod text_models_inputs_processor {
 
                 let start_idx = if let Some(sliding_window) = paged_attn_metadata.sliding_window {
                     if prompt_len > sliding_window {
-                        0.min(prompt_len - sliding_window)
+                        chunk_offset_toks.min(prompt_len - sliding_window)
                     } else {
-                        0
+                        chunk_offset_toks
                     }
                 } else {
-                    0
+                    chunk_offset_toks
                 };
+                paged_attn_context_lens.push(vec![start_idx; prompt_len]);
 
                 let mut slot_mapping = Vec::new();
                 for i in chunk_offset_toks..prompt_len + chunk_offset_toks {
-                    if i < start_idx + chunk_offset_toks {
+                    if i < start_idx {
                         // Pad [0,start_idx) with _PAD_TOKEN_ID
                         slot_mapping.push(_PAD_SLOT_ID);
                     }
@@ -176,6 +179,7 @@ pub mod text_models_inputs_processor {
                     let block_offset = i % paged_attn_metadata.block_size;
                     let slot = block_number * paged_attn_metadata.block_size + block_offset;
                     slot_mapping.push(slot.try_into().unwrap());
+                    block_tables.push(table.clone());
                 }
                 slot_mappings.push(slot_mapping);
             }
@@ -211,17 +215,44 @@ pub mod text_models_inputs_processor {
         }
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
+            let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
             let slot_mappings = _make_tensor_with_pad(
                 slot_mappings,
-                *position_ids.iter().max().unwrap(),
+                max_slot_mapping_len,
                 _PAD_SLOT_ID,
                 device,
             )?;
+
+            let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
+            let block_tables = _make_tensor_with_pad(
+                block_tables
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                max_block_table_len,
+                0,
+                device,
+            )?;
+            let block_tables = block_tables.reshape(((), max_block_table_len))?;
+
+            let max_context_len = paged_attn_context_lens.iter().map(|x| x.len()).max().unwrap();
+            #[allow(clippy::cast_possible_truncation)]
+            let context_lens = _make_tensor_with_pad(
+                paged_attn_context_lens
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
+                    .collect::<Vec<_>>(),
+                    max_context_len,
+                0,
+                device,
+            )?.reshape(((),))?;
+
             Some(PagedAttentionInputMetadata {
                 slot_mappings,
-                block_tables: None,
-                context_lens: None,
-                max_context_len: None,
+                block_tables: Some(block_tables),
+                context_lens: Some(context_lens),
+                max_context_len: Some(max_context_len),
             })
         } else {
             None
@@ -371,7 +402,7 @@ pub mod text_models_inputs_processor {
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         token_batchsize: Option<usize>,
     ) -> Box<dyn Iterator<Item = Result<InputMetadata>>> {
-        let token_batchsize = Some(4);
+        let token_batchsize = Some(3);
         if let Some(token_batchsize) = token_batchsize {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();

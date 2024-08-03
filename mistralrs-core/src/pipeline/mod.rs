@@ -617,7 +617,6 @@ pub trait Pipeline:
                 let mut i = 0;
                 for inputs in inputs_iter {
                     let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-                    dbg!(i);
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In(ref adapter_inst) => {
