@@ -246,7 +246,7 @@ impl Pipeline for AnyMoePipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -449,7 +449,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs.unwrap())?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
 
                 // Clear the KV cache
                 target.set_none_cache(true, true);

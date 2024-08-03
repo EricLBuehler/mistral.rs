@@ -18,7 +18,8 @@ use crate::pipeline::text_models_inputs_processor::{
     get_completion_input, get_prompt_input, PagedAttentionMeta,
 };
 use crate::pipeline::{
-    text_models_inputs_processor, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+    text_models_inputs_processor, InputProcessorOutput, InputsProcessor, InputsProcessorType,
+    MessagesAction, Processor,
 };
 use crate::sequence::Sequence;
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
@@ -85,7 +86,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-    ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
+    ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Cannot make inputs for X-LoRA vision model.",
@@ -147,34 +148,41 @@ impl InputsProcessor for LLaVAInputProcessor {
                         paged_attn_metadata,
                         None, // TODO
                     )
-                    .map(
-                        |metadata: anyhow::Result<Box<dyn Any>>| -> anyhow::Result<Box<dyn Any>> {
-                            let text_models_inputs_processor::ModelInputs {
-                                input_ids,
-                                input_ids_full: _,
-                                seqlen_offsets,
-                                seqlen_offsets_full: _,
-                                seqlen_offsets_kernel,
-                                seqlen_offsets_kernel_full: _,
-                                context_lens,
-                                position_ids,
-                                paged_attn_meta,
-                            } = *metadata?
-                                .downcast::<text_models_inputs_processor::ModelInputs>()
-                                .expect("Downcast failed.");
-                            let inputs: Box<dyn Any> = Box::new(ModelInputs {
-                                input_ids,
-                                seqlen_offsets,
-                                seqlen_offsets_kernel,
-                                context_lens,
-                                position_ids,
-                                pixel_values: None,
-                                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
-                                paged_attn_meta,
-                            });
-                            Ok(inputs)
-                        },
-                    ),
+                    .map(|metadata| {
+                        let InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        } = metadata?;
+
+                        let text_models_inputs_processor::ModelInputs {
+                            input_ids,
+                            input_ids_full: _,
+                            seqlen_offsets,
+                            seqlen_offsets_full: _,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: _,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                        } = *inputs
+                            .downcast::<text_models_inputs_processor::ModelInputs>()
+                            .expect("Downcast failed.");
+
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids,
+                            seqlen_offsets,
+                            seqlen_offsets_kernel,
+                            context_lens,
+                            position_ids,
+                            pixel_values: None,
+                            model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                            paged_attn_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
             );
         };
 
@@ -264,27 +272,32 @@ impl InputsProcessor for LLaVAInputProcessor {
             )
         };
 
-        Box::new(iter.into_iter().map(move |x| {
-            x.map(|metadata| {
-                let text_models_inputs_processor::InputMetadata {
-                    input,
-                    positions,
-                    positions_kernel,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                } = metadata;
-                let inputs: Box<dyn Any> = Box::new(ModelInputs {
-                    input_ids: input,
-                    seqlen_offsets: positions,
-                    seqlen_offsets_kernel: positions_kernel,
-                    context_lens,
-                    position_ids,
-                    pixel_values: pixel_values.clone(),
-                    model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
-                    paged_attn_meta,
-                });
-                inputs
+        Box::new(iter.into_iter().map(move |metadata| {
+            let text_models_inputs_processor::InnerInputProcesserOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        positions_kernel,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                    },
+                seq_indices,
+            } = metadata?;
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                seqlen_offsets_kernel: positions_kernel,
+                context_lens,
+                position_ids,
+                pixel_values: pixel_values.clone(),
+                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+                paged_attn_meta,
+            });
+            Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
             })
         }))
     }

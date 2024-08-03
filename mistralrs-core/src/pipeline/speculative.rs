@@ -298,7 +298,7 @@ impl Pipeline for SpeculativePipeline {
     async fn sample(
         &self,
         _seqs: &mut [&mut Sequence],
-        _logits: Tensor,
+        _logits: Vec<Tensor>,
         _prefix_cacher: &mut PrefixCacheManager,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,

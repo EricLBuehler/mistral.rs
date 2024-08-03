@@ -15,7 +15,7 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::ModelInputs,
@@ -123,7 +123,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-    ) -> Box<dyn Iterator<Item = anyhow::Result<Box<dyn Any>>>> {
+    ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Cannot make inputs for X-LoRA vision model.",
@@ -139,13 +139,17 @@ impl InputsProcessor for Idefics2ImageProcessor {
             warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
 
-        let text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
+        let text_models_inputs_processor::InnerInputProcesserOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    positions_kernel,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                },
+            seq_indices,
         } = if is_prompt {
             get_prompt_input(
                 input_seqs
@@ -220,7 +224,10 @@ impl InputsProcessor for Idefics2ImageProcessor {
             model_specific_args: Box::new(pixel_attention_mask),
             paged_attn_meta,
         });
-        Box::new(std::iter::once(Ok(inputs)))
+        Box::new(std::iter::once(Ok(InputProcessorOutput {
+            inputs,
+            seq_indices,
+        })))
     }
 }
 

@@ -29,6 +29,7 @@ use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
+pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
@@ -55,7 +56,7 @@ pub use vision_loaders::{
 };
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, Var};
+use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::{
     sequence::Sequence,
@@ -614,10 +615,13 @@ pub trait Pipeline:
                     self.get_metadata().prompt_batchsize,
                 );
 
-                let mut logits = None;
+                let mut logits = vec![None; input_seqs.len()];
 
                 for (i, inputs) in inputs_iter.enumerate() {
-                    let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    let InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In(ref adapter_inst) => {
@@ -671,10 +675,20 @@ pub trait Pipeline:
                         }
                     }
 
-                    logits = Some(self.forward_inputs(inputs)?);
+                    let raw_logits = self.forward_inputs(inputs)?;
+
+                    for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        logits[seq_idx] = Some(raw_logits.i(logit_idx)?);
+                    }
                 }
 
-                let logits = logits.expect("Did not get any inputs. This is shocking.");
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -715,15 +729,28 @@ pub trait Pipeline:
                     self.get_metadata().prompt_batchsize,
                 );
 
-                let mut logits = None;
+                let mut logits = vec![None; input_seqs.len()];
 
                 for inputs in inputs_iter {
-                    let inputs = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    let InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
-                    logits = Some(self.forward_inputs(inputs)?);
+                    let raw_logits = self.forward_inputs(inputs)?;
+
+                    for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        logits[seq_idx] = Some(raw_logits.i(logit_idx)?);
+                    }
                 }
 
-                let logits = logits.expect("Did not get any inputs. This is shocking.");
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
                     .await?;
@@ -735,7 +762,7 @@ pub trait Pipeline:
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
