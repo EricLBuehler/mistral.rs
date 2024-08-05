@@ -6,7 +6,7 @@ use candle_core::{
     quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
     Tensor, D,
 };
-use candle_nn::{linear_b, linear_no_bias, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, Linear, VarBuilder};
 use either::Either;
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
@@ -14,10 +14,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
-        RmsNorm, ScaledDotProductAttention,
-    },
+    layers::{repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm},
     layers_masker::PastKvLenCache,
     merge_delta,
     ops::{BitWiseOp, NonZeroOp},
@@ -97,12 +94,12 @@ trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn dtype(&self) -> DType;
 }
 
-impl ModuleWithMetadata for FusedBiasLinear {
+impl ModuleWithMetadata for Linear {
     fn device(&self) -> &Device {
-        self.w.device()
+        self.weight().device()
     }
     fn dtype(&self) -> DType {
-        self.w.dtype()
+        self.weight().dtype()
     }
 }
 
@@ -255,16 +252,14 @@ impl Attention {
                 let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
                 let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-                ScaledDotProductAttention.run_attention(
+                candle_nn::scaled_dot_product_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_heads,
-                    self.head_dim,
+                    1. / (self.head_dim as f64).sqrt(),
                     attn_mask.as_ref(),
                     self.use_flash_attn,
-                    b_sz,
-                    q_len,
+                    self.num_heads,
                 )?
             }
         };
@@ -531,47 +526,47 @@ impl ImageEmbedding {
         let layers: Vec<Box<dyn ModuleWithMetadata>> =
             match (projection_cls.as_str(), use_hd_transform) {
                 ("linear", _) => {
-                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                    vec![Box::new(linear_b(
                         image_dim_out,
                         hidden_size,
                         true,
                         vb.pp("img_projection"),
-                    )?)?)]
+                    )?)]
                 }
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                        Box::new(linear_b(
                             image_dim_out * 4,
                             dim_proj,
                             true,
                             vb.pp("img_projection.0"),
-                        )?)?),
+                        )?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                        Box::new(linear_b(
                             dim_proj,
                             dim_proj,
                             true,
                             vb.pp("img_projection.2"),
-                        )?)?),
+                        )?),
                     ]
                 }
                 ("mlp", false) => {
                     let dim_proj = hidden_size;
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                        Box::new(linear_b(
                             image_dim_out,
                             dim_proj,
                             true,
                             vb.pp("img_projection.0"),
-                        )?)?),
+                        )?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                        Box::new(linear_b(
                             dim_proj,
                             dim_proj,
                             true,
                             vb.pp("img_projection.2"),
-                        )?)?),
+                        )?),
                     ]
                 }
                 _ => {

@@ -1,9 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{
-    repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
-};
+use crate::layers::{repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -121,16 +119,14 @@ impl LayerWeights {
                 let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
                 let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-                ScaledDotProductAttention.run_attention(
+                candle_nn::scaled_dot_product_attention(
                     &q,
                     &k,
                     &v,
-                    self.n_head,
-                    self.head_dim,
+                    1. / (self.head_dim as f64).sqrt(),
                     mask,
                     false,
-                    b_sz,
-                    q_len,
+                    self.n_head,
                 )?
             }
         };

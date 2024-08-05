@@ -2,9 +2,9 @@
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
-use candle_nn::{Conv2dConfig, Module};
+use candle_nn::{Conv2dConfig, Linear, Module};
 
-use crate::{layers::FusedBiasLinear, serde_default_fn};
+use crate::serde_default_fn;
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -110,10 +110,10 @@ impl Module for ClipVisionEmbeddings {
 
 #[derive(Clone, Debug)]
 struct ClipAttention {
-    k_proj: FusedBiasLinear,
-    v_proj: FusedBiasLinear,
-    q_proj: FusedBiasLinear,
-    out_proj: FusedBiasLinear,
+    k_proj: Linear,
+    v_proj: Linear,
+    q_proj: Linear,
+    out_proj: Linear,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
@@ -131,10 +131,10 @@ impl ClipAttention {
         let scale = (head_dim as f64).powf(-0.5);
 
         Ok(ClipAttention {
-            k_proj: k_proj.try_into()?,
-            v_proj: v_proj.try_into()?,
-            q_proj: q_proj.try_into()?,
-            out_proj: out_proj.try_into()?,
+            k_proj,
+            v_proj,
+            q_proj,
+            out_proj,
             head_dim,
             scale,
             num_attention_heads,
@@ -187,8 +187,8 @@ impl ClipAttention {
 
 #[derive(Clone, Debug)]
 struct ClipMlp {
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Linear,
+    fc2: Linear,
     activation: Activation,
 }
 
@@ -198,8 +198,8 @@ impl ClipMlp {
         let fc2 = candle_nn::linear(c.intermediate_size, c.hidden_size, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
-            fc1: fc1.try_into()?,
-            fc2: fc2.try_into()?,
+            fc1,
+            fc2,
             activation: c.hidden_act,
         })
     }

@@ -14,7 +14,7 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm};
 use crate::pipeline::{extract_logits, Cache};
 use crate::DeviceMapMetadata;
 
@@ -249,16 +249,14 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let y = ScaledDotProductAttention.run_attention(
+        let y = candle_nn::scaled_dot_product_attention(
             &q,
             &k,
             &v,
-            self.n_head,
-            self.head_dim,
+            1. / (self.head_dim as f64).sqrt(),
             mask.as_ref(),
             false,
-            b_sz,
-            seq_len,
+            self.n_head,
         )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;

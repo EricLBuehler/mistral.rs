@@ -6,7 +6,6 @@ use crate::device_map::DeviceMapper;
 use crate::layers::repeat_kv;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
-use crate::layers::ScaledDotProductAttention;
 use crate::lora::get_lora_cfg;
 use crate::lora::AdapterSwapper;
 use crate::lora::LinearLayerLike;
@@ -171,16 +170,14 @@ impl LayerWeights {
         let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let y = ScaledDotProductAttention.run_attention(
+        let y = candle_nn::scaled_dot_product_attention(
             &q,
             &k,
             &v,
-            self.n_head,
-            self.head_dim,
+            1. / (self.head_dim as f64).sqrt(),
             attn_mask.as_ref(),
             false,
-            b_sz,
-            seq_len,
+            self.n_head,
         )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;

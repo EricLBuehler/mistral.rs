@@ -9,7 +9,7 @@ use tracing::info;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{CausalMasker, RotaryEmbedding, ScaledDotProductAttention},
+    layers::{CausalMasker, RotaryEmbedding},
     layers_utils::repeat_kv,
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
@@ -291,16 +291,14 @@ impl Attention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut attn_output = ScaledDotProductAttention.run_attention(
+        let mut attn_output = candle_nn::scaled_dot_product_attention(
             &q,
             &k,
             &v,
-            self.num_heads,
-            self.head_dim,
+            1. / (self.head_dim as f64).sqrt(),
             attn_mask.as_ref(),
             self.use_flash_attn,
-            b_sz,
-            q_len,
+            self.num_heads,
         )?;
 
         if self.q_proj.is_quant() {

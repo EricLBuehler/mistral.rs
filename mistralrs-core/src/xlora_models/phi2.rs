@@ -4,7 +4,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -291,16 +290,14 @@ impl Attention {
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
 
-        let attn_output = ScaledDotProductAttention.run_attention(
+        let attn_output = candle_nn::scaled_dot_product_attention(
             &q,
             &k,
             &v,
-            self.num_heads,
-            self.head_dim,
+            1. / (self.head_dim as f64).sqrt(),
             mask,
             self.use_flash_attn,
-            b_size,
-            seq_len,
+            self.num_heads,
         )?;
 
         let mut attn_output = attn_output

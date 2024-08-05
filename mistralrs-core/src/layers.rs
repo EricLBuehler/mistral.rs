@@ -13,16 +13,14 @@ use std::{
 
 use candle_core::{
     quantized::{gguf_file, QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Shape, Tensor, D,
+    DType, Device, IndexOp, Result, Tensor,
 };
 use candle_nn::{Linear, Module, VarBuilder};
 use serde::Deserialize;
 
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
-use crate::{
-    cublaslt::CUBLASLT_HANDLE, models::llama, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16,
-};
+use crate::{models::llama, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -431,168 +429,6 @@ impl MatMul {
     }
 }
 
-/// Computes softmax(QK^T*sqrt(d_k))V
-fn naive_sdpa(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    head_dim: usize,
-    mask: Option<&Tensor>,
-) -> Result<Tensor> {
-    let att = MatMul.matmul_affine_div(
-        &q.contiguous()?,
-        &k.t()?.contiguous()?,
-        (head_dim as f64).sqrt(),
-    )?;
-
-    let att = match mask {
-        Some(m) => att.broadcast_add(m)?,
-        None => att,
-    };
-    let att = candle_nn::ops::softmax_last_dim(&att)?;
-    // Convert to contiguous as matmul doesn't support strided vs for now.
-    MatMul.matmul(&att, &v.contiguous()?)
-}
-
-pub struct ScaledDotProductAttention;
-
-impl ScaledDotProductAttention {
-    /// Computes softmax(QK^T*sqrt(d_k))V
-    ///
-    /// The attention implementation is dispatched as follows:
-    /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
-    /// 2) If using CUDA and the cuBLASLt kernel is initialized, then it will use an optimized version.
-    /// 3) Otherwise, use the "naive" SDPA implementation.
-    #[allow(unused_variables, clippy::too_many_arguments)]
-    pub fn run_attention(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        v: &Tensor,
-        n_attn_heads: usize,
-        head_dim: usize,
-        mask: Option<&Tensor>,
-        use_flash_attn: bool,
-        b_sz: usize,
-        seq_len: usize,
-    ) -> Result<Tensor> {
-        if use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (head_dim as f32).sqrt();
-            return flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2);
-        }
-        if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            if !get_use_matmul_via_f16() {
-                #[cfg(feature = "cuda")]
-                {
-                    // cuBLASLt batch matmul implementation requires inputs to be dims3
-                    let k = k.flatten(0, 1)?;
-                    let q = q.flatten(0, 1)?;
-                    let v = v.flatten(0, 1)?;
-                    let attention_bias = mask.map(|mask| mask.flatten(0, 1)).transpose()?;
-
-                    // If attention_bias is set, we fuse the add by giving it as the output matrix
-                    // and setting beta to 1.0
-                    let beta = match attention_bias.is_some() {
-                        true => Some(1.0),
-                        false => None,
-                    };
-
-                    // Batch matrix multiplication
-                    // Fuse softmax scale and attention_bias add
-                    let attention_scores = cublaslt.batch_matmul(
-                        &k,
-                        &q,
-                        attention_bias.as_ref(),
-                        Some((1.0 / (head_dim as f64).sqrt()) as f32),
-                        beta,
-                        None,
-                        None,
-                    )?;
-                    let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
-
-                    let context_layer = cublaslt.batch_matmul(
-                        &v.t()?.contiguous()?,
-                        &attention_probs,
-                        // We save one allocation
-                        Some(&q),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
-
-                    // Reshape to dims4
-                    context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
-                }
-                #[cfg(not(feature = "cuda"))]
-                {
-                    candle_core::bail!("`cuda` feature is not enabled")
-                }
-            } else {
-                // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, k, v, head_dim, mask)
-            }
-        } else {
-            naive_sdpa(q, k, v, head_dim, mask)
-        }
-    }
-}
-
-/// Linear layer with fused bias matmul.
-#[derive(Debug, Clone)]
-pub struct FusedBiasLinear {
-    pub(crate) w: Tensor,
-    pub(crate) b: Tensor,
-}
-
-impl TryFrom<Linear> for FusedBiasLinear {
-    type Error = candle_core::Error;
-
-    fn try_from(x: Linear) -> Result<Self> {
-        if let Some(bias) = x.bias() {
-            Ok(Self {
-                w: x.weight().clone(),
-                b: bias.clone(),
-            })
-        } else {
-            candle_core::bail!("`FusedBiasLinear` expects a Linear layer with bias.")
-        }
-    }
-}
-
-impl Module for FusedBiasLinear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let w = match *x.dims() {
-            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
-            [bsize, _, _] => self.w.broadcast_left(bsize)?,
-            _ => self.w.clone(),
-        };
-        let mut tgt_shape = x.dims().to_vec();
-        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus2)?;
-        let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
-
-        if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            cublaslt
-                .batch_matmul(
-                    x,
-                    &w,
-                    Some(&b.t()?.contiguous()?),
-                    None,
-                    Some(1.0),
-                    None,
-                    None,
-                )?
-                .t()
-        } else {
-            x.matmul(&w.t()?)? + b
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,
@@ -748,80 +584,5 @@ impl RotaryEmbedding {
         b_sz: usize,
     ) -> Result<()> {
         self.0.forward(positions, positions_kernel, q, k, b_sz)
-    }
-}
-
-mod tests {
-
-    #[test]
-    fn fused_bias_linear() {
-        use candle_core::{DType, Device, IndexOp, Tensor};
-        use candle_nn::{Linear, Module};
-
-        use crate::cublaslt::setup_cublas_lt_wrapper;
-        use crate::layers::FusedBiasLinear;
-
-        const IN: usize = 1921;
-        const OUT: usize = 4096;
-        const INNER: usize = 1024;
-
-        let dev = Device::cuda_if_available(0).unwrap();
-        setup_cublas_lt_wrapper();
-
-        let inner_dtype = if dev.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
-
-        let w = Tensor::arange(0f32, (OUT * IN) as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT, IN))
-            .unwrap();
-        let b = Tensor::arange(0f32, OUT as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT,))
-            .unwrap();
-
-        let xs = Tensor::arange(0f32, (INNER * IN) as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((1, INNER, IN))
-            .unwrap();
-
-        let lin = Linear::new(w.clone(), Some(b.clone()));
-        let truth_out = lin.forward(&xs).unwrap();
-        let truth_y = truth_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::<f32>()
-            .unwrap();
-
-        let fused = FusedBiasLinear { w, b };
-        let fused_out = fused.forward(&xs).unwrap();
-        let fused_y = fused_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::<f32>()
-            .unwrap();
-
-        assert_eq!(truth_out.shape(), fused_out.shape());
-        if truth_y != fused_y {
-            panic!(
-                "Truth does not match fused kernel. Diff fused - truth:\n{:#?}",
-                &(&fused_out - &truth_out)
-                    .unwrap()
-                    .i((0, 5..10, 0..5))
-                    .unwrap()
-                    .to_dtype(DType::F32)
-                    .unwrap()
-                    .to_vec2::<f32>()
-            )
-        }
     }
 }
