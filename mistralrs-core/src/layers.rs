@@ -484,7 +484,6 @@ impl ScaledDotProductAttention {
             let softmax_scale = 1f32 / (head_dim as f32).sqrt();
             return flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2);
         }
-
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]

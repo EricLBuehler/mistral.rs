@@ -45,7 +45,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, iter::repeat, num::NonZeroUsize, sync::Arc};
+    use std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{Device, Tensor, WithDType};
@@ -108,7 +108,7 @@ pub mod text_models_inputs_processor {
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
-    fn make_prompt_chunk<T: WithDType>(
+    fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
         input_seqs: &[&Sequence],
@@ -415,7 +415,7 @@ pub mod text_models_inputs_processor {
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
-        if let Some(prompt_batchsize) = prompt_batchsize {
+        if let (Some(prompt_batchsize), true) = (prompt_batchsize, paged_attn_metadata.is_none()) {
             let mut seq_chunks = Vec::new();
             let mut n_chunks = Vec::new();
             let prompt_batchsize: usize = prompt_batchsize.into();
@@ -457,6 +457,12 @@ pub mod text_models_inputs_processor {
                 .collect::<Vec<_>>();
             Box::new(chunks.into_iter())
         } else {
+            if prompt_batchsize.is_some() {
+                // TODO(EricLBuehler)
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "PagedAttention does not yet support prompt batching.",
+                ))));
+            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
                     0,
