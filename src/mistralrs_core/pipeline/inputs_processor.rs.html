@@ -738,6 +738,12 @@
 <a href="#738" id="738">738</a>
 <a href="#739" id="739">739</a>
 <a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
@@ -785,7 +791,7 @@
 <span class="comment">// ========================= Test models input processor
 
 </span><span class="kw">pub mod </span>text_models_inputs_processor {
-    <span class="kw">use </span>std::{any::Any, iter::repeat, num::NonZeroUsize, sync::Arc};
+    <span class="kw">use </span>std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     <span class="kw">use </span>anyhow::Result;
     <span class="kw">use </span>candle_core::{Device, Tensor, WithDType};
@@ -848,7 +854,7 @@
 
     <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
-    </span><span class="kw">fn </span>make_prompt_chunk&lt;T: WithDType&gt;(
+    </span><span class="kw">fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
         chunk_offset_toks: usize,
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Sequence],
@@ -1155,7 +1161,7 @@
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(prompt_batchsize) = prompt_batchsize {
+        <span class="kw">if let </span>(<span class="prelude-val">Some</span>(prompt_batchsize), <span class="bool-val">true</span>) = (prompt_batchsize, paged_attn_metadata.is_none()) {
             <span class="kw">let </span><span class="kw-2">mut </span>seq_chunks = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>n_chunks = Vec::new();
             <span class="kw">let </span>prompt_batchsize: usize = prompt_batchsize.into();
@@ -1197,6 +1203,12 @@
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             Box::new(chunks.into_iter())
         } <span class="kw">else </span>{
+            <span class="kw">if </span>prompt_batchsize.is_some() {
+                <span class="comment">// TODO(EricLBuehler)
+                </span><span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                    <span class="string">"PagedAttention does not yet support prompt batching."</span>,
+                ))));
+            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
                     <span class="number">0</span>,

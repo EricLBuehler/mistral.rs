@@ -825,7 +825,6 @@
 <a href="#825" id="825">825</a>
 <a href="#826" id="826">826</a>
 <a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -1312,7 +1311,6 @@
             <span class="kw">let </span>softmax_scale = <span class="number">1f32 </span>/ (head_dim <span class="kw">as </span>f32).sqrt();
             <span class="kw">return </span>flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, softmax_scale, seq_len &gt; <span class="number">1</span>)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>);
         }
-
         <span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
             <span class="kw">if </span>!get_use_matmul_via_f16() {
                 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
