@@ -12,9 +12,7 @@ use crate::{
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{
-        repeat_kv, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, ScaledDotProductAttention,
-    },
+    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, RotaryEmbedding},
     layers_masker::PastKvLenCache,
     merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -270,16 +268,14 @@ impl Attention {
                 let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
                 let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-                ScaledDotProductAttention.run_attention(
+                candle_nn::scaled_dot_product_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_heads,
-                    self.head_dim,
+                    1. / (self.head_dim as f64).sqrt(),
                     attn_mask.as_ref(),
                     self.use_flash_attn,
-                    b_sz,
-                    q_len,
+                    self.num_heads,
                 )?
             }
         };

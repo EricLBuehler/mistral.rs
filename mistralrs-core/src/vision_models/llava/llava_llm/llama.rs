@@ -12,7 +12,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
     layers_masker::PastKvLenCache,
     merge_delta,
     models::llama::Config,
@@ -103,16 +103,14 @@ impl CausalSelfAttention {
                 let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?
                     .contiguous()?;
 
-                ScaledDotProductAttention.run_attention(
+                candle_nn::scaled_dot_product_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_attention_heads,
-                    self.head_dim,
+                    1. / (self.head_dim as f64).sqrt(),
                     attention_mask.clone().as_ref(),
                     self.use_flash_attn,
-                    b_sz,
-                    seq_len,
+                    self.num_attention_heads,
                 )?
             }
         };

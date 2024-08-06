@@ -2,7 +2,7 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
+    layers::Llama3RotaryEmbedding,
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
@@ -120,16 +120,14 @@ impl CausalSelfAttention {
         let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
         let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
 
-        let y = ScaledDotProductAttention.run_attention(
+        let y = candle_nn::scaled_dot_product_attention(
             &q,
             &k,
             &v,
-            self.num_attention_heads,
-            self.head_dim,
+            1. / (self.head_dim as f64).sqrt(),
             mask.clone().as_ref(),
             self.use_flash_attn,
-            b_sz,
-            seq_len,
+            self.num_attention_heads,
         )?;
 
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
