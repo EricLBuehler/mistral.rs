@@ -1,4 +1,4 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.XLoraGGUF(
