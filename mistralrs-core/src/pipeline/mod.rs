@@ -10,10 +10,12 @@ mod normal;
 mod normal_loaders;
 mod paths;
 mod processing;
+mod profile;
 mod sampling;
 mod speculative;
 mod vision;
 mod vision_loaders;
+
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{
     AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
