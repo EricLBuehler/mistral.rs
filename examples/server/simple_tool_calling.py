@@ -12,13 +12,10 @@ python3 examples/server/tool_calling_llama_31.py
 ```
 """
 
-import openai
 import json
-import sys
-from io import StringIO
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 tools = [
     {

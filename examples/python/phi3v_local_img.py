@@ -1,5 +1,4 @@
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
-import base64
 
 runner = Runner(
     which=Which.VisionPlain(

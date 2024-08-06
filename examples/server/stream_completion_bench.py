@@ -28,7 +28,7 @@ def run():
         print("=" * 15)
 
         now = datetime.now()
-        answer = request(stream=False)
+        request(stream=False)
         finished = datetime.now()
 
         print(f"Duration: {finished-now}")

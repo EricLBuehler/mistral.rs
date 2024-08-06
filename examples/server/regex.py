@@ -1,7 +1,6 @@
-import openai
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 BULLET_LIST_REGEX = "(- [^\n]*\n)+(- [^\n]*)(\n\n)?"
 
