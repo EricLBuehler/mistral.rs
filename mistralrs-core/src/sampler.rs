@@ -488,7 +488,7 @@ impl Sampler {
             let match_indices = toks
                 .par_iter()
                 .enumerate()
-                .take(toks.len() - 1)
+                .take(toks.len().saturating_sub(1))
                 .filter(|(_i, x)| *toks.last().unwrap() == **x)
                 .map(|(i, _)| i)
                 .collect::<Vec<_>>();

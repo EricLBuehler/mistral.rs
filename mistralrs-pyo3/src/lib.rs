@@ -21,12 +21,12 @@ use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
     Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
     SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, VisionLoaderBuilder,
-    VisionSpecificConfig,DrySamplingParams
+    VisionSpecificConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -580,7 +580,6 @@ impl Runner {
                 None
             };
 
-
             let messages = match request.messages {
                 Either::Left(ref messages) => {
                     let mut messages_vec = Vec::new();
@@ -872,7 +871,6 @@ impl Runner {
             } else {
                 None
             };
-
 
             let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
                 Some(DrySamplingParams::new_with_defaults(
