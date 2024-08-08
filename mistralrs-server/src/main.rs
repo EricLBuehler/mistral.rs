@@ -7,16 +7,15 @@ use axum::{
 };
 use candle_core::{quantized::GgmlDType, Device};
 use clap::Parser;
-use either::Either;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
-    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
-    TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
+    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 mod chat_completion;
 mod completions;
 use crate::{chat_completion::__path_chatcompletions, completions::completions};
@@ -37,24 +36,6 @@ const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
-}
-
-fn parse_isq(s: &str) -> Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
 }
 
 #[derive(Parser)]
@@ -120,19 +101,27 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
-    #[arg(long = "isq", value_parser = parse_isq)]
+    #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<GgmlDType>,
 
-    /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
-    /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
+    /// GPU memory to allocate for KV cache with PagedAttention in MBs.
+    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
-    /// This is always used over `pa-gpu-mem` if both are specified.
+    /// If this is not set and the device is CUDA, it will default to `0.9`.
+    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
+
+    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
+    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+    #[arg(long = "pa-ctxt-len")]
+    paged_ctxt_len: Option<usize>,
 
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
     /// PagedAttention is only supported on CUDA and is always automatically activated.
@@ -143,9 +132,13 @@ struct Args {
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
 
-    /// Enable server throughput logging when not using interactive mode
+    /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
     throughput_log: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 #[utoipa::path(
@@ -219,7 +212,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
@@ -281,10 +274,19 @@ async fn main() -> Result<()> {
         args.max_seqs = 1;
     }
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
 
     #[cfg(feature = "metal")]
@@ -351,31 +353,55 @@ async fn main() -> Result<()> {
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
+        args.paged_ctxt_len,
         paged_attn_supported(),
         args.no_paged_attn,
     ) {
-        (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
+        (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
         )?),
-        (block_size, Some(m), None, true, false) => {
-            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
-        }
-        (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
+        (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(f),
+            MemoryGpuConfig::ContextSize(ctxt),
         )?),
-        (block_size, Some(_m), Some(f), true, false) => {
-            info!("Both memory size and usage were specified, defaulting to the usage value.");
+        (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Utilization(f),
+        )?),
+        (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Amount(m),
+        )?),
+        (block_size, Some(_m), Some(f), None, true, false) => {
+            info!("Both memory size, and usage were specified, defaulting to the usage value.");
             Some(PagedAttentionConfig::new(
                 block_size,
                 512,
-                Either::Right(f),
+                MemoryGpuConfig::Utilization(f),
             )?)
         }
-        (_, _, _, _, _) => None,
+        (block_size, Some(_m), None, Some(ctxt), true, false) => {
+            info!("All memory size and ctxt len, defaulting to the context len value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::ContextSize(ctxt),
+            )?)
+        }
+        (block_size, None, Some(f), Some(_ctxt), true, false) => {
+            info!("Both ctxt len and usage were specified, defaulting to the usage value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::Utilization(f),
+            )?)
+        }
+        (_, _, _, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
@@ -391,16 +417,16 @@ async fn main() -> Result<()> {
     info!("Model loaded.");
 
     let scheduler_config = if cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: args.max_seqs,
-            config: pipeline
-                .lock()
-                .await
-                .get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        // Handle case where we may have device mapping
+        if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: args.max_seqs,
+                config: cache_config.clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
+            }
         }
     } else {
         SchedulerConfig::DefaultScheduler {
@@ -417,10 +443,10 @@ async fn main() -> Result<()> {
     if args.interactive_mode && args.vision_interactive_mode {
         anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
     } else if args.interactive_mode {
-        interactive_mode(builder.build(), false).await;
+        interactive_mode(builder.build(), false, args.throughput_log).await;
         return Ok(());
     } else if args.vision_interactive_mode {
-        interactive_mode(builder.build(), true).await;
+        interactive_mode(builder.build(), true, args.throughput_log).await;
         return Ok(());
     }
 

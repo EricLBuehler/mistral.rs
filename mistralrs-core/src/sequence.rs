@@ -9,9 +9,10 @@ use tokio::sync::{
 };
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
+    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
+    tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
 };
 use crate::{
@@ -160,6 +161,7 @@ pub struct Sequence {
     prefix: Option<String>,
     is_tmp: bool,
     adapters: Option<Vec<String>>,
+    pub(crate) tok_trie: TokTrie,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -188,6 +190,9 @@ pub struct Sequence {
 
     // Custom backend metadata
     custom_metadata: SequenceCustomMetadata,
+
+    // Tool calls
+    pub tools: Option<Arc<ToolCallingMatcher>>,
 }
 
 impl BlockEngineSequence for Sequence {
@@ -242,6 +247,9 @@ impl Sequence {
         input_images: Option<Vec<image::DynamicImage>>,
         // Paged attention
         block_size: Option<usize>,
+        //
+        tok_trie: TokTrie,
+        tools: Option<Arc<ToolCallingMatcher>>,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -295,6 +303,8 @@ impl Sequence {
             adapters,
             input_images,
             custom_metadata,
+            tok_trie,
+            tools,
         }
     }
 

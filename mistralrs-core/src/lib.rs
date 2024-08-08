@@ -53,16 +53,17 @@ mod sampler;
 mod scheduler;
 mod sequence;
 mod toml_selector;
+mod tools;
 mod utils;
 mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
-pub use paged_attention::PagedAttentionConfig;
+pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
-    chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
+    chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline, GGMLLoader,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder,
     GemmaLoader, GptqLoader, GptqLoaderBuilder, GptqSpecificConfig, Idefics2Loader, LLaVALoader,
     LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
     ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
@@ -78,6 +79,9 @@ pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
+pub use tools::{
+    CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
+};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};

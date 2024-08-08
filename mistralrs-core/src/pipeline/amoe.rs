@@ -19,6 +19,7 @@ use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
+    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
@@ -245,7 +246,7 @@ impl Pipeline for AnyMoePipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -352,8 +353,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         // Create several dummy objects for the sequences.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler =
-            Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0, 0.0);
+        let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, -1, 0.0, 0.0);
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
@@ -386,6 +386,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
                             true,
+                            Vec::new(),
                         )
                         .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                     let images = image_urls.as_ref().map(|urls| {
@@ -425,6 +426,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -439,13 +441,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         None,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
+                        None, // TODO: prompt chunking doesn't work.
                     )
+                    .nth(0)
                     .unwrap();
 
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
 
                 // Clear the KV cache
                 target.set_none_cache(true, true);
@@ -539,6 +543,7 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -561,5 +566,7 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
+        trie,
+        None,
     )
 }

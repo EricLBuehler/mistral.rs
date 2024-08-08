@@ -51,6 +51,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -81,7 +82,6 @@ pub struct GGUFPipeline {
 /// Loader for a GGUF model.
 pub struct GGUFLoader {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -90,6 +90,7 @@ pub struct GGUFLoader {
     chat_template: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, EnumString)]
@@ -120,17 +121,10 @@ impl GGUFArchitecture {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-/// A config for a GGUF loader.
-pub struct GGUFSpecificConfig {
-    pub repeat_last_n: usize,
-}
-
 #[derive(Default)]
 /// A builder for a GGUF loader.
 pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
-    config: GGUFSpecificConfig,
     quantized_model_id: String,
     quantized_filename: String,
     xlora_model_id: Option<String>,
@@ -139,6 +133,7 @@ pub struct GGUFLoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl GGUFLoaderBuilder {
@@ -146,23 +141,23 @@ impl GGUFLoaderBuilder {
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
     pub fn new(
-        config: GGUFSpecificConfig,
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Self {
         let kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
         };
 
         Self {
-            config,
             chat_template,
             model_id: tok_model_id,
             kind,
             quantized_filename,
             quantized_model_id,
+            prompt_batchsize,
             ..Default::default()
         }
     }
@@ -216,7 +211,6 @@ impl GGUFLoaderBuilder {
     pub fn build(self) -> Box<dyn Loader> {
         Box::new(GGUFLoader {
             model_id: self.model_id,
-            config: self.config,
             xlora_model_id: self.xlora_model_id,
             kind: self.kind,
             xlora_order: self.xlora_order,
@@ -225,6 +219,7 @@ impl GGUFLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: self.quantized_filename,
             quantized_model_id: self.quantized_model_id,
+            prompt_batchsize: self.prompt_batchsize,
         })
     }
 }
@@ -233,7 +228,6 @@ impl GGUFLoader {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         model_id: Option<String>,
-        config: GGUFSpecificConfig,
         quantized_model_id: String,
         quantized_filename: String,
         xlora_model_id: Option<String>,
@@ -242,6 +236,7 @@ impl GGUFLoader {
         no_kv_cache: bool,
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        prompt_batchsize: Option<NonZeroUsize>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             Some(id)
@@ -256,7 +251,6 @@ impl GGUFLoader {
         };
         Self {
             model_id,
-            config,
             quantized_model_id,
             quantized_filename,
             xlora_model_id,
@@ -265,6 +259,7 @@ impl GGUFLoader {
             chat_template,
             kind,
             tgt_non_granular_index,
+            prompt_batchsize,
         }
     }
 }
@@ -376,7 +371,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -390,6 +385,9 @@ impl Loader for GGUFLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
+        } else if paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
@@ -578,7 +576,6 @@ impl Loader for GGUFLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
@@ -589,6 +586,7 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.prompt_batchsize,
             }),
         })))
     }
@@ -780,7 +778,7 @@ impl Pipeline for GGUFPipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,

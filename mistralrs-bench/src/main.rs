@@ -1,15 +1,14 @@
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
-use either::Either;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MistralRs, MistralRsBuilder,
-    ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
-use std::fmt::Display;
 use std::sync::Arc;
+use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
@@ -79,6 +78,8 @@ fn run_bench(
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
 
     let mut usages = Vec::new();
@@ -243,6 +244,8 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
 
     sender
@@ -292,6 +295,12 @@ struct Args {
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
+    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
+    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+    #[arg(long = "pa-ctxt-len")]
+    paged_ctxt_len: Option<usize>,
+
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
     /// PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-blk-size")]
@@ -300,6 +309,10 @@ struct Args {
     /// Disable PagedAttention on CUDA.
     #[arg(long = "no_paged_attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -313,8 +326,17 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
     let model_name = loader.get_id();
 
@@ -383,31 +405,55 @@ fn main() -> anyhow::Result<()> {
         args.paged_attn_block_size,
         args.paged_attn_gpu_mem,
         args.paged_attn_gpu_mem_usage,
+        args.paged_ctxt_len,
         paged_attn_supported(),
         args.no_paged_attn,
     ) {
-        (block_size, None, None, true, false) => Some(PagedAttentionConfig::new(
+        (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
         )?),
-        (block_size, Some(m), None, true, false) => {
-            Some(PagedAttentionConfig::new(block_size, 512, Either::Left(m))?)
-        }
-        (block_size, None, Some(f), true, false) => Some(PagedAttentionConfig::new(
+        (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            Either::Right(f),
+            MemoryGpuConfig::ContextSize(ctxt),
         )?),
-        (block_size, Some(_m), Some(f), true, false) => {
-            info!("Both memory size and usage were specified, defaulting to the usage value.");
+        (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Utilization(f),
+        )?),
+        (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
+            block_size,
+            512,
+            MemoryGpuConfig::Amount(m),
+        )?),
+        (block_size, Some(_m), Some(f), None, true, false) => {
+            info!("Both memory size, and usage were specified, defaulting to the usage value.");
             Some(PagedAttentionConfig::new(
                 block_size,
                 512,
-                Either::Right(f),
+                MemoryGpuConfig::Utilization(f),
             )?)
         }
-        (_, _, _, _, _) => None,
+        (block_size, Some(_m), None, Some(ctxt), true, false) => {
+            info!("All memory size and ctxt len, defaulting to the context len value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::ContextSize(ctxt),
+            )?)
+        }
+        (block_size, None, Some(f), Some(_ctxt), true, false) => {
+            info!("Both ctxt len and usage were specified, defaulting to the usage value.");
+            Some(PagedAttentionConfig::new(
+                block_size,
+                512,
+                MemoryGpuConfig::Utilization(f),
+            )?)
+        }
+        (_, _, _, _, _, _) => None,
     };
 
     let pipeline = loader.load_model_from_hf(
@@ -423,15 +469,20 @@ fn main() -> anyhow::Result<()> {
     info!("Model loaded.");
 
     let scheduler_config = if cache_config.is_some() {
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
-            config: pipeline
-                .blocking_lock()
-                .get_metadata()
-                .cache_config
-                .as_ref()
-                .unwrap()
-                .clone(),
+        // Handle case where we may have device mapping
+        if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: *args.concurrency.as_ref().unwrap().iter().max().unwrap(),
+                config: cache_config.clone(),
+            }
+        } else {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(
+                    (*args.concurrency.as_ref().unwrap().iter().max().unwrap())
+                        .try_into()
+                        .unwrap(),
+                ),
+            }
         }
     } else {
         SchedulerConfig::DefaultScheduler {

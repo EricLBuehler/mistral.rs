@@ -1,7 +1,7 @@
 import requests
 import httpx
-import textwrap, json
-import base64
+import textwrap
+import json
 
 
 def log_response(response: httpx.Response):

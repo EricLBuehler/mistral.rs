@@ -45,7 +45,7 @@ cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m Hugg
 ```py
 import openai
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="idefics2",
     messages=[
         {
@@ -113,7 +113,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,
@@ -164,6 +163,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

@@ -3,6 +3,11 @@ from enum import Enum
 from typing import Iterator
 
 @dataclass
+class ToolChoice(Enum):
+    NoTools = "None"
+    Auto = "Auto"
+
+@dataclass
 class ChatCompletionRequest:
     """
     A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -31,6 +36,9 @@ class ChatCompletionRequest:
     grammar_type: str | None = None
     adapters: list[str] | None = None
     min_p: float | None = None
+    min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
 
 @dataclass
 class CompletionRequest:
@@ -57,6 +65,8 @@ class CompletionRequest:
     grammar_type: str | None = None
     adapters: list[str] | None = None
     min_p: float | None = None
+    tool_schemas: list[str] | None = None
+    tool_choice: ToolChoice | None = None
 
 @dataclass
 class Architecture(Enum):
@@ -89,7 +99,6 @@ class Which(Enum):
         model_id: str
         arch: Architecture
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class XLora:
@@ -98,7 +107,6 @@ class Which(Enum):
         arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         tgt_non_granular_index: int | None = None
 
     @dataclass
@@ -108,14 +116,12 @@ class Which(Enum):
         arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class GGUF:
         quantized_model_id: str
         quantized_filename: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class XLoraGGUF:
@@ -124,7 +130,6 @@ class Which(Enum):
         xlora_model_id: str
         order: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
         tgt_non_granular_index: int | None = None
 
     @dataclass
@@ -134,7 +139,6 @@ class Which(Enum):
         adapters_model_id: str
         order: str
         tok_model_id: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class GGML:
@@ -142,7 +146,6 @@ class Which(Enum):
         quantized_filename: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         gqa: int | None = None
 
     @dataclass
@@ -154,7 +157,6 @@ class Which(Enum):
         tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
         gqa: int | None = None
 
     @dataclass
@@ -165,14 +167,12 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
     @dataclass
     class VisionPlain:
         model_id: str
         arch: VisionArchitecture
         tokenizer_json: str | None = None
-        repeat_last_n: int = 64
 
 class Runner:
     def __init__(
@@ -213,8 +213,16 @@ class Runner:
             the corresponding number of layers.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-        - `pa_gpu_mem` sets GPU memory to allocate for KV cache with PagedAttention in MBs *OR* the percentage utilization, from 0 to 1. If this is not set and the device is
-            CUDA, it will default to using 90% of the total memory after allocation of the KV cache. PagedAttention is only supported on CUDA and is always automatically activated.
+        - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
+            PagedAttention is only supported on CUDA and is always automatically activated.
+            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+        - `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
+            If this is not set and the device is CUDA, it will default to `0.9`.
+            PagedAttention is only supported on CUDA and is always automatically activated.
+            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+        - `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
+            when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
         - `no_paged_attn` disables PagedAttention on CUDA
@@ -308,9 +316,25 @@ class Usage:
     total_completion_time_sec: float
 
 @dataclass
+class ToolCallType(Enum):
+    Function = "function"
+
+@dataclass
+class CalledFunction:
+    name: str
+    arguments: str
+
+@dataclass
+class ToolCallResponse:
+    id: str
+    type: ToolCallType
+    function: CalledFunction
+
+@dataclass
 class ResponseMessage:
     content: str
     role: str
+    tool_calls: list[ToolCallResponse]
 
 @dataclass
 class TopLogprob:

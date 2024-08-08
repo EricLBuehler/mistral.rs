@@ -15,7 +15,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
+            prompt_batchsize: None,
         },
         None,
         None,
@@ -67,11 +67,13 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
     let response = rx.blocking_recv().unwrap();
     match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content),
+        Response::Done(c) => println!("Text: {}", c.choices[0].message.content.as_ref().unwrap()),
         Response::InternalError(e) => println!("Internal error: {:?}", e),
         Response::ValidationError(e) => println!("Validation error: {:?}", e),
         Response::ModelError(s, r) => println!("Model error: {:?} {:?}", s, r),

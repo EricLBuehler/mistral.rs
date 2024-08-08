@@ -36,6 +36,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -76,8 +77,8 @@ pub struct GGMLLoader {
 #[derive(Clone, Copy, Default)]
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
-    pub repeat_last_n: usize,
     pub gqa: usize,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 #[derive(Default)]
@@ -234,7 +235,7 @@ impl Loader for GGMLLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -244,6 +245,11 @@ impl Loader for GGMLLoader {
         if !mapper.is_dummy() {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
+        if !mapper.is_dummy() && paged_attn_config.is_some() {
+            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
         info!(
             "Loading model `{}` on {}.",
             self.get_id(),
@@ -341,7 +347,6 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
                 tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
@@ -352,6 +357,7 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -516,7 +522,7 @@ impl Pipeline for GGMLPipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,

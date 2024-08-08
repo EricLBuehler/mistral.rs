@@ -4,7 +4,7 @@ use std::error::Error;
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;
 
-use crate::sampler::TopLogprob;
+use crate::{sampler::TopLogprob, tools::ToolCallResponse};
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
 
@@ -25,8 +25,9 @@ macro_rules! generate_repr {
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion response message.
 pub struct ResponseMessage {
-    pub content: String,
+    pub content: Option<String>,
     pub role: String,
+    pub tool_calls: Vec<ToolCallResponse>,
 }
 
 generate_repr!(ResponseMessage);

@@ -27,7 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn: false,
-                repeat_last_n: 64,
+                prompt_batchsize: None,
             },
             None,
             None,
@@ -78,6 +78,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
 
     // Example: Make adapter_3 the active adapter
@@ -90,7 +92,7 @@ fn main() -> anyhow::Result<()> {
     match response {
         Response::Done(c) => println!(
             "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),
@@ -98,7 +100,7 @@ fn main() -> anyhow::Result<()> {
         Response::ValidationError(e) => panic!("Validation error: {e}"),
         Response::ModelError(e, c) => panic!(
             "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),

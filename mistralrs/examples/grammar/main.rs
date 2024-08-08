@@ -26,7 +26,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = NormalLoaderBuilder::new(
         NormalSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
+            prompt_batchsize: None,
         },
         None,
         None,
@@ -71,6 +71,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::Regex("(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string()), // Bullet list regex
         suffix: None,
         adapters: None,
+        tool_choice: None,
+        tools: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
@@ -78,7 +80,7 @@ fn main() -> anyhow::Result<()> {
     match response {
         Response::Done(c) => println!(
             "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),
@@ -86,7 +88,7 @@ fn main() -> anyhow::Result<()> {
         Response::ValidationError(e) => panic!("Validation error: {e}"),
         Response::ModelError(e, c) => panic!(
             "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content,
+            c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
             c.usage.avg_compl_tok_per_sec
         ),

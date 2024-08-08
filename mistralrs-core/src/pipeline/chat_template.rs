@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use anyhow::Result;
 use either::Either;
 use indexmap::IndexMap;
-use minijinja::{context, Environment, ErrorKind};
+use itertools::Itertools;
+use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::MessageContent;
+use crate::{MessageContent, Tool};
 
-const SUPPORTED_ALTERNATE_EOS: [&str; 3] = [
-    "<|eot_id|>",    // Handle Llama3 chat case
+const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",    // Handle ChatML case
     "<end_of_turn>", // Handle Gemma2 chat case
 ];
@@ -37,6 +37,11 @@ pub struct BeginEndUnkTok(
     #[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>,
 );
 
+#[derive(Debug, Deserialize)]
+pub struct ChatTemplateValue(
+    #[serde(with = "either::serde_untagged")] pub Either<String, Vec<HashMap<String, String>>>,
+);
+
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 /// Template for chat models including bos/eos/unk as well as the chat template.
@@ -50,7 +55,7 @@ pub struct ChatTemplate {
     /// Jinja format [chat templating] for chat completion.
     ///
     /// [chat templating]: https://huggingface.co/docs/transformers/chat_templating
-    pub chat_template: Option<String>,
+    pub chat_template: Option<ChatTemplateValue>,
     clean_up_tokenization_spaces: Option<bool>,
     device_map: Option<String>,
     pub eos_token: Option<BeginEndUnkTok>,
@@ -101,7 +106,7 @@ pub fn calculate_eos_tokens(
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
-        if tokenizer.get_vocab(true).contains_key(alternate) {
+        if tokenizer.get_vocab(true).contains_key(*alternate) {
             eos_tok_ids.push(alternate.to_string())
         }
     }
@@ -133,6 +138,9 @@ pub fn calculate_eos_tokens(
             }
         }
     }
+
+    eos_tok_ids = eos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
+    bos_tok_ids = bos_tok_ids.into_iter().dedup().collect::<Vec<_>>();
 
     let bos_render = bos_tok_ids
         .iter()
@@ -172,13 +180,48 @@ pub struct GenerationConfig {
     eos_token_id: Either<u32, Vec<u32>>,
 }
 
+fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
+    if let Ok(indent) = kwargs.get("indent") {
+        let mut buf = Vec::new();
+        let repeat = b" ".repeat(indent);
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+        value.serialize(&mut ser).unwrap();
+        String::from_utf8(buf).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })
+    } else {
+        serde_json::to_string(&value).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })
+    }
+    .map_err(|err| {
+        Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
+    })
+    .map(|s| {
+        // When this filter is used the return value is safe for both HTML and JSON
+        let mut rv = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '<' => rv.push_str("\\u003c"),
+                '>' => rv.push_str("\\u003e"),
+                '&' => rv.push_str("\\u0026"),
+                '\'' => rv.push_str("\\u0027"),
+                _ => rv.push(c),
+            }
+        }
+        Value::from_safe_string(rv)
+    })
+}
+
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
-    template: &str,
+    template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
     unk_tok: Option<String>,
+    tools: Vec<Tool>,
 ) -> Result<String> {
     let mut env = Environment::new();
 
@@ -200,14 +243,52 @@ pub fn apply_chat_template_to(
         new_messages.push(new_message);
     }
 
-    env.add_template("chat_template", template)?;
+    let template = match &template.0 {
+        Either::Left(x) => x.clone(),
+        Either::Right(map) => {
+            let mut template = "".to_string();
+            for t in map {
+                if t.contains_key("tool_use") && !tools.is_empty() {
+                    template = t["tool_use"].clone();
+                    break;
+                } else if t.contains_key("default") {
+                    template = t["default"].clone();
+                    break;
+                }
+            }
+            if template.is_empty() {
+                anyhow::bail!("Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools.");
+            }
+            template
+        }
+    };
+
+    env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
+    env.add_filter("tojson", tojson);
     let tmpl = env.get_template("chat_template").unwrap();
-    Ok(tmpl.render(context! {
-        messages => new_messages,
-        add_generation_prompt => add_generation_prompt,
-        bos_token => bos_tok,
-        eos_token => eos_tok,
-        unk_token => unk_tok,
-    })?)
+
+    let date = chrono::Utc::now();
+    let date_string = date.format("%d, %B, %Y").to_string();
+
+    if tools.is_empty() {
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+            date_string => date_string,
+        })?)
+    } else {
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+            tools => tools,
+            date_string => date_string,
+        })?)
+    }
 }

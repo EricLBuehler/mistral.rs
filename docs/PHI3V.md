@@ -52,7 +52,7 @@ import openai
 openai.api_key = "EMPTY"
 openai.base_url = "http://localhost:1234/v1/"
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="phi3v",
     messages=[
         {
@@ -121,7 +121,6 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = VisionLoaderBuilder::new(
         VisionSpecificConfig {
             use_flash_attn: false,
-            repeat_last_n: 64,
         },
         None,
         None,
@@ -172,6 +171,8 @@ fn main() -> anyhow::Result<()> {
         constraint: Constraint::None,
         suffix: None,
         adapters: None,
+        tools: None,
+        tool_choice: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

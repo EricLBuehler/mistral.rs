@@ -16,7 +16,6 @@ pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
 use candle_core::{DType, Device};
 pub use config::{ModelConfigLike, ModelConfigMetadata};
-use either::Either;
 pub use layers::PagedAttention;
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
@@ -30,14 +29,14 @@ use tracing::info;
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_cpu: usize,
-    pub(crate) mem_gpu: Either<usize, f32>,
+    pub(crate) mem_gpu: MemoryGpuConfig,
 }
 
 impl PagedAttentionConfig {
     pub fn new(
         block_size: Option<usize>,
         mem_cpu: usize,
-        mem_gpu: Either<usize, f32>,
+        mem_gpu: MemoryGpuConfig,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             block_size,
@@ -50,6 +49,14 @@ impl PagedAttentionConfig {
 pub enum AttentionImplementation {
     Eager,
     PagedAttention,
+}
+
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
+pub enum MemoryGpuConfig {
+    Amount(usize),
+    Utilization(f32),
+    ContextSize(usize),
 }
 
 // See `pagedattention.cu` CALL_V1_LAUNCHER_BLOCK_SIZE
@@ -69,9 +76,20 @@ macro_rules! mb_to_blocks {
     };
 }
 
+macro_rules! ctxt_to_blocks {
+    ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
+        $context_len
+            * $dtype_size
+            * $config.num_kv_heads()
+            * ($config.hidden_size() / $config.num_attn_heads())
+            * $config.num_layers()
+            * 2
+    };
+}
+
 /// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 pub fn calculate_cache_config(
-    mem_gpu: Either<usize, f32>,
+    mem_gpu: MemoryGpuConfig,
     mem_cpu: usize,
     block_size: Option<usize>,
     dtype: DType,
@@ -86,16 +104,18 @@ pub fn calculate_cache_config(
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let mem_gpu = match mem_gpu {
-        Either::Left(v) => v,
-        Either::Right(f) => {
+        MemoryGpuConfig::Amount(v) => v,
+        MemoryGpuConfig::Utilization(f) => {
             let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
             let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
             let used = total - free;
-            let size = (total * f - used) as usize;
-            info!("Allocating {size} MB for PagedAttention KV cache");
-            size
+            (total * f - used) as usize
+        }
+        MemoryGpuConfig::ContextSize(toks) => {
+            ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
         }
     };
+    info!("Allocating {mem_gpu} MB for PagedAttention KV cache");
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
