@@ -2,8 +2,8 @@ use base64::{engine::general_purpose, Engine};
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    Constraint, MessageContent, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    Constraint, DrySamplingParams, MessageContent, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -43,6 +43,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
+        dry_params: Some(DrySamplingParams::default()),
     };
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
 
