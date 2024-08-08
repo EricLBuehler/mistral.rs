@@ -29,6 +29,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
         "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
         "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
+        None,
     )
     .build();
     // Load, into a Pipeline

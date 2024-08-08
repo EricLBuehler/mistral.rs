@@ -36,6 +36,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -77,6 +78,7 @@ pub struct GGMLLoader {
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
     pub gqa: usize,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 #[derive(Default)]
@@ -355,6 +357,7 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -519,7 +522,7 @@ impl Pipeline for GGMLPipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,

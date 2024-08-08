@@ -18,13 +18,12 @@ The final answer is $\boxed{50.26548245743669}$.
 ```
 """
 
-import openai
 import json
 import sys
 from io import StringIO
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 tools = [
     {
@@ -83,7 +82,7 @@ messages = [
     }
 ]
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
 )
 
@@ -106,7 +105,7 @@ if tool_called.name in functions:
 
     messages.append({"role": "tool", "content": result})
 
-    completion = openai.chat.completions.create(
+    completion = client.chat.completions.create(
         model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
     )
     # print(completion.usage)

@@ -1,4 +1,7 @@
-use std::fs::{self, File};
+use std::{
+    fs::{self, File},
+    num::NonZeroUsize,
+};
 
 use crate::{
     get_toml_selected_model_dtype,
@@ -13,6 +16,7 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     use_flash_attn: bool,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl LoaderBuilder {
@@ -22,6 +26,7 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             use_flash_attn: false,
+            prompt_batchsize: None,
         }
     }
 
@@ -35,6 +40,10 @@ impl LoaderBuilder {
     }
     pub fn with_use_flash_attn(mut self, use_flash_attn: bool) -> Self {
         self.use_flash_attn = use_flash_attn;
+        self
+    }
+    pub fn with_prompt_batchsize(mut self, prompt_batchsize: Option<NonZeroUsize>) -> Self {
+        self.prompt_batchsize = prompt_batchsize;
         self
     }
 
@@ -102,6 +111,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
+                prompt_batchsize: args.prompt_batchsize,
             };
             (selector, args).try_into()?
         }
@@ -111,7 +121,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             Some(model_id),
@@ -126,7 +139,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -149,7 +165,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             model_id,
@@ -171,6 +190,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -185,6 +205,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_xlora(
             xlora_model_id,
@@ -207,6 +228,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.prompt_batchsize,
         )
         .with_lora(
             adapters_model_id,
@@ -223,7 +245,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -241,7 +266,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -267,7 +295,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             tok_model_id,
@@ -288,7 +319,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+            },
             args.chat_template,
             tokenizer_json,
             Some(model_id),

@@ -231,13 +231,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 pub async fn sample_and_add_toks(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],
-    logits: Tensor,
+    logits_seq: Vec<Tensor>,
     prefix_cacher: &mut PrefixCacheManager,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
     let seqs_len = seqs.len();
-    let logits_seq = logits.to_device(&Device::Cpu)?.chunk(seqs_len, 0)?;
     debug_assert_eq!(logits_seq.len(), seqs_len);
 
     let use_async_pool = seqs_len > 1;

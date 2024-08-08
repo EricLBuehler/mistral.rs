@@ -2,7 +2,6 @@
 
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use base64::{engine::general_purpose, Engine};
-use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
@@ -11,6 +10,7 @@ use std::{
     collections::HashMap,
     fs,
     io::Read,
+    num::NonZeroUsize,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -19,13 +19,14 @@ use tokio::sync::mpsc::channel;
 
 use candle_core::Device;
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
-    CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, Tool, VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
+    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, VisionLoaderBuilder,
+    VisionSpecificConfig,DrySamplingParams
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -50,24 +51,6 @@ fn get_device() -> Device {
         .clone()
 }
 
-fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
-}
-
 #[pyclass]
 /// An object wrapping the underlying Rust system to handle requests and process conversations.
 struct Runner {
@@ -80,6 +63,7 @@ fn parse_which(
     which: Which,
     no_kv_cache: bool,
     chat_template: Option<String>,
+    prompt_batchsize: Option<NonZeroUsize>,
 ) -> PyResult<Box<dyn Loader>> {
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -92,7 +76,10 @@ fn parse_which(
             tokenizer_json,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -106,7 +93,10 @@ fn parse_which(
             tgt_non_granular_index,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             model_id,
@@ -129,7 +119,10 @@ fn parse_which(
             order,
             arch,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             model_id,
@@ -152,6 +145,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            prompt_batchsize,
         )
         .build(),
         Which::XLoraGGUF {
@@ -166,6 +160,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            prompt_batchsize,
         )
         .with_xlora(
             xlora_model_id,
@@ -189,6 +184,7 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            prompt_batchsize,
         )
         .with_lora(
             adapters_model_id,
@@ -206,7 +202,10 @@ fn parse_which(
             quantized_filename,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
@@ -224,7 +223,10 @@ fn parse_which(
             tgt_non_granular_index,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -251,7 +253,10 @@ fn parse_which(
             order,
             gqa,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             tok_model_id,
@@ -272,7 +277,10 @@ fn parse_which(
             tokenizer_json,
             arch,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+            },
             chat_template,
             tokenizer_json,
             Some(model_id),
@@ -301,6 +309,7 @@ impl Runner {
         pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
+        prompt_batchsize = None,
     ))]
     fn new(
         which: Which,
@@ -319,6 +328,7 @@ impl Runner {
         pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
+        prompt_batchsize: Option<usize>,
     ) -> PyResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -347,9 +357,19 @@ impl Runner {
             max_seqs
         };
 
-        let loader = parse_which(which, no_kv_cache, chat_template.clone())?;
+        let prompt_batchsize = match prompt_batchsize {
+            Some(0) => {
+                return Err(PyValueError::new_err(
+                    "`prompt_batchsize` must be a strictly positive integer, got 0.",
+                ))
+            }
+            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+            None => None,
+        };
+
+        let loader = parse_which(which, no_kv_cache, chat_template.clone(), prompt_batchsize)?;
         let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(draft_which, no_kv_cache, chat_template)?;
+            let draft = parse_which(draft_which, no_kv_cache, chat_template, prompt_batchsize)?;
             Box::new(SpeculativeLoader {
                 target: loader,
                 draft,
@@ -385,7 +405,7 @@ impl Runner {
 
         let device = get_device();
         let isq = if let Some(isq) = in_situ_quant {
-            Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
+            Some(parse_isq_value(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
         } else {
             None
         };
@@ -926,8 +946,9 @@ impl Runner {
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        let request =
-            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+        let request = _Request::ReIsq(
+            parse_isq_value(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?,
+        );
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
