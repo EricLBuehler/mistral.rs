@@ -339,6 +339,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             GptqSpecificConfig {
                 use_flash_attn,
                 repeat_last_n,
+                prompt_batchsize: args.prompt_batchsize,
             },
             args.chat_template,
             tokenizer_json,

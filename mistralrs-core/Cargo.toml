@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9e09d7f3", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "3b525f36", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -71,7 +71,7 @@ base64.workspace = true
 bytemuck_derive = "1.7.0"
 plotly = { version = "0.9.0", features = ["kaleido"], optional = true }
 mistralrs-paged-attn = { version = "0.2.4", path = "../mistralrs-paged-attn", optional = true }
-mistralrs-quant = { version = "0.2.0", path = "../mistralrs-quant", optional = true }
+mistralrs-quant = { version = "0.2.0", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
 
@@ -79,7 +79,7 @@ schemars = "0.8.21"
 default = ["plotly"]
 plotly = ["dep:plotly"]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:mistralrs-quant", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]

@@ -12,9 +12,13 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer},
     device_map::DeviceMapper,
     layers::{CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers_masker::PastKvLenCache,
     layers_utils::repeat_kv,
     paged_attention::ModelConfigMetadata,
-    pipeline::{extract_logits, IsqModel, NormalLoadingMetadata, NormalModel},
+    pipeline::{
+        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
+        NormalLoadingMetadata, NormalModel,
+    },
     utils::progress::NiceProgressBar,
 };
 
@@ -256,12 +260,16 @@ impl Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
         let mut cache = self.kv_cache.lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
-            &cache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
@@ -369,12 +377,14 @@ impl NormalModel for Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     fn xlora_forward(

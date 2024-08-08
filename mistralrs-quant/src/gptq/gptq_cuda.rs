@@ -27,7 +27,7 @@ pub struct GptqMatMul {
     gptq_qzeros: Tensor, // u32
     gptq_scales: Tensor, // f16
     bias: Tensor,        // f16
-    g_idx: Tensor,       // i64 (i32 by spec though)
+    g_idx: Tensor,       // i32
     bits: i32,
     use_exllama: bool,
 }
@@ -54,10 +54,10 @@ impl GptqMatMul {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
     fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
         let a_ptr = get_cuda_slice::<f16>(&a);
-        let b_q_weight = get_cuda_slice::<i64>(&self.q_weight); // u32
-        let b_gptq_qzeros = get_cuda_slice::<i64>(&self.gptq_qzeros); // u32
+        let b_q_weight = get_cuda_slice::<u32>(&self.q_weight);
+        let b_gptq_qzeros = get_cuda_slice::<u32>(&self.gptq_qzeros);
         let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales);
-        let b_g_idx = get_cuda_slice::<i64>(&self.g_idx) as *const i32; // i32
+        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx) as *const i32;
 
         let dev = get_cuda_device(&a);
 

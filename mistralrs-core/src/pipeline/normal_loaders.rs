@@ -982,6 +982,7 @@ impl NormalModelLoader for GptqLlamaLoader {
         use_flash_attn: bool,
         vb: VarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::gptq_llama::Llama::new(
             &GptqLlamaBasicConfig::deserialize(config, use_flash_attn)?,

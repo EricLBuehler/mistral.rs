@@ -1,5 +1,6 @@
 use super::cache_manager::DefaultCacheManager;
 use super::normal_loaders::GptqLlamaLoader;
+use super::sampling::sample_and_add_toks;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -23,8 +24,8 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    do_sample, get_mut_arcmutex, get_paths, normal_model_loader, DeviceMapMetadata,
-    NormalLoaderType, PagedAttentionConfig, Pipeline, TryIntoDType,
+    get_mut_arcmutex, get_paths, normal_model_loader, DeviceMapMetadata, NormalLoaderType,
+    PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::quantized::GgmlDType;
@@ -33,6 +34,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -84,6 +86,7 @@ pub struct GptqLoaderBuilder {
 pub struct GptqSpecificConfig {
     pub use_flash_attn: bool,
     pub repeat_last_n: usize,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 impl GptqLoaderBuilder {
@@ -310,8 +313,6 @@ impl Loader for GptqLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                repeat_last_n: self.config.repeat_last_n,
-                tok_trie,
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -321,6 +322,8 @@ impl Loader for GptqLoader {
                 sliding_window: todo!(),
                 cache_config: todo!(),
                 cache_engine: todo!(),
+                tok_trie,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -442,12 +445,12 @@ impl Pipeline for GptqPipeline {
     async fn sample(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        do_sample!(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Text
