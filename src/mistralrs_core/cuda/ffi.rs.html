@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/cuda/ffi.rs`."><title>ffi.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.0 (051478957 2024-07-21)" data-channel="1.80.0" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/cuda/ffi.rs`."><title>ffi.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -121,6 +121,33 @@
 <a href="#121" id="121">121</a>
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::ffi::c_void;
 
 <span class="attr">#[allow(dead_code)]
@@ -132,6 +159,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>count_nonzero_u8(d_in: <span class="kw-2">*const </span>c_void, N: u32) -&gt; u32;
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>count_nonzero_u32(d_in: <span class="kw-2">*const </span>c_void, N: u32) -&gt; u32;
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>count_nonzero_i64(d_in: <span class="kw-2">*const </span>c_void, N: u32) -&gt; u32;
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>count_nonzero_i32(d_in: <span class="kw-2">*const </span>c_void, N: u32) -&gt; u32;
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>nonzero_bf16(
         d_in: <span class="kw-2">*const </span>c_void,
         N: u32,
@@ -188,6 +216,14 @@
         num_dims: u32,
         d_out: <span class="kw-2">*mut </span>c_void,
     );
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>nonzero_i32(
+        d_in: <span class="kw-2">*const </span>c_void,
+        N: u32,
+        num_nonzero: u32,
+        dims: <span class="kw-2">*const </span>c_void,
+        num_dims: u32,
+        d_out: <span class="kw-2">*mut </span>c_void,
+    );
 
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_and_u8(
         d_in1: <span class="kw-2">*const </span>c_void,
@@ -202,6 +238,12 @@
         N: u32,
     );
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_and_i64(
+        d_in1: <span class="kw-2">*const </span>c_void,
+        d_in2: <span class="kw-2">*const </span>c_void,
+        d_out: <span class="kw-2">*mut </span>c_void,
+        N: u32,
+    );
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_and_i32(
         d_in1: <span class="kw-2">*const </span>c_void,
         d_in2: <span class="kw-2">*const </span>c_void,
         d_out: <span class="kw-2">*mut </span>c_void,
@@ -225,6 +267,12 @@
         d_out: <span class="kw-2">*mut </span>c_void,
         N: u32,
     );
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_or_i32(
+        d_in1: <span class="kw-2">*const </span>c_void,
+        d_in2: <span class="kw-2">*const </span>c_void,
+        d_out: <span class="kw-2">*mut </span>c_void,
+        N: u32,
+    );
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_xor_u8(
         d_in1: <span class="kw-2">*const </span>c_void,
         d_in2: <span class="kw-2">*const </span>c_void,
@@ -238,6 +286,12 @@
         N: u32,
     );
     <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_xor_i64(
+        d_in1: <span class="kw-2">*const </span>c_void,
+        d_in2: <span class="kw-2">*const </span>c_void,
+        d_out: <span class="kw-2">*mut </span>c_void,
+        N: u32,
+    );
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>bitwise_xor_i32(
         d_in1: <span class="kw-2">*const </span>c_void,
         d_in2: <span class="kw-2">*const </span>c_void,
         d_out: <span class="kw-2">*mut </span>c_void,

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/lora/loralinear.rs`."><title>loralinear.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.0 (051478957 2024-07-21)" data-channel="1.80.0" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/lora/loralinear.rs`."><title>loralinear.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -289,35 +289,20 @@
 <a href="#289" id="289">289</a>
 <a href="#290" id="290">290</a>
 <a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul};
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-<span class="kw">use </span>candle_core::{
-    bail,
-    quantized::{QMatMul, QTensor},
-    Module, <span class="prelude-ty">Result</span>, Tensor,
-};
+<span class="kw">use </span>candle_core::{bail, DType, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
-
-<span class="kw">use </span><span class="kw">crate</span>::layers::QLinear;
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 <span class="kw">use super</span>::{
     apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
     LinearLayerLike, LoraConfig, LoraLinearConfig, Merge,
 };
 
-<span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>LoraLinear {
-    old: QLinear,
+<span class="kw">pub struct </span>LoraLinear {
+    old: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     a_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     b_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     scale_adapters: Vec&lt;f64&gt;,
@@ -406,7 +391,9 @@
             </span>.to_dtype(a_adapters_stack.dtype())<span class="question-mark">?</span>;
             <span class="kw">let </span>a_adapters_stack = a_adapters_stack.broadcast_mul(<span class="kw-2">&amp;</span>scale_adapters_t)<span class="question-mark">?</span>;
             <span class="prelude-val">Ok</span>(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+                old: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(old.weight().clone(), old.bias().cloned()),
+                ))<span class="question-mark">?</span>),
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((b_adapters_stack, b_adapters)),
                 scale_adapters,
@@ -416,7 +403,9 @@
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">Ok</span>(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+                old: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(old.weight().clone(), old.bias().cloned()),
+                ))<span class="question-mark">?</span>),
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
@@ -476,43 +465,36 @@
     }
 
     <span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.old.inner() {
-            QMatMul::QTensor(q) =&gt; {
-                <span class="kw">let </span>(<span class="kw-2">mut </span>w_base_layer, dtype) = (q.dequantize(<span class="kw-2">&amp;</span>q.device())<span class="question-mark">?</span>, q.dtype());
-                <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;
-                }
-                <span class="kw">let </span>new_w = QTensor::quantize(<span class="kw-2">&amp;</span>w_base_layer, dtype)<span class="question-mark">?</span>;
-                <span class="self">self</span>.old = QLinear::from_qparts(new_w, <span class="self">self</span>.old.bias().cloned());
+        <span class="kw">let </span><span class="kw-2">mut </span>w_base_layer: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="prelude-val">None</span>;
+        <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(w_base_layer) = <span class="kw-2">&amp;mut </span>w_base_layer {
+                <span class="kw-2">*</span>w_base_layer = (<span class="kw-2">&amp;*</span>w_base_layer + <span class="kw-2">&amp;</span><span class="self">self</span>.get_delta_weight(adapter)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            } <span class="kw">else </span>{
+                w_base_layer = <span class="prelude-val">Some</span>(<span class="self">self</span>.get_delta_weight(adapter)<span class="question-mark">?</span>)
             }
-            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) =&gt; {
-                <span class="kw">let </span><span class="kw-2">mut </span>w_base_layer = w_base_layer.clone();
-                <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;
-                }
-                <span class="self">self</span>.old = QLinear::from_parts(w_base_layer, <span class="self">self</span>.old.bias().cloned());
-            }
-        };
+        }
+        <span class="self">self</span>.old
+            .add_delta_w(w_base_layer.as_ref().expect(<span class="string">"Found no adapters to merge."</span>))<span class="question-mark">?</span>;
         <span class="self">self</span>.merged = <span class="bool-val">true</span>;
         <span class="prelude-val">Ok</span>(())
     }
 }
 
 <span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>LoraLinear {
+    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>candle_core::quantized::QMatMul&gt; {
+        Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.old).unwrap().get_qmatmul()
+    }
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
-        <span class="self">self</span>.old.bias()
+        <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
-        <span class="self">self</span>.old.bias_mut()
+        <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
         <span class="macro">unreachable!</span>()
     }
-    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>QMatMul {
-        <span class="self">self</span>.old.inner()
-    }
-    <span class="kw">fn </span>is_quant(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.old.is_quant()
+    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {
+        <span class="self">self</span>.old.quantized_act_type()
     }
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

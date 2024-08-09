@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/models/quantized_phi3.rs`."><title>quantized_phi3.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.0 (051478957 2024-07-21)" data-channel="1.80.0" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/models/quantized_phi3.rs`."><title>quantized_phi3.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -397,9 +397,40 @@
 <a href="#397" id="397">397</a>
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+</span><span class="kw">use </span>std::sync::Arc;
+
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
@@ -414,21 +445,22 @@
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::Embedding;
+<span class="kw">use </span>mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
-<span class="attr">#[derive(Debug, Clone)]
+<span class="attr">#[derive(Clone)]
 </span><span class="kw">struct </span>Mlp {
-    ffn_up: QMatMul,
-    ffn_down: QMatMul,
+    ffn_up: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    ffn_down: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     i_size: usize,
 }
 
 <span class="kw">impl </span>Module <span class="kw">for </span>Mlp {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>up_states = MatMul.qmatmul(xs, <span class="kw-2">&amp;</span><span class="self">self</span>.ffn_up)<span class="question-mark">?</span>;
+        <span class="kw">let </span>up_states = MatMul.qmethod_matmul(xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.ffn_up)<span class="question-mark">?</span>;
         <span class="kw">let </span>gate = up_states.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
         <span class="kw">let </span>up_states = up_states.narrow(D::Minus1, <span class="self">self</span>.i_size, <span class="self">self</span>.i_size)<span class="question-mark">?</span>;
         <span class="kw">let </span>up_states = (up_states * gate.silu()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        MatMul.qmatmul(<span class="kw-2">&amp;</span>up_states, <span class="kw-2">&amp;</span><span class="self">self</span>.ffn_down)
+        MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>up_states, <span class="kw-2">&amp;*</span><span class="self">self</span>.ffn_down)
     }
 }
 
@@ -439,8 +471,8 @@
 }
 
 <span class="kw">struct </span>LayerWeights {
-    attn_qkv: QMatMul,
-    attn_output: QMatMul,
+    attn_qkv: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    attn_output: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     attn_norm: RmsNorm,
     ffn_norm: RmsNorm,
     mlp: Mlp,
@@ -478,7 +510,7 @@
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>qkv = MatMul.qmatmul(x, <span class="kw-2">&amp;</span><span class="self">self</span>.attn_qkv)<span class="question-mark">?</span>;
+        <span class="kw">let </span>qkv = MatMul.qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attn_qkv)<span class="question-mark">?</span>;
         <span class="kw">let </span>query_pos = <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim;
         <span class="kw">let </span>q = qkv.narrow(D::Minus1, <span class="number">0</span>, query_pos)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = qkv.narrow(D::Minus1, query_pos, <span class="self">self</span>.n_kv_head * <span class="self">self</span>.head_dim)<span class="question-mark">?</span>;
@@ -554,7 +586,7 @@
         </span>} <span class="kw">else </span>{
             y.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?
         </span>};
-        <span class="kw">let </span>y = MatMul.qmatmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;</span><span class="self">self</span>.attn_output)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;*</span><span class="self">self</span>.attn_output)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -687,9 +719,21 @@
                 <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>),
                 device,
             )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>QMatMul::QTensor(ffn_up_w) = ffn_up <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>()
+            };
+            <span class="kw">let </span>QMatMul::QTensor(ffn_down_w) = ffn_down <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>()
+            };
             <span class="kw">let </span>mlp = Mlp {
-                ffn_up,
-                ffn_down,
+                ffn_up: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_up_w,
+                    b: <span class="prelude-val">None</span>,
+                })<span class="question-mark">?</span>),
+                ffn_down: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_down_w,
+                    b: <span class="prelude-val">None</span>,
+                })<span class="question-mark">?</span>),
                 i_size,
             };
             <span class="kw">let </span>attn_norm = rms_norm(
@@ -712,17 +756,31 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>),
             };
+            <span class="kw">let </span>qkv = QMatMul::from_qtensor(ct.tensor(
+                reader,
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>),
+                device,
+            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>out = QMatMul::from_qtensor(ct.tensor(
+                reader,
+                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>),
+                device,
+            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>QMatMul::QTensor(qkv_w) = qkv.clone() <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>()
+            };
+            <span class="kw">let </span>QMatMul::QTensor(out_w) = out.clone() <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>()
+            };
             layers.push(LayerWeights {
-                attn_qkv: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>),
-                    device,
-                )<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-                attn_output: QMatMul::from_qtensor(ct.tensor(
-                    reader,
-                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>),
-                    device,
-                )<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+                attn_qkv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: qkv_w,
+                    b: <span class="prelude-val">None</span>,
+                })<span class="question-mark">?</span>),
+                attn_output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: out_w,
+                    b: <span class="prelude-val">None</span>,
+                })<span class="question-mark">?</span>),
                 attn_norm,
                 ffn_norm,
                 mlp,
