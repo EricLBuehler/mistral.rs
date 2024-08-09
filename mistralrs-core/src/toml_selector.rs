@@ -319,7 +319,7 @@ fn loader_from_selected(
             args.tokenizer_json,
             Some(model_id),
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::XLora {
             model_id,
             xlora_model_id,
@@ -345,7 +345,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
             adapters_model_id,
@@ -368,7 +368,7 @@ fn loader_from_selected(
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::GGUF {
             tok_model_id,
             quantized_model_id,

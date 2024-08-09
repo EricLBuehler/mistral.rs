@@ -4,7 +4,8 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias, Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use crate::{
 };
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -38,18 +39,18 @@ pub struct Config {
     pub(crate) num_experts_per_tok: usize,
     pub(crate) num_local_experts: usize,
     pub(crate) use_flash_attn: bool,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
 struct Attention {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
-    o_proj: QMatMul,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
@@ -68,20 +69,39 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+        let q_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
         Ok(Self {
-            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
-            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
-            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
-            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             num_heads,
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
@@ -102,13 +122,13 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut q = MatMul.qmatmul(&xs, &self.q_proj)?;
-        let mut k = MatMul.qmatmul(&xs, &self.k_proj)?;
-        let mut v = MatMul.qmatmul(&xs, &self.v_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -186,29 +206,27 @@ impl Attention {
             }
         };
 
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
-            attn_output
-                .transpose(1, 2)?
-                .reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
-            attn_output.reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct BlockSparseTop2MLP {
-    w1: QMatMul,
-    w2: QMatMul,
-    w3: QMatMul,
+    w1: Arc<dyn QuantMethod>,
+    w2: Arc<dyn QuantMethod>,
+    w3: Arc<dyn QuantMethod>,
     act_fn: Activation,
 }
 
@@ -216,13 +234,28 @@ impl BlockSparseTop2MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let w1 = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("w1"))?;
-        let w2 = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("w2"))?;
-        let w3 = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("w3"))?;
+        let w1 = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("w1"),
+        )?;
+        let w2 = mistralrs_quant::linear_no_bias(
+            intermediate_sz,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("w2"),
+        )?;
+        let w3 = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("w3"),
+        )?;
         Ok(Self {
-            w1: QMatMul::Tensor(w1.weight().clone()),
-            w2: QMatMul::Tensor(w2.weight().clone()),
-            w3: QMatMul::Tensor(w3.weight().clone()),
+            w1,
+            w2,
+            w3,
             act_fn: cfg.hidden_act,
         })
     }
@@ -232,29 +265,34 @@ impl Module for BlockSparseTop2MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.w1, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.w1.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let lhs = MatMul.qmatmul(&xs, &self.w1)?.apply(&self.act_fn)?;
-        let rhs = MatMul.qmatmul(&xs, &self.w3)?;
-        let mut res = MatMul.qmatmul(&(lhs * rhs)?, &self.w2)?;
-        if matches!(self.w1, QMatMul::QTensor(_)) {
+        let lhs = MatMul.qmethod_matmul(&xs, &*self.w1)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.w3)?;
+        let mut res = MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.w2)?;
+        if self.w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SparseMoeBlock {
-    gate: QMatMul,
+    gate: Arc<dyn QuantMethod>,
     experts: Vec<BlockSparseTop2MLP>,
     num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let gate = linear_no_bias(cfg.hidden_size, cfg.num_local_experts, vb.pp("gate"))?;
+        let gate = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            cfg.num_local_experts,
+            &cfg.quantization_config,
+            vb.pp("gate"),
+        )?;
         let mut experts = Vec::with_capacity(cfg.num_local_experts);
         let vb = vb.pp("experts");
         for idx in 0..cfg.num_local_experts {
@@ -262,7 +300,7 @@ impl SparseMoeBlock {
             experts.push(expert)
         }
         Ok(SparseMoeBlock {
-            gate: QMatMul::Tensor(gate.weight().clone()),
+            gate,
             experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
         })
@@ -276,11 +314,11 @@ impl Module for SparseMoeBlock {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.gate, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut router_logits = MatMul.qmatmul(&xs, &self.gate)?;
-        if matches!(self.gate, QMatMul::QTensor(_)) {
+        let mut router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
+        if self.gate.quantized_act_type().is_some() {
             router_logits = router_logits.to_dtype(original_dtype)?;
         }
 
@@ -432,6 +470,13 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -488,7 +533,7 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
+        let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
@@ -563,15 +608,63 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.block_sparse_moe.gate, Some(i)));
+            {
+                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.q_proj = q_proj;
+                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.k_proj = k_proj;
+                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.v_proj = v_proj;
+                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.o_proj = o_proj;
+                let gate = layer
+                    .block_sparse_moe
+                    .gate
+                    .clone()
+                    .convert_to_isq()
+                    .unwrap();
+                layer.block_sparse_moe.gate = gate;
+            }
+            if let Some(q) = Arc::get_mut(&mut layer.self_attn.q_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((q, Some(i)));
+            }
+            if let Some(k) = Arc::get_mut(&mut layer.self_attn.k_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((k, Some(i)));
+            }
+            if let Some(b) = Arc::get_mut(&mut layer.self_attn.v_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((b, Some(i)));
+            }
+            if let Some(o) = Arc::get_mut(&mut layer.self_attn.o_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((o, Some(i)));
+            }
+            if let Some(g) = Arc::get_mut(&mut layer.block_sparse_moe.gate)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((g, Some(i)));
+            }
             for expert in &mut layer.block_sparse_moe.experts {
-                tensors.push((&mut expert.w1, Some(i)));
-                tensors.push((&mut expert.w2, Some(i)));
-                tensors.push((&mut expert.w3, Some(i)));
+                if let Some(w1) = Arc::get_mut(&mut expert.w1).unwrap().get_qmatmul() {
+                    tensors.push((w1, Some(i)));
+                }
+                if let Some(w2) = Arc::get_mut(&mut expert.w2).unwrap().get_qmatmul() {
+                    tensors.push((w2, Some(i)));
+                }
+                if let Some(w3) = Arc::get_mut(&mut expert.w3).unwrap().get_qmatmul() {
+                    tensors.push((w3, Some(i)));
+                }
             }
         }
         (tensors, &*self.mapper)

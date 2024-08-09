@@ -33,7 +33,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(NormalLoaderType::Mistral);
+    .build(NormalLoaderType::Mistral)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

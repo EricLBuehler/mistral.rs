@@ -6,6 +6,7 @@ members = [
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
+    "mistralrs-quant",
 ]
 exclude = [
     "mistralrs-paged_attn",
@@ -24,8 +25,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9e09d7f3" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9e09d7f3" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "57c5599d" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "57c5599d" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }

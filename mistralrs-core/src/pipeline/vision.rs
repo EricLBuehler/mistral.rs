@@ -197,7 +197,7 @@ impl Loader for VisionLoader {
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
@@ -461,20 +461,21 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
-                if regex.is_match(&key) {
-                    // Idx of the last char of the layer id, +1
-                    // Assumes N.MLP
-                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
-                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
-                        .parse::<usize>()
-                        .unwrap();
-                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
-                } else {
-                    false
-                }
-            })?;
+            let vb =
+                from_mmaped_safetensors(filenames, vec![], Some(dtype), dev, silent, move |key| {
+                    if regex.is_match(&key) {
+                        // Idx of the last char of the layer id, +1
+                        // Assumes N.MLP
+                        let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                        let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                        let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                            .parse::<usize>()
+                            .unwrap();
+                        layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                    } else {
+                        false
+                    }
+                })?;
             vbs.push(vb);
         }
 
@@ -507,7 +508,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let vb = from_mmaped_safetensors(
                 gate_filenames.clone(),
                 vec![],
-                dtype,
+                Some(dtype),
                 dev,
                 silent,
                 |_| true,

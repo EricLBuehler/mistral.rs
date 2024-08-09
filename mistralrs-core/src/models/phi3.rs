@@ -3,7 +3,8 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, VarBuilder};
+use candle_nn::VarBuilder;
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -18,7 +19,6 @@ use crate::{
         ScaledDotProductAttention,
     },
     layers_masker::PastKvLenCache,
-    merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
@@ -46,6 +46,7 @@ pub struct Config {
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -67,8 +68,8 @@ impl Config {
 }
 
 struct Attention {
-    qkv_proj: QMatMul,
-    o_proj: QMatMul,
+    qkv_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -90,11 +91,24 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
-        let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
+
+        let qkv_proj = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            op_size,
+            &cfg.quantization_config,
+            vb.pp("qkv_proj"),
+        )?;
+
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
+
         Ok(Self {
-            qkv_proj: QMatMul::Tensor(qkv_proj.weight().clone()),
-            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
+            qkv_proj,
+            o_proj,
             rotary_emb,
             num_heads,
             num_kv_heads,
@@ -119,11 +133,11 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut qkv = MatMul.qmatmul(&xs, &self.qkv_proj)?;
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+        let mut qkv = MatMul.qmethod_matmul(&xs, &*self.qkv_proj)?;
+        if self.qkv_proj.quantized_act_type().is_some() {
             qkv = qkv.to_dtype(original_dtype)?;
         }
         let query_pos = self.num_heads * self.head_dim;
@@ -196,26 +210,26 @@ impl Attention {
                 )?
             }
         };
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.qkv_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    gate_up_proj: QMatMul,
-    down_proj: QMatMul,
+    gate_up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act_fn: candle_nn::Activation,
     i_size: usize,
     params: Vec<usize>,
@@ -225,11 +239,24 @@ impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
-        let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
+
+        let gate_up_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            2 * i_size,
+            &cfg.quantization_config,
+            vb.pp("gate_up_proj"),
+        )?;
+
+        let down_proj = mistralrs_quant::linear_no_bias(
+            i_size,
+            hidden_size,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
+
         Ok(Self {
-            gate_up_proj: QMatMul::Tensor(gate_up_proj.weight().clone()),
-            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
+            gate_up_proj,
+            down_proj,
             act_fn: cfg.hidden_act,
             i_size,
             params: vec![hidden_size, i_size],
@@ -243,21 +270,33 @@ impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_up_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let up_states = MatMul.qmatmul(&xs, &self.gate_up_proj)?;
+        let up_states = MatMul.qmethod_matmul(&xs, &*self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = MatMul.qmatmul(&up_states, &self.down_proj)?;
-        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
+        if self.gate_up_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        vec![&mut self.gate_up_proj, &mut self.down_proj]
+        {
+            let gate_up_proj = self.gate_up_proj.clone().convert_to_isq().unwrap();
+            self.gate_up_proj = gate_up_proj;
+            let down_proj = self.down_proj.clone().convert_to_isq().unwrap();
+            self.down_proj = down_proj;
+        }
+        vec![
+            Arc::get_mut(&mut self.gate_up_proj).unwrap().get_qmatmul(),
+            Arc::get_mut(&mut self.down_proj).unwrap().get_qmatmul(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
     }
     fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
         vec![None, None]
@@ -271,12 +310,12 @@ impl MlpLayer for Mlp {
     // gate_up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_gate_up = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.gate_up_proj, delta)
+            self.gate_up_proj.add_delta_w(delta)?
         } else {
             self.gate_up_proj.clone()
         };
         let new_down = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.down_proj, delta)
+            self.down_proj.add_delta_w(delta)?
         } else {
             self.down_proj.clone()
         };
@@ -291,10 +330,7 @@ impl MlpLayer for Mlp {
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match &self.gate_up_proj {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.gate_up_proj.dtype_and_device()
     }
 }
 
@@ -389,6 +425,13 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -437,7 +480,7 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
+        let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
@@ -513,8 +556,24 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
+            {
+                let qkv_proj = layer.self_attn.qkv_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.qkv_proj = qkv_proj;
+                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.o_proj = o_proj;
+            }
+            if let Some(qkv) = Arc::get_mut(&mut layer.self_attn.qkv_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((qkv, Some(i)));
+            }
+            if let Some(o) = Arc::get_mut(&mut layer.self_attn.o_proj)
+                .unwrap()
+                .get_qmatmul()
+            {
+                tensors.push((o, Some(i)));
+            }
             tensors.extend(
                 layer
                     .mlp

@@ -26,7 +26,7 @@ use crate::{
 
 use super::{classifier::XLoraClassifier, config::XLoraConfig, NonGranularState, ScalingsMaker};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -97,8 +97,8 @@ impl MLP {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.gate_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let lhs = self
             .gate_proj
@@ -121,14 +121,14 @@ impl MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate_proj.is_quant() {
+        if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -233,8 +233,8 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &xs,
@@ -254,7 +254,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -316,8 +316,8 @@ impl Attention {
             q_len,
         )?;
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
@@ -325,14 +325,14 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -458,6 +458,13 @@ impl XLoraModel {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -664,8 +671,8 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -684,8 +691,8 @@ impl XLoraModel {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -704,8 +711,8 @@ impl XLoraModel {
                     None,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -718,36 +725,31 @@ impl XLoraModel {
 impl IsqModel for XLoraModel {
     fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
+        if let Some(x) = Arc::get_mut(&mut self.lm_head).unwrap().inner() {
+            tensors.push((x, None));
+        }
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner(),
-                Some(i),
-            ));
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.mlp.gate_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.mlp.up_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
         }
         (tensors, &*self.mapper)
     }

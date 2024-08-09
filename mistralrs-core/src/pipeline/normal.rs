@@ -158,7 +158,7 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
+    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
         let loader: Box<dyn NormalModelLoader> = match loader {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
@@ -170,7 +170,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
         };
-        Box::new(NormalLoader {
+        Ok(Box::new(NormalLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -181,7 +181,7 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-        })
+        }))
     }
 }
 
@@ -266,7 +266,7 @@ impl Loader for NormalLoader {
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
@@ -281,7 +281,7 @@ impl Loader for NormalLoader {
                 adapter: AdapterKind::XLora,
             } => xlora_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
@@ -563,20 +563,21 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
-                if regex.is_match(&key) {
-                    // Idx of the last char of the layer id, +1
-                    // Assumes N.MLP
-                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
-                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
-                        .parse::<usize>()
-                        .unwrap();
-                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
-                } else {
-                    false
-                }
-            })?;
+            let vb =
+                from_mmaped_safetensors(filenames, vec![], Some(dtype), dev, silent, move |key| {
+                    if regex.is_match(&key) {
+                        // Idx of the last char of the layer id, +1
+                        // Assumes N.MLP
+                        let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                        let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                        let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                            .parse::<usize>()
+                            .unwrap();
+                        layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                    } else {
+                        false
+                    }
+                })?;
             vbs.push(vb);
         }
 
@@ -609,7 +610,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let vb = from_mmaped_safetensors(
                 gate_filenames.clone(),
                 vec![],
-                dtype,
+                Some(dtype),
                 dev,
                 silent,
                 |_| true,

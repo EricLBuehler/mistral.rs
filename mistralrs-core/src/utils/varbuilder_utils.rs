@@ -19,7 +19,7 @@ use super::progress::{Joinable, NonThreadingHandle, Parellelize};
 
 trait TensorLoaderBackend {
     fn get_names(&self) -> Vec<String>;
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor>;
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor>;
 }
 
 struct SafetensorBackend(MmapedSafetensors);
@@ -32,8 +32,17 @@ impl TensorLoaderBackend for SafetensorBackend {
             .map(|(name, _)| name)
             .collect::<Vec<_>>()
     }
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
-        self.0.load(name, device)?.to_dtype(dtype)
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
+        let t = self.0.load(name, device)?;
+        if let Some(dtype) = dtype {
+            if t.dtype() == DType::I32 {
+                Ok(t)
+            } else {
+                t.to_dtype(dtype)
+            }
+        } else {
+            Ok(t)
+        }
     }
 }
 
@@ -43,14 +52,23 @@ impl TensorLoaderBackend for PickleBackend {
     fn get_names(&self) -> Vec<String> {
         self.0.tensor_infos().keys().cloned().collect::<Vec<_>>()
     }
-    fn load_name(&self, name: &str, device: &Device, dtype: DType) -> Result<Tensor> {
-        self.0
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
+        let t = self
+            .0
             .get(name)?
             .ok_or(candle_core::Error::Msg(format!(
                 "Could not load tensor {name}"
             )))?
-            .to_device(device)?
-            .to_dtype(dtype)
+            .to_device(device)?;
+        if let Some(dtype) = dtype {
+            if t.dtype() == DType::I32 {
+                Ok(t)
+            } else {
+                t.to_dtype(dtype)
+            }
+        } else {
+            Ok(t)
+        }
     }
 }
 
@@ -60,7 +78,7 @@ impl TensorLoaderBackend for PickleBackend {
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
-    dtype: DType,
+    dtype: Option<DType>,
     device: &Device,
     silent: bool,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
@@ -100,7 +118,13 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    Ok(VarBuilder::from_tensors(ws, dtype, device))
+    // TODO(EricLBuehler): separation of concerns.
+    // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
+    Ok(VarBuilder::from_tensors(
+        ws,
+        dtype.unwrap_or(DType::F16),
+        device,
+    ))
 }
 
 pub(crate) fn load_preload_adapters<'a>(
@@ -114,7 +138,7 @@ pub(crate) fn load_preload_adapters<'a>(
         for (name, (path, config)) in paths {
             let loader = Common::new();
             let loaded_tensors =
-                loader.load_tensors_from_path(path, device, dtype, silent, |_| true)?;
+                loader.load_tensors_from_path(path, device, Some(dtype), silent, |_| true)?;
 
             map.insert(
                 name.clone(),
@@ -136,7 +160,7 @@ trait LoadTensors {
         &self,
         path: &PathBuf,
         device: &Device,
-        dtype: DType,
+        dtype: Option<DType>,
         is_silent: bool,
         predicate: impl Fn(String) -> bool,
     ) -> Result<HashMap<String, Tensor>> {

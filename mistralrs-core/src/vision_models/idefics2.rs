@@ -188,6 +188,7 @@ impl From<TextConfig> for mistral::Config {
             sliding_window: val.sliding_window,
             use_flash_attn: val.use_flash_attn,
             head_dim: None,
+            quantization_config: None,
         }
     }
 }
