@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
@@ -23,10 +23,10 @@ pub enum QuantMethodType {
     Gptq,
 }
 
-impl ToString for QuantMethodType {
-    fn to_string(&self) -> String {
+impl Display for QuantMethodType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Gptq => "GPTQ".to_string(),
+            Self::Gptq => write!(f, "GPTQ"),
         }
     }
 }
