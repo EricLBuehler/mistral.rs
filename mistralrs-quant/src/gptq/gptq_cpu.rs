@@ -1,6 +1,6 @@
-use candle_core::{Result, Tensor};
-
 use crate::{QuantMethod, QuantMethodConfig};
+use candle_core::{DType, Result, Tensor};
+use std::sync::Arc;
 
 pub struct GptqMatMul;
 
@@ -19,11 +19,25 @@ impl QuantMethod for GptqMatMul {
                 g_idx: _,
                 bias: _,
             } => todo!(),
-            QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
+            QuantMethodConfig::Gguf { q_weight: _ } | QuantMethodConfig::Unquantized(_) => {
+                unreachable!()
+            }
         }
     }
 
-    fn matmul(&self, _a: &Tensor) -> Result<Tensor> {
+    fn forward(&self, _a: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+
+    fn quantized_act_type(&self) -> Option<DType> {
+        todo!()
+    }
+
+    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
+    }
+
+    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         todo!()
     }
 }

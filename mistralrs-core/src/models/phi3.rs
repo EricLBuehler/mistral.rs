@@ -3,11 +3,8 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_no_bias, VarBuilder};
-use mistralrs_quant::{
-    gptq_linear_no_bias, QuantMethod, QuantMethodConfig, QuantMethodType, QuantizedConfig,
-    UnquantLinear,
-};
+use candle_nn::VarBuilder;
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -22,7 +19,6 @@ use crate::{
         ScaledDotProductAttention,
     },
     layers_masker::PastKvLenCache,
-    merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
@@ -96,36 +92,19 @@ impl Attention {
         let head_dim = cfg.head_dim();
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
 
-        let (qkv_proj, o_proj) = if let Some(quant_conf) = &cfg.quantization_config {
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let qkv_proj = gptq_linear_no_bias(
-                        cfg.hidden_size,
-                        op_size,
-                        quant_conf,
-                        vb.pp("qkv_proj"),
-                    )?;
-                    let o_proj = gptq_linear_no_bias(
-                        num_heads * head_dim,
-                        cfg.hidden_size,
-                        quant_conf,
-                        vb.pp("o_proj"),
-                    )?;
-                    (qkv_proj, o_proj)
-                }
-            }
-        } else {
-            let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
-            let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
-            let qkv_proj =
-                <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(qkv_proj))?;
-            let o_proj =
-                <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(o_proj))?;
-            (
-                Arc::new(qkv_proj) as Arc<dyn QuantMethod>,
-                Arc::new(o_proj) as Arc<dyn QuantMethod>,
-            )
-        };
+        let qkv_proj = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            op_size,
+            &cfg.quantization_config,
+            vb.pp("qkv_proj"),
+        )?;
+
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
 
         Ok(Self {
             qkv_proj,
@@ -158,7 +137,7 @@ impl Attention {
             xs = xs.to_dtype(t)?;
         }
         let mut qkv = MatMul.qmethod_matmul(&xs, &*self.qkv_proj)?;
-        if let Some(_) = self.qkv_proj.quantized_act_type() {
+        if self.qkv_proj.quantized_act_type().is_some() {
             qkv = qkv.to_dtype(original_dtype)?;
         }
         let query_pos = self.num_heads * self.head_dim;
@@ -240,7 +219,7 @@ impl Attention {
             attn_output.reshape((b_sz, q_len, ()))?
         };
         let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if let Some(_) = self.qkv_proj.quantized_act_type() {
+        if self.qkv_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -260,33 +239,20 @@ impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let (gate_up_proj, down_proj) = if let Some(quant_conf) = &cfg.quantization_config {
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let gate_up_proj = gptq_linear_no_bias(
-                        hidden_size,
-                        2 * i_size,
-                        quant_conf,
-                        vb.pp("gate_up_proj"),
-                    )?;
-                    let down_proj =
-                        gptq_linear_no_bias(i_size, hidden_size, quant_conf, vb.pp("down_proj"))?;
-                    (gate_up_proj, down_proj)
-                }
-            }
-        } else {
-            let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
-            let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
 
-            let gate_up_proj =
-                <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(gate_up_proj))?;
-            let down_proj =
-                <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(down_proj))?;
-            (
-                Arc::new(gate_up_proj) as Arc<dyn QuantMethod>,
-                Arc::new(down_proj) as Arc<dyn QuantMethod>,
-            )
-        };
+        let gate_up_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            2 * i_size,
+            &cfg.quantization_config,
+            vb.pp("gate_up_proj"),
+        )?;
+
+        let down_proj = mistralrs_quant::linear_no_bias(
+            i_size,
+            hidden_size,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
 
         Ok(Self {
             gate_up_proj,
@@ -312,7 +278,7 @@ impl MlpLayer for Mlp {
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
         let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
-        if let Some(_) = self.gate_up_proj.quantized_act_type() {
+        if self.gate_up_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -331,31 +297,28 @@ impl MlpLayer for Mlp {
     }
     // gate_up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        todo!() /*let new_gate_up = if let Some(ref delta) = deltas[0] {
-                    merge_delta!(self.gate_up_proj, delta)
-                } else {
-                    self.gate_up_proj.clone()
-                };
-                let new_down = if let Some(ref delta) = deltas[1] {
-                    merge_delta!(self.down_proj, delta)
-                } else {
-                    self.down_proj.clone()
-                };
+        let new_gate_up = if let Some(ref delta) = deltas[0] {
+            self.gate_up_proj.add_delta_w(delta)?
+        } else {
+            self.gate_up_proj.clone()
+        };
+        let new_down = if let Some(ref delta) = deltas[1] {
+            self.down_proj.add_delta_w(delta)?
+        } else {
+            self.down_proj.clone()
+        };
 
-                Ok(Box::new(Self {
-                    gate_up_proj: new_gate_up,
-                    down_proj: new_down,
-                    act_fn: self.act_fn,
-                    i_size: self.i_size,
-                    params: self.params.clone(),
-                }))*/
+        Ok(Box::new(Self {
+            gate_up_proj: new_gate_up,
+            down_proj: new_down,
+            act_fn: self.act_fn,
+            i_size: self.i_size,
+            params: self.params.clone(),
+        }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        todo!() /*match &self.gate_up_proj {
-                    QMatMul::QTensor(q) => (DType::F32, q.device()),
-                    QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-                }*/
+        self.gate_up_proj.dtype_and_device()
     }
 }
 
@@ -450,7 +413,6 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        dbg!(&cfg.quantization_config);
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -499,7 +461,7 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
+        let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),

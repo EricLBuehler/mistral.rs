@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use candle_core::{
     cuda::{
         cudarc::{
@@ -265,5 +267,13 @@ impl QuantMethod for GptqMatMul {
 
     fn quantized_act_type(&self) -> Option<DType> {
         Some(DType::F16)
+    }
+
+    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("GPTQ quantization does not support adding weight delta.")
+    }
+
+    fn dtype_and_device(&self) -> (DType, Device) {
+        (self.q_weight.dtype(), self.q_weight.device().clone())
     }
 }

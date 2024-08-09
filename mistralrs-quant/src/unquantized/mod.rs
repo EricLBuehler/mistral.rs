@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use candle_core::{DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
@@ -31,5 +33,16 @@ impl QuantMethod for UnquantLinear {
 
     fn quantized_act_type(&self) -> Option<DType> {
         None
+    }
+
+    fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self(Linear::new(
+            (self.0.weight() + delta)?,
+            self.0.bias().cloned(),
+        ))))
+    }
+
+    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+        (self.0.weight().dtype(), self.0.weight().device().clone())
     }
 }

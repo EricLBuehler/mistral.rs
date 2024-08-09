@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{quantized::QTensor, DType, Result, Tensor};
+use candle_core::{quantized::QTensor, DType, Device, Result, Tensor};
 
 mod gguf;
 mod gptq;
@@ -61,12 +61,36 @@ pub trait QuantMethod: Send + Sync {
 
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
+
+    /// Weight dtype and device
+    fn dtype_and_device(&self) -> (DType, Device);
+
+    fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 }
 
 macro_rules! pack_factor {
     ($bits:expr) => {
         32 / $bits
     };
+}
+
+pub fn linear_no_bias(
+    in_dim: usize,
+    out_dim: usize,
+    config: &Option<QuantizedConfig>,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let layer = if let Some(quant_conf) = &config {
+        match quant_conf.quant_method {
+            QuantMethodType::Gptq => gptq_linear_no_bias(in_dim, out_dim, quant_conf, vb)?,
+        }
+    } else {
+        let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
+
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+        Arc::new(layer) as Arc<dyn QuantMethod>
+    };
+    Ok(layer)
 }
 
 pub fn gptq_linear_no_bias(
