@@ -18,7 +18,7 @@ impl QuantMethod for GptqMatMul {
                 gptq_scales: _,
                 g_idx: _,
                 bias: _,
-            } => todo!(),
+            } => candle_core::bail!("GPTQ is only supported on CUDA."),
             QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
                 unreachable!()
             }
