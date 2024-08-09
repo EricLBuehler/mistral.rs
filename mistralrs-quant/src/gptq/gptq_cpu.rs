@@ -1,4 +1,4 @@
-use crate::{QuantMethod, QuantMethodConfig};
+use crate::{quantized::QMatMul, QuantMethod, QuantMethodConfig};
 use candle_core::{DType, Result, Tensor};
 use std::sync::Arc;
 
@@ -39,5 +39,9 @@ impl QuantMethod for GptqMatMul {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         todo!()
+    }
+
+    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
     }
 }

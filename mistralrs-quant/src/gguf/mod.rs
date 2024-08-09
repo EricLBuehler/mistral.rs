@@ -58,4 +58,8 @@ impl QuantMethod for GgufMatMul {
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
     }
+
+    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        Some(&mut self.0)
+    }
 }

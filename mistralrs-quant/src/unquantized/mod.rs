@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 use crate::{QuantMethod, QuantMethodConfig};
@@ -44,5 +44,9 @@ impl QuantMethod for UnquantLinear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (self.0.weight().dtype(), self.0.weight().device().clone())
+    }
+
+    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
     }
 }

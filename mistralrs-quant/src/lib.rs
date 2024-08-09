@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use candle_core::{quantized::QTensor, DType, Device, Result, Tensor};
+use candle_core::{
+    quantized::{QMatMul, QTensor},
+    DType, Device, Result, Tensor,
+};
 
 mod gguf;
 mod gptq;
@@ -65,7 +68,11 @@ pub trait QuantMethod: Send + Sync {
     /// Weight dtype and device
     fn dtype_and_device(&self) -> (DType, Device);
 
+    /// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
+
+    /// If the quant is backed by a qmatmul.
+    fn get_qmatmul(&mut self) -> Option<&mut QMatMul>;
 }
 
 macro_rules! pack_factor {

@@ -8,8 +8,9 @@ use candle_core::{
         },
         CudaDType, CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
-    WithDType, D,
+    from_storage_no_op,
+    quantized::QMatMul,
+    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, WithDType, D,
 };
 use half::f16;
 
@@ -275,5 +276,9 @@ impl QuantMethod for GptqMatMul {
 
     fn dtype_and_device(&self) -> (DType, Device) {
         (self.q_weight.dtype(), self.q_weight.device().clone())
+    }
+
+    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
     }
 }

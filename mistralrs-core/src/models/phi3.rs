@@ -284,7 +284,13 @@ impl MlpLayer for Mlp {
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        todo!() // vec![&mut self.gate_up_proj, &mut self.down_proj]
+        vec![
+            Arc::get_mut(&mut self.gate_up_proj).unwrap().get_qmatmul(),
+            Arc::get_mut(&mut self.down_proj).unwrap().get_qmatmul(),
+        ]
+        .into_iter()
+        .filter_map(|x| x)
+        .collect::<Vec<_>>()
     }
     fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
         vec![None, None]
