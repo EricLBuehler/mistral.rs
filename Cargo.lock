@@ -468,7 +468,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=57c5599d#57c5599d357f6ef5d34462b51645c3185d0b9b7d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -495,7 +495,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=57c5599d#57c5599d357f6ef5d34462b51645c3185d0b9b7d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -506,7 +506,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=57c5599d#57c5599d357f6ef5d34462b51645c3185d0b9b7d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -514,7 +514,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=57c5599d#57c5599d357f6ef5d34462b51645c3185d0b9b7d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "metal",
  "once_cell",
@@ -525,7 +525,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=57c5599d#57c5599d357f6ef5d34462b51645c3185d0b9b7d"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1234,14 +1234,14 @@ dependencies = [
 
 [[package]]
 name = "filetime"
-version = "0.2.23"
+version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ee447700ac8aa0b2f2bd7bc4462ad686ba06baa6727ac149a2d6277f0d240fd"
+checksum = "bf401df4a4e3872c4fe8151134cf483738e74b67fc934d6532c882b3d24a4550"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.4.1",
- "windows-sys 0.52.0",
+ "libredox",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2089,6 +2089,7 @@ checksum = "c0ff37bd590ca25063e35af745c343cb7a0271906fb7b37e4813e8f79f00268d"
 dependencies = [
  "bitflags 2.6.0",
  "libc",
+ "redox_syscall",
 ]
 
 [[package]]
@@ -2240,9 +2241,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4bf71af278c578cbcc91d0b1ff092910208bc86f7b3750364642bd424e3dcd3"
+checksum = "bf369fce3289017a63e514dfca10a0a6f1a02216b21b588b79f6a1081eb999f5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2250,9 +2251,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja-contrib"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b22bcb360a130647646fdda70742bff3cea5d4fe562d8a943f26675c84206088"
+checksum = "e399c81b189a627d37d43a028451551b2942e8bbe36d5c79db6d81be7e5047d4"
 dependencies = [
  "minijinja",
  "serde",
@@ -2839,7 +2840,7 @@ checksum = "1e401f977ab385c9e4e3ab30627d6f26d00e2c73eef317493c4ec6d468726cf8"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall 0.5.3",
+ "redox_syscall",
  "smallvec",
  "windows-targets 0.52.6",
 ]
@@ -3336,15 +3337,6 @@ name = "reborrow"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
-
-[[package]]
-name = "redox_syscall"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4722d768eff46b75989dd134e5c353f0d6296e5aaa3132e776cbdb56be7731aa"
-dependencies = [
- "bitflags 1.3.2",
-]
 
 [[package]]
 name = "redox_syscall"
