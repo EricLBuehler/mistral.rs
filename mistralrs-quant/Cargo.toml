@@ -16,6 +16,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 half.workspace = true
 serde.workspace = true
+lazy_static = "1.4"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]

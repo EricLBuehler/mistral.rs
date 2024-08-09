@@ -1,10 +1,13 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{
     cuda::{
         cudarc::{
             cublas::{result::hgemm, sys::cublasOperation_t},
-            driver::DevicePtr,
+            driver::{CudaSlice, DevicePtr},
         },
         CudaDType, CudaStorageSlice, WrapErr,
     },
@@ -13,6 +16,7 @@ use candle_core::{
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, WithDType, D,
 };
 use half::f16;
+use lazy_static::lazy_static;
 
 use crate::{QuantMethod, QuantMethodConfig};
 
@@ -24,6 +28,10 @@ const MAX_Q_GEMM_ROWS_8BIT: i32 = 24;
 const MAX_Q_GEMM_ROWS: i32 = 50;
 const MAX_ALT_GEMM_ROWS: i32 = 8;
 const BLOCK_M_SIZE_MAX: i32 = 8;
+
+lazy_static! {
+    static ref TMP_DQS: Mutex<HashMap<usize, CudaSlice<f16>>> = Mutex::new(HashMap::new());
+}
 
 pub struct GptqMatMul {
     q_weight: Tensor,    // u32
@@ -82,14 +90,8 @@ impl GptqMatMul {
 
         let c_ptr = *c.device_ptr() as *mut f16;
 
-        let temp_dq = unsafe {
-            dev.alloc::<f16>(
-                (self.q_weight.dims()[0] * 32 / self.bits as usize) * self.q_weight.dims()[1],
-            )
-            .w()?
-        };
-
-        let temp_dq_ptr = *temp_dq.device_ptr() as *mut f16;
+        let len = (self.q_weight.dims()[0] * 32 / self.bits as usize) * self.q_weight.dims()[1];
+        let temp_dq_ptr = *TMP_DQS.try_lock().unwrap().get(&len).unwrap().device_ptr() as *mut f16;
 
         let use_reconstruct = if use_exllama {
             (self.bits == 8 && m > MAX_Q_GEMM_ROWS_8BIT) || (self.bits != 8 && m > MAX_Q_GEMM_ROWS)
@@ -230,15 +232,26 @@ impl QuantMethod for GptqMatMul {
                 gptq_scales,
                 g_idx,
                 bias,
-            } => Ok(Self {
-                q_weight,
-                gptq_qzeros,
-                gptq_scales,
-                g_idx,
-                bits,
-                use_exllama,
-                bias,
-            }),
+            } => {
+                let dev = get_cuda_device(&g_idx);
+                let len = (q_weight.dims()[0] * 32 / bits as usize) * q_weight.dims()[1];
+                // SAFETY: used in the kernel as a tmp space, just preallocating it here.
+                if !TMP_DQS.lock().unwrap().contains_key(&len) {
+                    TMP_DQS
+                        .lock()
+                        .unwrap()
+                        .insert(len, unsafe { dev.alloc::<f16>(len).w()? });
+                }
+                Ok(Self {
+                    q_weight,
+                    gptq_qzeros,
+                    gptq_scales,
+                    g_idx,
+                    bits,
+                    use_exllama,
+                    bias,
+                })
+            }
             QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
                 unreachable!()
             }
