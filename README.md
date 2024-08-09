@@ -98,6 +98,7 @@ Mistal.rs supports several model categories:
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
+- Various quantizations (GGUF, GPTQ, ISQ): [docs](docs/QUANTS.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.

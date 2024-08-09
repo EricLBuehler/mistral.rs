@@ -5,13 +5,16 @@ Mistral.rs supports the following quantization:
     - Q, K type
     - Supported in GGUF/GGML and GGUF/GGML adapter models
     - I quants coming!
+    - CPU, CUDA, Metal (all supported devices)
 - GPTQ
     - Supported in all plain and adapter models
+    - CUDA only
 - ISQ
     - Q, K type GGUF quants
     - Supported in all plain and adapter models
     - I quants coming!
     - GPTQ quants coming!
+    - CPU, CUDA, Metal (all supported devices)
 
 ## Using a GGUF quantized model
 - Use the `gguf` (cli) / `GGUF` (Python) model selector
