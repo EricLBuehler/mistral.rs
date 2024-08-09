@@ -169,9 +169,6 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
-            NormalLoaderType::GptqLlama => {
-                anyhow::bail!("GPTQ architecture must *not* be one of `gptq_llama`.")
-            }
         };
         Ok(Box::new(NormalLoader {
             inner: loader,

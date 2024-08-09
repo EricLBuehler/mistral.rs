@@ -6,8 +6,8 @@ use candle_core::{
         },
         CudaDType, CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op, CudaDevice, CudaStorage, Device, Result, Shape, Storage, Tensor, WithDType,
-    D,
+    from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
+    WithDType, D,
 };
 use half::f16;
 
@@ -230,11 +230,13 @@ impl QuantMethod for GptqMatMul {
                 use_exllama,
                 bias,
             }),
-            QuantMethodConfig::Gguf { q_weight: _ } => unreachable!(),
+            QuantMethodConfig::Gguf { q_weight: _ } | QuantMethodConfig::Unquantized(_) => {
+                unreachable!()
+            }
         }
     }
 
-    fn matmul(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
         let out_shape = Shape::from_dims(
             &[
@@ -253,5 +255,9 @@ impl QuantMethod for GptqMatMul {
             self.use_exllama,
         )?;
         out.reshape(out_shape)?.broadcast_add(&self.bias)
+    }
+
+    fn quantized_act_type(&self) -> Option<DType> {
+        Some(DType::F16)
     }
 }

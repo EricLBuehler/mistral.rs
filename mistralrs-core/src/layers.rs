@@ -434,9 +434,9 @@ impl MatMul {
     /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
     pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
         if get_use_matmul_via_f16() {
-            matmul.matmul_via_half(x)
+            matmul.forward_via_half(x)
         } else {
-            matmul.matmul(x)
+            matmul.forward(x)
         }
     }
 }

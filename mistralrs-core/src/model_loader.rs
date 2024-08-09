@@ -6,8 +6,8 @@ use std::{
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    GptqLoaderBuilder, GptqSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder,
-    TomlLoaderArgs, TomlSelector, VisionLoaderBuilder, VisionSpecificConfig,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 
 /// A builder for a loader using the selected model.
@@ -61,8 +61,7 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::Toml { .. }
-        | ModelSelected::VisionPlain { .. }
-        | ModelSelected::Gptq { .. } => None,
+        | ModelSelected::VisionPlain { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -89,8 +88,7 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::XLoraGGUF { .. }
-        | ModelSelected::XLoraGGML { .. }
-        | ModelSelected::Gptq { .. } => Ok(ModelDType::Auto),
+        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -330,22 +328,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(model_id),
         )
         .build(arch),
-        ModelSelected::Gptq {
-            model_id,
-            repeat_last_n,
-            tokenizer_json,
-            arch,
-        } => GptqLoaderBuilder::new(
-            GptqSpecificConfig {
-                use_flash_attn,
-                repeat_last_n,
-                prompt_batchsize: args.prompt_batchsize,
-            },
-            args.chat_template,
-            tokenizer_json,
-            Some(model_id),
-        )
-        .build(arch)?,
     };
     Ok(loader)
 }

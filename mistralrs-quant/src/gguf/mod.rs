@@ -1,4 +1,4 @@
-use candle_core::{quantized::QMatMul, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Result, Tensor};
 use candle_nn::Module;
 
 use crate::{QuantMethod, QuantMethodConfig};
@@ -20,15 +20,20 @@ impl QuantMethod for GgufMatMul {
                 gptq_scales: _,
                 g_idx: _,
                 bias: _,
-            } => unreachable!(),
+            }
+            | QuantMethodConfig::Unquantized(_) => unreachable!(),
         }
     }
 
-    fn matmul(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward(a)
     }
 
-    fn matmul_via_half(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_via_half(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward_via_f16(a)
+    }
+
+    fn quantized_act_type(&self) -> Option<DType> {
+        Some(DType::F32)
     }
 }

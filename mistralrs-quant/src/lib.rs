@@ -4,14 +4,17 @@ use candle_core::{quantized::QTensor, DType, Result, Tensor};
 
 mod gguf;
 mod gptq;
+mod unquantized;
 
-use candle_nn::VarBuilder;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqMatMul;
+pub use unquantized::UnquantLinear;
+
+use candle_nn::{Linear, VarBuilder};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub enum QuantMethodEnum {
+pub enum QuantMethodType {
     #[default]
     #[serde(rename = "gptq")]
     Gptq,
@@ -20,7 +23,7 @@ pub enum QuantMethodEnum {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct QuantizedConfig {
     pub bits: usize,
-    pub quant_method: QuantMethodEnum,
+    pub quant_method: QuantMethodType,
     pub group_size: usize,
 }
 
@@ -38,6 +41,7 @@ pub enum QuantMethodConfig {
     Gguf {
         q_weight: Arc<QTensor>,
     },
+    Unquantized(Linear),
 }
 
 /// Quantized method for a quantized matmul.
@@ -47,13 +51,16 @@ pub trait QuantMethod: Send + Sync {
         Self: Sized;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    fn matmul(&self, a: &Tensor) -> Result<Tensor>;
+    fn forward(&self, a: &Tensor) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// This may go via half precision if it is supported.
-    fn matmul_via_half(&self, a: &Tensor) -> Result<Tensor> {
-        self.matmul(a)
+    fn forward_via_half(&self, a: &Tensor) -> Result<Tensor> {
+        self.forward(a)
     }
+
+    /// If a quantized method, return the activation dtype.
+    fn quantized_act_type(&self) -> Option<DType>;
 }
 
 macro_rules! pack_factor {

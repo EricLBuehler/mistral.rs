@@ -57,7 +57,11 @@ impl TensorLoaderBackend for PickleBackend {
             )))?
             .to_device(device)?;
         if let Some(dtype) = dtype {
-            t.to_dtype(dtype)
+            if t.dtype() == DType::I32 {
+                Ok(t)
+            } else {
+                t.to_dtype(dtype)
+            }
         } else {
             Ok(t)
         }
