@@ -31,7 +31,7 @@ impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         MatMul.qmethod_matmul(
             &MatMul
-                .qmethod_matmul(&xs, &*self.ffn_up)?
+                .qmethod_matmul(xs, &*self.ffn_up)?
                 .apply(&candle_nn::Activation::GeluPytorchTanh)?,
             &*self.ffn_down,
         )

@@ -34,7 +34,7 @@ struct Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        MatMul.qmethod_matmul(&MatMul.qmethod_matmul(&xs, &*self.ffn_up)?, &*self.ffn_down)
+        MatMul.qmethod_matmul(&MatMul.qmethod_matmul(xs, &*self.ffn_up)?, &*self.ffn_down)
     }
 }
 

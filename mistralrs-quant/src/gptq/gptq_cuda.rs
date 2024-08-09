@@ -66,7 +66,7 @@ impl GptqMatMul {
         let b_q_weight = get_cuda_slice::<i32>(&self.q_weight) as *const u32;
         let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros) as *const u32;
         let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales);
-        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx) as *const i32;
+        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx);
 
         let dev = get_cuda_device(&a);
 

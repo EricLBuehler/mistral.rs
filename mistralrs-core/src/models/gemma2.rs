@@ -165,7 +165,7 @@ impl MlpLayer for MLP {
             Arc::get_mut(&mut self.down_proj).unwrap().get_qmatmul(),
         ]
         .into_iter()
-        .filter_map(|x| x)
+        .flatten()
         .collect::<Vec<_>>()
     }
     fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
