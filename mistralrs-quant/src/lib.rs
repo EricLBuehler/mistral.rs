@@ -23,6 +23,14 @@ pub enum QuantMethodType {
     Gptq,
 }
 
+impl ToString for QuantMethodType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Gptq => "GPTQ".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct QuantizedConfig {
     pub bits: usize,
