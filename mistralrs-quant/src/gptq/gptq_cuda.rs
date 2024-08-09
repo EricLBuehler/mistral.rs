@@ -53,6 +53,12 @@ impl GptqMatMul {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
     fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
+        if !a.is_contiguous() {
+            candle_core::bail!(
+                "Expected `a` to be contiguous, got strides {:?}",
+                a.layout().stride()
+            )
+        }
         let a_ptr = get_cuda_slice::<f16>(&a);
         let b_q_weight = get_cuda_slice::<i32>(&self.q_weight) as *const u32;
         let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros) as *const u32;
@@ -75,7 +81,7 @@ impl GptqMatMul {
 
         let temp_dq = unsafe {
             dev.alloc::<f16>(
-                (self.q_weight.dims()[0] / 32 * self.bits as usize) * self.q_weight.dims()[1],
+                (self.q_weight.dims()[0] * 32 / self.bits as usize) * self.q_weight.dims()[1],
             )
             .w()?
         };

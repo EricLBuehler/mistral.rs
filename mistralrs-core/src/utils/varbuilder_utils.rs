@@ -35,7 +35,11 @@ impl TensorLoaderBackend for SafetensorBackend {
     fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
         let t = self.0.load(name, device)?;
         if let Some(dtype) = dtype {
-            t.to_dtype(dtype)
+            if t.dtype() == DType::I32 {
+                Ok(t)
+            } else {
+                t.to_dtype(dtype)
+            }
         } else {
             Ok(t)
         }

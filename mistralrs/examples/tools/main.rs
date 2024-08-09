@@ -34,7 +34,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("meta-llama/Meta-Llama-3.1-8B-Instruct".to_string()),
     )
-    .build(NormalLoaderType::Llama);
+    .build(NormalLoaderType::Llama)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
