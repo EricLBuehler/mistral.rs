@@ -68,19 +68,23 @@ pub fn gptq_linear_no_bias(
     config: &QuantizedConfig,
     vb: VarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    let qweight = vb.get_with_hints_dtype(
-        (in_dim / pack_factor!(config.bits), out_dim),
-        "qweight",
-        Default::default(),
-        DType::I32,
-    )?;
+    let qweight = vb
+        .get_with_hints_dtype(
+            (in_dim / pack_factor!(config.bits), out_dim),
+            "qweight",
+            Default::default(),
+            DType::I32,
+        )?
+        .to_dtype(DType::U32)?;
     let scale_and_zero_size = in_dim / config.group_size;
-    let qzeros = vb.get_with_hints_dtype(
-        (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
-        "qzeros",
-        Default::default(),
-        DType::I32,
-    )?;
+    let qzeros = vb
+        .get_with_hints_dtype(
+            (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
+            "qzeros",
+            Default::default(),
+            DType::I32,
+        )?
+        .to_dtype(DType::U32)?;
     let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),

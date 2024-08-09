@@ -24,8 +24,9 @@ use crate::{
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}";
-const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}";
+const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {
     pub adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -285,11 +286,15 @@ pub fn get_model_paths(
         None => {
             // We only match these patterns for model names
             let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
+            let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id)
-                .filter(|x| safetensor_match.is_match(x) || pickle_match.is_match(x));
+            let listing = api_dir_list!(api, model_id).filter(|x| {
+                safetensor_match.is_match(x)
+                    || pickle_match.is_match(x)
+                    || quant_safetensor_match.is_match(x)
+            });
             let safetensors = listing
                 .clone()
                 .filter(|x| x.ends_with(".safetensors"))

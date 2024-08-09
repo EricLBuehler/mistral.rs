@@ -110,8 +110,8 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    // TODO(EricLBuehler): seperation of concerns.
-    // This is to have WNA16 for GPTQ
+    // TODO(EricLBuehler): separation of concerns.
+    // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
     Ok(VarBuilder::from_tensors(
         ws,
         dtype.unwrap_or(DType::F16),
