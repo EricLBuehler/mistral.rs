@@ -601,6 +601,23 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            {
+                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.q_proj = q_proj;
+                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.k_proj = k_proj;
+                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.v_proj = v_proj;
+                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.o_proj = o_proj;
+                let gate = layer
+                    .block_sparse_moe
+                    .gate
+                    .clone()
+                    .convert_to_isq()
+                    .unwrap();
+                layer.block_sparse_moe.gate = gate;
+            }
             if let Some(q) = Arc::get_mut(&mut layer.self_attn.q_proj)
                 .unwrap()
                 .get_qmatmul()

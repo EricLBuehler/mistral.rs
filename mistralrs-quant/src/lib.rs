@@ -77,6 +77,9 @@ pub trait QuantMethod: Send + Sync {
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
+
+    /// Convert this layer to an ISQ-able layer if possible.
+    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
 }
 
 macro_rules! pack_factor {

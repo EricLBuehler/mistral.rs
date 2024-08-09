@@ -273,6 +273,14 @@ impl MlpLayer for Mlp {
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        {
+            let c_fc1 = self.c_fc1.clone().convert_to_isq().unwrap();
+            self.c_fc1 = c_fc1;
+            let c_fc2 = self.c_fc2.clone().convert_to_isq().unwrap();
+            self.c_fc2 = c_fc2;
+            let c_proj = self.c_proj.clone().convert_to_isq().unwrap();
+            self.c_proj = c_proj;
+        }
         vec![
             Arc::get_mut(&mut self.c_fc1).unwrap().get_qmatmul(),
             Arc::get_mut(&mut self.c_fc2).unwrap().get_qmatmul(),
@@ -537,6 +545,16 @@ impl IsqModel for Llama {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
+            {
+                let q_proj = layer.attn.q_proj.clone().convert_to_isq().unwrap();
+                layer.attn.q_proj = q_proj;
+                let k_proj = layer.attn.k_proj.clone().convert_to_isq().unwrap();
+                layer.attn.k_proj = k_proj;
+                let v_proj = layer.attn.v_proj.clone().convert_to_isq().unwrap();
+                layer.attn.v_proj = v_proj;
+                let o_proj = layer.attn.o_proj.clone().convert_to_isq().unwrap();
+                layer.attn.o_proj = o_proj;
+            }
             if let Some(q) = Arc::get_mut(&mut layer.attn.q_proj).unwrap().get_qmatmul() {
                 tensors.push((q, Some(i)));
             }

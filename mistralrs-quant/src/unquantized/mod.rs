@@ -3,7 +3,7 @@ use std::sync::Arc;
 use candle_core::{quantized::QMatMul, DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
-use crate::{QuantMethod, QuantMethodConfig};
+use crate::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 pub struct UnquantLinear(Linear);
 
@@ -52,5 +52,15 @@ impl QuantMethod for UnquantLinear {
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
+    }
+
+    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        let w = self.0.weight().clone();
+        let b = self.0.bias().cloned();
+
+        Ok(Arc::new(GgufMatMul {
+            w: QMatMul::Tensor(w),
+            b,
+        }))
     }
 }

@@ -298,4 +298,8 @@ impl QuantMethod for GptqMatMul {
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
+
+    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("GPTQ quantization does not support ISQ.")
+    }
 }

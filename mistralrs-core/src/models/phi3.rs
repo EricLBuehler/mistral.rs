@@ -284,6 +284,12 @@ impl MlpLayer for Mlp {
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        {
+            let gate_up_proj = self.gate_up_proj.clone().convert_to_isq().unwrap();
+            self.gate_up_proj = gate_up_proj;
+            let down_proj = self.down_proj.clone().convert_to_isq().unwrap();
+            self.down_proj = down_proj;
+        }
         vec![
             Arc::get_mut(&mut self.gate_up_proj).unwrap().get_qmatmul(),
             Arc::get_mut(&mut self.down_proj).unwrap().get_qmatmul(),
@@ -543,6 +549,12 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            {
+                let qkv_proj = layer.self_attn.qkv_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.qkv_proj = qkv_proj;
+                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.o_proj = o_proj;
+            }
             if let Some(qkv) = Arc::get_mut(&mut layer.self_attn.qkv_proj)
                 .unwrap()
                 .get_qmatmul()

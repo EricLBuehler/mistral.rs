@@ -6,8 +6,8 @@ use candle_nn::Module;
 use crate::{QuantMethod, QuantMethodConfig};
 
 pub struct GgufMatMul {
-    w: QMatMul,
-    b: Option<Tensor>,
+    pub(crate) w: QMatMul,
+    pub(crate) b: Option<Tensor>,
 }
 
 impl QuantMethod for GgufMatMul {
@@ -97,5 +97,9 @@ impl QuantMethod for GgufMatMul {
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         self.b.as_mut()
+    }
+
+    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self)
     }
 }

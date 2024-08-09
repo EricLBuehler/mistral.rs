@@ -42,10 +42,14 @@ impl QuantMethod for GptqMatMul {
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
+        todo!()
     }
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
+        todo!()
+    }
+
+    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
     }
 }

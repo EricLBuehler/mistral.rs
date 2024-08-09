@@ -3,7 +3,7 @@ use std::{collections::HashMap, iter::zip, ops::Mul};
 use candle_core::{
     bail,
     quantized::{QMatMul, QTensor},
-    Module, Result, Tensor,
+    DType, Module, Result, Tensor,
 };
 use candle_nn::{Linear, VarBuilder};
 use either::Either;
@@ -229,6 +229,9 @@ impl Merge for QLoraLinear {
 }
 
 impl LinearLayerLike for QLoraLinear {
+    fn inner(&mut self) -> Option<&mut candle_core::quantized::QMatMul> {
+        Some(&mut self.old)
+    }
     fn bias(&self) -> Option<&Tensor> {
         None
     }
@@ -238,11 +241,8 @@ impl LinearLayerLike for QLoraLinear {
     fn weight(&self) -> &Tensor {
         unimplemented!()
     }
-    fn inner(&mut self) -> &mut QMatMul {
-        &mut self.old
-    }
-    fn is_quant(&self) -> bool {
-        true
+    fn quantized_act_type(&self) -> Option<DType> {
+        Some(DType::F32)
     }
     fn lora_forward(
         &self,

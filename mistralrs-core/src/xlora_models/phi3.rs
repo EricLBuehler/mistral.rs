@@ -29,7 +29,7 @@ use crate::pipeline::Cache;
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Attention {
     qkv_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     o_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -109,8 +109,8 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.qkv_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut qkv = self.qkv_proj.lora_forward(
             &xs,
@@ -118,7 +118,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.is_quant() {
+        if self.qkv_proj.quantized_act_type().is_some() {
             qkv = qkv.to_dtype(original_dtype)?;
         }
         let query_pos = self.num_heads * self.head_dim;
@@ -176,8 +176,8 @@ impl Attention {
             q_len,
         )?;
 
-        if self.qkv_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
@@ -185,14 +185,14 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.is_quant() {
+        if self.qkv_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
     gate_up_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     down_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -252,8 +252,8 @@ impl Mlp {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.gate_up_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_up_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let up_states = self.gate_up_proj.lora_forward(
             &xs,
@@ -270,14 +270,14 @@ impl Mlp {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate_up_proj.is_quant() {
+        if self.gate_up_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
@@ -598,8 +598,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -618,8 +618,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -638,8 +638,8 @@ impl Model {
                     None,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -652,24 +652,22 @@ impl Model {
 impl IsqModel for Model {
     fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
+        if let Some(x) = Arc::get_mut(&mut self.lm_head).unwrap().inner() {
+            tensors.push((x, None));
+        }
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.qkv_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.gate_up_proj).unwrap().inner(),
-                Some(i),
-            ));
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.qkv_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.mlp.gate_up_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
+            if let Some(x) = Arc::get_mut(&mut layer.mlp.down_proj).unwrap().inner() {
+                tensors.push((x, Some(i)));
+            }
         }
         (tensors, &*self.mapper)
     }

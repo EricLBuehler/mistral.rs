@@ -112,6 +112,12 @@ impl MlpLayer for MLP {
         Ok(res)
     }
     fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+        {
+            let fc1 = self.fc1.clone().convert_to_isq().unwrap();
+            self.fc1 = fc1;
+            let fc2 = self.fc2.clone().convert_to_isq().unwrap();
+            self.fc2 = fc2;
+        }
         vec![
             Arc::get_mut(&mut self.fc1).unwrap().get_qmatmul(),
             Arc::get_mut(&mut self.fc2).unwrap().get_qmatmul(),
@@ -121,6 +127,12 @@ impl MlpLayer for MLP {
         .collect::<Vec<_>>()
     }
     fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
+        {
+            let fc1 = self.fc1.clone().convert_to_isq().unwrap();
+            self.fc1 = fc1;
+            let fc2 = self.fc2.clone().convert_to_isq().unwrap();
+            self.fc2 = fc2;
+        }
         vec![
             Arc::get_mut(&mut self.fc1).unwrap().get_bias_mut(),
             Arc::get_mut(&mut self.fc2).unwrap().get_bias_mut(),
@@ -560,6 +572,16 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((self.lm_head.inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            {
+                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.q_proj = q_proj;
+                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.k_proj = k_proj;
+                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.v_proj = v_proj;
+                let dense = layer.self_attn.dense.clone().convert_to_isq().unwrap();
+                layer.self_attn.dense = dense;
+            }
             if let Some(q) = Arc::get_mut(&mut layer.self_attn.q_proj)
                 .unwrap()
                 .get_qmatmul()
@@ -598,6 +620,16 @@ impl IsqModel for Model {
     fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
         let mut tensors = Vec::new();
         for (i, layer) in self.layers.iter_mut().enumerate() {
+            {
+                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.q_proj = q_proj;
+                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.k_proj = k_proj;
+                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
+                layer.self_attn.v_proj = v_proj;
+                let dense = layer.self_attn.dense.clone().convert_to_isq().unwrap();
+                layer.self_attn.dense = dense;
+            }
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)
                     .unwrap()

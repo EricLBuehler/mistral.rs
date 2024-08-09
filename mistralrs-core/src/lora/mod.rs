@@ -4,7 +4,7 @@ use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    IndexOp, Result, Tensor, D,
+    DType, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
@@ -97,9 +97,9 @@ fn make_adapter(
 }
 
 /// Any layer that is linear-like.
-pub trait LinearLayerLike: Debug + Merge + AdapterSwapper {
-    fn inner(&mut self) -> &mut QMatMul;
-    fn is_quant(&self) -> bool;
+pub trait LinearLayerLike: Merge + AdapterSwapper {
+    fn quantized_act_type(&self) -> Option<DType>;
+    fn inner(&mut self) -> Option<&mut QMatMul>;
     fn is_lora(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
@@ -152,11 +152,11 @@ impl AdapterSwapper for Linear {
 }
 
 impl LinearLayerLike for Linear {
-    fn inner(&mut self) -> &mut QMatMul {
-        unreachable!()
-    }
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
+    }
+    fn inner(&mut self) -> Option<&mut QMatMul> {
+        None
     }
     fn bias_mut(&mut self) -> Option<&mut Tensor> {
         unreachable!()
@@ -173,8 +173,8 @@ impl LinearLayerLike for Linear {
     ) -> Result<Tensor> {
         self.forward(x)
     }
-    fn is_quant(&self) -> bool {
-        false
+    fn quantized_act_type(&self) -> Option<DType> {
+        None
     }
     fn is_lora(&self) -> bool {
         false
