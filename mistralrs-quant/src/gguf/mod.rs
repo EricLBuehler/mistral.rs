@@ -5,7 +5,10 @@ use candle_nn::Module;
 
 use crate::{QuantMethod, QuantMethodConfig};
 
-pub struct GgufMatMul(QMatMul);
+pub struct GgufMatMul {
+    w: QMatMul,
+    b: Option<Tensor>,
+}
 
 impl QuantMethod for GgufMatMul {
     fn new(method: QuantMethodConfig) -> Result<Self>
@@ -13,7 +16,10 @@ impl QuantMethod for GgufMatMul {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight } => Ok(Self(QMatMul::from_arc(q_weight)?)),
+            QuantMethodConfig::Gguf { q_weight, b } => Ok(Self {
+                w: QMatMul::from_arc(q_weight)?,
+                b,
+            }),
             QuantMethodConfig::Gptq {
                 bits: _,
                 use_exllama: _,
@@ -28,11 +34,21 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward(a)
+        let x = self.w.forward(a)?;
+        if let Some(ref b) = self.b {
+            x.broadcast_add(b)
+        } else {
+            Ok(x)
+        }
     }
 
     fn forward_via_half(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward_via_f16(a)
+        let x = self.w.forward_via_f16(a)?;
+        if let Some(ref b) = self.b {
+            x.broadcast_add(b)
+        } else {
+            Ok(x)
+        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -41,25 +57,45 @@ impl QuantMethod for GgufMatMul {
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         match self {
-            Self(QMatMul::Tensor(w)) => Ok(Arc::new(Self(QMatMul::Tensor((w + delta)?)))),
-            Self(QMatMul::TensorF16(w)) => Ok(Arc::new(Self(QMatMul::TensorF16((w + delta)?)))),
-            Self(QMatMul::QTensor(w)) => {
+            Self {
+                w: QMatMul::Tensor(w),
+                b,
+            } => Ok(Arc::new(Self {
+                w: QMatMul::Tensor((w + delta)?),
+                b: b.clone(),
+            })),
+            Self {
+                w: QMatMul::TensorF16(w),
+                b,
+            } => Ok(Arc::new(Self {
+                w: QMatMul::TensorF16((w + delta)?),
+                b: b.clone(),
+            })),
+            Self {
+                w: QMatMul::QTensor(w),
+                b,
+            } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
-                Ok(Arc::new(Self(QMatMul::QTensor(std::sync::Arc::new(
+                let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
-                )))))
+                ));
+                Ok(Arc::new(Self { w, b: b.clone() }))
             }
         }
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
-        match &self.0 {
+        match &self.w {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        Some(&mut self.0)
+        Some(&mut self.w)
+    }
+
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
+        self.b.as_mut()
     }
 }

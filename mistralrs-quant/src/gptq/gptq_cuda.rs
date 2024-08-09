@@ -239,7 +239,7 @@ impl QuantMethod for GptqMatMul {
                 use_exllama,
                 bias,
             }),
-            QuantMethodConfig::Gguf { q_weight: _ } | QuantMethodConfig::Unquantized(_) => {
+            QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
                 unreachable!()
             }
         }
@@ -279,6 +279,10 @@ impl QuantMethod for GptqMatMul {
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
+    }
+
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 }

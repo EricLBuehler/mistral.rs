@@ -1,11 +1,18 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 use candle_core::quantized::gguf_file;
+use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
+use mistralrs_quant::GgufMatMul;
+use mistralrs_quant::QuantMethod;
+use mistralrs_quant::QuantMethodConfig;
 
 use crate::device_map::DeviceMapper;
+use crate::layers::MatMul;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
 use crate::paged_attention::AttentionImplementation;
@@ -19,21 +26,21 @@ use crate::DeviceMapMetadata;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    ffn_up: QLinear,
-    ffn_down: QLinear,
+    ffn_up: Arc<dyn QuantMethod>,
+    ffn_down: Arc<dyn QuantMethod>,
 }
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.ffn_up)?.gelu()?.apply(&self.ffn_down)
+        MatMul.qmethod_matmul(&MatMul.qmethod_matmul(&xs, &*self.ffn_up)?, &*self.ffn_down)
     }
 }
 
 struct LayerWeights {
-    attn_qkv: QLinear,
-    attn_output: QLinear,
+    attn_qkv: Arc<dyn QuantMethod>,
+    attn_output: Arc<dyn QuantMethod>,
     attn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
@@ -260,7 +267,22 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
             let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
             let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
-            let mlp = Mlp { ffn_up, ffn_down };
+            let QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(ffn_down_w) = ffn_down.inner_ref().clone() else {
+                unreachable!()
+            };
+            let mlp = Mlp {
+                ffn_up: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_up_w,
+                    b: ffn_up.bias().cloned(),
+                })?),
+                ffn_down: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_down_w,
+                    b: ffn_down.bias().cloned(),
+                })?),
+            };
             let attn_norm = layer_norm(
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
@@ -278,9 +300,23 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                 )?),
             };
+            let qkv = QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?;
+            let out = QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?;
+            let QMatMul::QTensor(qkv_w) = qkv.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(out_w) = out.inner_ref().clone() else {
+                unreachable!()
+            };
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
-                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_qkv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: qkv_w,
+                    b: qkv.bias().cloned(),
+                })?),
+                attn_output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: out_w,
+                    b: out.bias().cloned(),
+                })?),
                 attn_norm,
                 mlp,
                 n_head: head_count,

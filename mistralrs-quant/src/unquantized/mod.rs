@@ -13,7 +13,7 @@ impl QuantMethod for UnquantLinear {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight: _ }
+            QuantMethodConfig::Gguf { q_weight: _, b: _ }
             | QuantMethodConfig::Gptq {
                 bits: _,
                 use_exllama: _,
@@ -47,6 +47,10 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
+    }
+
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 }

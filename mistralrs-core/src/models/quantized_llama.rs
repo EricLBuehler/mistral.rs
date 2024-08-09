@@ -264,12 +264,15 @@ impl ModelConfig::FromGGML for ModelWeights {
                 MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w1),
+                        b: None,
                     })?),
                     feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w2),
+                        b: None,
                     })?),
                     feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w3),
+                        b: None,
                     })?),
                 })
             };
@@ -278,15 +281,19 @@ impl ModelConfig::FromGGML for ModelWeights {
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wq),
+                    b: None,
                 })?),
                 attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wk),
+                    b: None,
                 })?),
                 attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wv),
+                    b: None,
                 })?),
                 attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wo),
+                    b: None,
                 })?),
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
@@ -304,6 +311,7 @@ impl ModelConfig::FromGGML for ModelWeights {
             norm,
             output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: Arc::new(output),
+                b: None,
             })?),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
@@ -456,12 +464,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w1),
+                        b: None,
                     })?),
                     feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w2),
+                        b: None,
                     })?),
                     feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w3),
+                        b: None,
                     })?),
                 })
             } else {
@@ -501,16 +512,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
                                 feed_forward_w1: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(QTensor::quantize(&ff_w1, gate_type)?),
+                                        b: None,
                                     },
                                 )?),
                                 feed_forward_w2: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(QTensor::quantize(&ff_w2, down_type)?),
+                                        b: None,
                                     },
                                 )?),
                                 feed_forward_w3: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(QTensor::quantize(&ff_w3, up_type)?),
+                                        b: None,
                                     },
                                 )?),
                             })
@@ -534,16 +548,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
                                 feed_forward_w1: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(feed_forward_w1),
+                                        b: None,
                                     },
                                 )?),
                                 feed_forward_w2: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(feed_forward_w2),
+                                        b: None,
                                     },
                                 )?),
                                 feed_forward_w3: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
                                         q_weight: Arc::new(feed_forward_w3),
+                                        b: None,
                                     },
                                 )?),
                             })
@@ -554,6 +571,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     n_expert_used,
                     feed_forward_gate_inp: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_gate_inp),
+                        b: None,
                     })?),
                     experts,
                 }
@@ -576,15 +594,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wq),
+                    b: None,
                 })?),
                 attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wk),
+                    b: None,
                 })?),
                 attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wv),
+                    b: None,
                 })?),
                 attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wo),
+                    b: None,
                 })?),
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
@@ -602,6 +624,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             norm,
             output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: Arc::new(output),
+                b: None,
             })?),
             device: device.clone(),
             cache: Cache::new(block_count, false),

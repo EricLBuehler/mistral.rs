@@ -43,6 +43,7 @@ pub enum QuantMethodConfig {
     },
     Gguf {
         q_weight: Arc<QTensor>,
+        b: Option<Tensor>,
     },
     Unquantized(Linear),
 }
@@ -73,6 +74,9 @@ pub trait QuantMethod: Send + Sync {
 
     /// If the quant is backed by a qmatmul.
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul>;
+
+    /// If the quant is backed by a qmatmul.
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 }
 
 macro_rules! pack_factor {
@@ -89,7 +93,7 @@ pub fn linear_no_bias(
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear_no_bias(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
         }
     } else {
         let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
@@ -100,7 +104,40 @@ pub fn linear_no_bias(
     Ok(layer)
 }
 
-pub fn gptq_linear_no_bias(
+pub fn linear(
+    in_dim: usize,
+    out_dim: usize,
+    config: &Option<QuantizedConfig>,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let layer = if let Some(quant_conf) = &config {
+        match quant_conf.quant_method {
+            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+        }
+    } else {
+        let layer = candle_nn::linear(in_dim, out_dim, vb)?;
+
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+        Arc::new(layer) as Arc<dyn QuantMethod>
+    };
+    Ok(layer)
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    config: &Option<QuantizedConfig>,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    if bias {
+        linear(in_dim, out_dim, config, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, config, vb)
+    }
+}
+
+pub fn gptq_linear(
     in_dim: usize,
     out_dim: usize,
     config: &QuantizedConfig,

@@ -1,5 +1,5 @@
-use crate::{quantized::QMatMul, QuantMethod, QuantMethodConfig};
-use candle_core::{DType, Result, Tensor};
+use crate::{QuantMethod, QuantMethodConfig};
+use candle_core::{quantized::QMatMul, DType, Result, Tensor};
 use std::sync::Arc;
 
 pub struct GptqMatMul;
@@ -19,7 +19,7 @@ impl QuantMethod for GptqMatMul {
                 g_idx: _,
                 bias: _,
             } => todo!(),
-            QuantMethodConfig::Gguf { q_weight: _ } | QuantMethodConfig::Unquantized(_) => {
+            QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
                 unreachable!()
             }
         }
@@ -42,6 +42,10 @@ impl QuantMethod for GptqMatMul {
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
+        None
+    }
+
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 }
