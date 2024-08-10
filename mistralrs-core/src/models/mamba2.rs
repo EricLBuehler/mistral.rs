@@ -1,7 +1,14 @@
-use candle_nn::Activation;
+use std::sync::Arc;
+
+use candle_core::Tensor;
+use candle_nn::{Activation, Conv1d, Embedding, Linear};
+use mistralrs_quant::QuantMethod;
 use serde::Deserialize;
 
-use crate::serde_default_fn;
+use crate::{
+    layers::{GatedRmsNorm, RmsNorm},
+    serde_default_fn,
+};
 
 serde_default_fn!(usize, num_heads_default, 128);
 serde_default_fn!(usize, head_dim_default, 64);
@@ -66,6 +73,8 @@ pub struct Mamba2Config {
     time_step_rank: TimeStepRank,
     #[serde(default = "time_step_min_default")]
     time_step_min: f64,
+    #[serde(default = "time_step_max_default")]
+    time_step_max: f64,
     #[serde(default = "time_step_floor_default")]
     time_step_floor: f64,
     #[serde(default = "time_step_limit_default")]
@@ -78,4 +87,28 @@ pub struct Mamba2Config {
     rms_norm: bool,
     #[serde(default = "chunk_size_default")]
     chunk_size: usize,
+}
+
+// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mamba2/modeling_mamba2.py#L406
+struct Mixer {
+    conv1d: Conv1d,
+    in_proj: Arc<dyn QuantMethod>,
+    dt_bias: Tensor,
+    a_log: Tensor,
+    d: Tensor,
+    norm: GatedRmsNorm,
+    out_proj: Arc<dyn QuantMethod>,
+}
+
+struct Layer {
+    norm: RmsNorm,
+    mixer: Mixer,
+    res_in_f32: bool,
+}
+
+pub struct Model {
+    lm_head: Linear,
+    embeddings: Embedding,
+    norm_f: RmsNorm,
+    layers: Vec<Layer>,
 }
