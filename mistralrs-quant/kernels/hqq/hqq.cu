@@ -1,3 +1,5 @@
+// https://github.com/mobiusml/hqq/blob/master/hqq/kernels/hqq_aten_cuda_kernel.cu
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -276,16 +278,16 @@ __global__ void dequantize_3bit_32_kernel(int32_t* Wq_packed, T* scale, T* zero,
 	if(i>=n) return;
 
 	int j        = i % w;
-	W_r[i]       = ((float)((Wq_packed[i] & 0x38000000) >> 27) - zero[j])*scale[j];  //1st chunk
-	W_r[i + n]   = ((float)((Wq_packed[i] & 0x07000000) >> 24) - zero[j])*scale[j];  //2nd chunk
-	W_r[i + n*2] = ((float)((Wq_packed[i] & 0x00E00000) >> 21) - zero[j])*scale[j];  //3rd chunk	
-	W_r[i + n*3] = ((float)((Wq_packed[i] & 0x001C0000) >> 18) - zero[j])*scale[j];  //4th chunk	
-	W_r[i + n*4] = ((float)((Wq_packed[i] & 0x00038000) >> 15) - zero[j])*scale[j];  //5th chunk	
-	W_r[i + n*5] = ((float)((Wq_packed[i] & 0x00007000) >> 12) - zero[j])*scale[j];  //6th chunk	
-	W_r[i + n*6] = ((float)((Wq_packed[i] & 0x00000E00) >> 9)  - zero[j])*scale[j];  //7th chunk	
-	W_r[i + n*7] = ((float)((Wq_packed[i] & 0x000001C0) >> 6)  - zero[j])*scale[j];  //8th chunk	
-	W_r[i + n*8] = ((float)((Wq_packed[i] & 0x00000038) >> 3)  - zero[j])*scale[j];  //9th chunk	
-	W_r[i + n*9] = ((float)((Wq_packed[i] & 0x00000007))       - zero[j])*scale[j];  //10th chunk	
+	W_r[i]       = ((T)((Wq_packed[i] & 0x38000000) >> 27) - zero[j])*scale[j];  //1st chunk
+	W_r[i + n]   = ((T)((Wq_packed[i] & 0x07000000) >> 24) - zero[j])*scale[j];  //2nd chunk
+	W_r[i + n*2] = ((T)((Wq_packed[i] & 0x00E00000) >> 21) - zero[j])*scale[j];  //3rd chunk	
+	W_r[i + n*3] = ((T)((Wq_packed[i] & 0x001C0000) >> 18) - zero[j])*scale[j];  //4th chunk	
+	W_r[i + n*4] = ((T)((Wq_packed[i] & 0x00038000) >> 15) - zero[j])*scale[j];  //5th chunk	
+	W_r[i + n*5] = ((T)((Wq_packed[i] & 0x00007000) >> 12) - zero[j])*scale[j];  //6th chunk	
+	W_r[i + n*6] = ((T)((Wq_packed[i] & 0x00000E00) >> 9)  - zero[j])*scale[j];  //7th chunk	
+	W_r[i + n*7] = ((T)((Wq_packed[i] & 0x000001C0) >> 6)  - zero[j])*scale[j];  //8th chunk	
+	W_r[i + n*8] = ((T)((Wq_packed[i] & 0x00000038) >> 3)  - zero[j])*scale[j];  //9th chunk	
+	W_r[i + n*9] = ((T)((Wq_packed[i] & 0x00000007))       - zero[j])*scale[j];  //10th chunk	
 }
 
 extern "C" void dequantize_3bit_32_kernel_f32(int32_t* Wq_packed, float* scale, float* zero, float* W_r, int h, int w) {

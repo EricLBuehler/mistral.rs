@@ -61,7 +61,7 @@ pub struct HqqMatMul {
 
 impl HqqMatMul {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
-    fn dequantize(&self) -> Result<Tensor> {
+    fn dequantize(&self, group_size: usize, axis: usize) -> Result<Tensor> {
         match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16, DType::F16)
             | (DType::BF16, DType::BF16, DType::BF16)
@@ -69,6 +69,13 @@ impl HqqMatMul {
             (a, b, c) => {
                 candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}, {c:?}).")
             }
+        }
+        if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
+        {
+            candle_core::bail!("All tensors must be contiguous!");
+        }
+        if axis != 0 {
+            candle_core::bail!("HQQ dequantization requires axis == 0, got {axis}.");
         }
         let dev = get_cuda_device(&self.w_q);
 
@@ -150,8 +157,9 @@ impl HqqMatMul {
             }
 
             // 3 bits
+            // https://github.com/mobiusml/hqq/blob/306e30d9400629523c8e0af70101d8d7073cb3d5/hqq/kernels/hqq_aten_cuda.cpp#L42-L45
             (3, DType::F32) => {
-                dequant_for_dtype!(
+                let res = dequant_for_dtype!(
                     self,
                     w = i32,
                     sz = f32,
@@ -160,10 +168,15 @@ impl HqqMatMul {
                     dev,
                     three_bit,
                     3bit_32_kernel_f32
-                )
+                )?;
+                if group_size > 0 {
+                    res.narrow(axis, 0, group_size)
+                } else {
+                    Ok(res)
+                }
             }
             (3, DType::F16) => {
-                dequant_for_dtype!(
+                let res = dequant_for_dtype!(
                     self,
                     w = i32,
                     sz = f16,
@@ -172,10 +185,15 @@ impl HqqMatMul {
                     dev,
                     three_bit,
                     3bit_32_kernel_f16
-                )
+                )?;
+                if group_size > 0 {
+                    res.narrow(axis, 0, group_size)
+                } else {
+                    Ok(res)
+                }
             }
             (3, DType::BF16) => {
-                dequant_for_dtype!(
+                let res = dequant_for_dtype!(
                     self,
                     w = i32,
                     sz = bf16,
@@ -184,7 +202,12 @@ impl HqqMatMul {
                     dev,
                     three_bit,
                     3bit_32_kernel_bf16
-                )
+                )?;
+                if group_size > 0 {
+                    res.narrow(axis, 0, group_size)
+                } else {
+                    Ok(res)
+                }
             }
 
             // 2 bits
@@ -265,6 +288,15 @@ impl HqqMatMul {
             (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
         }
     }
+
+    fn dequant_matmul(&self, a: &Tensor, group_size: usize, axis: usize) -> Result<Tensor> {
+        let res = a.matmul(&self.dequantize(group_size, axis)?.t()?.contiguous()?)?;
+        if let Some(ref bias) = self.bias {
+            res + bias
+        } else {
+            Ok(res)
+        }
+    }
 }
 
 impl QuantMethod for HqqMatMul {
@@ -290,13 +322,7 @@ impl QuantMethod for HqqMatMul {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        /// Dequant then matmul!
-        let res = a.matmul(&self.dequantize()?.t()?)?;
-        if let Some(ref bias) = self.bias {
-            res + bias
-        } else {
-            Ok(res)
-        }
+        todo!()
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
