@@ -2436,6 +2436,7 @@ dependencies = [
  "candle-nn",
  "half",
  "lazy_static",
+ "paste",
  "serde",
 ]
 

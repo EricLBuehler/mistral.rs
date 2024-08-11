@@ -9,16 +9,19 @@ use candle_core::{
             cublas::{result::hgemm, sys::cublasOperation_t},
             driver::{CudaSlice, DevicePtr},
         },
-        CudaDType, CudaStorageSlice, WrapErr,
+        CudaStorageSlice, WrapErr,
     },
     from_storage_no_op,
     quantized::QMatMul,
-    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, WithDType, D,
+    CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 use lazy_static::lazy_static;
 
-use crate::{QuantMethod, QuantMethodConfig};
+use crate::{
+    util_cuda::{get_cuda_device, get_cuda_slice},
+    QuantMethod, QuantMethodConfig,
+};
 
 use super::ffi::{
     gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
@@ -41,23 +44,6 @@ pub struct GptqMatMul {
     g_idx: Tensor,       // i32
     bits: i32,
     use_exllama: bool,
-}
-
-fn get_cuda_slice<T: WithDType + CudaDType>(x: &Tensor) -> *const T {
-    match &*x.storage_and_layout().0 {
-        Storage::Cuda(a_storage) => *a_storage
-            .as_cuda_slice::<T>()
-            .expect("DType is not T")
-            .device_ptr() as *const T,
-        _ => panic!("Expected CUDA storage."),
-    }
-}
-
-fn get_cuda_device(x: &Tensor) -> &CudaDevice {
-    match x.device() {
-        Device::Cuda(dev) => dev,
-        _ => panic!("Expected CUDA device"),
-    }
 }
 
 impl GptqMatMul {

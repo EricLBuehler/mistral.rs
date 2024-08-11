@@ -7,7 +7,10 @@ use candle_core::{
 
 mod gguf;
 mod gptq;
+mod hqq;
 mod unquantized;
+#[cfg(feature = "cuda")]
+mod util_cuda;
 
 pub use gguf::GgufMatMul;
 pub use gptq::GptqMatMul;
