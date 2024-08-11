@@ -162,7 +162,7 @@ impl Loader for VisionLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
+        let dtype = dtype.try_into_dtype(&[device])?;
 
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {

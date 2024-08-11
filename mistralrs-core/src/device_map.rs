@@ -170,7 +170,7 @@ impl DeviceMapper for LayerDeviceMapper {
     }
     fn get_min_dtype(&self) -> Result<DType> {
         ModelDType::Auto
-            .try_into_dtype_all(&self.mappings)
+            .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
             .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
     }
 }
@@ -218,7 +218,7 @@ impl DeviceMapper for DummyDeviceMapper {
     }
     fn get_min_dtype(&self) -> Result<DType> {
         ModelDType::Auto
-            .try_into_dtype(&self.nm_device)
+            .try_into_dtype(&[&self.nm_device])
             .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
     }
 }
