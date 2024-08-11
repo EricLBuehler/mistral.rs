@@ -60,6 +60,7 @@ pub struct HqqMatMul {
 }
 
 impl HqqMatMul {
+    /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     fn dequantize(&self) -> Result<Tensor> {
         match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16, DType::F16)
@@ -289,6 +290,7 @@ impl QuantMethod for HqqMatMul {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
+        /// Dequant then matmul!
         let res = a.matmul(&self.dequantize()?.t()?)?;
         if let Some(ref bias) = self.bias {
             res + bias
