@@ -353,7 +353,6 @@ impl Llama {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,

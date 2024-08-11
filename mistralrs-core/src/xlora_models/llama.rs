@@ -589,7 +589,6 @@ impl XLoraLlama {
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let dtype = vb.dtype();
         let mut count = 0;
 
