@@ -529,6 +529,15 @@
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -548,6 +557,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
+<span class="kw">use </span><span class="kw">crate</span>::utils::normal::get_num_hidden_layers;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
@@ -693,7 +703,6 @@
         <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
 
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
@@ -712,6 +721,15 @@
             <span class="self">self</span>.inner
                 .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
         </span>);
+
+        <span class="kw">let </span>dtype = <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_layers) = get_num_hidden_layers(<span class="kw-2">&amp;</span>config) {
+            <span class="kw">let </span>mapper_full = mapper.into_mapper(n_layers, device)<span class="question-mark">?</span>;
+            mapper_full.get_min_dtype(dtype)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>[device])<span class="question-mark">?</span>;
+            <span class="macro">warn!</span>(<span class="string">"Model config does not have key `num_hidden_layers`. The dtype this may be incorrect in the context of device mapping!"</span>);
+            dtype
+        };
 
         <span class="kw">let </span>load_device = <span class="kw">if </span>in_situ_quant.is_none() {
             device.clone()

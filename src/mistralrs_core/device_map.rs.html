@@ -224,7 +224,7 @@
 <a href="#224" id="224">224</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
-<span class="kw">use crate</span>::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
+<span class="kw">use crate</span>::{utils::debug::DeviceRepr, TryIntoDType};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>serde::Deserialize;
@@ -347,7 +347,7 @@
     </span><span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
 
     <span class="comment">// === IMMEDIATELY AFTER INIT ===
-    </span><span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
+    </span><span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
 }
 
 <span class="attr">#[derive(Debug)]
@@ -392,9 +392,9 @@
             varbuilder.set_device(<span class="self">self</span>.nm_device.clone())
         }
     }
-    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
-        ModelDType::Auto
-            .try_into_dtype_all(<span class="kw-2">&amp;</span><span class="self">self</span>.mappings)
+    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        dtype
+            .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.mappings.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
             .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
     }
 }
@@ -440,9 +440,9 @@
             varbuilder.set_device(<span class="self">self</span>.nm_device.clone())
         }
     }
-    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
-        ModelDType::Auto
-            .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
+    <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
+        dtype
+            .try_into_dtype(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device])
             .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
     }
 }

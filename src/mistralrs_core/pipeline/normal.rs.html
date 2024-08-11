@@ -631,6 +631,15 @@
 <a href="#631" id="631">631</a>
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -657,6 +666,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
+<span class="kw">use </span><span class="kw">crate</span>::utils::normal::get_num_hidden_layers;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -863,7 +873,6 @@
         <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="kw">let </span>dtype = dtype.try_into_dtype(device)<span class="question-mark">?</span>;
         <span class="comment">// Otherwise, the device mapper will print it
         </span><span class="kw">if </span>mapper.is_dummy() {
             <span class="macro">info!</span>(
@@ -875,6 +884,15 @@
             <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
             paged_attn_config = <span class="prelude-val">None</span>;
         }
+
+        <span class="kw">let </span>dtype = <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_layers) = get_num_hidden_layers(<span class="kw-2">&amp;</span>config) {
+            <span class="kw">let </span>mapper_full = mapper.into_mapper(n_layers, device)<span class="question-mark">?</span>;
+            mapper_full.get_min_dtype(dtype)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>[device])<span class="question-mark">?</span>;
+            <span class="macro">warn!</span>(<span class="string">"Model config does not have key `num_hidden_layers`. The dtype this may be incorrect in the context of device mapping!"</span>);
+            dtype
+        };
 
         <span class="macro">info!</span>(
             <span class="string">"Model config: {:?}"</span>,

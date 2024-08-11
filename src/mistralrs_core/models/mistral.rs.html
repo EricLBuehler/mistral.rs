@@ -853,8 +853,6 @@
 <a href="#853" id="853">853</a>
 <a href="#854" id="854">854</a>
 <a href="#855" id="855">855</a>
-<a href="#856" id="856">856</a>
-<a href="#857" id="857">857</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -1340,8 +1338,6 @@
         <span class="kw">let </span>mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>vb_m = vb_m.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
-        <span class="kw">let </span>vb_lm_head = vb_lm_head.set_dtype(mapper.get_min_dtype()<span class="question-mark">?</span>);
 
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(
             cfg.vocab_size,
