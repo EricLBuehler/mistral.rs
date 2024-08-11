@@ -24,6 +24,7 @@ use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
+use crate::utils::normal::get_num_hidden_layers;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
@@ -230,7 +231,6 @@ impl Loader for NormalLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
             info!(
@@ -242,6 +242,15 @@ impl Loader for NormalLoader {
             warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
         }
+
+        let dtype = if let Ok(n_layers) = get_num_hidden_layers(&config) {
+            let mapper_full = mapper.into_mapper(n_layers, device)?;
+            mapper_full.get_min_dtype(dtype)?
+        } else {
+            let dtype = dtype.try_into_dtype(&[device])?;
+            warn!("Model config does not have key `num_hidden_layers`. The dtype this may be incorrect in the context of device mapping!");
+            dtype
+        };
 
         info!(
             "Model config: {:?}",
