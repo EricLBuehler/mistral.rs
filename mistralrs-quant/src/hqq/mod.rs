@@ -1,7 +1,8 @@
 #[cfg(feature = "cuda")]
 mod ffi;
 
-#[cfg(feature = "cuda")]
-mod hqq_cuda;
-
+#[cfg(not(feature = "cuda"))]
 mod hqq_cpu;
+
+#[cfg(feature = "cuda")]
+mod hqq;

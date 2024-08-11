@@ -5,19 +5,19 @@ use candle_core::{
     CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 use half::{bf16, f16};
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use crate::{
     util_cuda::{get_cuda_device, get_cuda_slice},
     QuantMethod, QuantMethodConfig,
 };
-use paste::paste;
 
+#[cfg(feature = "cuda")]
 use super::ffi::{eight_bit, four_bit, one_bit, three_bit, two_bit};
 
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
-        paste! {
+        paste::paste! {
             let w_slice = get_cuda_slice::<$wq_t>(&$this.w_q);
             let scale_slice = get_cuda_slice::<$scale_t>(&$this.scales);
             let zero_slice = get_cuda_slice::<$scale_t>(&$this.zeros);
@@ -50,18 +50,30 @@ macro_rules! dequant_for_dtype {
     }};
 }
 
+#[derive(Clone, Copy)]
+pub struct HqqConfig {
+    pub bits: i32,
+    pub group_size: Option<NonZeroUsize>,
+    pub axis: usize,
+}
+
 pub struct HqqMatMul {
     w_q: Tensor,
     zeros: Tensor,
     scales: Tensor,
-    bits: i32,
     bias: Option<Tensor>,
     w_shape: Shape,
+    cfg: HqqConfig,
 }
 
 impl HqqMatMul {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
-    fn dequantize(&self, group_size: usize, axis: usize) -> Result<Tensor> {
+    #[cfg(not(feature = "cuda"))]
+    fn dequantize(&self) -> Result<Tensor> {
+        use crate::hqq::hqq_cpu::{
+            Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit,
+        };
+
         match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16, DType::F16)
             | (DType::BF16, DType::BF16, DType::BF16)
@@ -74,12 +86,58 @@ impl HqqMatMul {
         {
             candle_core::bail!("All tensors must be contiguous!");
         }
-        if axis != 0 {
-            candle_core::bail!("HQQ dequantization requires axis == 0, got {axis}.");
+        if self.cfg.axis != 0 {
+            candle_core::bail!(
+                "CPU HQQ dequantization requires axis == 0, got {}.",
+                self.cfg.axis
+            );
+        }
+        let (h, w) = self.w_q.dims2()?;
+
+        match self.cfg.bits {
+            8 => self
+                .w_q
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant8Bit { h, w }),
+            4 => self
+                .w_q
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant4Bit { h, w }),
+            3 => self
+                .w_q
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant3Bit { h, w }),
+            2 => self
+                .w_q
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant2Bit { h, w }),
+            1 => self
+                .w_q
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant1Bit { h, w }),
+            b => candle_core::bail!("Unreachable bits {b}"),
+        }
+    }
+
+    /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
+    #[cfg(feature = "cuda")]
+    fn dequantize(&self) -> Result<Tensor> {
+        match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
+            (DType::F16, DType::F16, DType::F16)
+            | (DType::BF16, DType::BF16, DType::BF16)
+            | (DType::F32, DType::F32, DType::F32) => (),
+            (a, b, c) => {
+                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}, {c:?}).")
+            }
+        }
+        if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
+        {
+            candle_core::bail!("All tensors must be contiguous!");
+        }
+        if self.cfg.axis != 0 {
+            candle_core::bail!(
+                "CUDA HQQ dequantization requires axis == 0, got {}.",
+                self.cfg.axis
+            );
         }
         let dev = get_cuda_device(&self.w_q);
 
-        match (self.bits, self.w_q.dtype()) {
+        match (self.cfg.bits, self.w_q.dtype()) {
             // 8 bits
             (8, DType::F32) => {
                 dequant_for_dtype!(
@@ -169,8 +227,8 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_f32
                 )?;
-                if group_size > 0 {
-                    res.narrow(axis, 0, group_size)
+                if let Some(grp_size) = self.cfg.group_size {
+                    res.narrow(self.cfg.axis, 0, grp_size.into())
                 } else {
                     Ok(res)
                 }
@@ -186,8 +244,8 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_f16
                 )?;
-                if group_size > 0 {
-                    res.narrow(axis, 0, group_size)
+                if let Some(grp_size) = self.cfg.group_size {
+                    res.narrow(self.cfg.axis, 0, grp_size.into())
                 } else {
                     Ok(res)
                 }
@@ -203,8 +261,8 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_bf16
                 )?;
-                if group_size > 0 {
-                    res.narrow(axis, 0, group_size)
+                if let Some(grp_size) = self.cfg.group_size {
+                    res.narrow(self.cfg.axis, 0, grp_size.into())
                 } else {
                     Ok(res)
                 }
@@ -289,8 +347,8 @@ impl HqqMatMul {
         }
     }
 
-    fn dequant_matmul(&self, a: &Tensor, group_size: usize, axis: usize) -> Result<Tensor> {
-        let res = a.matmul(&self.dequantize(group_size, axis)?.t()?.contiguous()?)?;
+    fn dequantize_matmul(&self, a: &Tensor) -> Result<Tensor> {
+        let res = a.matmul(&self.dequantize()?.t()?.contiguous()?)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {
@@ -322,7 +380,13 @@ impl QuantMethod for HqqMatMul {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        todo!()
+        /*
+        if self.cfg.force_dequantize {
+            self.dequantize_matmul(a)
+        } else {
+            todo!()
+        } */
+        self.dequantize_matmul(a)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
