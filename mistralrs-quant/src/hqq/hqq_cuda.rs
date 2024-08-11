@@ -1,18 +1,54 @@
-use std::sync::Arc;
-
 use candle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice, WrapErr},
     from_storage_no_op,
     quantized::QMatMul,
     CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
+use half::{bf16, f16};
+use std::sync::Arc;
 
 use crate::{
     util_cuda::{get_cuda_device, get_cuda_slice},
     QuantMethod, QuantMethodConfig,
 };
+use paste::paste;
 
 use super::ffi::{eight_bit, four_bit, one_bit, three_bit, two_bit};
+
+macro_rules! dequant_for_dtype {
+    ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
+        paste! {
+            let w_slice = get_cuda_slice::<$wq_t>(&$this.w_q);
+            let scale_slice = get_cuda_slice::<$scale_t>(&$this.scales);
+            let zero_slice = get_cuda_slice::<$scale_t>(&$this.zeros);
+
+            let (h, w) = $this.w_q.dims2()?;
+            let num_packed_elems = $pack;
+            let out_shape = Shape::from_dims(&[num_packed_elems * h, w]);
+
+            let out = unsafe { $dev.alloc::<$scale_t>(out_shape.elem_count()).w()? };
+            let out_ptr = *out.device_ptr() as *mut $scale_t;
+            unsafe {
+                $bit_thing::[< dequantize_ $postfix >](
+                    w_slice,
+                    scale_slice,
+                    zero_slice,
+                    out_ptr,
+                    h as i32,
+                    w as i32,
+                );
+            }
+
+            let storage = CudaStorage {
+                slice: CudaStorageSlice::$dtype(out),
+                device: $dev.clone(),
+            };
+            let storage = Storage::Cuda(storage);
+
+            from_storage_no_op(storage, out_shape, false).reshape($this.w_shape.clone())
+        }
+    }};
+}
 
 pub struct HqqMatMul {
     w_q: Tensor,
@@ -20,6 +56,7 @@ pub struct HqqMatMul {
     scales: Tensor,
     bits: i32,
     bias: Option<Tensor>,
+    w_shape: Shape,
 }
 
 impl HqqMatMul {
@@ -32,38 +69,197 @@ impl HqqMatMul {
                 candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}, {c:?}).")
             }
         }
-        let (h, w) = self.w_q.dims2()?;
         let dev = get_cuda_device(&self.w_q);
 
         match (self.bits, self.w_q.dtype()) {
+            // 8 bits
             (8, DType::F32) => {
-                let w_slice = get_cuda_slice::<u8>(&self.w_q);
-                let scale_slice = get_cuda_slice::<f32>(&self.scales);
-                let zero_slice = get_cuda_slice::<f32>(&self.zeros);
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f32,
+                    F32,
+                    pack = 1,
+                    dev,
+                    eight_bit,
+                    8bit_u8_kernel_f32
+                )
+            }
+            (8, DType::F16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f16,
+                    F16,
+                    pack = 1,
+                    dev,
+                    eight_bit,
+                    8bit_u8_kernel_f16
+                )
+            }
+            (8, DType::BF16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = bf16,
+                    BF16,
+                    pack = 1,
+                    dev,
+                    eight_bit,
+                    8bit_u8_kernel_bf16
+                )
+            }
 
-                let num_packed_elems = 1;
-                let out_shape = Shape::from_dims(&[num_packed_elems * h, w]);
+            // 4 bits
+            (4, DType::F32) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f32,
+                    F32,
+                    pack = 2,
+                    dev,
+                    four_bit,
+                    4bit_u8_kernel_f32
+                )
+            }
+            (4, DType::F16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f16,
+                    F16,
+                    pack = 2,
+                    dev,
+                    four_bit,
+                    4bit_u8_kernel_f16
+                )
+            }
+            (4, DType::BF16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = bf16,
+                    BF16,
+                    pack = 2,
+                    dev,
+                    four_bit,
+                    4bit_u8_kernel_bf16
+                )
+            }
 
-                let out = unsafe { dev.alloc::<f32>(out_shape.elem_count()).w()? };
-                let out_ptr = *out.device_ptr() as *mut f32;
-                unsafe {
-                    eight_bit::dequantize_8bit_u8_kernel_f32(
-                        w_slice,
-                        scale_slice,
-                        zero_slice,
-                        out_ptr,
-                        h as i32,
-                        w as i32,
-                    );
-                }
+            // 3 bits
+            (3, DType::F32) => {
+                dequant_for_dtype!(
+                    self,
+                    w = i32,
+                    sz = f32,
+                    F32,
+                    pack = 10,
+                    dev,
+                    three_bit,
+                    3bit_32_kernel_f32
+                )
+            }
+            (3, DType::F16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = i32,
+                    sz = f16,
+                    F16,
+                    pack = 10,
+                    dev,
+                    three_bit,
+                    3bit_32_kernel_f16
+                )
+            }
+            (3, DType::BF16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = i32,
+                    sz = bf16,
+                    BF16,
+                    pack = 10,
+                    dev,
+                    three_bit,
+                    3bit_32_kernel_bf16
+                )
+            }
 
-                let storage = CudaStorage {
-                    slice: CudaStorageSlice::F32(out),
-                    device: dev.clone(),
-                };
-                let storage = Storage::Cuda(storage);
+            // 2 bits
+            (2, DType::F32) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f32,
+                    F32,
+                    pack = 4,
+                    dev,
+                    two_bit,
+                    2bit_u8_kernel_f32
+                )
+            }
+            (2, DType::F16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f16,
+                    F16,
+                    pack = 4,
+                    dev,
+                    two_bit,
+                    2bit_u8_kernel_f16
+                )
+            }
+            (2, DType::BF16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = bf16,
+                    BF16,
+                    pack = 4,
+                    dev,
+                    two_bit,
+                    2bit_u8_kernel_bf16
+                )
+            }
 
-                Ok(from_storage_no_op(storage, out_shape, false))
+            // 1 bit
+            (1, DType::F32) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f32,
+                    F32,
+                    pack = 8,
+                    dev,
+                    one_bit,
+                    1bit_u8_kernel_f32
+                )
+            }
+            (1, DType::F16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = f16,
+                    F16,
+                    pack = 8,
+                    dev,
+                    one_bit,
+                    1bit_u8_kernel_f16
+                )
+            }
+            (1, DType::BF16) => {
+                dequant_for_dtype!(
+                    self,
+                    w = u8,
+                    sz = bf16,
+                    BF16,
+                    pack = 8,
+                    dev,
+                    one_bit,
+                    1bit_u8_kernel_bf16
+                )
             }
             (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
         }
