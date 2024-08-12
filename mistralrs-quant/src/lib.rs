@@ -17,7 +17,7 @@ mod utils;
 
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
-use hqq::{HqqAxis, HqqBits};
+pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};

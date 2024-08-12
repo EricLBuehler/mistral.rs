@@ -149,7 +149,12 @@ impl CustomOp2 for BitWiseOr {
                 let d_out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::bitwise_or_u8(d_in1_ptr, d_in2_ptr, d_out_ptr, u32::try_from(elem_count)?)
+                    ffi::mq_bitwise_or_u8(
+                        d_in1_ptr,
+                        d_in2_ptr,
+                        d_out_ptr,
+                        u32::try_from(elem_count)?,
+                    )
                 };
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
@@ -157,7 +162,12 @@ impl CustomOp2 for BitWiseOr {
                 let d_out = unsafe { dev.alloc::<i32>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::bitwise_or_i32(d_in1_ptr, d_in2_ptr, d_out_ptr, u32::try_from(elem_count)?)
+                    ffi::mq_bitwise_or_i32(
+                        d_in1_ptr,
+                        d_in2_ptr,
+                        d_out_ptr,
+                        u32::try_from(elem_count)?,
+                    )
                 };
                 CudaStorage::wrap_cuda_slice(d_out, dev)
             }
@@ -261,7 +271,7 @@ impl CustomOp1 for Leftshift {
                 let d_out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::leftshift_u8(
+                    ffi::mq_leftshift_u8(
                         d_in1_ptr,
                         d_out_ptr,
                         u32::try_from(elem_count)?,
@@ -274,7 +284,7 @@ impl CustomOp1 for Leftshift {
                 let d_out = unsafe { dev.alloc::<i32>(elem_count) }.w()?;
                 let d_out_ptr = *d_out.device_ptr() as *mut c_void;
                 unsafe {
-                    ffi::leftshift_i32(
+                    ffi::mq_leftshift_i32(
                         d_in1_ptr,
                         d_out_ptr,
                         u32::try_from(elem_count)?,
@@ -315,9 +325,9 @@ mod tests {
         use candle_core::Tensor;
         let device = candle_core::Device::Cpu;
         let a =
-            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
-        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
-        let c = a.bitwise_or(&b).unwrap().to_vec2::<i64>().unwrap();
+            Tensor::from_vec(vec![1i32, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i32, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_or(&b).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
@@ -328,9 +338,30 @@ mod tests {
         use candle_core::Tensor;
         let device = candle_core::Device::new_cuda(0).unwrap();
         let a =
-            Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
-        let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
-        let c = a.bitwise_or(&b).unwrap().to_vec2::<i64>().unwrap();
+            Tensor::from_vec(vec![1i32, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i32, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_or(&b).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[test]
+    fn test_leftshift_cpu() {
+        use crate::utils::ops::LeftshiftOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+        let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
+        assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_leftshift_cuda() {
+        use crate::utils::ops::LeftshiftOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_cuda(0).unwrap();
+        let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
+        assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
     }
 }

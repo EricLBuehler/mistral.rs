@@ -409,8 +409,8 @@ mod tests {
                     .map_err(anyhow::Error::msg)
                     .map(|res| res.tokenizer)?
                 };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+
+                //fs::remove_file(&filename)?;
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
@@ -432,8 +432,8 @@ mod tests {
                     .map_err(anyhow::Error::msg)
                     .map(|res| res.tokenizer)?
                 };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+
+                //fs::remove_file(&filename)?;
                 Ok(tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),

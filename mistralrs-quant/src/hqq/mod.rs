@@ -465,9 +465,14 @@ impl HqqLayer {
         inner.reshape(&self.w_shape)
     }
 
-    fn dequantize_matmul(&self, a: &Tensor) -> Result<Tensor> {
-        let dequant = self.dequantize()?.t()?.contiguous()?;
-        let res = a.broadcast_matmul(&dequant)?;
+    fn dequantize_matmul(&self, xs: &Tensor) -> Result<Tensor> {
+        let w = self.dequantize()?;
+        let w = match *xs.dims() {
+            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+            _ => w.t()?,
+        };
+        let res = xs.matmul(&w)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {

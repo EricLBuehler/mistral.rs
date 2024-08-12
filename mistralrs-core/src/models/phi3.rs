@@ -543,6 +543,10 @@ impl IsqModel for Model {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
+        match &mut self.lm_head {
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => *t = t.to_device(&self.device).unwrap(),
+            QMatMul::QTensor(q) => todo!(),
+        }
         let mut tensors = Vec::new();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
