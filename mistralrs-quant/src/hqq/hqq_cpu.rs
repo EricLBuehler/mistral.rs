@@ -11,8 +11,9 @@ pub(crate) struct Dequant8Bit {
 impl Dequant8Bit {
     fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, (w, (s, z))) in w.into_iter().zip(s.into_iter().zip(z)).enumerate() {
-            out[i] = (T::from_f64(*w as f64) - *z) * *s;
+        for (i, w) in w.into_iter().enumerate() {
+            let j = i % self.w;
+            out[i] = (T::from_f64(*w as f64) - z[j]) * s[j];
         }
         out
     }

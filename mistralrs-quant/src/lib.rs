@@ -13,7 +13,7 @@ mod unquantized;
 mod util_cuda;
 
 pub use gguf::GgufMatMul;
-pub use gptq::GptqMatMul;
+pub use gptq::GptqLayer;
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
@@ -188,5 +188,5 @@ pub fn gptq_linear(
         g_idx,
         bias,
     };
-    Ok(Arc::new(GptqMatMul::new(config)?))
+    Ok(Arc::new(GptqLayer::new(config)?))
 }

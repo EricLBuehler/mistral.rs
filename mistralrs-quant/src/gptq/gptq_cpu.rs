@@ -2,9 +2,9 @@ use crate::{QuantMethod, QuantMethodConfig};
 use candle_core::{quantized::QMatMul, DType, Result, Tensor};
 use std::sync::Arc;
 
-pub struct GptqMatMul;
+pub struct GptqLayer;
 
-impl QuantMethod for GptqMatMul {
+impl QuantMethod for GptqLayer {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,

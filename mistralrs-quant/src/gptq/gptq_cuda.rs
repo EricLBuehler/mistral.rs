@@ -36,7 +36,7 @@ lazy_static! {
     static ref TMP_DQS: Mutex<HashMap<usize, CudaSlice<f16>>> = Mutex::new(HashMap::new());
 }
 
-pub struct GptqMatMul {
+pub struct GptqLayer {
     q_weight: Tensor,    // u32
     gptq_qzeros: Tensor, // u32
     gptq_scales: Tensor, // f16
@@ -46,7 +46,7 @@ pub struct GptqMatMul {
     use_exllama: bool,
 }
 
-impl GptqMatMul {
+impl GptqLayer {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
     fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
@@ -204,7 +204,7 @@ impl GptqMatMul {
     }
 }
 
-impl QuantMethod for GptqMatMul {
+impl QuantMethod for GptqLayer {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -255,7 +255,7 @@ impl QuantMethod for GptqMatMul {
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
         if !reshaped_a.device().is_cuda() {
-            candle_core::bail!("Expected CUDA input to GptqMatMul");
+            candle_core::bail!("Expected CUDA input to GptqLayer");
         }
         let out = self.gptq_gemm(
             reshaped_a,

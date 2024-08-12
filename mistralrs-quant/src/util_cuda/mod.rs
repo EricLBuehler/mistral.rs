@@ -3,6 +3,11 @@ use candle_core::{
     CudaDevice, Device, Storage, Tensor, WithDType,
 };
 
+mod ffi;
+mod ops;
+
+pub use ops::{BitWiseOp, LeftshiftOp};
+
 pub(crate) fn get_cuda_slice<T: WithDType + CudaDType>(x: &Tensor) -> *const T {
     match &*x.storage_and_layout().0 {
         Storage::Cuda(a_storage) => *a_storage

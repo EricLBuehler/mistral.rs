@@ -3,7 +3,13 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <vector>
-#include "cuda_utils.cuh"
+
+#if __CUDA_ARCH__ >= 630
+#include "cuda_fp16.h"
+#endif
+#if __CUDA_ARCH__ >= 800
+#include "cuda_bf16.h"
+#endif
 
 inline  unsigned int cdiv(unsigned int a, unsigned int b) { return (a + b - 1) / b;}
 #define BLOCK_SIZE 256 //~256 

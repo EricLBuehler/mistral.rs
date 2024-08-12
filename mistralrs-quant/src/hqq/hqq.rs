@@ -8,7 +8,7 @@ use half::{bf16, f16};
 use std::{num::NonZeroUsize, sync::Arc};
 
 use crate::{
-    util_cuda::{get_cuda_device, get_cuda_slice},
+    util_cuda::{get_cuda_device, get_cuda_slice, BitWiseOp, LeftshiftOp},
     QuantMethod, QuantMethodConfig,
 };
 
@@ -51,22 +51,127 @@ macro_rules! dequant_for_dtype {
 }
 
 #[derive(Clone, Copy)]
+pub enum HqqAxis {
+    Zero = 0,
+    One = 1,
+}
+
+#[derive(Clone, Copy)]
+pub enum HqqBits {
+    Eight = 8,
+    Four = 4,
+    Three = 3,
+    Two = 2,
+    One = 1,
+}
+
+impl HqqBits {
+    pub(crate) fn bitpack_type(&self) -> impl Fn(Tensor) -> Result<Tensor> {
+        match self {
+            Self::Eight => |wq: Tensor| wq.to_dtype(DType::U8),
+            Self::Four => |wq: Tensor| {
+                let wq = wq.to_dtype(DType::U8)?;
+                let step = (wq.dims()[0] as f64 / 2.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, wq.dims()[0])?;
+                a.leftshift(4)?.bitwise_or(&b)
+            },
+            Self::Two => |wq: Tensor| {
+                let wq = wq.to_dtype(DType::U8)?;
+                let step = (wq.dims()[0] as f64 / 4.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, step * 2)?;
+                let c = wq.narrow(0, step * 2, step * 3)?;
+                let d = wq.narrow(0, step * 3, wq.dims()[0])?;
+
+                a.leftshift(6)?
+                    .bitwise_or(&b.leftshift(4)?)?
+                    .bitwise_or(&c.leftshift(2)?)?
+                    .bitwise_or(&d)
+            },
+            Self::Three => |wq_in: Tensor| {
+                let wq = Tensor::zeros(
+                    (
+                        (10. * (wq_in.dims()[0] as f64 / 10.).ceil()) as usize,
+                        wq_in.dims()[1],
+                    ),
+                    DType::I32,
+                    wq_in.device(),
+                )?;
+                let wq =
+                    wq.slice_assign(&[&(..wq_in.dims()[0]), &..], &wq_in.to_dtype(DType::I32)?)?;
+                let step = (wq.dims()[0] as f64 / 10.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, step * 2)?;
+                let c = wq.narrow(0, step * 2, step * 3)?;
+                let d = wq.narrow(0, step * 3, step * 4)?;
+                let e = wq.narrow(0, step * 4, step * 5)?;
+                let f = wq.narrow(0, step * 5, step * 6)?;
+                let g = wq.narrow(0, step * 6, step * 7)?;
+                let h = wq.narrow(0, step * 7, step * 8)?;
+                let i = wq.narrow(0, step * 8, step * 9)?;
+                let j = wq.narrow(0, step * 9, step * 10)?;
+
+                a.leftshift(27)?
+                    .bitwise_or(&b.leftshift(24)?)?
+                    .bitwise_or(&c.leftshift(21)?)?
+                    .bitwise_or(&d.leftshift(18)?)?
+                    .bitwise_or(&e.leftshift(15)?)?
+                    .bitwise_or(&f.leftshift(12)?)?
+                    .bitwise_or(&g.leftshift(9)?)?
+                    .bitwise_or(&h.leftshift(6)?)?
+                    .bitwise_or(&i.leftshift(3)?)?
+                    .bitwise_or(&j)
+            },
+            Self::One => |wq: Tensor| {
+                let wq = wq.to_dtype(DType::U8)?;
+                let step = (wq.dims()[0] as f64 / 8.) as usize;
+
+                let a = wq.narrow(0, 0, step)?;
+                let b = wq.narrow(0, step, step * 2)?;
+                let c = wq.narrow(0, step * 2, step * 3)?;
+                let d = wq.narrow(0, step * 3, step * 4)?;
+                let e = wq.narrow(0, step * 4, step * 5)?;
+                let f = wq.narrow(0, step * 5, step * 6)?;
+                let g = wq.narrow(0, step * 6, step * 7)?;
+                let h = wq.narrow(0, step * 7, step * 8)?;
+
+                a.leftshift(7)?
+                    .bitwise_or(&b.leftshift(6)?)?
+                    .bitwise_or(&c.leftshift(5)?)?
+                    .bitwise_or(&d.leftshift(4)?)?
+                    .bitwise_or(&e.leftshift(3)?)?
+                    .bitwise_or(&f.leftshift(2)?)?
+                    .bitwise_or(&g.leftshift(1)?)?
+                    .bitwise_or(&h)
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct HqqConfig {
-    pub bits: i32,
-    pub group_size: Option<NonZeroUsize>,
-    pub axis: usize,
+    pub bits: HqqBits,
+    pub group_size: NonZeroUsize,
+    pub axis: HqqAxis,
+    pub optimize: bool,     // default false
+    pub round_zero: bool,   // default false
+    pub channel_wise: bool, // default true
 }
 
-pub struct HqqMatMul {
-    w_q: Tensor,
-    zeros: Tensor,
-    scales: Tensor,
-    bias: Option<Tensor>,
-    w_shape: Shape,
-    cfg: HqqConfig,
+pub struct HqqLayer {
+    pub(crate) w_q: Tensor,
+    pub(crate) zeros: Tensor,
+    pub(crate) scales: Tensor,
+    pub(crate) bias: Option<Tensor>,
+    pub(crate) w_shape: Shape,
+    pub(crate) cfg: HqqConfig,
 }
 
-impl HqqMatMul {
+impl HqqLayer {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
@@ -86,15 +191,15 @@ impl HqqMatMul {
         {
             candle_core::bail!("All tensors must be contiguous!");
         }
-        if self.cfg.axis != 0 {
+        if self.cfg.axis as usize != 0 {
             candle_core::bail!(
                 "CPU HQQ dequantization requires axis == 0, got {}.",
-                self.cfg.axis
+                self.cfg.axis as usize
             );
         }
         let (h, w) = self.w_q.dims2()?;
 
-        match self.cfg.bits {
+        match self.cfg.bits as usize {
             8 => self
                 .w_q
                 .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant8Bit { h, w }),
@@ -129,15 +234,15 @@ impl HqqMatMul {
         {
             candle_core::bail!("All tensors must be contiguous!");
         }
-        if self.cfg.axis != 0 {
+        if self.cfg.axis as usize != 0 {
             candle_core::bail!(
                 "CUDA HQQ dequantization requires axis == 0, got {}.",
-                self.cfg.axis
+                self.cfg.axis as usize
             );
         }
         let dev = get_cuda_device(&self.w_q);
 
-        match (self.cfg.bits, self.w_q.dtype()) {
+        match (self.cfg.bits as usize, self.w_q.dtype()) {
             // 8 bits
             (8, DType::F32) => {
                 dequant_for_dtype!(
@@ -227,11 +332,7 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_f32
                 )?;
-                if let Some(grp_size) = self.cfg.group_size {
-                    res.narrow(self.cfg.axis, 0, grp_size.into())
-                } else {
-                    Ok(res)
-                }
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
             }
             (3, DType::F16) => {
                 let res = dequant_for_dtype!(
@@ -244,11 +345,7 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_f16
                 )?;
-                if let Some(grp_size) = self.cfg.group_size {
-                    res.narrow(self.cfg.axis, 0, grp_size.into())
-                } else {
-                    Ok(res)
-                }
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
             }
             (3, DType::BF16) => {
                 let res = dequant_for_dtype!(
@@ -261,11 +358,7 @@ impl HqqMatMul {
                     three_bit,
                     3bit_32_kernel_bf16
                 )?;
-                if let Some(grp_size) = self.cfg.group_size {
-                    res.narrow(self.cfg.axis, 0, grp_size.into())
-                } else {
-                    Ok(res)
-                }
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
             }
 
             // 2 bits
@@ -357,7 +450,7 @@ impl HqqMatMul {
     }
 }
 
-impl QuantMethod for HqqMatMul {
+impl QuantMethod for HqqLayer {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
