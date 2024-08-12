@@ -11,16 +11,14 @@ use candle_core::{
         },
         CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op,
-    quantized::GgmlDType,
-    CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+    from_storage_no_op, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 use lazy_static::lazy_static;
 
 use crate::{
     utils::{get_cuda_device, get_cuda_slice},
-    QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig,
 };
 
 use super::ffi::{
@@ -285,7 +283,7 @@ impl QuantMethod for GptqLayer {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: GgmlDType,
+        _dtype: IsqType,
         _n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")

@@ -1,7 +1,4 @@
-use candle_core::{
-    quantized::{GgmlDType, QMatMul},
-    DType, Device, Result, Shape, Tensor,
-};
+use candle_core::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
@@ -18,7 +15,7 @@ use std::{
 
 use crate::{
     utils::{BitWiseOp, LeftshiftOp},
-    QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig,
 };
 
 #[cfg(feature = "cuda")]
@@ -547,7 +544,7 @@ impl QuantMethod for HqqLayer {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: GgmlDType,
+        dtype: IsqType,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()

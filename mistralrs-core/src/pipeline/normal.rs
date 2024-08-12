@@ -34,9 +34,9 @@ use crate::{
     TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -196,7 +196,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
@@ -227,7 +227,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
@@ -405,7 +405,7 @@ impl PreProcessingMixin for NormalPipeline {
 }
 
 impl IsqPipelineMixin for NormalPipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
             .quantize(dtype, device)

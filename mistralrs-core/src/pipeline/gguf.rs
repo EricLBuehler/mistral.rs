@@ -41,13 +41,11 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::gguf_file::Content;
-use candle_core::quantized::{
-    gguf_file::{self, Value as GgufValue},
-    GgmlDType,
-};
+use candle_core::quantized::gguf_file::{self, Value as GgufValue};
 use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
@@ -339,7 +337,7 @@ impl Loader for GGUFLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
@@ -370,7 +368,7 @@ impl Loader for GGUFLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
@@ -613,7 +611,7 @@ impl PreProcessingMixin for GGUFPipeline {
 }
 
 impl IsqPipelineMixin for GGUFPipeline {
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
         anyhow::bail!(
             "You are trying to in-situ requantize a GGML model. This will not do anything."
         )

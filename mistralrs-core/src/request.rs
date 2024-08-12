@@ -1,6 +1,7 @@
 use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
+use mistralrs_quant::IsqType;
 
 use crate::{
     response::Response,
@@ -82,7 +83,7 @@ impl NormalRequest {
 /// the `mspc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(NormalRequest),
-    ReIsq(GgmlDType),
+    ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
 }
 

@@ -3,9 +3,9 @@ use std::{
     time::Instant,
 };
 
-use candle_core::{quantized::GgmlDType, Device};
+use candle_core::Device;
 use indicatif::{ProgressBar, ProgressStyle};
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{IsqType, QuantMethod};
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
@@ -23,21 +23,26 @@ use crate::device_map::DeviceMapper;
 /// - `Q5K`
 /// - `Q6K`
 /// - `Q8K`
-pub fn parse_isq_value(s: &str) -> Result<GgmlDType, String> {
+pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     match s.to_lowercase().as_str() {
-        "q4_0" => Ok(GgmlDType::Q4_0),
-        "q4_1" => Ok(GgmlDType::Q4_1),
-        "q5_0" => Ok(GgmlDType::Q5_0),
-        "q5_1" => Ok(GgmlDType::Q5_1),
-        "q8_0" => Ok(GgmlDType::Q8_0),
-        "q8_1" => Ok(GgmlDType::Q8_1),
-        "q2k" => Ok(GgmlDType::Q2K),
-        "q3k" => Ok(GgmlDType::Q3K),
-        "q4k" => Ok(GgmlDType::Q4K),
-        "q5k" => Ok(GgmlDType::Q5K),
-        "q6k" => Ok(GgmlDType::Q6K),
-        "q8k" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
+        "q4_0" => Ok(IsqType::Q4_0),
+        "q4_1" => Ok(IsqType::Q4_1),
+        "q5_0" => Ok(IsqType::Q5_0),
+        "q5_1" => Ok(IsqType::Q5_1),
+        "q8_0" => Ok(IsqType::Q8_0),
+        "q8_1" => Ok(IsqType::Q8_1),
+        "q2k" => Ok(IsqType::Q2K),
+        "q3k" => Ok(IsqType::Q3K),
+        "q4k" => Ok(IsqType::Q4K),
+        "q5k" => Ok(IsqType::Q5K),
+        "q6k" => Ok(IsqType::Q6K),
+        "q8k" => Ok(IsqType::Q8K),
+        "hqq8" => Ok(IsqType::HQQ8),
+        "hqq4" => Ok(IsqType::HQQ4),
+        "hqq3" => Ok(IsqType::HQQ3),
+        "hqq2" => Ok(IsqType::HQQ2),
+        "hqq1" => Ok(IsqType::HQQ1),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `HQQ3`, `HQQ2`, `HQQ1`.")),
     }
 }
 
@@ -49,7 +54,7 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     );
     /// Quantize the model in-situ.
-    fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
+    fn quantize(&mut self, dtype: IsqType, device: Device) -> candle_core::Result<()> {
         {
             let (tensors, mapper) = self.get_layers();
             let total_tensors = tensors.len();

@@ -7,11 +7,12 @@ use std::{
 };
 
 use base64::{engine::general_purpose, Engine};
-use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use mistralrs_quant::IsqType;
 #[cfg(feature = "plotly")]
 use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
@@ -60,7 +61,7 @@ impl Loader for AnyMoeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -102,7 +103,7 @@ impl Loader for AnyMoeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -202,7 +203,7 @@ impl CacheManagerMixin for AnyMoePipeline {
 }
 
 impl IsqPipelineMixin for AnyMoePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)
     }
 }

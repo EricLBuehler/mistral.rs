@@ -5,7 +5,8 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -48,7 +49,7 @@ impl Loader for SpeculativeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -95,7 +96,7 @@ impl Loader for SpeculativeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -221,7 +222,7 @@ impl PreProcessingMixin for SpeculativePipeline {
 }
 
 impl IsqPipelineMixin for SpeculativePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)?;
         get_mut_arcmutex!(self.draft).re_isq_model(dtype)
     }

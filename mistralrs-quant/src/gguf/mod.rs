@@ -6,7 +6,7 @@ use candle_core::{
 };
 use candle_nn::Module;
 
-use crate::{generate_isq, QuantMethod, QuantMethodConfig};
+use crate::{generate_isq, IsqType, QuantMethod, QuantMethodConfig};
 
 #[derive(Debug)]
 pub struct GgufMatMul {
@@ -94,13 +94,14 @@ impl QuantMethod for GgufMatMul {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: GgmlDType,
+        dtype: IsqType,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         let t = match &self.w {
             QMatMul::QTensor(q) => q.dequantize(&q.device())?,
             QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
         };
+        let dtype = dtype.try_into()?;
         let res = generate_isq!(t, t.device(), dtype, n_quantized);
         Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
             q_weight: res,

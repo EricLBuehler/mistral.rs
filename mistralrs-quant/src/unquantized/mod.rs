@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicUsize, Arc};
 use candle_core::{quantized::GgmlDType, DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
-use crate::{generate_isq, GgufMatMul, QuantMethod, QuantMethodConfig};
+use crate::{generate_isq, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig};
 
 #[derive(Debug)]
 pub struct UnquantLinear(Linear);
@@ -46,9 +46,10 @@ impl QuantMethod for UnquantLinear {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: GgmlDType,
+        dtype: IsqType,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let dtype = dtype.try_into()?;
         let res = generate_isq!(
             self.0.weight(),
             self.0.weight().device(),
