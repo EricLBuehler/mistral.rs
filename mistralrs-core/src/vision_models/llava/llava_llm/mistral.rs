@@ -26,6 +26,7 @@ use super::{LLaVALLM, OrdinaryRoPE};
 use crate::models::mistral::Config;
 
 #[derive(Clone)]
+#[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Arc<dyn QuantMethod>,
     up_proj: Arc<dyn QuantMethod>,

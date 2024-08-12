@@ -47,6 +47,7 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
 }
 
 pub trait IsqModel {
+    #[allow(clippy::type_complexity)]
     fn get_layers(
         &mut self,
     ) -> (
@@ -94,7 +95,7 @@ pub trait IsqModel {
                     .for_each(|((tensor, _), device)| {
                         *tensor = tensor
                             .clone()
-                            .apply_isq(dtype, device, &n_quantized)
+                            .apply_isq(dtype, device.clone(), &n_quantized)
                             .unwrap();
                         device.synchronize().unwrap();
                     });
