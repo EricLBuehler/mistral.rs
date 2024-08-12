@@ -1,4 +1,3 @@
-use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;

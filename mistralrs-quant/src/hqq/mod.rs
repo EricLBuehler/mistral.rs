@@ -33,6 +33,8 @@ mod hqq_cpu;
 mod optimize;
 mod quantize;
 
+pub(crate) const ISQ_HQQ_GROUP_SIZE: usize = 64;
+
 #[cfg(feature = "cuda")]
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
@@ -545,8 +547,35 @@ impl QuantMethod for HqqLayer {
     fn apply_isq(
         self: Arc<Self>,
         dtype: IsqType,
+        device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bits = match dtype {
+            IsqType::HQQ8 => HqqBits::Eight,
+            IsqType::HQQ4 => HqqBits::Four,
+            IsqType::HQQ3 => HqqBits::Three,
+            IsqType::HQQ2 => HqqBits::Two,
+            IsqType::HQQ1 => HqqBits::One,
+            _ => candle_core::bail!("Expected HQQ ISQ type."),
+        };
+        let cfg = HqqConfig {
+            bits,
+            group_size: ISQ_HQQ_GROUP_SIZE.try_into()?,
+            axis: HqqAxis::Zero,
+            optimize: false,
+            round_zero: false,
+            channel_wise: true,
+        };
+        let dequant = self.dequantize()?.to_device(&device)?;
+        let res = Self::quantize(&dequant, cfg)?;
+        if let Some(ref bias) = self.bias {
+            let bias = bias
+                .to_device(&device)?
+                .to_dtype(res.dtype_and_device().0)?;
+            Ok(Arc::new(res.with_bias(bias)))
+        } else {
+            Ok(Arc::new(res))
+        }
     }
 }

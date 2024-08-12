@@ -284,6 +284,7 @@ impl QuantMethod for GptqLayer {
     fn apply_isq(
         self: Arc<Self>,
         _dtype: IsqType,
+        _device: Device,
         _n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")

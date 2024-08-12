@@ -94,6 +94,33 @@ pub enum IsqType {
     HQQ1,
 }
 
+impl IsqType {
+    pub fn is_hqq(&self) -> bool {
+        matches!(
+            self,
+            Self::HQQ1 | Self::HQQ2 | Self::HQQ3 | Self::HQQ4 | Self::HQQ8
+        )
+    }
+
+    pub fn is_gguf(&self) -> bool {
+        matches!(
+            self,
+            Self::Q2K
+                | Self::Q3K
+                | Self::Q4K
+                | Self::Q4_0
+                | Self::Q4_1
+                | Self::Q5K
+                | Self::Q5_0
+                | Self::Q5_1
+                | Self::Q6K
+                | Self::Q8K
+                | Self::Q8_0
+                | Self::Q8_1
+        )
+    }
+}
+
 impl TryFrom<IsqType> for GgmlDType {
     type Error = candle_core::Error;
 
@@ -144,6 +171,7 @@ pub trait QuantMethod: Send + Sync + Debug {
     fn apply_isq(
         self: Arc<Self>,
         dtype: IsqType,
+        device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>>;
 

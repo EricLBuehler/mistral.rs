@@ -1,9 +1,13 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, DType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
-use crate::{generate_isq, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig};
+use crate::{
+    generate_isq,
+    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_GROUP_SIZE},
+    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
+};
 
 #[derive(Debug)]
 pub struct UnquantLinear(Linear);
@@ -47,22 +51,49 @@ impl QuantMethod for UnquantLinear {
     fn apply_isq(
         self: Arc<Self>,
         dtype: IsqType,
+        device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let dtype = dtype.try_into()?;
-        let res = generate_isq!(
-            self.0.weight(),
-            self.0.weight().device(),
-            dtype,
-            n_quantized
-        );
-        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-            q_weight: res,
-            b: self
-                .0
-                .bias()
-                .cloned()
-                .map(|b| b.to_dtype(DType::F32).unwrap()),
-        })?))
+        if dtype.is_hqq() {
+            n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let bits = match dtype {
+                IsqType::HQQ8 => HqqBits::Eight,
+                IsqType::HQQ4 => HqqBits::Four,
+                IsqType::HQQ3 => HqqBits::Three,
+                IsqType::HQQ2 => HqqBits::Two,
+                IsqType::HQQ1 => HqqBits::One,
+                _ => unreachable!(),
+            };
+            let cfg = HqqConfig {
+                bits,
+                group_size: ISQ_HQQ_GROUP_SIZE.try_into()?,
+                axis: HqqAxis::Zero,
+                optimize: false,
+                round_zero: false,
+                channel_wise: true,
+            };
+            let res = HqqLayer::quantize(&self.0.weight().to_device(&device)?, cfg)?;
+            if let Some(bias) = self.0.bias() {
+                let bias = bias
+                    .to_device(&device)?
+                    .to_dtype(res.dtype_and_device().0)?;
+                Ok(Arc::new(res.with_bias(bias)))
+            } else {
+                Ok(Arc::new(res))
+            }
+        } else if dtype.is_gguf() {
+            let dtype = dtype.try_into()?;
+            let res = generate_isq!(self.0.weight(), device, dtype, n_quantized);
+            Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: res,
+                b: self
+                    .0
+                    .bias()
+                    .cloned()
+                    .map(|b| b.to_dtype(DType::F32).unwrap()),
+            })?))
+        } else {
+            candle_core::bail!("Unsupported dtype for ISQ on UnquantLinear {dtype:?}")
+        }
     }
 }

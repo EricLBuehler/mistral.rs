@@ -2,7 +2,7 @@ use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul},
-    DType, Result, Tensor,
+    DType, Device, Result, Tensor,
 };
 use candle_nn::Module;
 
@@ -95,6 +95,7 @@ impl QuantMethod for GgufMatMul {
     fn apply_isq(
         self: Arc<Self>,
         dtype: IsqType,
+        device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         let t = match &self.w {
@@ -102,7 +103,7 @@ impl QuantMethod for GgufMatMul {
             QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
         };
         let dtype = dtype.try_into()?;
-        let res = generate_isq!(t, t.device(), dtype, n_quantized);
+        let res = generate_isq!(t, device, dtype, n_quantized);
         Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
             q_weight: res,
             b: self.b.clone(),

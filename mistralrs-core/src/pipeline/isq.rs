@@ -92,7 +92,10 @@ pub trait IsqModel {
                     .zip(devices)
                     .progress_with(bar)
                     .for_each(|((tensor, _), device)| {
-                        *tensor = tensor.clone().apply_isq(dtype, &n_quantized).unwrap();
+                        *tensor = tensor
+                            .clone()
+                            .apply_isq(dtype, device, &n_quantized)
+                            .unwrap();
                         device.synchronize().unwrap();
                     });
             }
@@ -105,7 +108,10 @@ pub trait IsqModel {
                     .zip(devices)
                     .progress_with(bar)
                     .for_each(|((tensor, _), device)| {
-                        *tensor = tensor.clone().apply_isq(dtype, &n_quantized).unwrap();
+                        *tensor = tensor
+                            .clone()
+                            .apply_isq(dtype, &n_quantized, device)
+                            .unwrap();
                         device.synchronize().unwrap();
                     });
             }
