@@ -6,4 +6,6 @@ mod hqq_cpu;
 
 #[cfg(feature = "cuda")]
 mod hqq;
+
+mod optimize;
 mod quantize;

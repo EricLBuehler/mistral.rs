@@ -2,7 +2,10 @@ use candle_core::{DType, Result, Tensor};
 
 use crate::hqq::hqq::HqqAxis;
 
-use super::hqq::{HqqConfig, HqqLayer};
+use super::{
+    hqq::{HqqConfig, HqqLayer},
+    optimize::OptParams,
+};
 
 impl HqqLayer {
     /// Quantize the model into HQQ>
@@ -52,12 +55,25 @@ impl HqqLayer {
             zero = zero.round()?;
         }
 
-        let quant_w = if cfg.optimize {
-            todo!() // TODO: This is incredibly important!!!!
+        let (quant_w, scale, zero) = if cfg.optimize {
+            let result = Self::optimize_weights_proximal_legacy(
+                &w,
+                &scale,
+                zero,
+                0.,
+                max_v,
+                cfg.axis,
+                OptParams::default(),
+            )?;
+            (result.wq, result.scale, result.zero)
         } else {
-            w.broadcast_mul(&scale)?
-                .broadcast_add(&zero)?
-                .clamp(0f64, max_v)?
+            (
+                w.broadcast_mul(&scale)?
+                    .broadcast_add(&zero)?
+                    .clamp(0f64, max_v)?,
+                scale,
+                zero,
+            )
         };
 
         let quant_w = cfg.bits.bitpack_type()(quant_w)?;

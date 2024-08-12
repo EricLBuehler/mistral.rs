@@ -66,6 +66,7 @@ pub enum HqqBits {
 }
 
 impl HqqBits {
+    // https://github.com/mobiusml/hqq/blob/306e30d9400629523c8e0af70101d8d7073cb3d5/hqq/core/bitpack.py#L10
     pub(crate) fn bitpack_type(&self) -> impl Fn(Tensor) -> Result<Tensor> {
         match self {
             Self::Eight => |wq: Tensor| wq.to_dtype(DType::U8),
