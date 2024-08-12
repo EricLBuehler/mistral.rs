@@ -603,73 +603,26 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            {
-                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.q_proj = q_proj;
-                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.k_proj = k_proj;
-                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.v_proj = v_proj;
-                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.o_proj = o_proj;
-                let gate = layer
-                    .block_sparse_moe
-                    .gate
-                    .clone()
-                    .convert_to_isq()
-                    .unwrap();
-                layer.block_sparse_moe.gate = gate;
-            }
-            if let Some(q) = Arc::get_mut(&mut layer.self_attn.q_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((q, Some(i)));
-            }
-            if let Some(k) = Arc::get_mut(&mut layer.self_attn.k_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((k, Some(i)));
-            }
-            if let Some(b) = Arc::get_mut(&mut layer.self_attn.v_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((b, Some(i)));
-            }
-            if let Some(o) = Arc::get_mut(&mut layer.self_attn.o_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((o, Some(i)));
-            }
-            if let Some(g) = Arc::get_mut(&mut layer.block_sparse_moe.gate)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((g, Some(i)));
-            }
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
+            tensors.push((&mut layer.block_sparse_moe.gate, Some(i)));
             for expert in &mut layer.block_sparse_moe.experts {
-                if let Some(w1) = Arc::get_mut(&mut expert.w1).unwrap().get_qmatmul() {
-                    tensors.push((w1, Some(i)));
-                }
-                if let Some(w2) = Arc::get_mut(&mut expert.w2).unwrap().get_qmatmul() {
-                    tensors.push((w2, Some(i)));
-                }
-                if let Some(w3) = Arc::get_mut(&mut expert.w3).unwrap().get_qmatmul() {
-                    tensors.push((w3, Some(i)));
-                }
+                tensors.push((&mut expert.w1, Some(i)));
+                tensors.push((&mut expert.w2, Some(i)));
+                tensors.push((&mut expert.w3, Some(i)));
             }
         }
         (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
     }
 }
 

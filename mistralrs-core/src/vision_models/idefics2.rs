@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
     Embedding, LayerNorm, Module, VarBuilder,
@@ -1064,11 +1064,16 @@ impl Idefics2 {
 }
 
 impl IsqModel for Idefics2 {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.text_model.get_matmuls()
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        self.text_model.get_biases()
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn DeviceMapper,
+    ) {
+        self.text_model.get_layers()
     }
 }
 

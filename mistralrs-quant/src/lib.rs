@@ -1,7 +1,11 @@
-use std::{fmt::Display, num::NonZeroUsize, sync::Arc};
+use std::{
+    fmt::{Debug, Display},
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
 };
 
@@ -70,7 +74,7 @@ pub enum QuantMethodConfig {
 }
 
 /// Quantized method for a quantized matmul.
-pub trait QuantMethod: Send + Sync {
+pub trait QuantMethod: Send + Sync + Debug {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;
@@ -94,13 +98,14 @@ pub trait QuantMethod: Send + Sync {
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul>;
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: GgmlDType,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
-
-    /// Convert this layer to an ISQ-able layer if possible.
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
 }
 
 macro_rules! pack_factor {

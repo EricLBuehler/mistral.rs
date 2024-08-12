@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
 use candle_core::{
@@ -12,7 +12,7 @@ use candle_core::{
         CudaStorageSlice, WrapErr,
     },
     from_storage_no_op,
-    quantized::QMatMul,
+    quantized::GgmlDType,
     CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
@@ -36,6 +36,7 @@ lazy_static! {
     static ref TMP_DQS: Mutex<HashMap<usize, CudaSlice<f16>>> = Mutex::new(HashMap::new());
 }
 
+#[derive(Debug)]
 pub struct GptqLayer {
     q_weight: Tensor,    // u32
     gptq_qzeros: Tensor, // u32
@@ -278,15 +279,15 @@ impl QuantMethod for GptqLayer {
         (self.gptq_scales.dtype(), self.gptq_scales.device().clone())
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+    fn apply_isq(
+        self: Arc<Self>,
+        _dtype: GgmlDType,
+        _n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
     }
 }

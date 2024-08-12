@@ -1,8 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
 use candle_nn::{linear_no_bias, Activation, VarBuilder};
+use mistralrs_quant::QuantMethod;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
@@ -10,7 +13,6 @@ use crate::{
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
-    merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
@@ -23,12 +25,11 @@ use crate::{
 use super::{LLaVALLM, OrdinaryRoPE};
 use crate::models::mistral::Config;
 
-#[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
+#[derive(Clone)]
 struct MLP {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
-    down_proj: QMatMul,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act_fn: Activation,
     params: Vec<usize>,
 }
@@ -37,13 +38,28 @@ impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
-        let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
-        let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
+        let gate_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("gate_proj"),
+        )?;
+        let up_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("up_proj"),
+        )?;
+        let down_proj = mistralrs_quant::linear_no_bias(
+            intermediate_sz,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
         Ok(Self {
-            gate_proj: QMatMul::Tensor(gate_proj.weight().clone()),
-            up_proj: QMatMul::Tensor(up_proj.weight().clone()),
-            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
+            gate_proj,
+            up_proj,
+            down_proj,
             act_fn: cfg.hidden_act,
             params: vec![hidden_sz, intermediate_sz],
         })
@@ -56,22 +72,21 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.gate_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let lhs = MatMul.qmatmul(&xs, &self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = MatMul.qmatmul(&xs, &self.up_proj)?;
-        let mut res = MatMul.qmatmul(&(lhs * rhs)?, &self.down_proj)?;
-        if matches!(self.gate_proj, QMatMul::QTensor(_)) {
+        let lhs = MatMul
+            .qmethod_matmul(&xs, &*self.gate_proj)?
+            .apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let mut res = MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.down_proj)?;
+        if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![None, None, None]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -81,49 +96,45 @@ impl MlpLayer for MLP {
     }
     // gate, up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        let new_gate = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.gate_proj, delta)
+        let gate_proj = if let Some(ref delta) = deltas[0] {
+            self.gate_proj.add_delta_w(delta)?
         } else {
             self.gate_proj.clone()
         };
-        let new_up = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.up_proj, delta)
+        let up_proj = if let Some(ref delta) = deltas[1] {
+            self.up_proj.add_delta_w(delta)?
         } else {
             self.up_proj.clone()
         };
-        let new_down = if let Some(ref delta) = deltas[2] {
-            merge_delta!(self.down_proj, delta)
+        let down_proj = if let Some(ref delta) = deltas[2] {
+            self.down_proj.add_delta_w(delta)?
         } else {
             self.down_proj.clone()
         };
 
         Ok(Box::new(Self {
-            gate_proj: new_gate,
-            up_proj: new_up,
-            down_proj: new_down,
+            gate_proj,
+            up_proj,
+            down_proj,
             act_fn: self.act_fn,
             params: self.params.clone(),
         }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match &self.gate_proj {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.gate_proj.dtype_and_device()
     }
 }
 
 struct Attention {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
-    o_proj: QMatMul,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     use_flash_attn: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
@@ -135,21 +146,40 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
-        let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+        let head_dim = cfg.head_dim();
+        let q_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
         Ok(Self {
-            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
-            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
-            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
-            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             num_heads,
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
             paged_attn,
@@ -171,13 +201,13 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut q = MatMul.qmatmul(&xs, &self.q_proj)?;
-        let mut k = MatMul.qmatmul(&xs, &self.k_proj)?;
-        let mut v = MatMul.qmatmul(&xs, &self.v_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -237,19 +267,16 @@ impl Attention {
             }
         };
 
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
-            attn_output
-                .transpose(1, 2)?
-                .reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
-            attn_output.reshape(&[b_sz, q_len, self.hidden_size])?
+            attn_output.reshape((b_sz, q_len, ()))?
         };
-
-        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -513,9 +540,13 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
@@ -524,16 +555,13 @@ impl IsqModel for Model {
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }
         (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
     }
 }
 

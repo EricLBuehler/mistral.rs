@@ -1,4 +1,7 @@
-use candle_core::{quantized::QMatMul, DType, Device, Result, Shape, Tensor};
+use candle_core::{
+    quantized::{GgmlDType, QMatMul},
+    DType, Device, Result, Shape, Tensor,
+};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
@@ -8,7 +11,10 @@ use candle_core::{
 
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use crate::{
     utils::{BitWiseOp, LeftshiftOp},
@@ -169,7 +175,7 @@ impl HqqBits {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct HqqConfig {
     pub bits: HqqBits,
     pub group_size: NonZeroUsize,
@@ -179,6 +185,7 @@ pub struct HqqConfig {
     pub channel_wise: bool, // default true
 }
 
+#[derive(Debug)]
 pub struct HqqLayer {
     pub(crate) w_q: Tensor,
     pub(crate) zeros: Tensor,
@@ -534,15 +541,15 @@ impl QuantMethod for HqqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
+        self.bias.as_mut()
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("HQQ quantization does not support ISQ.")
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: GgmlDType,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
     }
 }

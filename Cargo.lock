@@ -2438,6 +2438,7 @@ dependencies = [
  "lazy_static",
  "paste",
  "serde",
+ "tracing",
 ]
 
 [[package]]

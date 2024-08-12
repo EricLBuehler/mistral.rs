@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::QMatMul, DType, Result, Tensor};
+use candle_core::{
+    quantized::{GgmlDType, QMatMul},
+    DType, Result, Tensor,
+};
 use candle_nn::Module;
 
-use crate::{QuantMethod, QuantMethodConfig};
+use crate::{generate_isq, QuantMethod, QuantMethodConfig};
 
+#[derive(Debug)]
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
@@ -84,15 +88,23 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        Some(&mut self.w)
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         self.b.as_mut()
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self)
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: GgmlDType,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let t = match &self.w {
+            QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+            QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
+        };
+        let res = generate_isq!(t, t.device(), dtype, n_quantized);
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: res,
+            b: self.b.clone(),
+        })?))
     }
 }

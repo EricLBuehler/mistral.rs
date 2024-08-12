@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::QMatMul, DType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Result, Tensor};
 use candle_nn::{Linear, Module};
 
-use crate::{GgufMatMul, QuantMethod, QuantMethodConfig};
+use crate::{generate_isq, GgufMatMul, QuantMethod, QuantMethodConfig};
 
+#[derive(Debug)]
 pub struct UnquantLinear(Linear);
 
 impl QuantMethod for UnquantLinear {
@@ -39,21 +40,28 @@ impl QuantMethod for UnquantLinear {
         (self.0.weight().dtype(), self.0.weight().device().clone())
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        let w = self.0.weight().clone();
-        let b = self.0.bias().cloned();
-
-        Ok(Arc::new(GgufMatMul {
-            w: QMatMul::Tensor(w),
-            b,
-        }))
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: GgmlDType,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let res = generate_isq!(
+            self.0.weight(),
+            self.0.weight().device(),
+            dtype,
+            n_quantized
+        );
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: res,
+            b: self
+                .0
+                .bias()
+                .cloned()
+                .map(|b| b.to_dtype(DType::F32).unwrap()),
+        })?))
     }
 }
