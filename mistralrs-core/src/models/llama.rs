@@ -421,7 +421,7 @@ impl Llama {
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
-        let mut cache = self.kv_cache.lock();
+        let mut cache = self.kv_caches[0].lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             metadata
@@ -468,6 +468,9 @@ impl Llama {
                 quant_cfg.bits
             );
         }
+
+        let num_devices = 1;
+        let mut cuda_devices = Vec::with_capacity(num_devices);
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
@@ -514,6 +517,9 @@ impl Llama {
                             .expect("Failed to create PagedAttention"),
                         ),
                     };
+                    if !cuda_devices.iter().any(|d| format!("{:?}", d) == format!("{:?}", device)) {
+                        cuda_devices.push(device.clone());
+                    }
                     Block::load(
                         vb.pp(&format!("model.layers.{i}")),
                         cfg,
@@ -527,12 +533,21 @@ impl Llama {
                 })
                 .collect();
 
+                let mut kv_caches: Vec<crate::pipeline::Cache> = Vec::with_capacity(num_devices);
+
+                for device_id in 0..num_devices {
+                    let cache = crate::pipeline::Cache::new(cfg.num_hidden_layers , false);
+                    kv_caches.push(cache);
+                };
+
         Ok(Self {
             wte,
             blocks,
             ln_f,
             lm_head: QMatMul::Tensor(lm_head.weight().clone()),
-            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            // kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            kv_caches,
+            cuda_devices,
             device: normal_loading_metadata.real_device,
             mapper,
             cfg: ModelConfigMetadata {
@@ -623,7 +638,8 @@ impl NormalModel for Llama {
         unimplemented!()
     }
     fn cache(&self) -> &crate::pipeline::Cache {
-        &self.kv_cache
+        &self.kv_caches[0]
+        // &self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device
