@@ -6,7 +6,7 @@ impl HqqLayer {
     /// Quantize the model into HQQ>
     pub fn quantize(input: &Tensor, cfg: HqqConfig) -> Result<Self> {
         let group_size: usize = cfg.group_size.into();
-        if input.elem_count() != group_size {
+        if input.elem_count() % group_size != 0 {
             candle_core::bail!("`group_size` should be divisible by the tensor number of elements, which are {}, got a group size of {group_size}.", input.elem_count());
         }
 

@@ -66,7 +66,7 @@ macro_rules! dequant_for_dtype {
             };
             let storage = Storage::Cuda(storage);
 
-            from_storage_no_op(storage, out_shape, false).reshape($this.w_shape.clone())
+            from_storage_no_op(storage, out_shape, false)
         }
     }};
 }
@@ -96,7 +96,7 @@ impl HqqBits {
                 let step = (wq.dims()[0] as f64 / 2.) as usize;
 
                 let a = wq.narrow(0, 0, step)?;
-                let b = wq.narrow(0, step, wq.dims()[0])?;
+                let b = wq.narrow(0, step, step)?;
                 a.leftshift(4)?.bitwise_or(&b)
             },
             Self::Two => |wq: Tensor| {
@@ -104,9 +104,9 @@ impl HqqBits {
                 let step = (wq.dims()[0] as f64 / 4.) as usize;
 
                 let a = wq.narrow(0, 0, step)?;
-                let b = wq.narrow(0, step, step * 2)?;
-                let c = wq.narrow(0, step * 2, step * 3)?;
-                let d = wq.narrow(0, step * 3, wq.dims()[0])?;
+                let b = wq.narrow(0, step, step)?;
+                let c = wq.narrow(0, step * 2, step)?;
+                let d = wq.narrow(0, step * 3, step)?;
 
                 a.leftshift(6)?
                     .bitwise_or(&b.leftshift(4)?)?
@@ -127,15 +127,15 @@ impl HqqBits {
                 let step = (wq.dims()[0] as f64 / 10.) as usize;
 
                 let a = wq.narrow(0, 0, step)?;
-                let b = wq.narrow(0, step, step * 2)?;
-                let c = wq.narrow(0, step * 2, step * 3)?;
-                let d = wq.narrow(0, step * 3, step * 4)?;
-                let e = wq.narrow(0, step * 4, step * 5)?;
-                let f = wq.narrow(0, step * 5, step * 6)?;
-                let g = wq.narrow(0, step * 6, step * 7)?;
-                let h = wq.narrow(0, step * 7, step * 8)?;
-                let i = wq.narrow(0, step * 8, step * 9)?;
-                let j = wq.narrow(0, step * 9, step * 10)?;
+                let b = wq.narrow(0, step, step)?;
+                let c = wq.narrow(0, step * 2, step)?;
+                let d = wq.narrow(0, step * 3, step)?;
+                let e = wq.narrow(0, step * 4, step)?;
+                let f = wq.narrow(0, step * 5, step)?;
+                let g = wq.narrow(0, step * 6, step)?;
+                let h = wq.narrow(0, step * 7, step)?;
+                let i = wq.narrow(0, step * 8, step)?;
+                let j = wq.narrow(0, step * 9, step)?;
 
                 a.leftshift(27)?
                     .bitwise_or(&b.leftshift(24)?)?
@@ -153,13 +153,13 @@ impl HqqBits {
                 let step = (wq.dims()[0] as f64 / 8.) as usize;
 
                 let a = wq.narrow(0, 0, step)?;
-                let b = wq.narrow(0, step, step * 2)?;
-                let c = wq.narrow(0, step * 2, step * 3)?;
-                let d = wq.narrow(0, step * 3, step * 4)?;
-                let e = wq.narrow(0, step * 4, step * 5)?;
-                let f = wq.narrow(0, step * 5, step * 6)?;
-                let g = wq.narrow(0, step * 6, step * 7)?;
-                let h = wq.narrow(0, step * 7, step * 8)?;
+                let b = wq.narrow(0, step, step)?;
+                let c = wq.narrow(0, step * 2, step)?;
+                let d = wq.narrow(0, step * 3, step)?;
+                let e = wq.narrow(0, step * 4, step)?;
+                let f = wq.narrow(0, step * 5, step)?;
+                let g = wq.narrow(0, step * 6, step)?;
+                let h = wq.narrow(0, step * 7, step)?;
 
                 a.leftshift(7)?
                     .bitwise_or(&b.leftshift(6)?)?
@@ -202,12 +202,10 @@ impl HqqLayer {
             Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit,
         };
 
-        match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
-            (DType::F16, DType::F16, DType::F16)
-            | (DType::BF16, DType::BF16, DType::BF16)
-            | (DType::F32, DType::F32, DType::F32) => (),
-            (a, b, c) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}, {c:?}).")
+        match (self.scales.dtype(), self.zeros.dtype()) {
+            (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
+            (a, b) => {
+                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
@@ -225,19 +223,24 @@ impl HqqLayer {
         match self.cfg.bits as usize {
             8 => self
                 .w_q
-                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant8Bit { h, w }),
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant8Bit { h, w })?
+                .reshape(&self.w_shape),
             4 => self
                 .w_q
-                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant4Bit { h, w }),
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant4Bit { h, w })?
+                .reshape(&self.w_shape),
             3 => self
                 .w_q
-                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant3Bit { h, w }),
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant3Bit { h, w })?
+                .reshape(&self.w_shape),
             2 => self
                 .w_q
-                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant2Bit { h, w }),
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant2Bit { h, w })?
+                .reshape(&self.w_shape),
             1 => self
                 .w_q
-                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant1Bit { h, w }),
+                .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant1Bit { h, w })?
+                .reshape(&self.w_shape),
             b => candle_core::bail!("Unreachable bits {b}"),
         }
     }
@@ -245,12 +248,10 @@ impl HqqLayer {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(feature = "cuda")]
     fn dequantize(&self) -> Result<Tensor> {
-        match (self.w_q.dtype(), self.scales.dtype(), self.zeros.dtype()) {
-            (DType::F16, DType::F16, DType::F16)
-            | (DType::BF16, DType::BF16, DType::BF16)
-            | (DType::F32, DType::F32, DType::F32) => (),
-            (a, b, c) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}, {c:?}).")
+        match (self.scales.dtype(), self.zeros.dtype()) {
+            (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
+            (a, b) => {
+                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
@@ -265,7 +266,7 @@ impl HqqLayer {
         }
         let dev = get_cuda_device(&self.w_q);
 
-        match (self.cfg.bits as usize, self.w_q.dtype()) {
+        let inner = match (self.cfg.bits as usize, self.scales.dtype()) {
             // 8 bits
             (8, DType::F32) => {
                 dequant_for_dtype!(
@@ -354,8 +355,8 @@ impl HqqLayer {
                     dev,
                     three_bit,
                     3bit_32_kernel_f32
-                )?;
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
+                );
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
             }
             (3, DType::F16) => {
                 let res = dequant_for_dtype!(
@@ -367,8 +368,8 @@ impl HqqLayer {
                     dev,
                     three_bit,
                     3bit_32_kernel_f16
-                )?;
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
+                );
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
             }
             (3, DType::BF16) => {
                 let res = dequant_for_dtype!(
@@ -380,8 +381,8 @@ impl HqqLayer {
                     dev,
                     three_bit,
                     3bit_32_kernel_bf16
-                )?;
-                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())
+                );
+                res.narrow(self.cfg.axis as usize, 0, self.cfg.group_size.into())?
             }
 
             // 2 bits
@@ -460,11 +461,13 @@ impl HqqLayer {
                 )
             }
             (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
-        }
+        };
+        inner.reshape(&self.w_shape)
     }
 
     fn dequantize_matmul(&self, a: &Tensor) -> Result<Tensor> {
-        let res = a.matmul(&self.dequantize()?.t()?.contiguous()?)?;
+        let dequant = self.dequantize()?.t()?.contiguous()?;
+        let res = a.broadcast_matmul(&dequant)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {

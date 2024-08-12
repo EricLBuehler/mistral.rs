@@ -40,7 +40,7 @@ impl CustomOp2 for BitWiseOr {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        if l1 != l2 {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
                 rhs: l2.shape().clone(),
@@ -56,7 +56,8 @@ impl CustomOp2 for BitWiseOr {
         }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let vs2 = s2.as_slice::<u8>().unwrap();
+                let vs2 = &s2.as_slice::<u8>().unwrap()[l2.start_offset()..];
+                let vs1 = &vs1[l1.start_offset()..];
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
@@ -64,7 +65,8 @@ impl CustomOp2 for BitWiseOr {
             CpuStorage::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "bitwise-or")),
             CpuStorage::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "bitwise-or")),
             CpuStorage::I32(vs1) => {
-                let vs2 = s2.as_slice::<i32>().unwrap();
+                let vs2 = &s2.as_slice::<i32>().unwrap()[l2.start_offset()..];
+                let vs1 = &vs1[l1.start_offset()..];
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
@@ -83,7 +85,7 @@ impl CustomOp2 for BitWiseOr {
         s2: &CudaStorage,
         l2: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
-        if l1 != l2 {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
                 rhs: l2.shape().clone(),
@@ -100,8 +102,14 @@ impl CustomOp2 for BitWiseOr {
         let dev = s1.device().clone();
         let (d_in1_ptr, d_in2_ptr, elem_count) = match s1.dtype() {
             DType::U8 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<u8>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<u8>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<u8>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<u8>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
@@ -112,8 +120,14 @@ impl CustomOp2 for BitWiseOr {
                 return Err(Error::UnsupportedDTypeForOp(DType::I64, "bitwise-or"));
             }
             DType::I32 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<i32>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<i32>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }

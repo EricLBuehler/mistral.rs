@@ -85,11 +85,12 @@ pub trait IsqModel {
                 info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
                 use indicatif::ParallelProgressIterator;
+                use indicatif::ProgressIterator;
                 use rayon::iter::{
                     IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
                 };
                 tensors
-                    .into_par_iter()
+                    .into_iter() //into_par_iter()
                     .zip(devices)
                     .progress_with(bar)
                     .for_each(|((tensor, _), device)| {

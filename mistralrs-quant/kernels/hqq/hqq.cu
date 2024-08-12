@@ -4,12 +4,12 @@
 #include <cuda_runtime.h>
 #include <vector>
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 #include "cuda_fp16.h"
-#endif
-#if __CUDA_ARCH__ >= 800
+//#endif
+//#if __CUDA_ARCH__ >= 800
 #include "cuda_bf16.h"
-#endif
+//#endif
 
 inline  unsigned int cdiv(unsigned int a, unsigned int b) { return (a + b - 1) / b;}
 #define BLOCK_SIZE 256 //~256 
@@ -34,19 +34,19 @@ extern "C" void dequantize_8bit_u8_kernel_f32(unsigned char* Wq_packed, float* s
     dequantize_8bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 extern "C" void dequantize_8bit_u8_kernel_f16(unsigned char* Wq_packed, __half* scale, __half* zero, __half* W_r, int h, int w) {
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_8bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
-#if __CUDA_ARCH__ >= 800
+//#if __CUDA_ARCH__ >= 800
 extern "C" void dequantize_8bit_u8_kernel_bf16(unsigned char* Wq_packed, __nv_bfloat16* scale, __nv_bfloat16* zero, __nv_bfloat16* W_r, int h, int w) { 
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_8bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
 
 /*******************************************************************************************************************************************/
@@ -79,19 +79,19 @@ extern "C" void dequantize_4bit_u8_kernel_f32(unsigned char* Wq_packed, float* s
     dequantize_4bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 extern "C" void dequantize_4bit_u8_kernel_f16(unsigned char* Wq_packed, __half* scale, __half* zero, __half* W_r, int h, int w) {
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_4bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
-#if __CUDA_ARCH__ >= 800
+//#if __CUDA_ARCH__ >= 800
 extern "C" void dequantize_4bit_u8_kernel_bf16(unsigned char* Wq_packed, __nv_bfloat16* scale, __nv_bfloat16* zero, __nv_bfloat16* W_r, int h, int w) { 
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_4bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
 /*******************************************************************************************************************************************/
 /************* 2-bit *************/
@@ -128,19 +128,19 @@ extern "C" void dequantize_2bit_u8_kernel_f32(unsigned char* Wq_packed, float* s
     dequantize_2bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 extern "C" void dequantize_2bit_u8_kernel_f16(unsigned char* Wq_packed, __half* scale, __half* zero, __half* W_r, int h, int w) {
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_2bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
-#if __CUDA_ARCH__ >= 800
+//#if __CUDA_ARCH__ >= 800
 extern "C" void dequantize_2bit_u8_kernel_bf16(unsigned char* Wq_packed, __nv_bfloat16* scale, __nv_bfloat16* zero, __nv_bfloat16* W_r, int h, int w) { 
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_2bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
 
 // //Shared
@@ -212,19 +212,19 @@ extern "C" void dequantize_1bit_u8_kernel_f32(unsigned char* Wq_packed, float* s
     dequantize_1bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 extern "C" void dequantize_1bit_u8_kernel_f16(unsigned char* Wq_packed, __half* scale, __half* zero, __half* W_r, int h, int w) {
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_1bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
-#if __CUDA_ARCH__ >= 800
+//#if __CUDA_ARCH__ >= 800
 extern "C" void dequantize_1bit_u8_kernel_bf16(unsigned char* Wq_packed, __nv_bfloat16* scale, __nv_bfloat16* zero, __nv_bfloat16* W_r, int h, int w) { 
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_1bit_u8_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
 // //Shared
 // template <typename scalar_t>
@@ -301,16 +301,16 @@ extern "C" void dequantize_3bit_32_kernel_f32(int32_t* Wq_packed, float* scale, 
     dequantize_3bit_32_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
 
-#if __CUDA_ARCH__ >= 630
+//#if __CUDA_ARCH__ >= 630
 extern "C" void dequantize_3bit_32_kernel_f16(int32_t* Wq_packed, __half* scale, __half* zero, __half* W_r, int h, int w) {
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_3bit_32_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
 
-#if __CUDA_ARCH__ >= 800
+//#if __CUDA_ARCH__ >= 800
 extern "C" void dequantize_3bit_32_kernel_bf16(int32_t* Wq_packed, __nv_bfloat16* scale, __nv_bfloat16* zero, __nv_bfloat16* W_r, int h, int w) { 
     int blocks = cdiv(h*w, BLOCK_SIZE);
     dequantize_3bit_32_kernel<<<blocks, BLOCK_SIZE>>>(Wq_packed, scale, zero, W_r, h, w);
 }
-#endif
+//#endif
