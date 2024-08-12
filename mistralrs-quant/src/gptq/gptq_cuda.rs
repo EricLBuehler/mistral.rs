@@ -19,7 +19,7 @@ use half::f16;
 use lazy_static::lazy_static;
 
 use crate::{
-    util_cuda::{get_cuda_device, get_cuda_slice},
+    utils::{get_cuda_device, get_cuda_slice},
     QuantMethod, QuantMethodConfig,
 };
 

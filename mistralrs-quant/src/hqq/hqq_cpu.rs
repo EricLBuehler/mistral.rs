@@ -11,7 +11,7 @@ pub(crate) struct Dequant8Bit {
 impl Dequant8Bit {
     fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, w) in w.into_iter().enumerate() {
+        for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             out[i] = (T::from_f64(*w as f64) - z[j]) * s[j];
         }
@@ -40,15 +40,15 @@ impl CustomOp3 for Dequant8Bit {
         }
         match (s, z) {
             (CpuStorage::F32(s_slice), CpuStorage::F32(z_slice)) => Ok((
-                CpuStorage::F32(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F32(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[self.h, self.w]),
             )),
             (CpuStorage::F16(s_slice), CpuStorage::F16(z_slice)) => Ok((
-                CpuStorage::F16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[self.h, self.w]),
             )),
             (CpuStorage::BF16(s_slice), CpuStorage::BF16(z_slice)) => Ok((
-                CpuStorage::BF16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::BF16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[self.h, self.w]),
             )),
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
@@ -67,7 +67,7 @@ pub(crate) struct Dequant4Bit {
 impl Dequant4Bit {
     fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, w) in w.into_iter().enumerate() {
+        for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
             out[i] = (T::from_f64(((*w & 0xF0) >> 4) as f64) - z[j]) * s[j];
@@ -100,15 +100,15 @@ impl CustomOp3 for Dequant4Bit {
         }
         match (s, z) {
             (CpuStorage::F32(s_slice), CpuStorage::F32(z_slice)) => Ok((
-                CpuStorage::F32(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F32(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::F16(s_slice), CpuStorage::F16(z_slice)) => Ok((
-                CpuStorage::F16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::BF16(s_slice), CpuStorage::BF16(z_slice)) => Ok((
-                CpuStorage::BF16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::BF16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
@@ -127,7 +127,7 @@ pub(crate) struct Dequant2Bit {
 impl Dequant2Bit {
     fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, w) in w.into_iter().enumerate() {
+        for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
             out[i] = (T::from_f64(((*w & 0xC0) >> 6) as f64) - z[j]) * s[j];
@@ -162,15 +162,15 @@ impl CustomOp3 for Dequant2Bit {
         }
         match (s, z) {
             (CpuStorage::F32(s_slice), CpuStorage::F32(z_slice)) => Ok((
-                CpuStorage::F32(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F32(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::F16(s_slice), CpuStorage::F16(z_slice)) => Ok((
-                CpuStorage::F16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::BF16(s_slice), CpuStorage::BF16(z_slice)) => Ok((
-                CpuStorage::BF16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::BF16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
@@ -189,7 +189,7 @@ pub(crate) struct Dequant1Bit {
 impl Dequant1Bit {
     fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, w) in w.into_iter().enumerate() {
+        for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
             out[i] = (T::from_f64(((*w & 0x80) >> 7) as f64) - z[j]) * s[j];
@@ -228,15 +228,15 @@ impl CustomOp3 for Dequant1Bit {
         }
         match (s, z) {
             (CpuStorage::F32(s_slice), CpuStorage::F32(z_slice)) => Ok((
-                CpuStorage::F32(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F32(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::F16(s_slice), CpuStorage::F16(z_slice)) => Ok((
-                CpuStorage::F16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::BF16(s_slice), CpuStorage::BF16(z_slice)) => Ok((
-                CpuStorage::BF16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::BF16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
@@ -255,7 +255,7 @@ pub(crate) struct Dequant3Bit {
 impl Dequant3Bit {
     fn dequantize<T: WithDType>(&self, w: &[i32], s: &[T], z: &[T]) -> Vec<T> {
         let mut out = Vec::with_capacity(w.len());
-        for (i, w) in w.into_iter().enumerate() {
+        for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
             out[i] = (T::from_f64(((*w & 0x38000000) >> 27) as f64) - z[j]) * s[j];
@@ -296,15 +296,15 @@ impl CustomOp3 for Dequant3Bit {
         }
         match (s, z) {
             (CpuStorage::F32(s_slice), CpuStorage::F32(z_slice)) => Ok((
-                CpuStorage::F32(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F32(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::F16(s_slice), CpuStorage::F16(z_slice)) => Ok((
-                CpuStorage::F16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::F16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (CpuStorage::BF16(s_slice), CpuStorage::BF16(z_slice)) => Ok((
-                CpuStorage::BF16(self.dequantize(&w_slice, &s_slice, &z_slice)),
+                CpuStorage::BF16(self.dequantize(w_slice, s_slice, z_slice)),
                 Shape::from_dims(&[PACK_FACTOR * self.h, self.w]),
             )),
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),

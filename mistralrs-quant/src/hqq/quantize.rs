@@ -1,11 +1,6 @@
 use candle_core::{DType, Result, Tensor};
 
-use crate::hqq::hqq::HqqAxis;
-
-use super::{
-    hqq::{HqqConfig, HqqLayer},
-    optimize::OptParams,
-};
+use super::{optimize::OptParams, HqqAxis, HqqConfig, HqqLayer};
 
 impl HqqLayer {
     /// Quantize the model into HQQ>

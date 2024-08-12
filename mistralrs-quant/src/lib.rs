@@ -9,8 +9,7 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod unquantized;
-#[cfg(feature = "cuda")]
-mod util_cuda;
+mod utils;
 
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;

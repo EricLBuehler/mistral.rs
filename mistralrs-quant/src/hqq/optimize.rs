@@ -1,6 +1,6 @@
 use candle_core::{DType, Result, Tensor};
 
-use super::hqq::{HqqAxis, HqqLayer};
+use super::{HqqAxis, HqqLayer};
 
 pub(crate) struct OptParams {
     pub(crate) lp_norm: f64,

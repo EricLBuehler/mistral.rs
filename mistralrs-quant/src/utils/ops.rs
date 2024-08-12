@@ -6,7 +6,7 @@ use candle_core::{
 use std::ops::{BitOr, Shl};
 
 #[cfg(feature = "cuda")]
-use crate::util_cuda::ffi;
+use crate::utils::ffi;
 #[cfg(feature = "cuda")]
 use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
 #[cfg(feature = "cuda")]
@@ -297,7 +297,7 @@ impl LeftshiftOp for Tensor {
 mod tests {
     #[test]
     fn test_bitwise_or_cpu() {
-        use crate::util_cuda::ops::BitWiseOp;
+        use crate::utils::ops::BitWiseOp;
         use candle_core::Tensor;
         let device = candle_core::Device::Cpu;
         let a =
@@ -310,7 +310,7 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn test_bitwise_or_cuda() {
-        use crate::util_cuda::ops::BitWiseOp;
+        use crate::utils::ops::BitWiseOp;
         use candle_core::Tensor;
         let device = candle_core::Device::new_cuda(0).unwrap();
         let a =
