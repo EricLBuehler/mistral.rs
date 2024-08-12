@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc};
+use std::{fmt::Display, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
@@ -13,6 +13,7 @@ mod utils;
 
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
+use hqq::{HqqAxis, HqqBits};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
@@ -56,6 +57,16 @@ pub enum QuantMethodConfig {
         b: Option<Tensor>,
     },
     Unquantized(Linear),
+    Hqq {
+        tensor: Tensor,
+        bits: HqqBits,
+        group_size: NonZeroUsize,
+        axis: HqqAxis,
+        optimize: Option<bool>,
+        round_zero: Option<bool>,
+        channel_wise: Option<bool>,
+        bias: Option<Tensor>,
+    },
 }
 
 /// Quantized method for a quantized matmul.

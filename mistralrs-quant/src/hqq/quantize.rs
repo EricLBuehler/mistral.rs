@@ -82,8 +82,4 @@ impl HqqLayer {
             cfg,
         })
     }
-
-    pub fn add_bias(&mut self, bias: Tensor) {
-        self.bias = Some(bias);
-    }
 }

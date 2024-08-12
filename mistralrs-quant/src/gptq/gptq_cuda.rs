@@ -237,7 +237,9 @@ impl QuantMethod for GptqLayer {
                     bias,
                 })
             }
-            QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
+            QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Hqq { .. } => {
                 unreachable!()
             }
         }
@@ -273,7 +275,7 @@ impl QuantMethod for GptqLayer {
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
-        (self.q_weight.dtype(), self.q_weight.device().clone())
+        (self.gptq_scales.dtype(), self.gptq_scales.device().clone())
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {

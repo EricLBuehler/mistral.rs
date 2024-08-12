@@ -13,16 +13,9 @@ impl QuantMethod for UnquantLinear {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight: _, b: _ }
-            | QuantMethodConfig::Gptq {
-                bits: _,
-                use_exllama: _,
-                q_weight: _,
-                gptq_qzeros: _,
-                gptq_scales: _,
-                g_idx: _,
-                bias: _,
-            } => unreachable!(),
+            QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Hqq { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }

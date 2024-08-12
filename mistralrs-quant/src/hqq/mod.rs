@@ -66,13 +66,13 @@ macro_rules! dequant_for_dtype {
     }};
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum HqqAxis {
     Zero = 0,
     One = 1,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum HqqBits {
     Eight = 8,
     Four = 4,
@@ -465,6 +465,11 @@ impl HqqLayer {
             Ok(res)
         }
     }
+
+    pub fn with_bias(mut self, bias: Tensor) -> Self {
+        self.bias = Some(bias);
+        self
+    }
 }
 
 impl QuantMethod for HqqLayer {
@@ -473,18 +478,36 @@ impl QuantMethod for HqqLayer {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight: _, b: _ }
+            QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Gptq {
-                bits: _,
-                use_exllama: _,
-                q_weight: _,
-                gptq_qzeros: _,
-                gptq_scales: _,
-                g_idx: _,
-                bias: _,
-            } => {
+            | QuantMethodConfig::Gptq { .. } => {
                 unreachable!()
+            }
+            QuantMethodConfig::Hqq {
+                tensor,
+                bits,
+                group_size,
+                axis,
+                optimize,
+                round_zero,
+                channel_wise,
+                bias,
+            } => {
+                let cfg = HqqConfig {
+                    bits,
+                    group_size,
+                    axis,
+                    optimize: optimize.unwrap_or(false),
+                    round_zero: round_zero.unwrap_or(false),
+                    channel_wise: channel_wise.unwrap_or(true),
+                };
+
+                let this = Self::quantize(&tensor, cfg)?;
+                if let Some(bias) = bias {
+                    Ok(this.with_bias(bias))
+                } else {
+                    Ok(this)
+                }
             }
         }
     }
@@ -500,26 +523,26 @@ impl QuantMethod for HqqLayer {
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
-        todo!()
+        Some(self.scales.dtype())
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        candle_core::bail!("HQQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
-        todo!()
+        (self.scales.dtype(), self.scales.device().clone())
     }
 
     fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        todo!()
+        None
     }
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        todo!()
+        None
     }
 
     fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        candle_core::bail!("HQQ quantization does not support ISQ.")
     }
 }
