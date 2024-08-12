@@ -46,7 +46,12 @@ impl HqqLayer {
         let scale = (max_v / (max - &min)?)?.clamp(f64::MIN, 2e4)?;
         let mut zero = (min.neg()? * &scale)?;
 
-        // dbg!(&scale.squeeze(0)?.to_vec1::<f32>()?[0..5], &zero.squeeze(0)?.to_vec1::<f32>()?[0..5], &w.i(0)?.to_vec1::<f32>()?[0..5]);
+        use candle_core::IndexOp;
+        dbg!(
+            &scale.squeeze(0)?.to_vec1::<f32>()?[0..5],
+            &zero.squeeze(0)?.to_vec1::<f32>()?[0..5],
+            &w.i(0)?.to_vec1::<f32>()?[0..5]
+        );
 
         if cfg.round_zero {
             zero = zero.round()?;

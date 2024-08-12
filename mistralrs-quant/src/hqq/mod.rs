@@ -39,9 +39,9 @@ pub(crate) const ISQ_HQQ_GROUP_SIZE: usize = 64;
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
         paste::paste! {
-            let w_slice = get_cuda_slice::<$wq_t>(&$this.w_q);
-            let scale_slice = get_cuda_slice::<$scale_t>(&$this.scales);
-            let zero_slice = get_cuda_slice::<$scale_t>(&$this.zeros);
+            let w_slice = get_cuda_slice::<$wq_t>(&$this.w_q)?;
+            let scale_slice = get_cuda_slice::<$scale_t>(&$this.scales)?;
+            let zero_slice = get_cuda_slice::<$scale_t>(&$this.zeros)?;
 
             let (h, w) = $this.w_q.dims2()?;
             let num_packed_elems = $pack;
@@ -264,7 +264,7 @@ impl HqqLayer {
                 self.cfg.axis as usize
             );
         }
-        let dev = get_cuda_device(&self.w_q);
+        let dev = get_cuda_device(&self.w_q)?;
 
         let inner = match (self.cfg.bits as usize, self.scales.dtype()) {
             // 8 bits

@@ -55,13 +55,13 @@ impl GptqLayer {
                 a.layout().stride()
             )
         }
-        let a_ptr = get_cuda_slice::<f16>(&a);
-        let b_q_weight = get_cuda_slice::<i32>(&self.q_weight) as *const u32;
-        let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros) as *const u32;
-        let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales);
-        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx);
+        let a_ptr = get_cuda_slice::<f16>(&a)?;
+        let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
+        let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros)? as *const u32;
+        let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales)?;
+        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx)?;
 
-        let dev = get_cuda_device(&a);
+        let dev = get_cuda_device(&a)?;
 
         let c_shape = Shape::from_dims(&[a.dims()[0], self.q_weight.dims()[1]]);
 
@@ -218,7 +218,7 @@ impl QuantMethod for GptqLayer {
                 g_idx,
                 bias,
             } => {
-                let dev = get_cuda_device(&g_idx);
+                let dev = get_cuda_device(&g_idx)?;
                 let len = (q_weight.dims()[0] * 32 / bits as usize) * q_weight.dims()[1];
                 // SAFETY: used in the kernel as a tmp space, just preallocating it here.
                 if let std::collections::hash_map::Entry::Vacant(e) =
