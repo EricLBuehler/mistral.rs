@@ -177,8 +177,8 @@ impl Leftshift {
     fn leftshift<T: WithDType + Shl<Output = T>>(&self, vs: &[T]) -> Vec<T> {
         let n = vs.len();
         let mut result = Vec::with_capacity(n);
-        for i in 0..n {
-            result.push(vs[i] << T::from_f64(self.0 as f64));
+        for v in vs {
+            result.push(*v << T::from_f64(self.0 as f64));
         }
         result
     }

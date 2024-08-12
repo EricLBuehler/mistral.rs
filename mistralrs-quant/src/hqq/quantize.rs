@@ -32,7 +32,7 @@ impl HqqLayer {
             // TODO we need min_all
             let mut min = w.min(0)?;
             let mut max = w.max(0)?;
-            while min.dims().len() > 0 {
+            while !min.dims().is_empty() {
                 min = min.min(0)?;
                 max = max.min(0)?;
             }

@@ -222,11 +222,10 @@ impl QuantMethod for GptqLayer {
                 let dev = get_cuda_device(&g_idx);
                 let len = (q_weight.dims()[0] * 32 / bits as usize) * q_weight.dims()[1];
                 // SAFETY: used in the kernel as a tmp space, just preallocating it here.
-                if !TMP_DQS.lock().unwrap().contains_key(&len) {
-                    TMP_DQS
-                        .lock()
-                        .unwrap()
-                        .insert(len, unsafe { dev.alloc::<f16>(len).w()? });
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    TMP_DQS.lock().unwrap().entry(len)
+                {
+                    e.insert(unsafe { dev.alloc::<f16>(len).w()? });
                 }
                 Ok(Self {
                     q_weight,
