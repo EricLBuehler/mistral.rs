@@ -1,5 +1,7 @@
 use candle_core::{DType, Result, Tensor};
 
+use crate::hqq::optimize::OptResults;
+
 use super::{optimize::OptParams, HqqAxis, HqqConfig, HqqLayer};
 
 impl HqqLayer {
@@ -43,42 +45,45 @@ impl HqqLayer {
 
         // Note: here using the inverse of the scale to avoid division, quantize via W * scale + zero, scale is inverted later!
         // Clamp to avoid half precision problems
-        let scale = (max_v / (max - &min)?)?.clamp(f64::MIN, 2e4)?;
+        let scale = (max_v / (max - &min)?)?.clamp(0., 2e4)?;
         let mut zero = (min.neg()? * &scale)?;
 
-        use candle_core::IndexOp;
-        dbg!(
-            &scale.squeeze(0)?.to_vec1::<f32>()?[0..5],
-            &zero.squeeze(0)?.to_vec1::<f32>()?[0..5],
-            &w.i(0)?.to_vec1::<f32>()?[0..5]
-        );
-
-        if cfg.round_zero {
+        if cfg.round_zeros {
             zero = zero.round()?;
         }
 
-        let (quant_w, scale, zero) = if cfg.optimize {
+        // We only support using optimization!
+        /*let (quant_w, scale, zero) = if let Some(optimization_steps) = cfg.optimization_steps {
             let result = Self::optimize_weights_proximal_legacy(
                 &w,
                 &scale,
                 zero,
-                f64::MIN,
+                0.,
                 max_v,
                 cfg.axis,
-                OptParams::default(),
+                OptParams::default(optimization_steps),
             )?;
             (result.wq, result.scale, result.zero)
         } else {
             (
                 w.broadcast_mul(&scale)?
                     .broadcast_add(&zero)?
-                    .clamp(f64::MIN, max_v)?,
+                    .clamp(0., max_v)?,
                 scale,
                 zero,
             )
-        };
+        };*/
+        let OptResults { wq, scale, zero } = Self::optimize_weights_proximal_legacy(
+            &w,
+            &scale,
+            zero,
+            0.,
+            max_v,
+            cfg.axis,
+            OptParams::default(cfg.optimization_steps),
+        )?;
 
-        let quant_w = cfg.bits.bitpack_type()(quant_w)?;
+        let quant_w = cfg.bits.bitpack_type()(wq)?;
 
         let this = Self {
             w_q: quant_w,
@@ -103,32 +108,29 @@ mod test {
 
         use crate::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 
-        let data =
-            Tensor::randn(0., 1., (32, 32, 32), &Device::new_cuda(0)?)?.to_dtype(DType::F32)?;
+        let data = Tensor::rand(0., 1., (32, 2), &Device::new_cuda(0)?)?.to_dtype(DType::F32)?;
         let hqq = HqqLayer::quantize(
             &data,
             HqqConfig {
-                bits: HqqBits::Four,
-                group_size: 64.try_into()?,
+                bits: HqqBits::Eight,
+                group_size: 4.try_into()?,
                 axis: HqqAxis::Zero,
-                optimize: false,
-                round_zero: false,
+                optimization_steps: None,
+                round_zeros: false,
                 channel_wise: true,
             },
         )?;
 
         let dequant = hqq.dequantize()?;
-        let abs_diff = (dequant - &data)?.abs()?.to_vec3::<f32>()?;
-        let range = 1e-05;
+        let abs_diff = (dequant - &data)?.abs()?.to_vec2::<f32>()?;
+        let range = 1e-010;
 
         let mut exceedences = Vec::new();
         abs_diff.iter().for_each(|x| {
             x.into_iter().for_each(|y| {
-                y.into_iter().for_each(|x| {
-                    if *x > range {
-                        exceedences.push(*x);
-                    }
-                })
+                if *y > range {
+                    exceedences.push(*y);
+                }
             })
         });
         if !exceedences.is_empty() {

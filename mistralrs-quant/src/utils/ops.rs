@@ -238,7 +238,10 @@ impl CustomOp1 for Leftshift {
         let dev = s1.device().clone();
         let (d_in1_ptr, elem_count) = match s1.dtype() {
             DType::U8 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<u8>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<u8>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, elem_count)
             }
@@ -249,7 +252,10 @@ impl CustomOp1 for Leftshift {
                 return Err(Error::UnsupportedDTypeForOp(DType::I64, "leftshift"));
             }
             DType::I32 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<i32>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, elem_count)
             }
@@ -363,5 +369,27 @@ mod tests {
         let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitwise_or_and_leftshift_cuda() {
+        use crate::utils::{ops::BitWiseOp, LeftshiftOp};
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_cuda(0).unwrap();
+        let a = Tensor::from_vec(vec![0b00001111u8], (1,), &device).unwrap();
+        let b = Tensor::from_vec(vec![0b00001111u8], (1,), &device).unwrap();
+        let c = a
+            .leftshift(4)
+            .unwrap()
+            .bitwise_or(&b)
+            .unwrap()
+            .to_vec1::<u8>()
+            .unwrap();
+        let av = a.to_vec1::<u8>().unwrap();
+        let bv = b.to_vec1::<u8>().unwrap();
+        assert_eq!(av, [0b00001111]);
+        assert_eq!(bv, [0b00001111]);
+        assert_eq!(c, [0b11111111]);
     }
 }

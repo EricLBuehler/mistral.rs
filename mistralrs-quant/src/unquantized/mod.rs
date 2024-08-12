@@ -5,7 +5,7 @@ use candle_nn::{Linear, Module};
 
 use crate::{
     generate_isq,
-    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_GROUP_SIZE},
+    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
 };
 
@@ -68,8 +68,8 @@ impl QuantMethod for UnquantLinear {
                 bits,
                 group_size: ISQ_HQQ_GROUP_SIZE.try_into()?,
                 axis: HqqAxis::Zero,
-                optimize: false,
-                round_zero: false,
+                optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
+                round_zeros: false,
                 channel_wise: true,
             };
             let res = HqqLayer::quantize(&self.0.weight().to_device(&device)?, cfg)?;

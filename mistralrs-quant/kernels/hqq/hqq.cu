@@ -70,6 +70,8 @@ __global__ void dequantize_4bit_u8_kernel(unsigned char* Wq_packed, T* scale, T*
 	if(i>=n) return;
 
 	int j      = i % w;
+	//W_r[i]     = (T)((Wq_packed[i] & 0xF0) >> 4);//((T)((Wq_packed[i] & 0xF0) >> 4) - zero[j])*scale[j];  //First chunk
+	//W_r[i + n] = (T)((Wq_packed[i] & 0x0F)) + (T)10000;//((T)((Wq_packed[i] & 0x0F))      - zero[j])*scale[j];  //Second chunk
 	W_r[i]     = ((T)((Wq_packed[i] & 0xF0) >> 4) - zero[j])*scale[j];  //First chunk
 	W_r[i + n] = ((T)((Wq_packed[i] & 0x0F))      - zero[j])*scale[j];  //Second chunk
 }

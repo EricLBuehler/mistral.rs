@@ -34,6 +34,8 @@ mod optimize;
 mod quantize;
 
 pub(crate) const ISQ_HQQ_GROUP_SIZE: usize = 64;
+pub(crate) const ISQ_HQQ_DEFAULT_OPT_STEPS: Option<usize> = Some(10);
+pub(crate) const OPTIMIZER_HQQ_DEFAULT_STEPS: usize = 20;
 
 #[cfg(feature = "cuda")]
 macro_rules! dequant_for_dtype {
@@ -179,8 +181,8 @@ pub struct HqqConfig {
     pub bits: HqqBits,
     pub group_size: NonZeroUsize,
     pub axis: HqqAxis,
-    pub optimize: bool,     // default false
-    pub round_zero: bool,   // default false
+    pub optimization_steps: Option<usize>,
+    pub round_zeros: bool,  // default false
     pub channel_wise: bool, // default true
 }
 
@@ -502,8 +504,8 @@ impl QuantMethod for HqqLayer {
                 bits,
                 group_size,
                 axis,
-                optimize,
-                round_zero,
+                optimization_steps,
+                round_zeros,
                 channel_wise,
                 bias,
             } => {
@@ -511,8 +513,8 @@ impl QuantMethod for HqqLayer {
                     bits,
                     group_size,
                     axis,
-                    optimize: optimize.unwrap_or(false),
-                    round_zero: round_zero.unwrap_or(false),
+                    optimization_steps,
+                    round_zeros: round_zeros.unwrap_or(false),
                     channel_wise: channel_wise.unwrap_or(true),
                 };
 
@@ -571,8 +573,8 @@ impl QuantMethod for HqqLayer {
             bits,
             group_size: ISQ_HQQ_GROUP_SIZE.try_into()?,
             axis: HqqAxis::Zero,
-            optimize: false,
-            round_zero: false,
+            optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
+            round_zeros: false,
             channel_wise: true,
         };
         let dequant = self.dequantize()?.to_device(&device)?;
