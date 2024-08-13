@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
@@ -94,6 +97,17 @@ impl QuantMethod for UnquantLinear {
             })?))
         } else {
             candle_core::bail!("Unsupported dtype for ISQ on UnquantLinear {dtype:?}")
+        }
+    }
+
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
+        if dtype.is_hqq() {
+            // Use 1 because our HQQ quantizes on the GPU
+            Some(1.try_into().unwrap())
+        } else if dtype.is_gguf() {
+            None
+        } else {
+            unreachable!()
         }
     }
 }

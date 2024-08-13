@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul},
@@ -108,5 +111,9 @@ impl QuantMethod for GgufMatMul {
             q_weight: res,
             b: self.b.clone(),
         })?))
+    }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
+        None
     }
 }

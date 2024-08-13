@@ -82,10 +82,22 @@ pub trait IsqModel {
             let t_start = Instant::now();
             #[cfg(not(feature = "metal"))]
             {
-                info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+                let current_rayon_threads = rayon::current_num_threads();
+                // Get the MINIMUM of the max isq threads the quant method allows
+                let minimum_max_threads = tensors
+                    .iter()
+                    .map(|(q, _)| {
+                        q.get_max_isq_cpu_threads(dtype)
+                            .map(|x| usize::from(x))
+                            .unwrap_or(current_rayon_threads)
+                    })
+                    .min()
+                    .unwrap_or(current_rayon_threads);
+
+                info!("Applying ISQ on {minimum_max_threads} threads.");
 
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(1)
+                    .num_threads(minimum_max_threads)
                     .build()
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 

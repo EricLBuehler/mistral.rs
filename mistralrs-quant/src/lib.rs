@@ -177,6 +177,8 @@ pub trait QuantMethod: Send + Sync + Debug {
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
+
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 }
 
 macro_rules! pack_factor {

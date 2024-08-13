@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
@@ -288,5 +289,9 @@ impl QuantMethod for GptqLayer {
         _n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
+    }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
+        None
     }
 }

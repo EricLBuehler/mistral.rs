@@ -588,4 +588,9 @@ impl QuantMethod for HqqLayer {
             Ok(Arc::new(res))
         }
     }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
+        // Use 1 because we quantize on the GPU
+        Some(1.try_into().unwrap())
+    }
 }
