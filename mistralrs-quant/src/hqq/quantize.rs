@@ -1,18 +1,18 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 
 use crate::hqq::optimize::OptResults;
 
 use super::{optimize::OptParams, HqqAxis, HqqConfig, HqqLayer};
 
 impl HqqLayer {
-    /// Quantize the model into HQQ>
-    pub fn quantize(input: &Tensor, cfg: HqqConfig) -> Result<Self> {
+    /// Quantize the model into HQQ
+    pub fn quantize(input: &Tensor, device: &Device, cfg: HqqConfig) -> Result<Self> {
         let group_size: usize = cfg.group_size.into();
         if input.elem_count() % group_size != 0 {
             candle_core::bail!("`group_size` should be divisible by the tensor number of elements, which are {}, got a group size of {group_size}.", input.elem_count());
         }
 
-        let mut w = input.to_dtype(DType::F32)?;
+        let mut w = input.clone();
 
         // Reshape for grouping
         w = if cfg.channel_wise {
@@ -83,12 +83,12 @@ impl HqqLayer {
             OptParams::default(cfg.optimization_steps),
         )?;
 
-        let quant_w = cfg.bits.bitpack_type()(wq)?;
+        let quant_w = cfg.bits.bitpack_type()(wq)?.to_device(device)?;
 
         let this = Self {
             w_q: quant_w,
-            zeros: zero,
-            scales: (1.0 / scale)?,
+            zeros: zero.to_device(device)?,
+            scales: (1.0 / scale)?.to_device(device)?,
             bias: None,
             w_shape: input.shape().clone(),
             cfg,
@@ -108,10 +108,11 @@ mod test {
 
         use crate::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 
-        let data =
-            Tensor::rand(0., 1., (3072, 3072), &Device::new_cuda(0)?)?.to_dtype(DType::F32)?;
+        let dev = Device::new_cuda(0)?;
+        let data = Tensor::rand(0., 1., (3072, 3072), &dev)?.to_dtype(DType::F32)?;
         let hqq = HqqLayer::quantize(
             &data,
+            &dev,
             HqqConfig {
                 bits: HqqBits::Two,
                 group_size: 64.try_into()?,

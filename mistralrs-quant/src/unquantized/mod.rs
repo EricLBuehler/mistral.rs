@@ -72,7 +72,7 @@ impl QuantMethod for UnquantLinear {
                 round_zeros: false,
                 channel_wise: true,
             };
-            let res = HqqLayer::quantize(&self.0.weight().to_device(&device)?, cfg)?;
+            let res = HqqLayer::quantize(&self.0.weight().to_device(&device)?, &device, cfg)?;
             if let Some(bias) = self.0.bias() {
                 let bias = bias
                     .to_device(&device)?

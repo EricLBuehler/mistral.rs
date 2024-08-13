@@ -2,6 +2,7 @@ use candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
     Tensor, WithDType,
 };
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
 use std::ops::{BitOr, Shl};
 
@@ -16,15 +17,10 @@ struct BitWiseOr;
 
 impl BitWiseOr {
     fn bitwise<T: WithDType + BitOr<Output = T>>(&self, vs1: &[T], vs2: &[T]) -> Vec<T> {
-        let n = vs1.len();
-        let mut result = Vec::with_capacity(n);
-        for i in 0..n {
-            let v1 = vs1[i];
-            let v2 = vs2[i];
-            let r = v1 | v2;
-            result.push(r);
-        }
-        result
+        vs1.into_par_iter()
+            .zip_eq(vs2)
+            .map(|(v1, v2)| *v1 | *v2)
+            .collect()
     }
 }
 
@@ -56,8 +52,7 @@ impl CustomOp2 for BitWiseOr {
         }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let vs2 = &s2.as_slice::<u8>().unwrap()[l2.start_offset()..];
-                let vs1 = &vs1[l1.start_offset()..];
+                let vs2 = &s2.as_slice::<u8>().unwrap();
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
@@ -65,8 +60,7 @@ impl CustomOp2 for BitWiseOr {
             CpuStorage::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "bitwise-or")),
             CpuStorage::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "bitwise-or")),
             CpuStorage::I32(vs1) => {
-                let vs2 = &s2.as_slice::<i32>().unwrap()[l2.start_offset()..];
-                let vs1 = &vs1[l1.start_offset()..];
+                let vs2 = &s2.as_slice::<i32>().unwrap();
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
@@ -199,12 +193,8 @@ struct Leftshift(usize);
 
 impl Leftshift {
     fn leftshift<T: WithDType + Shl<Output = T>>(&self, vs: &[T]) -> Vec<T> {
-        let n = vs.len();
-        let mut result = Vec::with_capacity(n);
-        for v in vs {
-            result.push(*v << T::from_f64(self.0 as f64));
-        }
-        result
+        let offset = T::from_f64(self.0 as f64);
+        vs.into_par_iter().map(|v| *v << offset).collect()
     }
 }
 

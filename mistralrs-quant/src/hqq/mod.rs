@@ -518,7 +518,7 @@ impl QuantMethod for HqqLayer {
                     channel_wise: channel_wise.unwrap_or(true),
                 };
 
-                let this = Self::quantize(&tensor, cfg)?;
+                let this = Self::quantize(&tensor, tensor.device(), cfg)?;
                 if let Some(bias) = bias {
                     Ok(this.with_bias(bias))
                 } else {
@@ -577,8 +577,8 @@ impl QuantMethod for HqqLayer {
             round_zeros: false,
             channel_wise: true,
         };
-        let dequant = self.dequantize()?.to_device(&device)?;
-        let res = Self::quantize(&dequant, cfg)?;
+        let dequant = self.dequantize()?;
+        let res = Self::quantize(&dequant, &device, cfg)?;
         if let Some(ref bias) = self.bias {
             let bias = bias
                 .to_device(&device)?

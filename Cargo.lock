@@ -2437,6 +2437,7 @@ dependencies = [
  "half",
  "lazy_static",
  "paste",
+ "rayon",
  "serde",
  "tracing",
 ]

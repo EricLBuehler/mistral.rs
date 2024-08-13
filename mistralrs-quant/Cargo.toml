@@ -19,6 +19,7 @@ serde.workspace = true
 lazy_static = "1.4"
 paste = "1.0.15"
 tracing.workspace = true
+rayon.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]

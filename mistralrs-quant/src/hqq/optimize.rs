@@ -56,9 +56,9 @@ impl HqqLayer {
             iters,
         } = opt_params;
 
-        let wf = tensor.to_dtype(DType::F32)?;
-        let scale = scale.to_dtype(DType::F32)?;
-        let mut zero = zero.to_dtype(DType::F32)?;
+        let wf = tensor.clone();
+        let scale = scale.to_dtype(wf.dtype())?;
+        let mut zero = zero.to_dtype(wf.dtype())?;
 
         let mut best_error = 1e4;
         for _ in 0..iters {

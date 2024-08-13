@@ -84,22 +84,28 @@ pub trait IsqModel {
             {
                 info!("Applying ISQ on {} threads.", rayon::current_num_threads());
 
-                use indicatif::ParallelProgressIterator;
-                use indicatif::ProgressIterator;
-                use rayon::iter::{
-                    IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
-                };
-                tensors
-                    .into_iter() //into_par_iter()
-                    .zip(devices)
-                    .progress_with(bar)
-                    .for_each(|((tensor, _), device)| {
-                        *tensor = tensor
-                            .clone()
-                            .apply_isq(dtype, device.clone(), &n_quantized)
-                            .unwrap();
-                        device.synchronize().unwrap();
-                    });
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+                pool.install(|| {
+                    use indicatif::ParallelProgressIterator;
+                    use rayon::iter::{
+                        IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
+                    };
+                    tensors
+                        .into_par_iter()
+                        .zip(devices)
+                        .progress_with(bar)
+                        .for_each(|((tensor, _), device)| {
+                            *tensor = tensor
+                                .clone()
+                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .unwrap();
+                            device.synchronize().unwrap();
+                        });
+                });
             }
 
             #[cfg(feature = "metal")]
