@@ -698,6 +698,7 @@ impl IsqModel for Model {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)

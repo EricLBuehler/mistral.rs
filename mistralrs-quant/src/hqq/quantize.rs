@@ -108,7 +108,8 @@ mod test {
 
         use crate::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 
-        let data = Tensor::rand(0., 1., (3072, 3072), &Device::new_cuda(0)?)?.to_dtype(DType::F32)?;
+        let data =
+            Tensor::rand(0., 1., (3072, 3072), &Device::new_cuda(0)?)?.to_dtype(DType::F32)?;
         let hqq = HqqLayer::quantize(
             &data,
             HqqConfig {

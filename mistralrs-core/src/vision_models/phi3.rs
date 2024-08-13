@@ -3,12 +3,11 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{
-    quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
-    Tensor, D,
+    shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
 use candle_nn::{linear_b, linear_no_bias, VarBuilder};
 use either::Either;
-use mistralrs_quant::{QuantMethod, QuantizedConfig};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
@@ -855,7 +854,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -934,7 +933,7 @@ impl Model {
             vision_embed_tokens,
             layers,
             norm,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
@@ -998,10 +997,10 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
@@ -1013,6 +1012,7 @@ impl IsqModel for Model {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));

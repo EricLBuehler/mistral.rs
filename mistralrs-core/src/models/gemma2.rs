@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantizedConfig};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
     amoe::{
@@ -482,7 +482,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     hidden_size: usize,
     pub device: Device,
     pub cache: Cache,
@@ -552,15 +552,17 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+        let lm_head = mapper.cast_nm_device(
             embed_tokens.embeddings(),
             normal_loading_metadata.loading_isq,
-        )?);
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(lm_head, None),
+            ))?),
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -621,11 +623,11 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
 
-        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+        let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = (xs / final_logit_softcapping)?;
@@ -645,6 +647,7 @@ impl IsqModel for Model {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));

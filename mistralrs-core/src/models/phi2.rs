@@ -10,7 +10,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_quant::{QuantMethod, QuantizedConfig};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, MatMul, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -403,7 +403,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: QLinear,
+    lm_head: Arc<dyn QuantMethod>,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -491,7 +491,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
@@ -542,10 +542,10 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.final_layernorm)?;
-        if self.lm_head.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
@@ -557,6 +557,7 @@ impl IsqModel for Model {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((&mut layer.self_attn.q_proj, Some(i)));
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));

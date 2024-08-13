@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantizedConfig};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -386,7 +386,7 @@ pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     pub kv_cache: crate::pipeline::Cache,
     pub device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -429,11 +429,11 @@ impl Llama {
         }
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
-        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
-        extract_logits(&logits, context_lens)
+        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        extract_logits(&xs, context_lens)
     }
 
     pub fn new(
@@ -459,7 +459,7 @@ impl Llama {
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = candle_nn::linear(
+        let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
@@ -513,7 +513,7 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,
@@ -536,6 +536,7 @@ impl IsqModel for Llama {
         &dyn DeviceMapper,
     ) {
         let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
             tensors.push((&mut layer.attn.q_proj, Some(i)));
             tensors.push((&mut layer.attn.k_proj, Some(i)));
