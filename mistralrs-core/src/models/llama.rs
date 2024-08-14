@@ -428,7 +428,8 @@ impl Llama {
         let num_devices = 1;
         let chunk_size = seq_len / num_devices;
 
-        let mut chunks = Vec::new();
+        // let mut chunks = Vec::new();
+        let mut chunks = Vec<Tensor>;
         // let chunk = x.clone();
         // chunks.push(chunk.to_device(&self.cuda_devices[0])?);
         chunks.push(&x);
