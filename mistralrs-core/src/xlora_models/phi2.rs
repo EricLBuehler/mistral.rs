@@ -17,10 +17,11 @@ use crate::{
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
+use mistralrs_quant::QuantMethod;
 use tqdm::Iter;
 use tracing::info;
 
@@ -690,65 +691,45 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        if let Some(x) = Arc::get_mut(&mut self.lm_head).unwrap().inner() {
-            tensors.push((x, None));
-        }
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            if let Some(x) = Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-            if let Some(x) = Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-            if let Some(x) = Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-            if let Some(x) = Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-            if let Some(x) = Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-            if let Some(x) = Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner() {
-                tensors.push((x, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().bias_mut(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.v_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.self_attn.dense)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc1).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc1).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc2).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc2).unwrap().quant_inner(),
                 Some(i),
             ));
         }

@@ -2437,7 +2437,10 @@ dependencies = [
  "candle-nn",
  "half",
  "lazy_static",
+ "paste",
+ "rayon",
  "serde",
+ "tracing",
 ]
 
 [[package]]

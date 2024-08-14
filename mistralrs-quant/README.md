@@ -4,7 +4,7 @@ Quantization techniques for mistral.rs. This implements a common trait for all q
 
 Currently supported:
 - GGUF: `GgufMatMul`
-- Gptq: `GptqMatMul`
+- Gptq: `GptqLayer`
 
 Some kernels are copied or based on implementations in:
 - https://github.com/vllm-project/vllm

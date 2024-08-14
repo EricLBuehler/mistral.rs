@@ -5,12 +5,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use candle_core::{quantized::GgmlDType, Device};
+use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
-    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
     PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -102,7 +102,7 @@ struct Args {
 
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<GgmlDType>,
+    in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is only supported on CUDA and is always automatically activated.

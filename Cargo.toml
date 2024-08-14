@@ -45,6 +45,7 @@ image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds'
 reqwest = { version = "0.12.4", features = ["blocking"] }
 base64 = "0.22.1"
 half = "2.4.0"
+rayon = "1.1.0"
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]

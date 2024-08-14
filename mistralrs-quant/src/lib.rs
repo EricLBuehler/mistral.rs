@@ -1,16 +1,21 @@
-use std::{fmt::Display, sync::Arc};
+use std::{
+    fmt::{Debug, Display},
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
 };
 
 mod gguf;
 mod gptq;
 mod unquantized;
+mod utils;
 
 pub use gguf::GgufMatMul;
-pub use gptq::GptqMatMul;
+pub use gptq::GptqLayer;
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
@@ -56,8 +61,45 @@ pub enum QuantMethodConfig {
     Unquantized(Linear),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IsqType {
+    Q4_0,
+    Q4_1,
+    Q5_0,
+    Q5_1,
+    Q8_0,
+    Q8_1,
+    Q2K,
+    Q3K,
+    Q4K,
+    Q5K,
+    Q6K,
+    Q8K,
+}
+
+impl TryFrom<IsqType> for GgmlDType {
+    type Error = candle_core::Error;
+
+    fn try_from(value: IsqType) -> Result<Self> {
+        match value {
+            IsqType::Q2K => Ok(Self::Q2K),
+            IsqType::Q3K => Ok(Self::Q3K),
+            IsqType::Q4K => Ok(Self::Q4K),
+            IsqType::Q4_0 => Ok(Self::Q4_0),
+            IsqType::Q4_1 => Ok(Self::Q4_1),
+            IsqType::Q5K => Ok(Self::Q5K),
+            IsqType::Q5_0 => Ok(Self::Q5_0),
+            IsqType::Q5_1 => Ok(Self::Q5_1),
+            IsqType::Q6K => Ok(Self::Q6K),
+            IsqType::Q8K => Ok(Self::Q8K),
+            IsqType::Q8_0 => Ok(Self::Q8_0),
+            IsqType::Q8_1 => Ok(Self::Q8_1),
+        }
+    }
+}
+
 /// Quantized method for a quantized matmul.
-pub trait QuantMethod: Send + Sync {
+pub trait QuantMethod: Send + Sync + Debug {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;
@@ -81,13 +123,17 @@ pub trait QuantMethod: Send + Sync {
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul>;
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: IsqType,
+        device: Device,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
-    /// Convert this layer to an ISQ-able layer if possible.
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 }
 
 macro_rules! pack_factor {
@@ -185,5 +231,5 @@ pub fn gptq_linear(
         g_idx,
         bias,
     };
-    Ok(Arc::new(GptqMatMul::new(config)?))
+    Ok(Arc::new(GptqLayer::new(config)?))
 }

@@ -2,12 +2,10 @@
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{
-    quantized::{QMatMul, QTensor},
-    DType, IndexOp, Result, Tensor, D,
-};
+use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
+use mistralrs_quant::QuantMethod;
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
 
@@ -99,11 +97,10 @@ fn make_adapter(
 /// Any layer that is linear-like.
 pub trait LinearLayerLike: Merge + AdapterSwapper {
     fn quantized_act_type(&self) -> Option<DType>;
-    fn inner(&mut self) -> Option<&mut QMatMul>;
+    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod>;
     fn is_lora(&self) -> bool;
     fn weight(&self) -> &Tensor;
     fn bias(&self) -> Option<&Tensor>;
-    fn bias_mut(&mut self) -> Option<&mut Tensor>;
     fn lora_forward(
         &self,
         x: &Tensor,
@@ -155,11 +152,8 @@ impl LinearLayerLike for Linear {
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
     }
-    fn inner(&mut self) -> Option<&mut QMatMul> {
-        None
-    }
-    fn bias_mut(&mut self) -> Option<&mut Tensor> {
-        unreachable!()
+    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
+        unimplemented!("Linear layer has no reasonable quant inner!")
     }
     fn weight(&self) -> &Tensor {
         self.weight()

@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
-use candle_core::{quantized::QMatMul, DType, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
-use crate::{GgufMatMul, QuantMethod, QuantMethodConfig};
+use crate::{generate_isq, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig};
 
+#[derive(Debug)]
 pub struct UnquantLinear(Linear);
 
 impl QuantMethod for UnquantLinear {
@@ -13,16 +17,7 @@ impl QuantMethod for UnquantLinear {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight: _, b: _ }
-            | QuantMethodConfig::Gptq {
-                bits: _,
-                use_exllama: _,
-                q_weight: _,
-                gptq_qzeros: _,
-                gptq_scales: _,
-                g_idx: _,
-                bias: _,
-            } => unreachable!(),
+            QuantMethodConfig::Gguf { .. } | QuantMethodConfig::Gptq { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }
@@ -46,21 +41,57 @@ impl QuantMethod for UnquantLinear {
         (self.0.weight().dtype(), self.0.weight().device().clone())
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        let w = self.0.weight().clone();
-        let b = self.0.bias().cloned();
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: IsqType,
+        device: Device,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        match dtype {
+            IsqType::Q2K
+            | IsqType::Q3K
+            | IsqType::Q4K
+            | IsqType::Q4_0
+            | IsqType::Q4_1
+            | IsqType::Q5K
+            | IsqType::Q5_0
+            | IsqType::Q5_1
+            | IsqType::Q6K
+            | IsqType::Q8K
+            | IsqType::Q8_0
+            | IsqType::Q8_1 => {
+                let dtype = dtype.try_into()?;
+                let res = generate_isq!(self.0.weight(), device, dtype, n_quantized);
+                Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: res,
+                    b: self
+                        .0
+                        .bias()
+                        .cloned()
+                        .map(|b| b.to_dtype(DType::F32).unwrap()),
+                })?))
+            }
+        }
+    }
 
-        Ok(Arc::new(GgufMatMul {
-            w: QMatMul::Tensor(w),
-            b,
-        }))
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
+        match dtype {
+            IsqType::Q2K
+            | IsqType::Q3K
+            | IsqType::Q4K
+            | IsqType::Q4_0
+            | IsqType::Q4_1
+            | IsqType::Q5K
+            | IsqType::Q5_0
+            | IsqType::Q5_1
+            | IsqType::Q6K
+            | IsqType::Q8K
+            | IsqType::Q8_0
+            | IsqType::Q8_1 => None,
+        }
     }
 }
