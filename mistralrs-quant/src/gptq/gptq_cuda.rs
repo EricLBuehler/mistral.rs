@@ -2,8 +2,6 @@ use std::{
     collections::HashMap,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex},
-    num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
 use candle_core::{

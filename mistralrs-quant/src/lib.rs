@@ -3,11 +3,6 @@ use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
-use std::{
-    fmt::{Debug, Display},
-    num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
-};
 
 use candle_core::{
     quantized::{GgmlDType, QTensor},
@@ -18,7 +13,6 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod unquantized;
-mod utils;
 mod utils;
 
 pub use gguf::GgufMatMul;
@@ -100,33 +94,6 @@ pub enum IsqType {
     HQQ1,
 }
 
-impl IsqType {
-    pub fn is_hqq(&self) -> bool {
-        matches!(
-            self,
-            Self::HQQ1 | Self::HQQ2 | Self::HQQ3 | Self::HQQ4 | Self::HQQ8
-        )
-    }
-
-    pub fn is_gguf(&self) -> bool {
-        matches!(
-            self,
-            Self::Q2K
-                | Self::Q3K
-                | Self::Q4K
-                | Self::Q4_0
-                | Self::Q4_1
-                | Self::Q5K
-                | Self::Q5_0
-                | Self::Q5_1
-                | Self::Q6K
-                | Self::Q8K
-                | Self::Q8_0
-                | Self::Q8_1
-        )
-    }
-}
-
 impl TryFrom<IsqType> for GgmlDType {
     type Error = candle_core::Error;
 
@@ -145,43 +112,6 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8_0 => Ok(Self::Q8_0),
             IsqType::Q8_1 => Ok(Self::Q8_1),
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum IsqType {
-    Q4_0,
-    Q4_1,
-    Q5_0,
-    Q5_1,
-    Q8_0,
-    Q8_1,
-    Q2K,
-    Q3K,
-    Q4K,
-    Q5K,
-    Q6K,
-    Q8K,
-}
-
-impl TryFrom<IsqType> for GgmlDType {
-    type Error = candle_core::Error;
-
-    fn try_from(value: IsqType) -> Result<Self> {
-        match value {
-            IsqType::Q2K => Ok(Self::Q2K),
-            IsqType::Q3K => Ok(Self::Q3K),
-            IsqType::Q4K => Ok(Self::Q4K),
-            IsqType::Q4_0 => Ok(Self::Q4_0),
-            IsqType::Q4_1 => Ok(Self::Q4_1),
-            IsqType::Q5K => Ok(Self::Q5K),
-            IsqType::Q5_0 => Ok(Self::Q5_0),
-            IsqType::Q5_1 => Ok(Self::Q5_1),
-            IsqType::Q6K => Ok(Self::Q6K),
-            IsqType::Q8K => Ok(Self::Q8K),
-            IsqType::Q8_0 => Ok(Self::Q8_0),
-            IsqType::Q8_1 => Ok(Self::Q8_1),
         }
     }
 }

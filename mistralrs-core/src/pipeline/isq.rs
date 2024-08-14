@@ -4,7 +4,6 @@ use std::{
 };
 
 use candle_core::Device;
-use candle_core::Device;
 use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_quant::{IsqType, QuantMethod};
 use tracing::info;
@@ -24,7 +23,11 @@ use crate::device_map::DeviceMapper;
 /// - `Q5K`
 /// - `Q6K`
 /// - `Q8K`
-pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
+/// - `HQQ1`
+/// - `HQQ2`
+/// - `HQQ3`
+/// - `HQQ4`
+/// - `HQQ8`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     match s.to_lowercase().as_str() {
         "q4_0" => Ok(IsqType::Q4_0),
