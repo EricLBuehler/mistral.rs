@@ -444,7 +444,7 @@ impl Llama {
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             // x = self.mapper.map(x, block_idx)?;
-            x = self.mapper.map(chunks[0], block_idx)?;
+            x = self.mapper.map(chunks[0].clone(), block_idx)?;
             x = block.forward(
                 &x,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
