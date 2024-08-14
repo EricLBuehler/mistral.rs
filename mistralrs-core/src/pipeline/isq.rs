@@ -37,12 +37,7 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "q5k" => Ok(IsqType::Q5K),
         "q6k" => Ok(IsqType::Q6K),
         "q8k" => Ok(IsqType::Q8K),
-        "hqq8" => Ok(IsqType::HQQ8),
-        "hqq4" => Ok(IsqType::HQQ4),
-        "hqq3" => Ok(IsqType::HQQ3),
-        "hqq2" => Ok(IsqType::HQQ2),
-        "hqq1" => Ok(IsqType::HQQ1),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `HQQ3`, `HQQ2`, `HQQ1`.")),
+        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
     }
 }
 

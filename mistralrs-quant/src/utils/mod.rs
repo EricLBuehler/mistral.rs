@@ -1,9 +1,6 @@
 #[cfg(feature = "cuda")]
 mod ffi;
 pub(crate) mod isq;
-mod ops;
-
-pub use ops::{BitWiseOp, LeftshiftOp};
 
 #[cfg(feature = "cuda")]
 use candle_core::{

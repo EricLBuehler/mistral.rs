@@ -19,9 +19,7 @@ impl QuantMethod for GptqLayer {
                 g_idx: _,
                 bias: _,
             } => candle_core::bail!("GPTQ is only supported on CUDA."),
-            QuantMethodConfig::Gguf { .. }
-            | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Hqq { .. } => {
+            QuantMethodConfig::Gguf { .. } | QuantMethodConfig::Unquantized(_) => {
                 unreachable!()
             }
         }

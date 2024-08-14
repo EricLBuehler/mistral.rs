@@ -7,11 +7,7 @@ fn main() {
         use std::{path::PathBuf, vec};
         println!("cargo:rerun-if-changed=build.rs");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let lib_files = vec![
-            "kernels/gptq/q_gemm.cu",
-            "kernels/hqq/hqq.cu",
-            "kernels/ops/ops.cu",
-        ];
+        let lib_files = vec!["kernels/gptq/q_gemm.cu"];
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
