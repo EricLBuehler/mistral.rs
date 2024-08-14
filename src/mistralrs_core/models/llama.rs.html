@@ -1239,7 +1239,7 @@
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = candle_nn::linear(
+        <span class="kw">let </span>lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
