@@ -194,6 +194,7 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.74",
+ "syn 2.0.74",
 ]
 
 [[package]]
@@ -219,6 +220,7 @@ checksum = "6e0c28dcc82d7c8ead5cb13beb15405b57b8546e93215673ff8ca0349a028107"
 dependencies = [
  "proc-macro2",
  "quote",
+ "syn 2.0.74",
  "syn 2.0.74",
 ]
 
@@ -468,7 +470,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3d40ffc#3d40ffcec809e8742c56955600b0ddf27f7eb0f7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -495,7 +497,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3d40ffc#3d40ffcec809e8742c56955600b0ddf27f7eb0f7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -506,7 +508,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3d40ffc#3d40ffcec809e8742c56955600b0ddf27f7eb0f7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -514,7 +516,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3d40ffc#3d40ffcec809e8742c56955600b0ddf27f7eb0f7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "metal",
  "once_cell",
@@ -525,7 +527,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3d40ffc#3d40ffcec809e8742c56955600b0ddf27f7eb0f7"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7ad6494#7ad6494dc04024532dfdacdb2f9a09908c272a6b"
 dependencies = [
  "accelerate-src",
  "candle-core",
