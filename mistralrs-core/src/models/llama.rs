@@ -433,7 +433,9 @@ impl Llama {
         // let chunk = x.clone();
         // chunks.push(chunk.to_device(&self.cuda_devices[0])?);
         let mut chunks: Vec<Tensor> = Vec::with_capacity(num_devices);
+        println!("x device {:?}", x.device());
         chunks.push(x.copy().unwrap());
+        println!("chunk device {:?}", chunks[0].device());
 
         let mut cache = self.kv_caches[0].lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
@@ -449,8 +451,6 @@ impl Llama {
         for (block_idx, block) in self.blocks.iter().enumerate() {
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
-            println!("x device {:?}", x.device());
-            println!("chunk device {:?}", chunks[0].device());
             x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
             x = block.forward(
                 &x,
