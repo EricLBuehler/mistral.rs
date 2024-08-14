@@ -429,7 +429,7 @@ impl Llama {
         let chunk_size = seq_len / num_devices;
 
         let mut chunks = Vec::with_capacity(num_devices);
-        let chunk = x;
+        let chunk = x.clone();
         chunks.push(chunk.to_device(&self.cuda_devices[0])?);
 
         let mut cache = self.kv_caches[0].lock();
