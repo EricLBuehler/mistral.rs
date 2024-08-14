@@ -479,12 +479,12 @@
     routing::{get, post},
     Router,
 };
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, Device};
+<span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader,
-    LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
     PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 <span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
@@ -576,7 +576,7 @@
 
     <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
-    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
 
     <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is only supported on CUDA and is always automatically activated.

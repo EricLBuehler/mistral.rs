@@ -53,13 +53,26 @@
 <a href="#53" id="53">53</a>
 <a href="#54" id="54">54</a>
 <a href="#55" id="55">55</a>
-</pre></div><pre class="rust"><code><span class="kw">use crate</span>::{QuantMethod, QuantMethodConfig};
-<span class="kw">use </span>candle_core::{quantized::QMatMul, DType, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>std::sync::Arc;
+<a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a>
+<a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+</pre></div><pre class="rust"><code><span class="kw">use crate</span>::{IsqType, QuantMethod, QuantMethodConfig};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
-<span class="kw">pub struct </span>GptqMatMul;
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>GptqLayer;
 
-<span class="kw">impl </span>QuantMethod <span class="kw">for </span>GptqMatMul {
+<span class="kw">impl </span>QuantMethod <span class="kw">for </span>GptqLayer {
     <span class="kw">fn </span>new(method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -74,7 +87,7 @@
                 g_idx: <span class="kw">_</span>,
                 bias: <span class="kw">_</span>,
             } =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"GPTQ is only supported on CUDA."</span>),
-            QuantMethodConfig::Gguf { q_weight: <span class="kw">_</span>, b: <span class="kw">_ </span>} | QuantMethodConfig::Unquantized(<span class="kw">_</span>) =&gt; {
+            QuantMethodConfig::Gguf { .. } | QuantMethodConfig::Unquantized(<span class="kw">_</span>) =&gt; {
                 <span class="macro">unreachable!</span>()
             }
         }
@@ -96,15 +109,20 @@
         <span class="macro">todo!</span>()
     }
 
-    <span class="kw">fn </span>get_qmatmul(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
-        <span class="macro">todo!</span>()
-    }
-
     <span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
         <span class="macro">todo!</span>()
     }
 
-    <span class="kw">fn </span>convert_to_isq(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+    <span class="kw">fn </span>apply_isq(
+        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+        _dtype: IsqType,
+        _device: Device,
+        _n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+        <span class="macro">todo!</span>()
+    }
+
+    <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {
         <span class="macro">todo!</span>()
     }
 }

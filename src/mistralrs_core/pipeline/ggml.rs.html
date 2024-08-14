@@ -536,6 +536,7 @@
 <a href="#536" id="536">536</a>
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -568,9 +569,10 @@
     xlora_models::XLoraQLlama,
 };
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::quantized::{ggml_file, GgmlDType};
+<span class="kw">use </span>candle_core::quantized::ggml_file;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
@@ -772,7 +774,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
@@ -909,7 +911,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
@@ -954,7 +956,7 @@
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>GGMLPipeline {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="macro">anyhow::bail!</span>(
             <span class="string">"You are trying to in-situ requantize a GGML model. This will not do anything."
         </span>)

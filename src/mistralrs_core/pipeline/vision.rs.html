@@ -568,9 +568,9 @@
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
-<span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
@@ -668,7 +668,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
@@ -699,7 +699,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
@@ -862,7 +862,7 @@
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>VisionPipeline {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="self">self</span>.model
             .quantize(dtype, device)

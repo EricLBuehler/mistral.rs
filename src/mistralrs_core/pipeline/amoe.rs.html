@@ -570,6 +570,7 @@
 <a href="#570" id="570">570</a>
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -579,11 +580,12 @@
 };
 
 <span class="kw">use </span>base64::{engine::general_purpose, Engine};
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>candle_nn::{AdamW, Optimizer, ParamsAdamW};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>image::DynamicImage;
 <span class="kw">use </span>indexmap::IndexMap;
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="attr">#[cfg(feature = <span class="string">"plotly"</span>)]
 </span><span class="kw">use </span>plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 <span class="kw">use </span>rand::{seq::SliceRandom, thread_rng};
@@ -632,7 +634,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhow::Result&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
@@ -674,7 +676,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhow::Result&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
@@ -774,7 +776,7 @@
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>AnyMoePipeline {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; anyhow::Result&lt;()&gt; {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; anyhow::Result&lt;()&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).re_isq_model(dtype)
     }
 }

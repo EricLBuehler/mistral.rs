@@ -116,9 +116,9 @@
 <a href="#116" id="116">116</a>
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::quantized::GgmlDType;
-<span class="kw">use </span>either::Either;
+</pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
+<span class="kw">use </span>mistralrs_quant::IsqType;
 
 <span class="kw">use crate</span>::{
     response::Response,
@@ -200,7 +200,7 @@
 /// the `mspc` response `Sender` used to return the [`Response`].
 </span><span class="kw">pub enum </span>Request {
     Normal(NormalRequest),
-    ReIsq(GgmlDType),
+    ReIsq(IsqType),
     ActivateAdapters(Vec&lt;String&gt;),
 }
 

@@ -449,6 +449,7 @@
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -511,6 +512,7 @@
 
 <span class="kw">pub use </span>amoe::{AnyMoeConfig, AnyMoeExpertType};
 <span class="kw">pub use </span>device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+<span class="kw">pub use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 <span class="kw">pub use </span>pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline, GGMLLoader,

@@ -187,19 +187,70 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, sync::Arc};
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    fmt::{Debug, Display},
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 <span class="kw">use </span>candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{GgmlDType, QTensor},
     DType, Device, <span class="prelude-ty">Result</span>, Tensor,
 };
 
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>gptq;
 <span class="kw">mod </span>unquantized;
+<span class="kw">mod </span>utils;
 
 <span class="kw">pub use </span>gguf::GgufMatMul;
-<span class="kw">pub use </span>gptq::GptqMatMul;
+<span class="kw">pub use </span>gptq::GptqLayer;
 <span class="kw">pub use </span>unquantized::UnquantLinear;
 
 <span class="kw">use </span>candle_nn::{Linear, VarBuilder};
@@ -245,8 +296,45 @@
     Unquantized(Linear),
 }
 
+<span class="attr">#[derive(Clone, Copy, Debug, PartialEq)]
+</span><span class="kw">pub enum </span>IsqType {
+    Q4_0,
+    Q4_1,
+    Q5_0,
+    Q5_1,
+    Q8_0,
+    Q8_1,
+    Q2K,
+    Q3K,
+    Q4K,
+    Q5K,
+    Q6K,
+    Q8K,
+}
+
+<span class="kw">impl </span>TryFrom&lt;IsqType&gt; <span class="kw">for </span>GgmlDType {
+    <span class="kw">type </span>Error = candle_core::Error;
+
+    <span class="kw">fn </span>try_from(value: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">match </span>value {
+            IsqType::Q2K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q2K),
+            IsqType::Q3K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q3K),
+            IsqType::Q4K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4K),
+            IsqType::Q4_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4_0),
+            IsqType::Q4_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4_1),
+            IsqType::Q5K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5K),
+            IsqType::Q5_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5_0),
+            IsqType::Q5_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5_1),
+            IsqType::Q6K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q6K),
+            IsqType::Q8K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8K),
+            IsqType::Q8_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8_0),
+            IsqType::Q8_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8_1),
+        }
+    }
+}
+
 <span class="doccomment">/// Quantized method for a quantized matmul.
-</span><span class="kw">pub trait </span>QuantMethod: Send + Sync {
+</span><span class="kw">pub trait </span>QuantMethod: Send + Sync + Debug {
     <span class="kw">fn </span>new(method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized;
@@ -270,13 +358,17 @@
     </span><span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
 
     <span class="doccomment">/// If the quant is backed by a qmatmul.
-    </span><span class="kw">fn </span>get_qmatmul(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt;;
+    </span><span class="kw">fn </span>apply_isq(
+        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+        dtype: IsqType,
+        device: Device,
+        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
 
     <span class="doccomment">/// If the quant is backed by a qmatmul.
     </span><span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;;
 
-    <span class="doccomment">/// Convert this layer to an ISQ-able layer if possible.
-    </span><span class="kw">fn </span>convert_to_isq(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
+    <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;;
 }
 
 <span class="macro">macro_rules!</span> pack_factor {
@@ -374,6 +466,6 @@
         g_idx,
         bias,
     };
-    <span class="prelude-val">Ok</span>(Arc::new(GptqMatMul::new(config)<span class="question-mark">?</span>))
+    <span class="prelude-val">Ok</span>(Arc::new(GptqLayer::new(config)<span class="question-mark">?</span>))
 }
 </code></pre></div></section></main></body></html>

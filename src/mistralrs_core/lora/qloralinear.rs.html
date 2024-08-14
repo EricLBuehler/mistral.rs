@@ -332,15 +332,17 @@
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul};
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-<span class="kw">use </span>candle_core::{
-    bail,
-    quantized::{QMatMul, QTensor},
-    DType, Module, <span class="prelude-ty">Result</span>, Tensor,
-};
+<span class="kw">use </span>candle_core::{bail, quantized::QMatMul, DType, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Linear, VarBuilder};
 <span class="kw">use </span>either::Either;
+<span class="kw">use </span>mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 <span class="kw">use super</span>::{
     apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
@@ -349,7 +351,7 @@
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>QLoraLinear {
-    old: QMatMul,
+    old: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     a_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     b_adapters: Either&lt;Vec&lt;Linear&gt;, (Tensor, Vec&lt;Linear&gt;)&gt;,
     scale_adapters: Vec&lt;f64&gt;,
@@ -381,6 +383,16 @@
                 <span class="macro">candle_core::bail!</span>(<span class="string">"Expected all target modules to be the same."</span>);
             }
         }
+
+        <span class="kw">let </span>old: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; = <span class="kw">match </span>old {
+            QMatMul::QTensor(q) =&gt; Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: q,
+                b: <span class="prelude-val">None</span>,
+            })<span class="question-mark">?</span>),
+            QMatMul::TensorF16(t) | QMatMul::Tensor(t) =&gt; Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(t, <span class="prelude-val">None</span>)),
+            )<span class="question-mark">?</span>),
+        };
 
         <span class="kw">let </span>module = prefix.split(<span class="string">'.'</span>).last().unwrap();
         <span class="kw">if </span>target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
@@ -548,28 +560,26 @@
     }
 
     <span class="kw">fn </span>merge_weights(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>(<span class="kw-2">mut </span>w_base_layer, dtype) = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.old {
-            QMatMul::QTensor(q) =&gt; (q.dequantize(<span class="kw-2">&amp;</span>q.device())<span class="question-mark">?</span>, q.dtype()),
-            QMatMul::Tensor(<span class="kw">_</span>) | QMatMul::TensorF16(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-        };
+        <span class="kw">let </span><span class="kw-2">mut </span>w_base_layer: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="prelude-val">None</span>;
         <span class="kw">for </span>adapter <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.scale_adapters.len() {
-            w_base_layer = (w_base_layer + <span class="self">self</span>.get_delta_weight(adapter))<span class="question-mark">?</span>;
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(w_base_layer) = <span class="kw-2">&amp;mut </span>w_base_layer {
+                <span class="kw-2">*</span>w_base_layer = (<span class="kw-2">&amp;*</span>w_base_layer + <span class="kw-2">&amp;</span><span class="self">self</span>.get_delta_weight(adapter)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            } <span class="kw">else </span>{
+                w_base_layer = <span class="prelude-val">Some</span>(<span class="self">self</span>.get_delta_weight(adapter)<span class="question-mark">?</span>)
+            }
         }
-        <span class="kw">let </span>new_w = QTensor::quantize(<span class="kw-2">&amp;</span>w_base_layer, dtype)<span class="question-mark">?</span>;
-        <span class="self">self</span>.old = QMatMul::from_qtensor(new_w)<span class="question-mark">?</span>;
+        <span class="self">self</span>.old
+            .add_delta_w(w_base_layer.as_ref().expect(<span class="string">"Found no adapters to merge."</span>))<span class="question-mark">?</span>;
         <span class="self">self</span>.merged = <span class="bool-val">true</span>;
         <span class="prelude-val">Ok</span>(())
     }
 }
 
 <span class="kw">impl </span>LinearLayerLike <span class="kw">for </span>QLoraLinear {
-    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>candle_core::quantized::QMatMul&gt; {
-        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;mut </span><span class="self">self</span>.old)
+    <span class="kw">fn </span>quant_inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.old
     }
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
-        <span class="prelude-val">None
-    </span>}
-    <span class="kw">fn </span>bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
         <span class="prelude-val">None
     </span>}
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {

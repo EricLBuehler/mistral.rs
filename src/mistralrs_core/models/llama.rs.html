@@ -726,45 +726,11 @@
 <a href="#726" id="726">726</a>
 <a href="#727" id="727">727</a>
 <a href="#728" id="728">728</a>
-<a href="#729" id="729">729</a>
-<a href="#730" id="730">730</a>
-<a href="#731" id="731">731</a>
-<a href="#732" id="732">732</a>
-<a href="#733" id="733">733</a>
-<a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
-<a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a>
-<a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a>
-<a href="#746" id="746">746</a>
-<a href="#747" id="747">747</a>
-<a href="#748" id="748">748</a>
-<a href="#749" id="749">749</a>
-<a href="#750" id="750">750</a>
-<a href="#751" id="751">751</a>
-<a href="#752" id="752">752</a>
-<a href="#753" id="753">753</a>
-<a href="#754" id="754">754</a>
-<a href="#755" id="755">755</a>
-<a href="#756" id="756">756</a>
-<a href="#757" id="757">757</a>
-<a href="#758" id="758">758</a>
-<a href="#759" id="759">759</a>
-<a href="#760" id="760">760</a>
-<a href="#761" id="761">761</a>
-<a href="#762" id="762">762</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+</span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantizedConfig};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
 
@@ -1034,26 +1000,8 @@
         }
         <span class="prelude-val">Ok</span>(res)
     }
-    <span class="kw">fn </span>get_isq_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
-        {
-            <span class="kw">let </span>c_fc1 = <span class="self">self</span>.c_fc1.clone().convert_to_isq().unwrap();
-            <span class="self">self</span>.c_fc1 = c_fc1;
-            <span class="kw">let </span>c_fc2 = <span class="self">self</span>.c_fc2.clone().convert_to_isq().unwrap();
-            <span class="self">self</span>.c_fc2 = c_fc2;
-            <span class="kw">let </span>c_proj = <span class="self">self</span>.c_proj.clone().convert_to_isq().unwrap();
-            <span class="self">self</span>.c_proj = c_proj;
-        }
-        <span class="macro">vec!</span>[
-            Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.c_fc1).unwrap().get_qmatmul(),
-            Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.c_fc2).unwrap().get_qmatmul(),
-            Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.c_proj).unwrap().get_qmatmul(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-    }
-    <span class="kw">fn </span>get_isq_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;&gt; {
-        <span class="macro">vec!</span>[<span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>]
+    <span class="kw">fn </span>get_isq_layers(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+        <span class="macro">vec!</span>[<span class="kw-2">&amp;mut </span><span class="self">self</span>.c_fc1, <span class="kw-2">&amp;mut </span><span class="self">self</span>.c_fc2, <span class="kw-2">&amp;mut </span><span class="self">self</span>.c_proj]
     }
     <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>MlpLayer&gt; {
         Box::new(Clone::clone(<span class="self">self</span>))
@@ -1166,7 +1114,7 @@
     wte: Embedding,
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     <span class="kw">pub </span>kv_cache: <span class="kw">crate</span>::pipeline::Cache,
     <span class="kw">pub </span>device: Device,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
@@ -1209,11 +1157,11 @@
         }
         <span class="kw">let </span>x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.lm_head, QMatMul::QTensor(<span class="kw">_</span>)) {
-            x = x.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
+            x = x.to_dtype(t)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span>logits = MatMul.qmatmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
-        extract_logits(<span class="kw-2">&amp;</span>logits, context_lens)
+        <span class="kw">let </span>xs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
+        extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)
     }
 
     <span class="kw">pub fn </span>new(
@@ -1293,7 +1241,7 @@
             wte,
             blocks,
             ln_f,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))<span class="question-mark">?</span>),
             kv_cache: <span class="kw">crate</span>::pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: normal_loading_metadata.real_device,
             mapper,
@@ -1309,45 +1257,29 @@
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Llama {
-    <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+    <span class="kw">fn </span>get_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+    ) -&gt; (
+        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
         tensors.push((<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head, <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter_mut().enumerate() {
-            {
-                <span class="kw">let </span>q_proj = layer.attn.q_proj.clone().convert_to_isq().unwrap();
-                layer.attn.q_proj = q_proj;
-                <span class="kw">let </span>k_proj = layer.attn.k_proj.clone().convert_to_isq().unwrap();
-                layer.attn.k_proj = k_proj;
-                <span class="kw">let </span>v_proj = layer.attn.v_proj.clone().convert_to_isq().unwrap();
-                layer.attn.v_proj = v_proj;
-                <span class="kw">let </span>o_proj = layer.attn.o_proj.clone().convert_to_isq().unwrap();
-                layer.attn.o_proj = o_proj;
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(q) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.q_proj).unwrap().get_qmatmul() {
-                tensors.push((q, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(k) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.k_proj).unwrap().get_qmatmul() {
-                tensors.push((k, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.v_proj).unwrap().get_qmatmul() {
-                tensors.push((b, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(o) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.attn.o_proj).unwrap().get_qmatmul() {
-                tensors.push((o, <span class="prelude-val">Some</span>(i)));
-            }
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.q_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.k_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.v_proj, <span class="prelude-val">Some</span>(i)));
+            tensors.push((<span class="kw-2">&amp;mut </span>layer.attn.o_proj, <span class="prelude-val">Some</span>(i)));
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, <span class="prelude-val">Some</span>(i)))
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-    }
-    <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        (Vec::new(), <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 

@@ -869,31 +869,11 @@
 <a href="#869" id="869">869</a>
 <a href="#870" id="870">870</a>
 <a href="#871" id="871">871</a>
-<a href="#872" id="872">872</a>
-<a href="#873" id="873">873</a>
-<a href="#874" id="874">874</a>
-<a href="#875" id="875">875</a>
-<a href="#876" id="876">876</a>
-<a href="#877" id="877">877</a>
-<a href="#878" id="878">878</a>
-<a href="#879" id="879">879</a>
-<a href="#880" id="880">880</a>
-<a href="#881" id="881">881</a>
-<a href="#882" id="882">882</a>
-<a href="#883" id="883">883</a>
-<a href="#884" id="884">884</a>
-<a href="#885" id="885">885</a>
-<a href="#886" id="886">886</a>
-<a href="#887" id="887">887</a>
-<a href="#888" id="888">888</a>
-<a href="#889" id="889">889</a>
-<a href="#890" id="890">890</a>
-<a href="#891" id="891">891</a>
-<a href="#892" id="892">892</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
+</span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{layer_norm, LayerNorm, VarBuilder};
+<span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
@@ -1598,67 +1578,45 @@
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
-    <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
+    <span class="kw">fn </span>get_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+    ) -&gt; (
+        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) {
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().inner() {
-            tensors.push((x, <span class="prelude-val">None</span>));
-        }
-        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_fc).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(x) = Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_proj).unwrap().inner() {
-                tensors.push((x, <span class="prelude-val">Some</span>(i)));
-            }
-        }
-        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-    }
-    <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().bias_mut(), <span class="prelude-val">None</span>));
+        tensors.push((Arc::get_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>.lm_head).unwrap().quant_inner(), <span class="prelude-val">None</span>));
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
             tensors.push((
                 Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
             tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_fc).unwrap().bias_mut(),
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_fc).unwrap().quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
             tensors.push((
-                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_proj).unwrap().bias_mut(),
+                Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.c_proj).unwrap().quant_inner(),
                 <span class="prelude-val">Some</span>(i),
             ));
         }

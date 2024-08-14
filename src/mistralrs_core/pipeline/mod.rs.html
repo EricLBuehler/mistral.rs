@@ -1113,13 +1113,13 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use crate</span>::{DeviceMapMetadata, TryIntoDType};
 <span class="kw">pub use </span>amoe::{AnyMoeLoader, AnyMoePipeline};
-<span class="kw">use </span>candle_core::quantized::GgmlDType;
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">use </span>core::fmt;
 <span class="kw">pub use </span>ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 <span class="kw">pub use </span>gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
 <span class="kw">pub use </span>inputs_processor::InputProcessorOutput;
 <span class="kw">pub use </span>isq::{parse_isq_value, IsqModel};
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">pub use </span>normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -1498,7 +1498,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
@@ -1516,7 +1516,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
 
@@ -1565,7 +1565,7 @@
 }
 
 <span class="kw">pub trait </span>IsqPipelineMixin {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
 }
 
 <span class="kw">pub trait </span>CacheManagerMixin {

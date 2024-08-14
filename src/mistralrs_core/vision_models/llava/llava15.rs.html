@@ -340,6 +340,10 @@
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
 <a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -359,7 +363,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config;
 <span class="kw">use </span><span class="kw">crate</span>::AnyMoeConfig;
 <span class="kw">use </span><span class="kw">crate</span>::AnyMoeExpertType;
-<span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::{bail, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{linear, Activation, Linear, VarBuilder};
 
@@ -597,11 +600,16 @@
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Model {
-    <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="self">self</span>.llm.get_matmuls()
-    }
-    <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="self">self</span>.llm.get_biases()
+    <span class="kw">fn </span>get_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+    ) -&gt; (
+        Vec&lt;(
+            <span class="kw-2">&amp;mut </span>std::sync::Arc&lt;<span class="kw">dyn </span>mistralrs_quant::QuantMethod&gt;,
+            <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        )&gt;,
+        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) {
+        <span class="self">self</span>.llm.get_layers()
     }
 }
 

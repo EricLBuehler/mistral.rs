@@ -1144,9 +1144,14 @@
 <a href="#1144" id="1144">1144</a>
 <a href="#1145" id="1145">1145</a>
 <a href="#1146" id="1146">1146</a>
+<a href="#1147" id="1147">1147</a>
+<a href="#1148" id="1148">1148</a>
+<a href="#1149" id="1149">1149</a>
+<a href="#1150" id="1150">1150</a>
+<a href="#1151" id="1151">1151</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>candle_core::{quantized::QMatMul, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
+</span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
     Embedding, LayerNorm, Module, VarBuilder,
@@ -2210,11 +2215,16 @@
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Idefics2 {
-    <span class="kw">fn </span>get_matmuls(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="kw-2">&amp;mut </span>QMatMul, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="self">self</span>.text_model.get_matmuls()
-    }
-    <span class="kw">fn </span>get_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; (Vec&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;, <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper) {
-        <span class="self">self</span>.text_model.get_biases()
+    <span class="kw">fn </span>get_layers(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+    ) -&gt; (
+        Vec&lt;(
+            <span class="kw-2">&amp;mut </span>std::sync::Arc&lt;<span class="kw">dyn </span>mistralrs_quant::QuantMethod&gt;,
+            <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        )&gt;,
+        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) {
+        <span class="self">self</span>.text_model.get_layers()
     }
 }
 

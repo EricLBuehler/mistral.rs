@@ -621,6 +621,7 @@
 <a href="#621" id="621">621</a>
 <a href="#622" id="622">622</a>
 <a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -628,7 +629,8 @@
 };
 
 <span class="kw">use </span>anyhow::Result <span class="kw">as </span>anyhowResult;
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tracing::warn;
@@ -671,7 +673,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhowResult&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
@@ -718,7 +720,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; anyhowResult&lt;Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span>paged_attn_config.is_none() {
@@ -844,7 +846,7 @@
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: GgmlDType) -&gt; anyhow::Result&lt;()&gt; {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; anyhow::Result&lt;()&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).re_isq_model(dtype)<span class="question-mark">?</span>;
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).re_isq_model(dtype)
     }

@@ -148,6 +148,11 @@
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::ffi::c_void;
 
 <span class="attr">#[allow(dead_code)]
@@ -297,5 +302,10 @@
         d_out: <span class="kw-2">*mut </span>c_void,
         N: u32,
     );
+    <span class="comment">// Linked to in mistralrs-quant
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>leftshift_u8(d_in1: <span class="kw-2">*const </span>c_void, d_out: <span class="kw-2">*mut </span>c_void, N: u32, k: i32);
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>leftshift_u32(d_in1: <span class="kw-2">*const </span>c_void, d_out: <span class="kw-2">*mut </span>c_void, N: u32, k: i32);
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>leftshift_i64(d_in1: <span class="kw-2">*const </span>c_void, d_out: <span class="kw-2">*mut </span>c_void, N: u32, k: i32);
+    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>leftshift_i32(d_in1: <span class="kw-2">*const </span>c_void, d_out: <span class="kw-2">*mut </span>c_void, N: u32, k: i32);
 }
 </code></pre></div></section></main></body></html>

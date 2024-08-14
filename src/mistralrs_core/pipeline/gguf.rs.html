@@ -790,8 +790,6 @@
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -835,13 +833,11 @@
 };
 <span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::quantized::gguf_file::Content;
-<span class="kw">use </span>candle_core::quantized::{
-    gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue},
-    GgmlDType,
-};
+<span class="kw">use </span>candle_core::quantized::gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
@@ -1133,7 +1129,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths_gguf!</span>(
@@ -1164,7 +1160,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: <span class="prelude-ty">Option</span>&lt;GgmlDType&gt;,
+        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
@@ -1407,7 +1403,7 @@
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>GGUFPipeline {
-    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: GgmlDType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="macro">anyhow::bail!</span>(
             <span class="string">"You are trying to in-situ requantize a GGML model. This will not do anything."
         </span>)

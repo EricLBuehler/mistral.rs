@@ -329,18 +329,6 @@
 <a href="#329" id="329">329</a>
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
-<a href="#332" id="332">332</a>
-<a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a>
-<a href="#337" id="337">337</a>
-<a href="#338" id="338">338</a>
-<a href="#339" id="339">339</a>
-<a href="#340" id="340">340</a>
-<a href="#341" id="341">341</a>
-<a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -348,8 +336,9 @@
     sync::{Arc, RwLock},
 };
 
-<span class="kw">use </span>candle_core::{quantized::QMatMul, safetensors, DType, Device, <span class="prelude-ty">Result</span>, Tensor, Var, D};
+<span class="kw">use </span>candle_core::{safetensors, DType, Device, <span class="prelude-ty">Result</span>, Tensor, Var, D};
 <span class="kw">use </span>candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
+<span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">mod </span>inputs;
@@ -435,8 +424,7 @@
 
 <span class="kw">pub trait </span>MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
-    <span class="kw">fn </span>get_isq_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt;;
-    <span class="kw">fn </span>get_isq_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;&gt;;
+    <span class="kw">fn </span>get_isq_layers(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
     <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>MlpLayer&gt;;
     <span class="doccomment">/// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
@@ -626,26 +614,14 @@
         gathered_outputs.squeeze(<span class="number">1</span>)
     }
 
-    <span class="kw">fn </span>get_isq_tensors(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
+    <span class="kw">fn </span>get_isq_layers(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.training {
             <span class="macro">unreachable!</span>(<span class="string">"Should not be applying ISQ before training is complete."</span>);
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>accum = Vec::new();
         <span class="kw">for </span>expert <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.experts {
-            accum.extend(expert.get_isq_tensors());
-        }
-        accum
-    }
-
-    <span class="kw">fn </span>get_isq_biases(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;&gt; {
-        <span class="kw">if </span><span class="self">self</span>.training {
-            <span class="macro">unreachable!</span>(<span class="string">"Should not be applying ISQ before training is complete."</span>);
-        }
-
-        <span class="kw">let </span><span class="kw-2">mut </span>accum = Vec::new();
-        <span class="kw">for </span>expert <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.experts {
-            accum.extend(expert.get_isq_biases());
+            accum.extend(expert.get_isq_layers());
         }
         accum
     }

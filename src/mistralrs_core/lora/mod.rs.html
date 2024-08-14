@@ -323,22 +323,14 @@
 <a href="#323" id="323">323</a>
 <a href="#324" id="324">324</a>
 <a href="#325" id="325">325</a>
-<a href="#326" id="326">326</a>
-<a href="#327" id="327">327</a>
-<a href="#328" id="328">328</a>
-<a href="#329" id="329">329</a>
-<a href="#330" id="330">330</a>
-<a href="#331" id="331">331</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-<span class="kw">use </span>candle_core::{
-    quantized::{QMatMul, QTensor},
-    DType, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D,
-};
+<span class="kw">use </span>candle_core::{quantized::QTensor, DType, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{init, Linear, Module, VarBuilder};
 <span class="kw">use </span>loralinear::LoraLinear;
+<span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">pub use </span>qloralinear::QLoraLinear;
 <span class="kw">use </span>serde::Deserialize;
 
@@ -430,11 +422,10 @@
 <span class="doccomment">/// Any layer that is linear-like.
 </span><span class="kw">pub trait </span>LinearLayerLike: Merge + AdapterSwapper {
     <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt;;
-    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt;;
+    <span class="kw">fn </span>quant_inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;;
     <span class="kw">fn </span>is_lora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor;
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;;
-    <span class="kw">fn </span>bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;;
     <span class="kw">fn </span>lora_forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
@@ -486,11 +477,8 @@
     <span class="kw">fn </span>bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
         <span class="self">self</span>.bias()
     }
-    <span class="kw">fn </span>inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>QMatMul&gt; {
-        <span class="prelude-val">None
-    </span>}
-    <span class="kw">fn </span>bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
-        <span class="macro">unreachable!</span>()
+    <span class="kw">fn </span>quant_inner(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt; {
+        <span class="macro">unimplemented!</span>(<span class="string">"Linear layer has no reasonable quant inner!"</span>)
     }
     <span class="kw">fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
         <span class="self">self</span>.weight()

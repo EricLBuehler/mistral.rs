@@ -17,7 +17,7 @@
 </span><span class="kw">mod </span>gptq_cuda;
 
 <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-</span><span class="kw">pub use </span>gptq_cpu::GptqMatMul;
+</span><span class="kw">pub use </span>gptq_cpu::GptqLayer;
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-</span><span class="kw">pub use </span>gptq_cuda::GptqMatMul;
+</span><span class="kw">pub use </span>gptq_cuda::GptqLayer;
 </code></pre></div></section></main></body></html>
