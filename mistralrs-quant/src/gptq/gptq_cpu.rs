@@ -1,7 +1,11 @@
-use crate::{QuantMethod, QuantMethodConfig};
-use candle_core::{quantized::QMatMul, DType, Result, Tensor};
-use std::sync::Arc;
+use crate::{IsqType, QuantMethod, QuantMethodConfig};
+use candle_core::{DType, Device, Result, Tensor};
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
+#[derive(Debug)]
 pub struct GptqLayer;
 
 impl QuantMethod for GptqLayer {
@@ -41,15 +45,20 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        todo!()
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         todo!()
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+    fn apply_isq(
+        self: Arc<Self>,
+        _dtype: IsqType,
+        _device: Device,
+        _n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
+    }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
     }
 }
