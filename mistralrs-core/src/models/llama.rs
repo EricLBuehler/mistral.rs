@@ -428,10 +428,10 @@ impl Llama {
         let num_devices = 1;
         let chunk_size = seq_len / num_devices;
 
-        let mut chunks = Vec::with_capacity(num_devices);
+        let mut chunks = Vec::new();
         // let chunk = x.clone();
         // chunks.push(chunk.to_device(&self.cuda_devices[0])?);
-        chunks.push(x.clone());
+        chunks.push(x);
 
         let mut cache = self.kv_caches[0].lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
