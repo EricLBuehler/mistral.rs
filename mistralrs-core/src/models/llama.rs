@@ -492,7 +492,7 @@ impl Llama {
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = candle_nn::linear(
+        let lm_head = candle_nn::linear_no_bias(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
