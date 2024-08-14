@@ -423,6 +423,15 @@ impl Llama {
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
+        let (batch_size, seq_len, hidden_size) = x.dims3()?;
+
+        let num_devices = 1;
+        let chunk_size = seq_len / num_devices;
+
+        let mut chunks = Vec::with_capacity(num_devices);
+        let chunk = x;
+        chunks.push(chunk.to_device(&self.cuda_devices[0])?);
+
         let mut cache = self.kv_caches[0].lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
@@ -434,7 +443,8 @@ impl Llama {
             self.blocks[0].attn.num_attention_heads,
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = self.mapper.map(x, block_idx)?;
+            // x = self.mapper.map(x, block_idx)?;
+            x = self.mapper.map(chunks[0], block_idx)?;
             x = block.forward(
                 &x,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
