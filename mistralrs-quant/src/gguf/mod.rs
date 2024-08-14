@@ -2,6 +2,10 @@ use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{
     quantized::{GgmlDType, QMatMul},

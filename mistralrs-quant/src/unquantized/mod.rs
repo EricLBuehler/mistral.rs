@@ -7,9 +7,8 @@ use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 use crate::{
-    generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
+    generate_isq, GgufMatMul, IsqType, IsqType, QuantMethod, QuantMethodConfig,
 };
 
 #[derive(Debug)]
