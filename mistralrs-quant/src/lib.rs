@@ -89,9 +89,9 @@ pub enum IsqType {
     Q8K,
     HQQ8,
     HQQ4,
-    HQQ3,
-    HQQ2,
-    HQQ1,
+    // HQQ3,
+    // HQQ2,
+    // HQQ1,
 }
 
 impl TryFrom<IsqType> for GgmlDType {

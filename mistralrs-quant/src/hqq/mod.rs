@@ -564,9 +564,9 @@ impl QuantMethod for HqqLayer {
         let bits = match dtype {
             IsqType::HQQ8 => HqqBits::Eight,
             IsqType::HQQ4 => HqqBits::Four,
-            IsqType::HQQ3 => HqqBits::Three,
-            IsqType::HQQ2 => HqqBits::Two,
-            IsqType::HQQ1 => HqqBits::One,
+            // IsqType::HQQ3 => HqqBits::Three,
+            // IsqType::HQQ2 => HqqBits::Two,
+            // IsqType::HQQ1 => HqqBits::One,
             _ => candle_core::bail!("Expected HQQ ISQ type."),
         };
         let cfg = HqqConfig {

@@ -58,14 +58,15 @@ impl QuantMethod for UnquantLinear {
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
-            IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | IsqType::HQQ4 | IsqType::HQQ8 => {
+            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            IsqType::HQQ4 | IsqType::HQQ8 => {
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bits = match dtype {
                     IsqType::HQQ8 => HqqBits::Eight,
                     IsqType::HQQ4 => HqqBits::Four,
-                    IsqType::HQQ3 => HqqBits::Three,
-                    IsqType::HQQ2 => HqqBits::Two,
-                    IsqType::HQQ1 => HqqBits::One,
+                    // IsqType::HQQ3 => HqqBits::Three,
+                    // IsqType::HQQ2 => HqqBits::Two,
+                    // IsqType::HQQ1 => HqqBits::One,
                     _ => unreachable!(),
                 };
                 let cfg = HqqConfig {
@@ -114,7 +115,8 @@ impl QuantMethod for UnquantLinear {
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
         match dtype {
-            IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | IsqType::HQQ4 | IsqType::HQQ8 => {
+            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            IsqType::HQQ4 | IsqType::HQQ8 => {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
