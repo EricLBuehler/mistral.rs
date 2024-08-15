@@ -23,14 +23,12 @@
 <a href="#23" id="23">23</a>
 <a href="#24" id="24">24</a>
 <a href="#25" id="25">25</a>
-<a href="#26" id="26">26</a>
 </pre></div><pre class="rust"><code><span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
-#[serde(untagged)]
+#[serde(rename_all = <span class="string">"snake_case"</span>)]
 </span><span class="kw">pub enum </span>ToolCallType {
-    <span class="attr">#[serde(rename = <span class="string">"function"</span>)]
-    </span>Function,
+    Function,
 }
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass)]
