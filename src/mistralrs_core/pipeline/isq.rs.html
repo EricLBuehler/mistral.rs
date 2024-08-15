@@ -263,7 +263,7 @@
                     .for_each(|((tensor, <span class="kw">_</span>), device)| {
                         <span class="kw-2">*</span>tensor = tensor
                             .clone()
-                            .apply_isq(dtype, <span class="kw-2">&amp;</span>n_quantized, device)
+                            .apply_isq(dtype, device.clone(), <span class="kw-2">&amp;</span>n_quantized)
                             .unwrap();
                         device.synchronize().unwrap();
                     });
