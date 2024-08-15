@@ -93,7 +93,7 @@ pub trait IsqModel {
                     .iter()
                     .map(|(q, _)| {
                         q.get_max_isq_cpu_threads(dtype)
-                            .map(|x| usize::from(x))
+                            .map(usize::from)
                             .unwrap_or(current_rayon_threads)
                     })
                     .min()
