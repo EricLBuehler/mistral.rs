@@ -170,6 +170,8 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
@@ -310,6 +312,8 @@
                         <span class="comment">// Accelerate backend doesn't support f16/bf16
                         // Metal backend doesn't support f16
                         </span>candle_core::Error::Msg(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                        <span class="comment">// This is when the metal backend doesn't support bf16
+                        </span>candle_core::Error::Metal(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
                         other =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(other),
                     },
                 }
