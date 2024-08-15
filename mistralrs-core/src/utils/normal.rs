@@ -138,6 +138,8 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
                         // Accelerate backend doesn't support f16/bf16
                         // Metal backend doesn't support f16
                         candle_core::Error::Msg(_) => continue,
+                        // This is when the metal backend doesn't support bf16
+                        candle_core::Error::Metal(_) => continue,
                         other => return Err(other),
                     },
                 }
