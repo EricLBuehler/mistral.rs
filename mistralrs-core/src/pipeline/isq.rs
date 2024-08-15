@@ -125,7 +125,7 @@ pub trait IsqModel {
                     .for_each(|((tensor, _), device)| {
                         *tensor = tensor
                             .clone()
-                            .apply_isq(dtype, &n_quantized, device)
+                            .apply_isq(dtype, device.clone(), &n_quantized)
                             .unwrap();
                         device.synchronize().unwrap();
                     });
