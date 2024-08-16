@@ -75,7 +75,7 @@ Mistal.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
-- HQQ: 4-bit and 8 bit, with ISQ supprort
+- HQQ: 4-bit and 8 bit, with ISQ support
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
     - Extremely fast due to working in parallel
