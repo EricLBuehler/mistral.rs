@@ -17,7 +17,6 @@ use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
-use candle_core::quantized::QMatMul;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, Activation, Linear, VarBuilder};
 
@@ -255,11 +254,16 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
-        self.llm.get_matmuls()
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        self.llm.get_biases()
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn DeviceMapper,
+    ) {
+        self.llm.get_layers()
     }
 }
 

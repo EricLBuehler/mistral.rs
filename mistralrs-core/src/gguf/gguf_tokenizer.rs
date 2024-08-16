@@ -369,14 +369,9 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use anyhow::Result;
-    use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
-
-    use super::convert_gguf_to_hf_tokenizer;
 
     #[allow(dead_code)]
     #[derive(Debug)]
@@ -393,47 +388,25 @@ mod tests {
             TokenizerType::Llama => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+                    "EricB/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
 
-                let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
-                let tokenizer = {
-                    let mut file = std::fs::File::open(&filename)?;
-                    convert_gguf_to_hf_tokenizer(
-                        &Content::read(&mut file)
-                            .map_err(|e| e.with_path(filename.clone()))
-                            .map_err(anyhow::Error::msg)?,
-                    )
-                    .map_err(anyhow::Error::msg)
-                    .map(|res| res.tokenizer)?
-                };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+                let filename = api.get("llama_gguf_tokenizer.json").unwrap();
+                let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF".to_string(),
+                    "EricB/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
 
-                let filename = api.get("Meta-Llama-3-8B-Instruct.Q2_K.gguf").unwrap();
-                let tokenizer = {
-                    let mut file = std::fs::File::open(&filename)?;
-                    convert_gguf_to_hf_tokenizer(
-                        &Content::read(&mut file)
-                            .map_err(|e| e.with_path(filename.clone()))
-                            .map_err(anyhow::Error::msg)?,
-                    )
-                    .map_err(anyhow::Error::msg)
-                    .map(|res| res.tokenizer)?
-                };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+                let filename = api.get("gpt2_gguf_tokenizer.json").unwrap();
+                let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
                 Ok(tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),

@@ -6,6 +6,7 @@ members = [
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
+    "mistralrs-quant",
 ]
 exclude = [
     "mistralrs-paged_attn",
@@ -13,7 +14,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -24,8 +25,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9e09d7f3" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9e09d7f3" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "2386e4e" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "2386e4e" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -44,6 +45,7 @@ image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds'
 reqwest = { version = "0.12.4", features = ["blocking"] }
 base64 = "0.22.1"
 half = "2.4.0"
+rayon = "1.1.0"
 
 # Config for 'cargo dist'
 [workspace.metadata.dist]

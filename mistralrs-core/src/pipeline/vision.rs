@@ -17,6 +17,7 @@ use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
+use crate::utils::normal::get_num_hidden_layers;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -27,9 +28,9 @@ use crate::{
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -127,7 +128,7 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
@@ -158,11 +159,10 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
 
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
@@ -182,6 +182,15 @@ impl Loader for VisionLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
+        let dtype = if let Ok(n_layers) = get_num_hidden_layers(&config) {
+            let mapper_full = mapper.into_mapper(n_layers, device)?;
+            mapper_full.get_min_dtype(dtype)?
+        } else {
+            let dtype = dtype.try_into_dtype(&[device])?;
+            warn!("Model config does not have key `num_hidden_layers`. The dtype this may be incorrect in the context of device mapping!");
+            dtype
+        };
+
         let load_device = if in_situ_quant.is_none() {
             device.clone()
         } else {
@@ -197,7 +206,7 @@ impl Loader for VisionLoader {
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
@@ -313,7 +322,7 @@ impl PreProcessingMixin for VisionPipeline {
 }
 
 impl IsqPipelineMixin for VisionPipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
             .quantize(dtype, device)
@@ -461,20 +470,21 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
-                if regex.is_match(&key) {
-                    // Idx of the last char of the layer id, +1
-                    // Assumes N.MLP
-                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
-                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
-                        .parse::<usize>()
-                        .unwrap();
-                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
-                } else {
-                    false
-                }
-            })?;
+            let vb =
+                from_mmaped_safetensors(filenames, vec![], Some(dtype), dev, silent, move |key| {
+                    if regex.is_match(&key) {
+                        // Idx of the last char of the layer id, +1
+                        // Assumes N.MLP
+                        let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                        let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                        let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                            .parse::<usize>()
+                            .unwrap();
+                        layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                    } else {
+                        false
+                    }
+                })?;
             vbs.push(vb);
         }
 
@@ -507,7 +517,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let vb = from_mmaped_safetensors(
                 gate_filenames.clone(),
                 vec![],
-                dtype,
+                Some(dtype),
                 dev,
                 silent,
                 |_| true,

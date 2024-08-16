@@ -24,13 +24,13 @@ use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, Page
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::{DeviceMapMetadata, TryIntoDType};
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
-use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel};
+use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub use normal_loaders::{
     GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
@@ -296,6 +296,8 @@ pub enum QuantizationKind {
     Ggml,
     /// GGUF
     Gguf,
+    /// GPTQ
+    Gptq,
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
@@ -407,7 +409,7 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
@@ -425,7 +427,7 @@ pub trait Loader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
 
@@ -474,7 +476,7 @@ pub trait PreProcessingMixin: MetadataMixin {
 }
 
 pub trait IsqPipelineMixin {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()>;
 }
 
 pub trait CacheManagerMixin {

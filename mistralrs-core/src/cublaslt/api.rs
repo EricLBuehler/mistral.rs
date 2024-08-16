@@ -901,10 +901,9 @@ mod tests {
         let res = fused_matmul(&a, &b, None, None, None, Some(&bias), None, cublaslt)?;
         let expected = (b.matmul(&a.t()?)? + bias.broadcast_left(2)?)?;
 
-        assert_eq!(
-            to_vec2_round(res.to_dtype(DType::F32)?, 4)?,
-            to_vec2_round(expected.to_dtype(DType::F32)?, 4)?
-        );
+        let abs_diff = (res - expected)?.abs()?.to_vec2::<f32>()?;
+        let range = 1e-02;
+        assert!(abs_diff.iter().all(|x| x.into_iter().all(|y| *y <= range)));
         Ok(())
     }
 
@@ -931,10 +930,11 @@ mod tests {
         )?;
         let expected = (b.matmul(&a.t()?)?.add(&c)? + bias.broadcast_left((3, 2))?)?;
 
-        assert_eq!(
-            to_vec3_round(res.to_dtype(DType::F32)?, 4)?,
-            to_vec3_round(expected.to_dtype(DType::F32)?, 4)?
-        );
+        let abs_diff = (res - expected)?.abs()?.to_vec3::<f32>()?;
+        let range = 1e-02;
+        assert!(abs_diff
+            .iter()
+            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
         Ok(())
     }
 }

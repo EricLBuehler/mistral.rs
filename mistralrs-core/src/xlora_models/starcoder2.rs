@@ -1,7 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -24,7 +25,7 @@ use crate::{
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     c_fc: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -84,8 +85,8 @@ impl MLP {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.c_fc.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.c_fc.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut res = self.c_proj.lora_forward(
             &self
@@ -101,14 +102,14 @@ impl MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.c_fc.is_quant() {
+        if self.c_fc.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -220,8 +221,8 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &xs,
@@ -241,7 +242,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -303,8 +304,8 @@ impl Attention {
             q_len,
         )?;
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.o_proj.lora_forward(
             &attn_output
@@ -314,7 +315,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -446,10 +447,16 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -648,8 +655,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -668,8 +675,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -688,8 +695,8 @@ impl Model {
                     None,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -700,68 +707,45 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc).unwrap().inner(), Some(i)));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner(),
-                Some(i),
-            ));
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().bias_mut(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.v_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.o_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_fc).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.c_fc).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().quant_inner(),
                 Some(i),
             ));
         }

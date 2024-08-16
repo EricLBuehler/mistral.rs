@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
+use crate::{utils::debug::DeviceRepr, TryIntoDType};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
@@ -123,7 +123,7 @@ pub trait DeviceMapper: Debug {
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
 
     // === IMMEDIATELY AFTER INIT ===
-    fn get_min_dtype(&self) -> Result<DType>;
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
 }
 
 #[derive(Debug)]
@@ -168,9 +168,9 @@ impl DeviceMapper for LayerDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
-    fn get_min_dtype(&self) -> Result<DType> {
-        ModelDType::Auto
-            .try_into_dtype_all(&self.mappings)
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        dtype
+            .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
             .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
     }
 }
@@ -216,9 +216,9 @@ impl DeviceMapper for DummyDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
-    fn get_min_dtype(&self) -> Result<DType> {
-        ModelDType::Auto
-            .try_into_dtype(&self.nm_device)
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        dtype
+            .try_into_dtype(&[&self.nm_device])
             .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
     }
 }

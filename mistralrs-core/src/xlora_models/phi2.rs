@@ -17,10 +17,11 @@ use crate::{
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
+use mistralrs_quant::QuantMethod;
 use tqdm::Iter;
 use tracing::info;
 
@@ -33,7 +34,7 @@ use crate::{
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -92,8 +93,8 @@ impl MLP {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.fc1.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.fc1.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut res = self.fc2.lora_forward(
             &self
@@ -109,7 +110,7 @@ impl MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.fc1.is_quant() {
+        if self.fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -225,8 +226,8 @@ impl Attention {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &xs,
@@ -246,7 +247,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -306,8 +307,8 @@ impl Attention {
         let mut attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.dense.lora_forward(
             &attn_output,
@@ -315,7 +316,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -435,10 +436,16 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(
@@ -632,8 +639,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -652,8 +659,8 @@ impl Model {
                         None,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -672,8 +679,8 @@ impl Model {
                     None,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -684,63 +691,45 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().bias_mut(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.v_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.self_attn.dense)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc1).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc1).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc2).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc2).unwrap().quant_inner(),
                 Some(i),
             ));
         }

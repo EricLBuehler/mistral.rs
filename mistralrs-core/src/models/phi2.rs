@@ -1,14 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
-/// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
-    embedding, layer_norm, linear, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
+    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 
 use crate::{
@@ -18,9 +20,8 @@ use crate::{
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, QLinear, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, MatMul, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
-    merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
@@ -30,7 +31,7 @@ use crate::{
 };
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
-#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -41,11 +42,11 @@ pub struct Config {
     pub(crate) hidden_act: Activation,
     pub(crate) max_position_embeddings: usize,
     pub(crate) layer_norm_eps: f64,
-    pub(crate) tie_word_embeddings: bool,
     pub(crate) rope_theta: f32,
     pub(crate) partial_rotary_factor: f64,
     pub(crate) qk_layernorm: bool,
     pub(crate) use_flash_attn: bool,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
 impl Config {
@@ -58,22 +59,32 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    fc1: QLinear,
-    fc2: QLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
     act: Activation,
     params: Vec<usize>,
 }
 
 impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let fc1 = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?;
+        let fc1 = mistralrs_quant::linear(
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &cfg.quantization_config,
+            vb.pp("fc1"),
+        )?;
+        let fc2 = mistralrs_quant::linear(
+            cfg.intermediate_size,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            vb.pp("fc2"),
+        )?;
         Ok(Self {
-            fc1: QLinear::from_linear(fc1),
-            fc2: QLinear::from_linear(fc2),
+            fc1,
+            fc2,
             // This does not match the mixformers implementation where Gelu is used rather than
             // GeluNew.
             act: cfg.hidden_act,
@@ -88,20 +99,20 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.fc1.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.fc1.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut res = xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)?;
-        if self.fc1.is_quant() {
+        let mut res = MatMul.qmethod_matmul(
+            &MatMul.qmethod_matmul(&xs, &*self.fc1)?.apply(&self.act)?,
+            &*self.fc2,
+        )?;
+        if self.fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        vec![self.fc1.inner(), self.fc2.inner()]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![self.fc1.bias_mut(), self.fc2.bias_mut()]
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.fc1, &mut self.fc2]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -112,37 +123,34 @@ impl MlpLayer for MLP {
     // fc1, fc2
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_fc1 = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.fc1.inner_ref(), delta)
+            self.fc1.add_delta_w(delta)?
         } else {
-            self.fc1.inner_ref().clone()
+            self.fc1.clone()
         };
         let new_fc2 = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.fc2.inner_ref(), delta)
+            self.fc2.add_delta_w(delta)?
         } else {
-            self.fc2.inner_ref().clone()
+            self.fc2.clone()
         };
 
         Ok(Box::new(Self {
-            fc1: QLinear::from_old_and_qmatmul(new_fc1, &self.fc1),
-            fc2: QLinear::from_old_and_qmatmul(new_fc2, &self.fc2),
+            fc1: new_fc1,
+            fc2: new_fc2,
             act: self.act,
             params: self.params.clone(),
         }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match self.fc1.inner_ref() {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.fc1.dtype_and_device()
     }
 }
 
 struct Attention {
-    q_proj: QLinear,
-    k_proj: QLinear,
-    v_proj: QLinear,
-    dense: QLinear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    dense: Arc<dyn QuantMethod>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -163,10 +171,30 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
         let head_dim = cfg.head_dim();
-        let q_proj = linear(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
-        let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
+        let q_proj = mistralrs_quant::linear(
+            cfg.hidden_size,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let dense = mistralrs_quant::linear(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            vb.pp("dense"),
+        )?;
         let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
@@ -175,10 +203,10 @@ impl Attention {
             (None, None)
         };
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            dense: QLinear::from_linear(dense),
+            q_proj,
+            k_proj,
+            v_proj,
+            dense,
             q_layernorm,
             k_layernorm,
             rotary_emb: rope,
@@ -203,13 +231,13 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
-        if self.q_proj.is_quant() {
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -294,8 +322,8 @@ impl Attention {
             }
         };
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if mask.is_some() {
             attn_output
@@ -304,8 +332,8 @@ impl Attention {
         } else {
             attn_output.reshape((b_size, seq_len, ()))?
         };
-        let mut res = attn_output.apply(&self.dense)?;
-        if self.q_proj.is_quant() {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.dense)?;
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -375,7 +403,7 @@ pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
-    lm_head: QLinear,
+    lm_head: Arc<dyn QuantMethod>,
     pub cache: Cache,
     pub device: Device,
     pub max_seq_len: usize,
@@ -391,10 +419,16 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(
@@ -448,7 +482,7 @@ impl Model {
             )?;
             layers.push(layer)
         }
-        let lm_head = linear(
+        let lm_head = candle_nn::linear(
             cfg.hidden_size,
             cfg.vocab_size,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
@@ -457,7 +491,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: QLinear::from_linear(lm_head),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
@@ -508,46 +542,33 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.final_layernorm)?;
-        if self.lm_head.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((self.lm_head.inner(), None));
+        tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.dense.inner(), Some(i)));
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.dense, Some(i)));
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.dense.bias_mut(), Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_biases()
-                    .into_iter()
-                    .map(|b| (b, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }

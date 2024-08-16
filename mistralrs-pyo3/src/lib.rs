@@ -84,7 +84,8 @@ fn parse_which(
             tokenizer_json,
             Some(model_id),
         )
-        .build(arch.into()),
+        .build(arch.into())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?,
         Which::XLora {
             model_id,
             xlora_model_id,
@@ -111,7 +112,8 @@ fn parse_which(
             no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch.into()),
+        .build(arch.into())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?,
         Which::Lora {
             model_id,
             tokenizer_json,
@@ -135,7 +137,8 @@ fn parse_which(
             )
             .map_err(|e| PyValueError::new_err(e.to_string()))?,
         )
-        .build(arch.into()),
+        .build(arch.into())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?,
         Which::GGUF {
             tok_model_id,
             quantized_model_id,

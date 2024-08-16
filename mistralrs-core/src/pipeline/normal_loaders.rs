@@ -10,6 +10,7 @@ use candle_core::Device;
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
 
+use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -116,6 +117,7 @@ struct MistralBasicConfig {
     rope_theta: f64,
     sliding_window: Option<usize>,
     head_dim: Option<usize>,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl MistralBasicConfig {
@@ -135,6 +137,7 @@ impl MistralBasicConfig {
             sliding_window: basic_config.sliding_window,
             use_flash_attn,
             head_dim: basic_config.head_dim,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -215,6 +218,7 @@ struct GemmaBasicConfig {
 
     #[serde(default = "default_max_position_embeddings")]
     max_position_embeddings: usize,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl GemmaBasicConfig {
@@ -235,6 +239,7 @@ impl GemmaBasicConfig {
             attention_bias: basic_config.attention_bias,
             head_dim: basic_config.head_dim,
             use_flash_attn,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -309,6 +314,7 @@ struct LlamaBasicConfig {
     rope_theta: f32,
     max_position_embeddings: usize,
     rope_scaling: Option<Llama3RopeConfig>,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 fn default_rope() -> f32 {
@@ -332,6 +338,7 @@ impl LlamaBasicConfig {
             use_flash_attn,
             max_position_embeddings: basic_config.max_position_embeddings,
             rope_scaling: basic_config.rope_scaling,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -408,6 +415,7 @@ struct MixtralBasicConfig {
     sliding_window: Option<usize>,
     num_experts_per_tok: usize,
     num_local_experts: usize,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl MixtralBasicConfig {
@@ -428,6 +436,7 @@ impl MixtralBasicConfig {
             use_flash_attn,
             num_experts_per_tok: basic_config.num_experts_per_tok,
             num_local_experts: basic_config.num_local_experts,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -497,10 +506,10 @@ struct Phi2BasicConfig {
     hidden_act: Activation,
     max_position_embeddings: usize,
     layer_norm_eps: f64,
-    tie_word_embeddings: bool,
     rope_theta: f32,
     partial_rotary_factor: f64,
     qk_layernorm: bool,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl Phi2BasicConfig {
@@ -517,10 +526,10 @@ impl Phi2BasicConfig {
             max_position_embeddings: basic_config.max_position_embeddings,
             rope_theta: basic_config.rope_theta,
             layer_norm_eps: basic_config.layer_norm_eps,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
             partial_rotary_factor: basic_config.partial_rotary_factor,
             qk_layernorm: basic_config.qk_layernorm,
             use_flash_attn,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -602,6 +611,7 @@ struct Phi3BasicConfig {
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
     sliding_window: Option<usize>,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl Phi3BasicConfig {
@@ -624,6 +634,7 @@ impl Phi3BasicConfig {
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
             sliding_window: basic_config.sliding_window,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -695,12 +706,10 @@ struct Qwen2BasicConfig {
     num_key_value_heads: usize,
     max_position_embeddings: usize,
     sliding_window: usize,
-    max_window_layers: usize,
-    tie_word_embeddings: bool,
     rope_theta: f64,
     rms_norm_eps: f64,
-    use_sliding_window: bool,
     hidden_act: Activation,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl Qwen2BasicConfig {
@@ -718,10 +727,8 @@ impl Qwen2BasicConfig {
             rope_theta: basic_config.rope_theta,
             rms_norm_eps: basic_config.rms_norm_eps,
             sliding_window: basic_config.sliding_window,
-            max_window_layers: basic_config.max_window_layers,
-            tie_word_embeddings: basic_config.tie_word_embeddings,
-            use_sliding_window: basic_config.use_sliding_window,
             use_flash_attn,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }
@@ -851,6 +858,7 @@ struct Starcoder2BasicConfig {
     rope_theta: f64,
     use_bias: bool,
     sliding_window: Option<usize>,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl Starcoder2BasicConfig {
@@ -870,6 +878,7 @@ impl Starcoder2BasicConfig {
             use_flash_attn,
             norm_epsilon: basic_config.norm_epsilon,
             use_bias: basic_config.use_bias,
+            quantization_config: basic_config.quantization_config,
         })
     }
 }

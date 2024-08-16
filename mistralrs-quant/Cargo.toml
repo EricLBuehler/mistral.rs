@@ -1,0 +1,29 @@
+[package]
+name = "mistralrs-quant"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+candle-core.workspace = true
+candle-nn.workspace = true
+half.workspace = true
+serde.workspace = true
+lazy_static = "1.4"
+paste = "1.0.15"
+tracing.workspace = true
+rayon.workspace = true
+
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
+metal = ["candle-core/metal", "candle-nn/metal"]
+
+[build-dependencies]
+bindgen_cuda = { version = "0.1.5", optional = true }

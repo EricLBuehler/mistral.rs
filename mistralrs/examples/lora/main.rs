@@ -39,7 +39,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                 panic!("Could not load ordering file at my-ordering-file.json")
             }))?,
         )
-        .build(NormalLoaderType::Mistral);
+        .build(NormalLoaderType::Mistral)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

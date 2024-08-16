@@ -1,17 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{layer_norm, linear_b, LayerNorm, VarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::sync::Arc;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, QLinear, RotaryEmbedding, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, RotaryEmbedding, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
     layers_utils::repeat_kv,
-    merge_delta,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
@@ -36,13 +36,14 @@ pub struct Config {
     pub(crate) use_bias: bool,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) use_flash_attn: bool,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    c_fc: QLinear,
-    c_proj: QLinear,
+    c_fc: Arc<dyn QuantMethod>,
+    c_proj: Arc<dyn QuantMethod>,
     act: candle_nn::Activation,
     params: Vec<usize>,
 }
@@ -50,11 +51,23 @@ struct MLP {
 impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let (h_size, i_size) = (cfg.hidden_size, cfg.intermediate_size);
-        let c_fc = linear_b(h_size, i_size, cfg.use_bias, vb.pp("c_fc"))?;
-        let c_proj = linear_b(i_size, h_size, cfg.use_bias, vb.pp("c_proj"))?;
+        let c_fc = mistralrs_quant::linear_b(
+            h_size,
+            i_size,
+            cfg.use_bias,
+            &cfg.quantization_config,
+            vb.pp("c_fc"),
+        )?;
+        let c_proj = mistralrs_quant::linear_b(
+            i_size,
+            h_size,
+            cfg.use_bias,
+            &cfg.quantization_config,
+            vb.pp("c_proj"),
+        )?;
         Ok(Self {
-            c_fc: QLinear::from_linear(c_fc),
-            c_proj: QLinear::from_linear(c_proj),
+            c_fc,
+            c_proj,
             act: cfg.hidden_act,
             params: vec![h_size, i_size],
         })
@@ -67,23 +80,20 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.c_fc.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.c_fc.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut res = xs
-            .apply(&self.c_fc)?
-            .apply(&self.act)?
-            .apply(&self.c_proj)?;
-        if self.c_fc.is_quant() {
+        let mut res = MatMul.qmethod_matmul(
+            &MatMul.qmethod_matmul(&xs, &*self.c_fc)?.apply(&self.act)?,
+            &*self.c_proj,
+        )?;
+        if self.c_fc.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        vec![self.c_fc.inner(), self.c_proj.inner()]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![self.c_fc.bias_mut(), self.c_proj.bias_mut()]
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.c_fc, &mut self.c_proj]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -94,37 +104,34 @@ impl MlpLayer for MLP {
     // c_fc, c_proj
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_c_fc = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.c_fc.inner_ref(), delta)
+            self.c_fc.add_delta_w(delta)?
         } else {
-            self.c_fc.inner_ref().clone()
+            self.c_fc.clone()
         };
         let new_c_proj = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.c_proj.inner_ref(), delta)
+            self.c_proj.add_delta_w(delta)?
         } else {
-            self.c_proj.inner_ref().clone()
+            self.c_proj.clone()
         };
 
         Ok(Box::new(Self {
-            c_fc: QLinear::from_old_and_qmatmul(new_c_fc, &self.c_fc),
-            c_proj: QLinear::from_old_and_qmatmul(new_c_proj, &self.c_proj),
+            c_fc: new_c_fc,
+            c_proj: new_c_proj,
             act: self.act,
             params: self.params.clone(),
         }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match &self.c_fc.inner_ref() {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.c_fc.dtype_and_device()
     }
 }
 
 struct Attention {
-    q_proj: QLinear,
-    k_proj: QLinear,
-    v_proj: QLinear,
-    o_proj: QLinear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
@@ -148,15 +155,39 @@ impl Attention {
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
         let b = cfg.use_bias;
-        let q_proj = linear_b(hidden_sz, num_heads * head_dim, b, vb.pp("q_proj"))?;
-        let k_proj = linear_b(hidden_sz, num_kv_heads * head_dim, b, vb.pp("k_proj"))?;
-        let v_proj = linear_b(hidden_sz, num_kv_heads * head_dim, b, vb.pp("v_proj"))?;
-        let o_proj = linear_b(num_heads * head_dim, hidden_sz, b, vb.pp("o_proj"))?;
+        let q_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_heads * head_dim,
+            b,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            b,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            b,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_b(
+            num_heads * head_dim,
+            hidden_sz,
+            b,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            o_proj: QLinear::from_linear(o_proj),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             num_heads,
             num_kv_heads,
             num_kv_groups,
@@ -181,13 +212,13 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
-        if self.q_proj.is_quant() {
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -265,16 +296,16 @@ impl Attention {
             }
         };
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = attn_output.apply(&self.o_proj)?;
-        if self.q_proj.is_quant() {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -355,7 +386,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     sliding_window: Option<usize>,
     pub device: Device,
     pub cache: Cache,
@@ -372,10 +403,16 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
         let mapper = normal_loading_metadata
             .mapper
             .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -427,15 +464,17 @@ impl Model {
             cfg.norm_epsilon,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+        let lm_head = mapper.cast_nm_device(
             embed_tokens.embeddings(),
             normal_loading_metadata.loading_isq,
-        )?);
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(lm_head, None),
+            ))?),
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -490,46 +529,33 @@ impl Model {
             )?
         }
         let mut xs = xs.to_device(&self.device)?.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&xs.apply(&self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.o_proj.inner(), Some(i)));
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.o_proj.bias_mut(), Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_biases()
-                    .into_iter()
-                    .map(|b| (b, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }
