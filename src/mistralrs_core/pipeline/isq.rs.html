@@ -136,6 +136,16 @@
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
 <a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
@@ -161,6 +171,11 @@
 /// - `Q5K`
 /// - `Q6K`
 /// - `Q8K`
+/// - `HQQ1`
+/// - `HQQ2`
+/// - `HQQ3`
+/// - `HQQ4`
+/// - `HQQ8`
 </span><span class="kw">pub fn </span>parse_isq_value(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;IsqType, String&gt; {
     <span class="kw">match </span>s.to_lowercase().as_str() {
         <span class="string">"q4_0" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::Q4_0),
@@ -175,7 +190,12 @@
         <span class="string">"q5k" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::Q5K),
         <span class="string">"q6k" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::Q6K),
         <span class="string">"q8k" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::Q8K),
-        <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`."</span>)),
+        <span class="string">"hqq8" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ8),
+        <span class="string">"hqq4" </span>=&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ4),
+        <span class="comment">// "hqq3" =&gt; Ok(IsqType::HQQ3),
+        // "hqq2" =&gt; Ok(IsqType::HQQ2),
+        // "hqq1" =&gt; Ok(IsqType::HQQ1),
+        </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`."</span>)),
     }
 }
 

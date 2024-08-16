@@ -95,6 +95,46 @@
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -103,7 +143,11 @@
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Linear, Module};
 
-<span class="kw">use crate</span>::{generate_isq, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig};
+<span class="kw">use crate</span>::{
+    generate_isq,
+    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
+    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
+};
 
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>UnquantLinear(Linear);
@@ -114,7 +158,9 @@
         </span><span class="self">Self</span>: Sized,
     {
         <span class="kw">match </span>method {
-            QuantMethodConfig::Gguf { .. } | QuantMethodConfig::Gptq { .. } =&gt; <span class="macro">unreachable!</span>(),
+            QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Hqq { .. } =&gt; <span class="macro">unreachable!</span>(),
             QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>(l)),
         }
     }
@@ -149,6 +195,35 @@
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">match </span>dtype {
+            <span class="comment">/*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            </span>IsqType::HQQ4 | IsqType::HQQ8 =&gt; {
+                n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
+                <span class="kw">let </span>bits = <span class="kw">match </span>dtype {
+                    IsqType::HQQ8 =&gt; HqqBits::Eight,
+                    IsqType::HQQ4 =&gt; HqqBits::Four,
+                    <span class="comment">// IsqType::HQQ3 =&gt; HqqBits::Three,
+                    // IsqType::HQQ2 =&gt; HqqBits::Two,
+                    // IsqType::HQQ1 =&gt; HqqBits::One,
+                    </span><span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+                };
+                <span class="kw">let </span>cfg = HqqConfig {
+                    bits,
+                    group_size: ISQ_HQQ_GROUP_SIZE.try_into()<span class="question-mark">?</span>,
+                    axis: HqqAxis::Zero,
+                    optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
+                    round_zeros: <span class="bool-val">false</span>,
+                    channel_wise: <span class="bool-val">true</span>,
+                };
+                <span class="kw">let </span>res = HqqLayer::quantize(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+                    <span class="kw">let </span>bias = bias
+                        .to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
+                        </span>.to_dtype(res.dtype_and_device().<span class="number">0</span>)<span class="question-mark">?</span>;
+                    <span class="prelude-val">Ok</span>(Arc::new(res.with_bias(bias)))
+                } <span class="kw">else </span>{
+                    <span class="prelude-val">Ok</span>(Arc::new(res))
+                }
+            }
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K
@@ -177,6 +252,11 @@
 
     <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {
         <span class="kw">match </span>dtype {
+            <span class="comment">/*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            </span>IsqType::HQQ4 | IsqType::HQQ8 =&gt; {
+                <span class="comment">// Use 1 because our HQQ quantizes on the GPU
+                </span><span class="prelude-val">Some</span>(<span class="number">1</span>.try_into().unwrap())
+            }
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K

@@ -28,9 +28,15 @@
 <a href="#28" id="28">28</a>
 <a href="#29" id="29">29</a>
 <a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
 </pre></div><pre class="rust"><code><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">mod </span>ffi;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>isq;
+<span class="kw">mod </span>ops;
+
+<span class="kw">pub use </span>ops::{BitWiseOp, LeftshiftOp};
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">use </span>candle_core::{
