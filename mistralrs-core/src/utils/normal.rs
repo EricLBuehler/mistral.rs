@@ -140,6 +140,8 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
                         candle_core::Error::Msg(_) => continue,
                         // This is when the metal backend doesn't support bf16
                         candle_core::Error::Metal(_) => continue,
+                        // If running with RUST_BACKTRACE=1
+                        candle_core::Error::WithBacktrace { .. } => continue,
                         other => return Err(other),
                     },
                 }
