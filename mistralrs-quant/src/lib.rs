@@ -11,11 +11,13 @@ use candle_core::{
 
 mod gguf;
 mod gptq;
+mod hqq;
 mod unquantized;
 mod utils;
 
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
+pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
@@ -59,6 +61,16 @@ pub enum QuantMethodConfig {
         b: Option<Tensor>,
     },
     Unquantized(Linear),
+    Hqq {
+        tensor: Tensor,
+        bits: HqqBits,
+        group_size: NonZeroUsize,
+        axis: HqqAxis,
+        optimization_steps: Option<usize>,
+        round_zeros: Option<bool>,
+        channel_wise: Option<bool>,
+        bias: Option<Tensor>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +87,11 @@ pub enum IsqType {
     Q5K,
     Q6K,
     Q8K,
+    HQQ8,
+    HQQ4,
+    // HQQ3,
+    // HQQ2,
+    // HQQ1,
 }
 
 impl TryFrom<IsqType> for GgmlDType {
@@ -94,6 +111,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8K => Ok(Self::Q8K),
             IsqType::Q8_0 => Ok(Self::Q8_0),
             IsqType::Q8_1 => Ok(Self::Q8_1),
+            _ => candle_core::bail!("Expected valid GGML ISQ type."),
         }
     }
 }
