@@ -485,10 +485,16 @@ impl Sampler {
             }
             let toks = context.as_ref().unwrap();
 
+            // Handle when there is no penalty context during prompt processing
+            if toks.is_empty() {
+                // Nothing to do.
+                return Ok(());
+            }
+
             let match_indices = toks
                 .par_iter()
                 .enumerate()
-                .take(toks.len().saturating_sub(1))
+                .take(toks.len() - 1)
                 .filter(|(_i, x)| *toks.last().unwrap() == **x)
                 .map(|(i, _)| i)
                 .collect::<Vec<_>>();
