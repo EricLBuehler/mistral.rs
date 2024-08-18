@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 
+use crate::gguf::Content;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
 use crate::utils::progress::NiceProgressBar;
+use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
-use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use tqdm::Iter;
@@ -475,8 +476,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
 impl ModelConfig::FromAdapterGGUF for ModelWeights {
     #[allow(clippy::too_many_arguments)]
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
@@ -490,7 +490,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "llama",
-            metadata: &ct.metadata,
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             n_expert,
@@ -514,13 +514,10 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             );
         }
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
-        )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+        let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
 
@@ -539,18 +536,14 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 DType::F32,
             )?;
 
-            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo =
-                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
+            let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;
+            let attention_wv = ct.tensor(&format!("{prefix}.attn_v.weight"), device)?;
+            let attention_wo = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
             let mlp_or_moe = if n_expert <= 1 {
-                let feed_forward_w1 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+                let feed_forward_w1 = ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?;
+                let feed_forward_w2 = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
+                let feed_forward_w3 = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
                 let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                 let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                 let cfg_w3 = get_lora_cfg(&feed_forward_w3);
@@ -588,15 +581,15 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 })
             } else {
                 let feed_forward_gate_inp =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
+                    ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
                 for i in 0..n_expert {
                     let feed_forward_w1 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_gate.{i}.weight"), device)?;
                     let feed_forward_w2 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_down.{i}.weight"), device)?;
                     let feed_forward_w3 =
-                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                        ct.tensor(&format!("{prefix}.ffn_up.{i}.weight"), device)?;
                     let cfg_w1 = get_lora_cfg(&feed_forward_w1);
                     let cfg_w2 = get_lora_cfg(&feed_forward_w2);
                     let cfg_w3 = get_lora_cfg(&feed_forward_w3);
@@ -639,9 +632,8 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     experts,
                 }
             };
-            let attention_norm =
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
-            let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
+            let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
+            let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             let cfgq = get_lora_cfg(&attention_wq);
             let cfgk = get_lora_cfg(&attention_wk);
             let cfgv = get_lora_cfg(&attention_wv);
