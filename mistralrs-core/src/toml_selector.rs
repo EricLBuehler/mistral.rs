@@ -92,7 +92,7 @@ pub enum TomlModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
     },
 
@@ -108,7 +108,7 @@ pub enum TomlModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -134,7 +134,7 @@ pub enum TomlModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
