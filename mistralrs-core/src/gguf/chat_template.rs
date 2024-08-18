@@ -24,8 +24,8 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUFTemplate {
 }
 
 // Get chat template from GGUF metadata if it exists
-pub fn get_gguf_chat_template<'a, R: std::io::Seek + std::io::Read>(
-    content: &Content<'a, R>,
+pub fn get_gguf_chat_template<R: std::io::Seek + std::io::Read>(
+    content: &Content<'_, R>,
 ) -> Result<Option<String>> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer",

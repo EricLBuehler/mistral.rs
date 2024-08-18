@@ -240,7 +240,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "phi3",
-            metadata: &ct.get_metadata(),
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,

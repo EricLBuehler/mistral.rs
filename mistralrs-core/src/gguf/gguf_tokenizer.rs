@@ -72,8 +72,8 @@ struct AddedTokensCollection {
     unk: Option<String>,
 }
 
-pub fn convert_gguf_to_hf_tokenizer<'a, R: std::io::Seek + std::io::Read>(
-    content: &Content<'a, R>,
+pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
+    content: &Content<'_, R>,
 ) -> Result<GgufTokenizerConversion> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml",
