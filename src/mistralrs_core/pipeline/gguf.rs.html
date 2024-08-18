@@ -712,84 +712,6 @@
 <a href="#712" id="712">712</a>
 <a href="#713" id="713">713</a>
 <a href="#714" id="714">714</a>
-<a href="#715" id="715">715</a>
-<a href="#716" id="716">716</a>
-<a href="#717" id="717">717</a>
-<a href="#718" id="718">718</a>
-<a href="#719" id="719">719</a>
-<a href="#720" id="720">720</a>
-<a href="#721" id="721">721</a>
-<a href="#722" id="722">722</a>
-<a href="#723" id="723">723</a>
-<a href="#724" id="724">724</a>
-<a href="#725" id="725">725</a>
-<a href="#726" id="726">726</a>
-<a href="#727" id="727">727</a>
-<a href="#728" id="728">728</a>
-<a href="#729" id="729">729</a>
-<a href="#730" id="730">730</a>
-<a href="#731" id="731">731</a>
-<a href="#732" id="732">732</a>
-<a href="#733" id="733">733</a>
-<a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
-<a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a>
-<a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a>
-<a href="#746" id="746">746</a>
-<a href="#747" id="747">747</a>
-<a href="#748" id="748">748</a>
-<a href="#749" id="749">749</a>
-<a href="#750" id="750">750</a>
-<a href="#751" id="751">751</a>
-<a href="#752" id="752">752</a>
-<a href="#753" id="753">753</a>
-<a href="#754" id="754">754</a>
-<a href="#755" id="755">755</a>
-<a href="#756" id="756">756</a>
-<a href="#757" id="757">757</a>
-<a href="#758" id="758">758</a>
-<a href="#759" id="759">759</a>
-<a href="#760" id="760">760</a>
-<a href="#761" id="761">761</a>
-<a href="#762" id="762">762</a>
-<a href="#763" id="763">763</a>
-<a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a>
-<a href="#767" id="767">767</a>
-<a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -805,6 +727,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
+<span class="kw">use </span><span class="kw">crate</span>::gguf::{Content, GGUFArchitecture};
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
@@ -821,7 +744,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, TryIntoDType, DEBUG,
+    Pipeline, TryIntoDType,
 };
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
@@ -831,9 +754,7 @@
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-<span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::quantized::gguf_file::Content;
-<span class="kw">use </span>candle_core::quantized::gguf_file::{<span class="self">self</span>, Value <span class="kw">as </span>GgufValue};
+<span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -845,7 +766,6 @@
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>strum::EnumString;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::{info, warn};
@@ -873,7 +793,7 @@
 </span><span class="kw">pub struct </span>GGUFLoader {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filenames: Vec&lt;String&gt;,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     no_kv_cache: bool,
@@ -883,40 +803,12 @@
     prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
-<span class="attr">#[derive(Debug, EnumString)]
-#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
-</span><span class="kw">pub enum </span>GGUFArchitecture {
-    Llama,
-    Mpt,
-    Gptneox,
-    Gptj,
-    Gpt2,
-    Bloom,
-    Falcon,
-    Mamba,
-    Rwkv,
-    Phi2,
-    Phi3,
-    Starcoder2,
-}
-
-<span class="comment">// Wraps from_str() for some convenience:
-// - Case-insensitive variant matching (TODO: is this desirable?)
-// - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
-</span><span class="kw">impl </span>GGUFArchitecture {
-    <span class="kw">fn </span>from_value&lt;T: AsRef&lt;str&gt; + std::fmt::Display&gt;(value: T) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="self">Self</span>::from_str(<span class="kw-2">&amp;</span>value.as_ref().to_ascii_lowercase())
-            .with_context(|| <span class="macro">format!</span>(<span class="string">"Unknown GGUF architecture `{value}`"</span>))
-            .map_err(anyhow::Error::msg)
-    }
-}
-
 <span class="attr">#[derive(Default)]
 </span><span class="doccomment">/// A builder for a GGUF loader.
 </span><span class="kw">pub struct </span>GGUFLoaderBuilder {
     model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filenames: Vec&lt;String&gt;,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
@@ -934,7 +826,7 @@
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filenames: Vec&lt;String&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>kind = ModelKind::Quantized {
@@ -945,7 +837,7 @@
             chat_template,
             model_id: tok_model_id,
             kind,
-            quantized_filename,
+            quantized_filenames,
             quantized_model_id,
             prompt_batchsize,
             ..Default::default()
@@ -1007,7 +899,7 @@
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template: <span class="self">self</span>.chat_template,
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
-            quantized_filename: <span class="self">self</span>.quantized_filename,
+            quantized_filenames: <span class="self">self</span>.quantized_filenames,
             quantized_model_id: <span class="self">self</span>.quantized_model_id,
             prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
         })
@@ -1019,7 +911,7 @@
     </span><span class="kw">pub fn </span>new(
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filenames: Vec&lt;String&gt;,
         xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         kind: ModelKind,
         xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
@@ -1042,7 +934,7 @@
         <span class="self">Self </span>{
             model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filenames,
             xlora_model_id,
             xlora_order,
             no_kv_cache,
@@ -1054,28 +946,6 @@
     }
 }
 
-<span class="kw">fn </span>parse_gguf_value(value: <span class="kw-2">&amp;</span>GgufValue) -&gt; String {
-    <span class="kw">match </span>value {
-        GgufValue::Array(vs) =&gt; vs
-            .iter()
-            .map(parse_gguf_value)
-            .collect::&lt;Vec&lt;String&gt;&gt;()
-            .join(<span class="string">", "</span>),
-        GgufValue::Bool(b) =&gt; b.to_string(),
-        GgufValue::F32(x) =&gt; x.to_string(),
-        GgufValue::F64(x) =&gt; x.to_string(),
-        GgufValue::I8(x) =&gt; x.to_string(),
-        GgufValue::I16(x) =&gt; x.to_string(),
-        GgufValue::I32(x) =&gt; x.to_string(),
-        GgufValue::I64(x) =&gt; x.to_string(),
-        GgufValue::String(x) =&gt; x.to_string(),
-        GgufValue::U8(x) =&gt; x.to_string(),
-        GgufValue::U16(x) =&gt; x.to_string(),
-        GgufValue::U32(x) =&gt; x.to_string(),
-        GgufValue::U64(x) =&gt; x.to_string(),
-    }
-}
-
 <span class="kw">struct </span>ContentConfig {
     hidden_size: usize,
     num_attn_heads: usize,
@@ -1084,22 +954,21 @@
 }
 
 <span class="attr">#[allow(clippy::cast_possible_truncation)]
-</span><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; From&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>Content&gt; <span class="kw">for </span>ContentConfig {
-    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>Content) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>arch = value.metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
+</span><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, R: std::io::Seek + std::io::Read&gt; From&lt;<span class="kw-2">&amp;</span>Content&lt;<span class="lifetime">'a</span>, R&gt;&gt; <span class="kw">for </span>ContentConfig {
+    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span>Content&lt;<span class="lifetime">'a</span>, R&gt;) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>metadata = value.get_metadata();
+        <span class="kw">let </span>arch = metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
         <span class="self">Self </span>{
-            hidden_size: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
+            hidden_size: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
                 .to_u64()
                 .unwrap() <span class="kw">as </span>usize,
-            num_attn_heads: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count"</span>)]
+            num_attn_heads: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count"</span>)]
                 .to_u64()
                 .unwrap() <span class="kw">as </span>usize,
-            num_kv_heads: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count_kv"</span>)]
+            num_kv_heads: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count_kv"</span>)]
                 .to_u64()
                 .unwrap() <span class="kw">as </span>usize,
-            num_layers: value.metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)]
-                .to_u64()
-                .unwrap() <span class="kw">as </span>usize,
+            num_layers: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)].to_u64().unwrap() <span class="kw">as </span>usize,
         }
     }
 }
@@ -1138,7 +1007,7 @@
             revision,
             <span class="self">self</span>,
             <span class="self">self</span>.quantized_model_id.clone(),
-            <span class="self">self</span>.quantized_filename.clone(),
+            <span class="self">self</span>.quantized_filenames.clone(),
             silent
         );
         <span class="self">self</span>.load_model_from_path(
@@ -1180,40 +1049,15 @@
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())<span class="question-mark">?</span>;
-        <span class="kw">let </span>model = gguf_file::Content::read(<span class="kw-2">&amp;mut </span>file)
-            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))<span class="question-mark">?</span>;
-        <span class="kw">let </span>arch = model.metadata[<span class="string">"general.architecture"</span>]
-            .to_string()
-            .context(<span class="string">"Model metadata should have declared an architecture"</span>)
-            .and_then(GGUFArchitecture::from_value)<span class="question-mark">?</span>;
-
-        <span class="macro">info!</span>(<span class="string">"Model config:"</span>);
-        <span class="kw">let </span><span class="kw-2">mut </span>sorted_keys = model.metadata.keys().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        sorted_keys.sort();
-        <span class="kw">for </span>name <span class="kw">in </span>sorted_keys {
-            <span class="kw">if </span>!name.contains(<span class="string">"tokenizer"</span>) {
-                <span class="kw">let </span>value = parse_gguf_value(<span class="kw-2">&amp;</span>model.metadata[name]);
-                <span class="macro">println!</span>(<span class="string">"{name}: {}"</span>, value);
-            }
+        <span class="kw">let </span><span class="kw-2">mut </span>readers = Vec::new();
+        <span class="kw">for </span>filename <span class="kw">in </span>paths.get_weight_filenames() {
+            readers.push(std::fs::File::open(filename)<span class="question-mark">?</span>);
         }
+        <span class="kw">let </span><span class="kw-2">mut </span>readers = readers.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
-        <span class="kw">if </span>DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-            <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-            <span class="kw">for </span>(name, info) <span class="kw">in </span><span class="kw-2">&amp;</span>model.tensor_infos {
-                tensors.push(<span class="macro">format!</span>(
-                    <span class="string">"name = `{name}`, shape = {:?}, dtype = {:?}"</span>,
-                    info.shape.clone(),
-                    info.ggml_dtype
-                ));
-            }
-            fs::write(
-                <span class="string">"mistralrs_gguf_tensors.txt"</span>,
-                serde_json::to_string_pretty(<span class="kw-2">&amp;</span>tensors).expect(<span class="string">"Serialization failed."</span>),
-            )<span class="question-mark">?</span>;
-
-            <span class="macro">info!</span>(<span class="string">"Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`."</span>);
-        }
+        <span class="kw">let </span>model = Content::from_readers(<span class="kw-2">&amp;mut </span>readers)<span class="question-mark">?</span>;
+        model.print_metadata()<span class="question-mark">?</span>;
+        <span class="kw">let </span>arch = model.arch();
 
         <span class="kw">let </span>GgufTokenizerConversion {
             tokenizer,
@@ -1254,7 +1098,7 @@
         <span class="kw">let </span>model_config = {
             <span class="comment">// Base config (quantization only):
             </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF(
-                (model, <span class="kw-2">&amp;mut </span>file).into(),
+                model,
                 (device, mapper).into(),
                 <span class="kw">if </span>paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention

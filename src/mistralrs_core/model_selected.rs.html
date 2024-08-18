@@ -291,6 +291,9 @@
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>clap::Subcommand;
 
 <span class="kw">use crate</span>::{
@@ -405,12 +408,13 @@
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
     },
@@ -423,12 +427,13 @@
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
 
@@ -454,12 +459,13 @@
         </span><span class="attr">#[arg(short, long)]
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
 
@@ -482,12 +488,12 @@
         </span><span class="attr">#[arg(long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
 
@@ -506,12 +512,12 @@
         </span><span class="attr">#[arg(long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
 
@@ -543,12 +549,12 @@
         </span><span class="attr">#[arg(long)]
         </span>tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span><span class="attr">#[arg(short = <span class="string">'m'</span>, long)]
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span><span class="attr">#[arg(short = <span class="string">'f'</span>, long)]
         </span>quantized_filename: String,
 

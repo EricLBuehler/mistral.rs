@@ -676,31 +676,18 @@
 <a href="#676" id="676">676</a>
 <a href="#677" id="677">677</a>
 <a href="#678" id="678">678</a>
-<a href="#679" id="679">679</a>
-<a href="#680" id="680">680</a>
-<a href="#681" id="681">681</a>
-<a href="#682" id="682">682</a>
-<a href="#683" id="683">683</a>
-<a href="#684" id="684">684</a>
-<a href="#685" id="685">685</a>
-<a href="#686" id="686">686</a>
-<a href="#687" id="687">687</a>
-<a href="#688" id="688">688</a>
-<a href="#689" id="689">689</a>
-<a href="#690" id="690">690</a>
-<a href="#691" id="691">691</a>
-<a href="#692" id="692">692</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
+<span class="kw">use </span>candle_core::quantized::ggml_file;
 <span class="kw">use </span>candle_core::quantized::QTensor;
-<span class="kw">use </span>candle_core::quantized::{ggml_file, gguf_file};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
@@ -1085,8 +1072,7 @@
 
 <span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        ct: gguf_file::Content,
-        reader: <span class="kw-2">&amp;mut </span>R,
+        <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1094,7 +1080,7 @@
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
             path_prefix: <span class="string">"llama"</span>,
-            metadata: <span class="kw-2">&amp;</span>ct.metadata,
+            metadata: ct.get_metadata(),
         };
         <span class="kw">let </span>PropsGGUF {
             n_expert,
@@ -1111,13 +1097,10 @@
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm = QRmsNorm::new(
-            ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
-            rms_norm_eps,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>norm = QRmsNorm::new(ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_norm_eps)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
@@ -1141,18 +1124,14 @@
                 DType::F32,
             )<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>attention_wq = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_q.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attention_wk = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attention_wv = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_v.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>attention_wo =
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attention_wq = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_q.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attention_wk = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attention_wv = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_v.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attention_wo = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>mlp_or_moe = <span class="kw">if </span>n_expert &lt;= <span class="number">1 </span>{
-                <span class="kw">let </span>feed_forward_w1 =
-                    ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate.weight"</span>), device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>feed_forward_w2 =
-                    ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>), device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>feed_forward_w3 =
-                    ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>), device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>feed_forward_w1 = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate.weight"</span>), device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>feed_forward_w2 = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>), device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>feed_forward_w3 = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>), device)<span class="question-mark">?</span>;
                 MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w1),
@@ -1169,14 +1148,14 @@
                 })
             } <span class="kw">else </span>{
                 <span class="kw">let </span>feed_forward_gate_inp =
-                    ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate_inp.weight"</span>), device)<span class="question-mark">?</span>;
+                    ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate_inp.weight"</span>), device)<span class="question-mark">?</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>experts = Vec::with_capacity(n_expert);
-                <span class="kw">match </span>ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate_exps.weight"</span>), device) {
+                <span class="kw">match </span>ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate_exps.weight"</span>), device) {
                     <span class="prelude-val">Ok</span>(feed_forward_gate_exps) =&gt; {
                         <span class="kw">let </span>feed_forward_down_exps =
-                            ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down_exps.weight"</span>), device)<span class="question-mark">?</span>;
+                            ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down_exps.weight"</span>), device)<span class="question-mark">?</span>;
                         <span class="kw">let </span>feed_forward_up_exps =
-                            ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up_exps.weight"</span>), device)<span class="question-mark">?</span>;
+                            ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up_exps.weight"</span>), device)<span class="question-mark">?</span>;
 
                         <span class="kw">let </span>dequant_ffn_gate = feed_forward_gate_exps
                             .dequantize(device)<span class="question-mark">?
@@ -1224,18 +1203,12 @@
                     }
                     <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; {
                         <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..n_expert {
-                            <span class="kw">let </span>feed_forward_w1 = ct.tensor(
-                                reader,
-                                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate.{i}.weight"</span>),
-                                device,
-                            )<span class="question-mark">?</span>;
-                            <span class="kw">let </span>feed_forward_w2 = ct.tensor(
-                                reader,
-                                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.{i}.weight"</span>),
-                                device,
-                            )<span class="question-mark">?</span>;
+                            <span class="kw">let </span>feed_forward_w1 =
+                                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_gate.{i}.weight"</span>), device)<span class="question-mark">?</span>;
+                            <span class="kw">let </span>feed_forward_w2 =
+                                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.{i}.weight"</span>), device)<span class="question-mark">?</span>;
                             <span class="kw">let </span>feed_forward_w3 =
-                                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.{i}.weight"</span>), device)<span class="question-mark">?</span>;
+                                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.{i}.weight"</span>), device)<span class="question-mark">?</span>;
                             experts.push(Mlp {
                                 feed_forward_w1: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
@@ -1268,9 +1241,8 @@
                     experts,
                 }
             };
-            <span class="kw">let </span>attention_norm =
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>ffn_norm = ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>attention_norm = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_norm = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                 AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(

@@ -413,24 +413,12 @@
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
 <a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a>
-<a href="#420" id="420">420</a>
-<a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a>
-<a href="#423" id="423">423</a>
-<a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a>
-<a href="#426" id="426">426</a>
-<a href="#427" id="427">427</a>
-<a href="#428" id="428">428</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
@@ -440,7 +428,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
-<span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -673,8 +660,7 @@
 
 <span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        ct: gguf_file::Content,
-        reader: <span class="kw-2">&amp;mut </span>R,
+        <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -682,7 +668,7 @@
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
             path_prefix: <span class="string">"phi3"</span>,
-            metadata: <span class="kw-2">&amp;</span>ct.metadata,
+            metadata: ct.get_metadata(),
         };
         <span class="kw">let </span>PropsGGUF {
             head_count,
@@ -697,10 +683,10 @@
 
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, context_window)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output_norm = rms_norm(ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(reader, <span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output_norm = rms_norm(ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_eps)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
 
@@ -709,16 +695,10 @@
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
-            <span class="kw">let </span>ffn_up = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>),
-                device,
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>ffn_down = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>),
-                device,
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_up =
+                QMatMul::from_qtensor(ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up.weight"</span>), device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_down =
+                QMatMul::from_qtensor(ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down.weight"</span>), device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>QMatMul::QTensor(ffn_up_w) = ffn_up <span class="kw">else </span>{
                 <span class="macro">unreachable!</span>()
             };
@@ -737,11 +717,11 @@
                 i_size,
             };
             <span class="kw">let </span>attn_norm = rms_norm(
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
                 rms_eps,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_norm = rms_norm(
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>,
                 rms_eps,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
@@ -756,16 +736,10 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>),
             };
-            <span class="kw">let </span>qkv = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>),
-                device,
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>out = QMatMul::from_qtensor(ct.tensor(
-                reader,
-                <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>),
-                device,
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>qkv =
+                QMatMul::from_qtensor(ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv.weight"</span>), device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>out =
+                QMatMul::from_qtensor(ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output.weight"</span>), device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>QMatMul::QTensor(qkv_w) = qkv.clone() <span class="kw">else </span>{
                 <span class="macro">unreachable!</span>()
             };

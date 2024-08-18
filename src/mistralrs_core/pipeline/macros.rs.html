@@ -607,7 +607,7 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> get_paths_gguf {
-    (<span class="macro-nonterminal">$path_name</span>:ident, <span class="macro-nonterminal">$token_source</span>:expr, <span class="macro-nonterminal">$revision</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$quantized_model_id</span>:expr, <span class="macro-nonterminal">$quantized_filename</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
+    (<span class="macro-nonterminal">$path_name</span>:ident, <span class="macro-nonterminal">$token_source</span>:expr, <span class="macro-nonterminal">$revision</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$quantized_model_id</span>:expr, <span class="macro-nonterminal">$quantized_filenames</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
         <span class="kw">let </span>api = ApiBuilder::new()
             .with_progress(!<span class="macro-nonterminal">$silent</span>)
             .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
@@ -646,7 +646,7 @@
             revision.clone(),
             <span class="kw-2">&amp;</span><span class="macro-nonterminal">$token_source</span>,
             <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro-nonterminal">$quantized_model_id</span>),
-            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="macro-nonterminal">$quantized_filename</span>]),
+            <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro-nonterminal">$quantized_filenames</span>),
             <span class="kw-2">&amp;</span>api,
             <span class="kw-2">&amp;</span>model_id,
         )<span class="question-mark">?</span>;

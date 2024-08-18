@@ -564,6 +564,18 @@
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
 <a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize};
 
 <span class="kw">use </span>serde::Deserialize;
@@ -572,7 +584,7 @@
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
     SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="kw">fn </span>default_one() -&gt; usize {
@@ -653,11 +665,12 @@
         /// removing all remote accesses.
         </span>tok_model_id: String,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span>quantized_filename: String,
     },
 
@@ -668,11 +681,12 @@
         /// removing all remote accesses.
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span>quantized_filename: String,
 
         <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -693,11 +707,12 @@
         /// removing all remote accesses.
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         </span>quantized_filename: String,
 
         <span class="doccomment">/// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -713,11 +728,11 @@
         <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span>tok_model_id: String,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span>quantized_filename: String,
 
         <span class="doccomment">/// GQA value
@@ -730,11 +745,11 @@
         <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span>quantized_filename: String,
 
         <span class="doccomment">/// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -757,11 +772,11 @@
         <span class="doccomment">/// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         </span>tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         </span>quantized_model_id: String,
 
-        <span class="doccomment">/// Quantized filename, only applicable if `quantized` is set.
+        <span class="doccomment">/// Quantized filename.
         </span>quantized_filename: String,
 
         <span class="doccomment">/// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -943,7 +958,10 @@
             args.chat_template,
             <span class="prelude-val">Some</span>(tok_model_id),
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             args.prompt_batchsize,
         )
         .build(),
@@ -958,7 +976,10 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             args.prompt_batchsize,
         )
         .with_xlora(
@@ -981,7 +1002,10 @@
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             args.prompt_batchsize,
         )
         .with_lora(

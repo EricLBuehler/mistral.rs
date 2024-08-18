@@ -379,12 +379,10 @@
 <a href="#379" id="379">379</a>
 <a href="#380" id="380">380</a>
 <a href="#381" id="381">381</a>
-<a href="#382" id="382">382</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span>candle_core::quantized::gguf_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -394,6 +392,7 @@
 <span class="kw">use </span>mistralrs_quant::QuantMethodConfig;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
 <span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
@@ -607,8 +606,7 @@
 
 <span class="kw">impl </span>ModelConfig::FromGGUF <span class="kw">for </span>ModelWeights {
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
-        ct: gguf_file::Content,
-        reader: <span class="kw-2">&amp;mut </span>R,
+        <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -616,7 +614,7 @@
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
             path_prefix: <span class="string">"phi2"</span>,
-            metadata: <span class="kw-2">&amp;</span>ct.metadata,
+            metadata: ct.get_metadata(),
         };
         <span class="kw">let </span>PropsGGUF {
             head_count,
@@ -630,14 +628,14 @@
 
         <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(reader, <span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>output_norm = layer_norm(
-            ct.tensor(reader, <span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
-            ct.tensor(reader, <span class="string">"output_norm.bias"</span>, device)<span class="question-mark">?</span>,
+            ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>,
+            ct.tensor(<span class="string">"output_norm.bias"</span>, device)<span class="question-mark">?</span>,
             ln_eps,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
 
@@ -647,8 +645,8 @@
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
 
-            <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() <span class="kw">else </span>{
                 <span class="macro">unreachable!</span>()
             };
@@ -666,8 +664,8 @@
                 })<span class="question-mark">?</span>),
             };
             <span class="kw">let </span>attn_norm = layer_norm(
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
-                ct.tensor(reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.bias"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.weight"</span>), device)<span class="question-mark">?</span>,
+                ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_norm.bias"</span>), device)<span class="question-mark">?</span>,
                 ln_eps,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
@@ -682,8 +680,8 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>),
             };
-            <span class="kw">let </span>qkv = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv"</span>), device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>out = QLinear::new(<span class="kw-2">&amp;</span>ct, reader, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>qkv = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_qkv"</span>), device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>out = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_output"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>QMatMul::QTensor(qkv_w) = qkv.inner_ref().clone() <span class="kw">else </span>{
                 <span class="macro">unreachable!</span>()
             };
