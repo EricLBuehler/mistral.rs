@@ -1,3 +1,4 @@
+use either::Either;
 use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
@@ -105,7 +106,7 @@ pub enum Which {
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         tok_model_id: Option<String>,
     },
 
@@ -119,7 +120,7 @@ pub enum Which {
     ))]
     XLoraGGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         xlora_model_id: String,
         order: String,
         tok_model_id: Option<String>,
@@ -135,7 +136,7 @@ pub enum Which {
     ))]
     LoraGGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         adapters_model_id: String,
         order: String,
         tok_model_id: Option<String>,

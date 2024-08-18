@@ -79,7 +79,7 @@ pub struct GGUFPipeline {
 pub struct GGUFLoader {
     model_id: Option<String>,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filenames: Vec<String>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -94,7 +94,7 @@ pub struct GGUFLoader {
 pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
     quantized_model_id: String,
-    quantized_filename: String,
+    quantized_filenames: Vec<String>,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
@@ -112,7 +112,7 @@ impl GGUFLoaderBuilder {
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filenames: Vec<String>,
         prompt_batchsize: Option<NonZeroUsize>,
     ) -> Self {
         let kind = ModelKind::Quantized {
@@ -123,7 +123,7 @@ impl GGUFLoaderBuilder {
             chat_template,
             model_id: tok_model_id,
             kind,
-            quantized_filename,
+            quantized_filenames,
             quantized_model_id,
             prompt_batchsize,
             ..Default::default()
@@ -185,7 +185,7 @@ impl GGUFLoaderBuilder {
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
             tgt_non_granular_index: self.tgt_non_granular_index,
-            quantized_filename: self.quantized_filename,
+            quantized_filenames: self.quantized_filenames,
             quantized_model_id: self.quantized_model_id,
             prompt_batchsize: self.prompt_batchsize,
         })
@@ -197,7 +197,7 @@ impl GGUFLoader {
     pub fn new(
         model_id: Option<String>,
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filenames: Vec<String>,
         xlora_model_id: Option<String>,
         kind: ModelKind,
         xlora_order: Option<Ordering>,
@@ -220,7 +220,7 @@ impl GGUFLoader {
         Self {
             model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filenames,
             xlora_model_id,
             xlora_order,
             no_kv_cache,
@@ -293,7 +293,7 @@ impl Loader for GGUFLoader {
             revision,
             self,
             self.quantized_model_id.clone(),
-            self.quantized_filename.clone(),
+            self.quantized_filenames.clone(),
             silent
         );
         self.load_model_from_path(

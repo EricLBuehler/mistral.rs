@@ -6,7 +6,7 @@ use crate::{
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
     SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -87,11 +87,12 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: String,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
         quantized_filename: String,
     },
 
@@ -102,11 +103,12 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -127,11 +129,12 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimeter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -147,11 +150,11 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: String,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// GQA value
@@ -164,11 +167,11 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -191,11 +194,11 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -377,7 +380,10 @@ fn loader_from_selected(
             args.chat_template,
             Some(tok_model_id),
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .build(),
@@ -392,7 +398,10 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .with_xlora(
@@ -415,7 +424,10 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .with_lora(
