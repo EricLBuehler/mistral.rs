@@ -536,18 +536,14 @@
 <a href="#536" id="536">536</a>
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
-<a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
-<span class="kw">use </span><span class="kw">super</span>::vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
-};
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
     ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
     VisionModelLoader, XLoraPaths,
 };
+<span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};

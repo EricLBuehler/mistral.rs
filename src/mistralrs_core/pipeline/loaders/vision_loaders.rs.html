@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/vision_loaders.rs`."><title>vision_loaders.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/loaders/vision_loaders.rs`."><title>vision_loaders.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -247,10 +247,38 @@
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
 
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
@@ -258,8 +286,11 @@
 
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="kw">use super</span>::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
-<span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
+<span class="kw">use </span><span class="kw">super</span>::NormalLoadingMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeBaseModelMixin;
+<span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config <span class="kw">as </span>LLaVAConfig;
@@ -271,6 +302,27 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi3_inputs_processor::Phi3Processor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
+
+<span class="kw">pub trait </span>VisionModel: IsqModel + AnyMoeBaseModelMixin {
+    <span class="comment">// pixel_values and pixel_attention_mask only specified for prompt seqs
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec&lt;(usize, usize)&gt;,
+        position_ids: Vec&lt;usize&gt;,
+        model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
+        </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+    ) -&gt; candle_core::Result&lt;Tensor&gt;;
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
+    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
+    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata;
+}
 
 <span class="kw">pub trait </span>VisionModelLoader {
     <span class="kw">fn </span>load(
