@@ -1,12 +1,15 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
-    paged_attention::AttentionImplementation,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel},
+    xlora_models::NonGranularState,
 };
 use anyhow::Result;
-use candle_core::Device;
+use candle_core::{Device, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
 
@@ -16,6 +19,49 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 use tracing::warn;
+
+use crate::{
+    models,
+    xlora_models::{self, XLoraConfig},
+    DeviceMapMetadata,
+};
+
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+    ) -> candle_core::Result<Tensor>;
+    #[allow(clippy::too_many_arguments)]
+    fn xlora_forward(
+        &self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    fn is_xlora(&self) -> bool;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
+    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
+        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
+        candle_core::bail!(
+            "Activating adapters is only supported for models fine-tuned with LoRA."
+        );
+    }
+    fn config(&self) -> &ModelConfigMetadata;
+}
 
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
@@ -51,13 +97,6 @@ pub trait NormalModelLoader {
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
 }
-
-use super::NormalModel;
-use crate::{
-    models,
-    xlora_models::{self, XLoraConfig},
-    DeviceMapMetadata,
-};
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, PartialEq)]

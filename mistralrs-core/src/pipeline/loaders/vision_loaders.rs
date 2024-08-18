@@ -1,7 +1,9 @@
+use std::any::Any;
 use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
+use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -9,8 +11,11 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
-use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
-use crate::paged_attention::AttentionImplementation;
+use super::NormalLoadingMetadata;
+use crate::amoe::AnyMoeBaseModelMixin;
+use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -22,6 +27,27 @@ use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
+
+pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
+    // pixel_values and pixel_attention_mask only specified for prompt seqs
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+    ) -> candle_core::Result<Tensor>;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
+    fn has_conv2d(&self) -> bool;
+    fn config(&self) -> &ModelConfigMetadata;
+}
 
 pub trait VisionModelLoader {
     fn load(

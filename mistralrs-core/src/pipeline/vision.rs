@@ -1,13 +1,11 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
-};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
     ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
     VisionModelLoader, XLoraPaths,
 };
+use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
