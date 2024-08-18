@@ -3,7 +3,6 @@
 use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
-use candle_core::quantized::gguf_file::Content;
 use itertools::Itertools;
 use tokenizers::{
     decoders::{
@@ -22,6 +21,8 @@ use tracing::info;
 
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
+
+use super::Content;
 
 pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
@@ -71,10 +72,12 @@ struct AddedTokensCollection {
     unk: Option<String>,
 }
 
-pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
+pub fn convert_gguf_to_hf_tokenizer<'a, R: std::io::Seek + std::io::Read>(
+    content: &Content<'a, R>,
+) -> Result<GgufTokenizerConversion> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml",
-        metadata: &content.metadata,
+        metadata: content.get_metadata(),
     };
     let props = PropsGGUF::try_from(metadata)?;
 

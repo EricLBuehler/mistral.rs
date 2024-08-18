@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
+use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
-use candle_core::quantized::{ggml_file, gguf_file};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
@@ -393,8 +394,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -402,7 +402,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "llama",
-            metadata: &ct.metadata,
+            metadata: &ct.get_metadata(),
         };
         let PropsGGUF {
             n_expert,
@@ -419,13 +419,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
-        )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+        let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
         let mapper = mapper.into_mapper(block_count, device)?;
@@ -449,18 +446,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 DType::F32,
             )?;
 
-            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo =
-                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
+            let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;
+            let attention_wv = ct.tensor(&format!("{prefix}.attn_v.weight"), device)?;
+            let attention_wo = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
             let mlp_or_moe = if n_expert <= 1 {
-                let feed_forward_w1 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+                let feed_forward_w1 = ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?;
+                let feed_forward_w2 = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
+                let feed_forward_w3 = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
                 MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w1),
@@ -477,14 +470,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 })
             } else {
                 let feed_forward_gate_inp =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
+                    ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
-                match ct.tensor(reader, &format!("{prefix}.ffn_gate_exps.weight"), device) {
+                match ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device) {
                     Ok(feed_forward_gate_exps) => {
                         let feed_forward_down_exps =
-                            ct.tensor(reader, &format!("{prefix}.ffn_down_exps.weight"), device)?;
+                            ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
                         let feed_forward_up_exps =
-                            ct.tensor(reader, &format!("{prefix}.ffn_up_exps.weight"), device)?;
+                            ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), device)?;
 
                         let dequant_ffn_gate = feed_forward_gate_exps
                             .dequantize(device)?
@@ -532,18 +525,12 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     }
                     Err(_) => {
                         for i in 0..n_expert {
-                            let feed_forward_w1 = ct.tensor(
-                                reader,
-                                &format!("{prefix}.ffn_gate.{i}.weight"),
-                                device,
-                            )?;
-                            let feed_forward_w2 = ct.tensor(
-                                reader,
-                                &format!("{prefix}.ffn_down.{i}.weight"),
-                                device,
-                            )?;
+                            let feed_forward_w1 =
+                                ct.tensor(&format!("{prefix}.ffn_gate.{i}.weight"), device)?;
+                            let feed_forward_w2 =
+                                ct.tensor(&format!("{prefix}.ffn_down.{i}.weight"), device)?;
                             let feed_forward_w3 =
-                                ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                                ct.tensor(&format!("{prefix}.ffn_up.{i}.weight"), device)?;
                             experts.push(Mlp {
                                 feed_forward_w1: Arc::new(GgufMatMul::new(
                                     QuantMethodConfig::Gguf {
@@ -576,9 +563,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     experts,
                 }
             };
-            let attention_norm =
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
-            let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
+            let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
+            let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(

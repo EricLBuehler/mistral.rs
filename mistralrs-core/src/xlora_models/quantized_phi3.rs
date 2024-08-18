@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::repeat_kv;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
@@ -17,7 +18,6 @@ use crate::lora::QLoraLinear;
 use crate::pipeline::extract_logits;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -226,8 +226,7 @@ fn precomput_freqs_cis(
 impl ModelConfig::FromAdapterGGUF for ModelWeights {
     #[allow(clippy::too_many_arguments)]
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
@@ -241,7 +240,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "phi3",
-            metadata: &ct.metadata,
+            metadata: &ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,
@@ -256,10 +255,10 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let output_norm = rms_norm(ct.tensor("output_norm.weight", device)?, rms_eps)?;
+        let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
         let mapper = mapper.into_mapper(block_count, device)?;
@@ -268,8 +267,8 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let ffn_up = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
-            let ffn_down = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
+            let ffn_up = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
+            let ffn_down = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
             let cfg_up = get_lora_cfg(&ffn_up);
             let cfg_down = get_lora_cfg(&ffn_down);
             let mlp = Mlp {
@@ -296,15 +295,15 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 i_size,
             };
             let attn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
                 rms_eps,
             )?;
             let ffn_norm = rms_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
                 rms_eps,
             )?;
-            let qkv = ct.tensor(reader, &format!("{prefix}.attn_qkv.weight"), device)?;
-            let output = ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let qkv = ct.tensor(&format!("{prefix}.attn_qkv.weight"), device)?;
+            let output = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
             let cfg_qkv = get_lora_cfg(&qkv);
             let cfg_out = get_lora_cfg(&output);
             layers.push(LayerWeights {

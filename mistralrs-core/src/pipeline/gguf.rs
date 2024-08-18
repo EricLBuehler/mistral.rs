@@ -13,6 +13,7 @@ use crate::aici::toktree::TokTrie;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
+use crate::gguf::{Content, GGUFArchitecture};
 use crate::lora::Ordering;
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
@@ -29,7 +30,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
     get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, TryIntoDType, DEBUG,
+    Pipeline, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -39,9 +40,7 @@ use crate::{
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-use anyhow::{bail, Context, Result};
-use candle_core::quantized::gguf_file::Content;
-use candle_core::quantized::gguf_file::{self, Value as GgufValue};
+use anyhow::{bail, Result};
 use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -53,7 +52,6 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use strum::EnumString;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -89,34 +87,6 @@ pub struct GGUFLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     prompt_batchsize: Option<NonZeroUsize>,
-}
-
-#[derive(Debug, EnumString)]
-#[strum(serialize_all = "kebab-case")]
-pub enum GGUFArchitecture {
-    Llama,
-    Mpt,
-    Gptneox,
-    Gptj,
-    Gpt2,
-    Bloom,
-    Falcon,
-    Mamba,
-    Rwkv,
-    Phi2,
-    Phi3,
-    Starcoder2,
-}
-
-// Wraps from_str() for some convenience:
-// - Case-insensitive variant matching (TODO: is this desirable?)
-// - Customized error until potential upstream support: https://github.com/Peternator7/strum/issues/332
-impl GGUFArchitecture {
-    fn from_value<T: AsRef<str> + std::fmt::Display>(value: T) -> Result<Self> {
-        Self::from_str(&value.as_ref().to_ascii_lowercase())
-            .with_context(|| format!("Unknown GGUF architecture `{value}`"))
-            .map_err(anyhow::Error::msg)
-    }
 }
 
 #[derive(Default)]
@@ -262,28 +232,6 @@ impl GGUFLoader {
     }
 }
 
-fn parse_gguf_value(value: &GgufValue) -> String {
-    match value {
-        GgufValue::Array(vs) => vs
-            .iter()
-            .map(parse_gguf_value)
-            .collect::<Vec<String>>()
-            .join(", "),
-        GgufValue::Bool(b) => b.to_string(),
-        GgufValue::F32(x) => x.to_string(),
-        GgufValue::F64(x) => x.to_string(),
-        GgufValue::I8(x) => x.to_string(),
-        GgufValue::I16(x) => x.to_string(),
-        GgufValue::I32(x) => x.to_string(),
-        GgufValue::I64(x) => x.to_string(),
-        GgufValue::String(x) => x.to_string(),
-        GgufValue::U8(x) => x.to_string(),
-        GgufValue::U16(x) => x.to_string(),
-        GgufValue::U32(x) => x.to_string(),
-        GgufValue::U64(x) => x.to_string(),
-    }
-}
-
 struct ContentConfig {
     hidden_size: usize,
     num_attn_heads: usize,
@@ -292,22 +240,21 @@ struct ContentConfig {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-impl<'a> From<&'a Content> for ContentConfig {
-    fn from(value: &'a Content) -> Self {
-        let arch = value.metadata["general.architecture"].to_string().unwrap();
+impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
+    fn from(value: &Content<'a, R>) -> Self {
+        let metadata = value.get_metadata();
+        let arch = metadata["general.architecture"].to_string().unwrap();
         Self {
-            hidden_size: value.metadata[&format!("{arch}.embedding_length")]
+            hidden_size: metadata[&format!("{arch}.embedding_length")]
                 .to_u64()
                 .unwrap() as usize,
-            num_attn_heads: value.metadata[&format!("{arch}.attention.head_count")]
+            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
                 .to_u64()
                 .unwrap() as usize,
-            num_kv_heads: value.metadata[&format!("{arch}.attention.head_count_kv")]
+            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
                 .to_u64()
                 .unwrap() as usize,
-            num_layers: value.metadata[&format!("{arch}.block_count")]
-                .to_u64()
-                .unwrap() as usize,
+            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
         }
     }
 }
@@ -388,40 +335,15 @@ impl Loader for GGUFLoader {
             paged_attn_config = None;
         }
 
-        let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-        let model = gguf_file::Content::read(&mut file)
-            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
-        let arch = model.metadata["general.architecture"]
-            .to_string()
-            .context("Model metadata should have declared an architecture")
-            .and_then(GGUFArchitecture::from_value)?;
-
-        info!("Model config:");
-        let mut sorted_keys = model.metadata.keys().collect::<Vec<_>>();
-        sorted_keys.sort();
-        for name in sorted_keys {
-            if !name.contains("tokenizer") {
-                let value = parse_gguf_value(&model.metadata[name]);
-                println!("{name}: {}", value);
-            }
+        let mut readers = Vec::new();
+        for filename in paths.get_weight_filenames() {
+            readers.push(std::fs::File::open(filename)?);
         }
+        let mut readers = readers.iter_mut().collect::<Vec<_>>();
 
-        if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
-            let mut tensors = Vec::new();
-            for (name, info) in &model.tensor_infos {
-                tensors.push(format!(
-                    "name = `{name}`, shape = {:?}, dtype = {:?}",
-                    info.shape.clone(),
-                    info.ggml_dtype
-                ));
-            }
-            fs::write(
-                "mistralrs_gguf_tensors.txt",
-                serde_json::to_string_pretty(&tensors).expect("Serialization failed."),
-            )?;
-
-            info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_gguf_tensors.txt`.");
-        }
+        let model = Content::from_readers(&mut readers)?;
+        model.print_metadata()?;
+        let arch = model.arch();
 
         let GgufTokenizerConversion {
             tokenizer,
@@ -462,7 +384,7 @@ impl Loader for GGUFLoader {
         let model_config = {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
-                (model, &mut file).into(),
+                model,
                 (device, mapper).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention

@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -12,6 +11,7 @@ use mistralrs_quant::QuantMethod;
 use mistralrs_quant::QuantMethodConfig;
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::MatMul;
 use crate::layers::ScaledDotProductAttention;
 use crate::layers::{repeat_kv, CausalMasker, QLinear};
@@ -225,8 +225,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -234,7 +233,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "phi2",
-            metadata: &ct.metadata,
+            metadata: &ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,
@@ -248,14 +247,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             ln_eps,
         )?;
-        let output = QLinear::new(&ct, reader, "output", device)?;
+        let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
 
@@ -265,8 +264,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
             let QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() else {
                 unreachable!()
             };
@@ -284,8 +283,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 })?),
             };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 ln_eps,
             )?;
             let paged_attn = match &attention_mechanism {
@@ -300,8 +299,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                 )?),
             };
-            let qkv = QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?;
-            let out = QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?;
+            let qkv = QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?;
+            let out = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;
             let QMatMul::QTensor(qkv_w) = qkv.inner_ref().clone() else {
                 unreachable!()
             };

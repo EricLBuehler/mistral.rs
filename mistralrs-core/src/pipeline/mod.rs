@@ -27,7 +27,7 @@ pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
 use core::fmt;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
+pub use gguf::{GGUFLoader, GGUFLoaderBuilder};
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel};
 use mistralrs_quant::IsqType;
