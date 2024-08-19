@@ -303,9 +303,9 @@ pub trait LeftshiftOp {
 impl LeftshiftOp for Tensor {
     #[cfg(feature = "metal")]
     fn leftshift(&self, n: usize) -> Result<Tensor> {
-        let original_device = rhs.device();
+        let original_device = self.device();
         self.to_device(&candle_core::Device::Cpu)?
-            .apply_op2_no_bwd(&Leftshift(n))?
+            .apply_op1_no_bwd(&Leftshift(n))?
             .to_device(original_device)
     }
     #[cfg(not(feature = "metal"))]
