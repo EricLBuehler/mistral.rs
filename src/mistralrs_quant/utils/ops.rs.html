@@ -688,9 +688,9 @@
 <span class="kw">impl </span>LeftshiftOp <span class="kw">for </span>Tensor {
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
     </span><span class="kw">fn </span>leftshift(<span class="kw-2">&amp;</span><span class="self">self</span>, n: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>original_device = rhs.device();
+        <span class="kw">let </span>original_device = <span class="self">self</span>.device();
         <span class="self">self</span>.to_device(<span class="kw-2">&amp;</span>candle_core::Device::Cpu)<span class="question-mark">?
-            </span>.apply_op2_no_bwd(<span class="kw-2">&amp;</span>Leftshift(n))<span class="question-mark">?
+            </span>.apply_op1_no_bwd(<span class="kw-2">&amp;</span>Leftshift(n))<span class="question-mark">?
             </span>.to_device(original_device)
     }
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
