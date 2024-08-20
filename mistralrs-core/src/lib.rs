@@ -54,6 +54,7 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod tools;
+mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
