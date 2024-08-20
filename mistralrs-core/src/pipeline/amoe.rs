@@ -498,13 +498,21 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
             let mut writer =
                 csv::Writer::from_path(path).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+            let mut header = vec![format!("Step")];
+            header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
+            writer
+                .write_record(&header)
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
             for (i, row) in all_losses.into_iter().enumerate() {
                 let mut new_row = vec![format!("Step {i}")];
-                new_row.extend(row.iter().map(|x| x.to_string()));
+                new_row.extend(row.iter().map(|x| format!("{x:.4}")));
                 writer
                     .write_record(&new_row)
                     .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
             }
+
             writer
                 .flush()
                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
