@@ -2307,6 +2307,7 @@ dependencies = [
  "anyhow",
  "candle-core",
  "either",
+ "futures",
  "image",
  "indexmap 2.4.0",
  "mistralrs-core",

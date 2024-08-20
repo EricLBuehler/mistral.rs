@@ -204,6 +204,14 @@ impl PagedAttentionScheduler {
             TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
         }
 
+        println!(
+            "running {:?}",
+            self.running
+                .iter()
+                .map(|x| *get_mut_arcmutex!(x).id())
+                .collect::<Vec<_>>()
+        );
+
         PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into(), // Clone should be cheap.
             blocks_to_swap_in,
@@ -222,6 +230,7 @@ impl PagedAttentionScheduler {
                 true
             }
         });
+        println!("free finished {to_free_ids:?}");
         for id in to_free_ids {
             self._free(id);
         }
@@ -337,6 +346,7 @@ impl PagedAttentionScheduler {
 
 impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
+        println!("Adding sequence {}", seq.id());
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
     fn schedule(&mut self) -> SchedulerOutput<'_> {
