@@ -170,6 +170,14 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fs};
 
 <span class="kw">use </span>anyhow::Context;
@@ -233,15 +241,23 @@
                     .get(<span class="string">"split.count"</span>)
                     .map(|val| val.to_u64().unwrap())
             })
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            .fold(Vec::new(), |<span class="kw-2">mut </span>accum, x| {
+                <span class="kw">if </span>!accum.contains(<span class="kw-2">&amp;</span>x) {
+                    accum.push(x);
+                }
+                accum
+            });
         <span class="kw">if </span>n_splits.len() &gt; <span class="number">1 </span>{
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Multiple contents have multiple `split.count` fields"</span>);
+            <span class="macro">candle_core::bail!</span>(<span class="string">"GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?"</span>);
         }
         <span class="attr">#[allow(clippy::cast_possible_truncation)]
         </span><span class="kw">if </span>!n_splits.is_empty() &amp;&amp; n_readers != n_splits[<span class="number">0</span>] <span class="kw">as </span>usize {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Number of readers does not match the number of splits."</span>);
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"Number of GGUF files does not match the number of splits, expected {} files."</span>,
+                n_splits[<span class="number">0</span>]
+            );
         } <span class="kw">else if </span>n_splits.len() == <span class="number">1 </span>{
-            <span class="macro">info!</span>(<span class="string">"Model n splits: {}"</span>, n_splits[<span class="number">0</span>]);
+            <span class="macro">info!</span>(<span class="string">"GGUF file has been split into {} shards"</span>, n_splits[<span class="number">0</span>]);
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>arch = <span class="prelude-val">None</span>;
