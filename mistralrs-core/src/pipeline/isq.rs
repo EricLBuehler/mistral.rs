@@ -131,7 +131,7 @@ pub trait IsqModel {
                 };
                 let dtype = if let Some(ref layers) = layers {
                     if let Some(layer) = layer {
-                        layers.get(*layer).cloned().unwrap_or(None)
+                        layers.get(*layer).cloned().unwrap_or(dtype)
                     } else {
                         dtype
                     }

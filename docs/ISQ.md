@@ -1,8 +1,12 @@
 # In situ quantization
 
-In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized. An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models. 
+In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized.
 
-Possible values for ISQ quantization:
+An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models at runtime.
+
+To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
+
+## ISQ quantization types
 - Q4_0
 - Q4_1
 - Q5_0
