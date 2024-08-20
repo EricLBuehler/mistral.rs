@@ -4,9 +4,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    ChatCompletionResponse, Constraint, Device, DeviceMapMetadata, GGUFLoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalRequest, PagedAttentionConfig,
-    Request, RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    initialize_logging, ChatCompletionResponse, Constraint, Device, DeviceMapMetadata,
+    GGUFLoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalRequest,
+    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    TokenSource, Usage,
 };
 
 async fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -32,7 +33,7 @@ async fn setup() -> anyhow::Result<Arc<MistralRs>> {
         Some(PagedAttentionConfig::new(
             Some(32),
             500,
-            MemoryGpuConfig::ContextSize(256),
+            MemoryGpuConfig::Utilization(0.9),
         )?), // No PagedAttention.
     )?;
     let config = pipeline
@@ -51,10 +52,12 @@ async fn setup() -> anyhow::Result<Arc<MistralRs>> {
             config,
         },
     )
+    .with_throughput_logging()
     .build())
 }
 
 async fn bench_mistralrs(n_requests: usize) -> anyhow::Result<()> {
+    initialize_logging();
     let mistralrs = setup().await?;
 
     let mut handles = Vec::new();
@@ -119,7 +122,7 @@ async fn bench_mistralrs(n_requests: usize) -> anyhow::Result<()> {
             max_completion = *avg_compl_tok_per_sec;
         }
     }
-    println!("Mistral.rs: {max_prompt} max PP T/s, {max_completion} max TG T/s");
+    println!("Individual sequence stats: {max_prompt} max PP T/s, {max_completion} max TG T/s");
 
     Ok(())
 }
