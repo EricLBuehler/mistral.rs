@@ -74,7 +74,7 @@ pub enum QuantMethodConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
-pub enum    IsqType {
+pub enum IsqType {
     Q4_0,
     Q4_1,
     Q5_0,
@@ -98,21 +98,40 @@ impl TryFrom<IsqType> for GgmlDType {
     type Error = candle_core::Error;
 
     fn try_from(value: IsqType) -> Result<Self> {
-        match value {
-            IsqType::Q2K => Ok(Self::Q2K),
-            IsqType::Q3K => Ok(Self::Q3K),
-            IsqType::Q4K => Ok(Self::Q4K),
-            IsqType::Q4_0 => Ok(Self::Q4_0),
-            IsqType::Q4_1 => Ok(Self::Q4_1),
-            IsqType::Q5K => Ok(Self::Q5K),
-            IsqType::Q5_0 => Ok(Self::Q5_0),
-            IsqType::Q5_1 => Ok(Self::Q5_1),
-            IsqType::Q6K => Ok(Self::Q6K),
-            IsqType::Q8K => Ok(Self::Q8K),
-            IsqType::Q8_0 => Ok(Self::Q8_0),
-            IsqType::Q8_1 => Ok(Self::Q8_1),
+        let tp = match value {
+            IsqType::Q2K => Self::Q2K,
+            IsqType::Q3K => Self::Q3K,
+            IsqType::Q4K => Self::Q4K,
+            IsqType::Q4_0 => Self::Q4_0,
+            IsqType::Q4_1 => Self::Q4_1,
+            IsqType::Q5K => Self::Q5K,
+            IsqType::Q5_0 => Self::Q5_0,
+            IsqType::Q5_1 => Self::Q5_1,
+            IsqType::Q6K => Self::Q6K,
+            IsqType::Q8K => Self::Q8K,
+            IsqType::Q8_0 => Self::Q8_0,
+            IsqType::Q8_1 => Self::Q8_1,
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
+        };
+        #[cfg(feature = "cuda")]
+        {
+            if !matches!(
+                tp,
+                GgmlDType::Q4_0
+                    | GgmlDType::Q4_1
+                    | GgmlDType::Q5_0
+                    | GgmlDType::Q5_1
+                    | GgmlDType::Q8_0
+                    | GgmlDType::Q2K
+                    | GgmlDType::Q3K
+                    | GgmlDType::Q4K
+                    | GgmlDType::Q5K
+                    | GgmlDType::Q6K
+            ) {
+                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+            }
         }
+        Ok(tp)
     }
 }
 

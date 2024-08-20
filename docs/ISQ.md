@@ -8,13 +8,13 @@ Possible values for ISQ quantization:
 - Q5_0
 - Q5_1
 - Q8_0
-- Q8_1
+- Q8_1 (*not available on CUDA*)
 - Q2K
 - Q3K
 - Q4K
 - Q5K
 - Q6K
-- Q8K
+- Q8K  (*not available on CUDA*)
 - HQQ4
 - HQQ8
 
