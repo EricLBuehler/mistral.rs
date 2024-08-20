@@ -163,14 +163,3 @@ impl TryIntoDType for ModelDType {
         dtype
     }
 }
-
-#[derive(Debug, Clone, Deserialize)]
-struct DummyConfig {
-    num_hidden_layers: usize,
-}
-
-/// Get the `num_hidden_layers` key from a config. This needs to be at the top level.
-pub fn get_num_hidden_layers(config: &str) -> anyhow::Result<usize> {
-    let cfg: DummyConfig = serde_json::from_str(config)?;
-    Ok(cfg.num_hidden_layers)
-}
