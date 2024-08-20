@@ -452,11 +452,25 @@ impl Sampler {
     }
 
     fn apply_penalties(&self, mut logits: Vec<f32>, context: Option<&[u32]>) -> Result<Tensor> {
+        let Some(ctxt) = context else {
+            bail!("Must specify penalty context.");
+        };
+        if ctxt.is_empty() {
+            bail!("Penalty context is empty, this should not happen.");
+        }
+
+        // Dry penalty
+        self.apply_dry_penalty(&mut logits, ctxt)?;
+
+        // Frequency and Presence penalty
+        self.apply_freq_presc_penalty(&mut logits, ctxt)?;
+
+        let vocab_size = logits.len();
+        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    fn apply_freq_presc_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
         if self.frequency_penalty.is_some() || self.presence_penalty.is_some() {
-            if context.is_none() {
-                bail!("Must specify penalty context.");
-            }
-            let context = context.as_ref().unwrap();
             let frequency_penalty = self.frequency_penalty.unwrap_or(0.);
             let presence_penalty = self.presence_penalty.unwrap_or(0.);
 
@@ -474,35 +488,23 @@ impl Sampler {
                     - if count > 0.0 { 1. } else { 0. } * presence_penalty;
             }
         }
-        let vocab_size = logits.len();
-        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+        Ok(())
     }
 
-    fn apply_dry_penalty(&self, logits: &mut [f32], context: Option<&[u32]>) -> Result<()> {
+    fn apply_dry_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
         if let Some(ref params) = self.dry_params {
-            if context.is_none() {
-                bail!("Must specify penalty context.");
-            }
-            let toks = context.as_ref().unwrap();
-
-            // Handle when there is no penalty context during prompt processing
-            if toks.is_empty() {
-                // Nothing to do.
-                return Ok(());
-            }
-
-            let match_indices = toks
+            let match_indices = context
                 .par_iter()
                 .enumerate()
-                .take(toks.len() - 1)
-                .filter(|(_i, x)| *toks.last().unwrap() == **x)
+                .take(context.len() - 1)
+                .filter(|(_i, x)| *context.last().unwrap() == **x)
                 .map(|(i, _)| i)
                 .collect::<Vec<_>>();
 
             let mut match_lengths = HashMap::new();
 
             for i in match_indices {
-                let next_token = toks[i + 1];
+                let next_token = context[i + 1];
 
                 if params.sequence_breakers.contains(&next_token) {
                     continue;
@@ -519,8 +521,8 @@ impl Sampler {
 
                     let j = i - match_length;
 
-                    let prev_tok = toks[toks.len() - (match_length + 1)];
-                    if toks[j] != prev_tok {
+                    let prev_tok = context[context.len() - (match_length + 1)];
+                    if context[j] != prev_tok {
                         // Start of match reached
                         break;
                     }
@@ -566,9 +568,9 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
-        let mut logits = logits.to_vec1()?;
-        self.apply_dry_penalty(&mut logits, penalty_ctxt)?;
+        let logits = logits.to_vec1()?;
         let logits = self.apply_penalties(logits, penalty_ctxt)?;
+
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
