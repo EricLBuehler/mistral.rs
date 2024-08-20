@@ -21,6 +21,7 @@ serde.workspace = true
 image.workspace = true
 indexmap.workspace = true
 either.workspace = true
+futures.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
@@ -92,4 +93,8 @@ required-features = []
 
 [[example]]
 name = "tools"
+required-features = []
+
+[[example]]
+name = "batching"
 required-features = []
