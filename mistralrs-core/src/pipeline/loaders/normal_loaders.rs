@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -23,7 +24,6 @@ use tracing::warn;
 use crate::{
     models,
     xlora_models::{self, XLoraConfig},
-    DeviceMapMetadata,
 };
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
@@ -66,7 +66,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     // Device mapping metadata which can be used to construct a concrete device mapper
-    pub mapper: DeviceMapMetadata,
+    pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     // Flag to check if loading in ISQ
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)

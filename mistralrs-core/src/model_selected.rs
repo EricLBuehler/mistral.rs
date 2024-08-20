@@ -43,6 +43,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select an X-LoRA architecture
@@ -75,6 +79,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a LoRA architecture
@@ -102,6 +110,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model.
@@ -292,5 +304,9 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 }

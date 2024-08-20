@@ -5,7 +5,7 @@ use serde::Deserialize;
 use crate::{
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
+    SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType,
     VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
@@ -35,6 +35,9 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select an X-LoRA architecture
@@ -58,6 +61,9 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a LoRA architecture
@@ -77,6 +83,9 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGUF model.
@@ -223,6 +232,9 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 }
 
@@ -313,10 +325,12 @@ fn loader_from_selected(
             model_id,
             arch,
             dtype: _,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -330,10 +344,12 @@ fn loader_from_selected(
             tgt_non_granular_index,
             arch,
             dtype: _,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -355,10 +371,12 @@ fn loader_from_selected(
             order,
             arch,
             dtype: _,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -514,10 +532,12 @@ fn loader_from_selected(
             model_id,
             arch,
             dtype: _,
+            topology,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,

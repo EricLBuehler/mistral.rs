@@ -53,15 +53,15 @@ impl QuantMethod for UnquantLinear {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: IsqType,
+        dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
-            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            IsqType::HQQ4 | IsqType::HQQ8 => {
+            /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            Some(IsqType::HQQ4 | IsqType::HQQ8) => {
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let bits = match dtype {
+                let bits = match dtype.unwrap() {
                     IsqType::HQQ8 => HqqBits::Eight,
                     IsqType::HQQ4 => HqqBits::Four,
                     // IsqType::HQQ3 => HqqBits::Three,
@@ -87,19 +87,21 @@ impl QuantMethod for UnquantLinear {
                     Ok(Arc::new(res))
                 }
             }
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1 => {
-                let dtype = dtype.try_into()?;
+            Some(
+                IsqType::Q2K
+                | IsqType::Q3K
+                | IsqType::Q4K
+                | IsqType::Q4_0
+                | IsqType::Q4_1
+                | IsqType::Q5K
+                | IsqType::Q5_0
+                | IsqType::Q5_1
+                | IsqType::Q6K
+                | IsqType::Q8K
+                | IsqType::Q8_0
+                | IsqType::Q8_1,
+            ) => {
+                let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = generate_isq!(self.0.weight(), device, dtype, n_quantized);
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -109,6 +111,17 @@ impl QuantMethod for UnquantLinear {
                         .cloned()
                         .map(|b| b.to_dtype(DType::F32).unwrap()),
                 })?))
+            }
+            None => {
+                let w = self.0.weight().to_device(&device)?;
+                let b = if let Some(b) = self.0.bias() {
+                    Some(b.to_device(&device)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                )?))
             }
         }
     }
