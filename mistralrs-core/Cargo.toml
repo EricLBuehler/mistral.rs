@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "b5f038f", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "8790527", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
