@@ -20,7 +20,7 @@ pyo3.workspace = true
 mistralrs-core = { version = "0.2.5", path = "../mistralrs-core", features=["pyo3_macros","$feature_name"] }
 serde.workspace = true
 serde_json.workspace = true
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "8790527", features=["$feature_name"] }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "5212980", features=["$feature_name"] }
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
