@@ -19,6 +19,34 @@ pub struct LayerTopology {
     pub(crate) isq: Option<IsqType>,
 }
 
+#[derive(PartialEq, Eq, Debug)]
+struct CustomRange {
+    start: usize,
+    end: usize,
+}
+
+impl From<CustomRange> for Range<usize> {
+    fn from(value: CustomRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+impl Ord for CustomRange {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Order based on end position
+        self.end.cmp(&other.end)
+    }
+}
+
+impl PartialOrd for CustomRange {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Topology(pub Vec<Option<LayerTopology>>);
 
@@ -44,7 +72,6 @@ impl Topology {
             self.0
                 .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
         } else {
-            dbg!(self.0.len(), range.end);
             assert!(self.0.len() > range.end);
             self.0.splice(
                 range.clone(),
@@ -56,8 +83,8 @@ impl Topology {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(topology: &str) -> anyhow::Result<Self> {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
-        let mut this = Topology::new();
 
+        let mut layers = Vec::new();
         for (range, DeserLayerTopology { isq }) in deser.0 {
             let (start, end) = if range.contains('-') {
                 // Range (inclusive, exclusive)
@@ -74,14 +101,21 @@ impl Topology {
             if end <= start {
                 anyhow::bail!("Topology range end must be > start, got {end} <= {start}");
             }
-            let range = Range { start, end };
+            let range = CustomRange { start, end };
             let isq = if let Some(isq) = isq {
                 Some(parse_isq_value(&isq).map_err(anyhow::Error::msg)?)
             } else {
                 None
             };
             let layer_topo = LayerTopology { isq };
-            this.add_from_range(range, layer_topo);
+            layers.push((range, layer_topo));
+        }
+        // Sort so that we increase in end points
+        layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
+
+        let mut this = Self::new();
+        for (range, layer) in layers {
+            this.add_from_range(range.into(), layer);
         }
         Ok(this)
     }
