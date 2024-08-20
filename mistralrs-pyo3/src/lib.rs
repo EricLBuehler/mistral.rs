@@ -147,7 +147,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .build(),
@@ -162,7 +162,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .with_xlora(
@@ -186,7 +186,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .with_lora(

@@ -7,7 +7,7 @@ use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
-    VisionLoaderBuilder, VisionSpecificConfig,
+    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -189,7 +189,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .build(),
@@ -204,7 +207,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .with_xlora(
@@ -227,7 +233,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             args.prompt_batchsize,
         )
         .with_lora(

@@ -63,13 +63,13 @@ class Which(Enum):
     @dataclass
     class GGUF:
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         tok_model_id: str | None = None
 
     @dataclass
     class XLoraGGUF:
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         xlora_model_id: str
         order: str
         tok_model_id: str | None = None
@@ -78,7 +78,7 @@ class Which(Enum):
     @dataclass
     class LoraGGUF:
         quantized_model_id: str
-        quantized_filename: str
+        quantized_filename: str | list[str]
         adapters_model_id: str
         order: str
         tok_model_id: str | None = None
