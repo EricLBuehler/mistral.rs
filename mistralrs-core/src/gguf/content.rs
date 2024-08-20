@@ -61,15 +61,23 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .get("split.count")
                     .map(|val| val.to_u64().unwrap())
             })
-            .collect::<Vec<_>>();
+            .fold(Vec::new(), |mut accum, x| {
+                if !accum.contains(&x) {
+                    accum.push(x);
+                }
+                accum
+            });
         if n_splits.len() > 1 {
-            candle_core::bail!("Multiple contents have multiple `split.count` fields");
+            candle_core::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
         }
         #[allow(clippy::cast_possible_truncation)]
         if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
-            candle_core::bail!("Number of readers does not match the number of splits.");
+            candle_core::bail!(
+                "Number of GGUF files does not match the number of splits, expected {} files.",
+                n_splits[0]
+            );
         } else if n_splits.len() == 1 {
-            info!("Model n splits: {}", n_splits[0]);
+            info!("GGUF file has been split into {} shards", n_splits[0]);
         }
 
         let mut arch = None;
