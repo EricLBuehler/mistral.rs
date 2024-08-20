@@ -61,9 +61,14 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .get("split.count")
                     .map(|val| val.to_u64().unwrap())
             })
-            .collect::<Vec<_>>();
+            .fold(Vec::new(), |mut accum, x| {
+                if !accum.contains(&x) {
+                    accum.push(x);
+                }
+                accum
+            });
         if n_splits.len() > 1 {
-            candle_core::bail!("Multiple contents have multiple `split.count` fields");
+            candle_core::bail!("GGUF files have `split.count` differing values: {n_splits:?}. Perhaps they do not match?");
         }
         #[allow(clippy::cast_possible_truncation)]
         if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
