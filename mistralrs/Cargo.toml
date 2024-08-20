@@ -99,3 +99,7 @@ required-features = []
 [[example]]
 name = "batching"
 required-features = []
+
+[[example]]
+name = "topology"
+required-features = []

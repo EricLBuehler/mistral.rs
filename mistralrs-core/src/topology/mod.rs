@@ -16,7 +16,7 @@ pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
 
 #[derive(Clone, Debug)]
 pub struct LayerTopology {
-    pub(crate) isq: Option<IsqType>,
+    pub isq: Option<IsqType>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -51,8 +51,16 @@ impl PartialOrd for CustomRange {
 pub struct Topology(pub Vec<Option<LayerTopology>>);
 
 impl Topology {
-    fn new() -> Self {
+    /// Create an empty topology.
+    pub fn empty() -> Self {
         Topology(Vec::new())
+    }
+
+    /// Add an topology item (which will be expanded to cover all elements) of a range.
+    /// Any overlapping items will be overwritten. Padding automatically occurs if gaps occur.
+    pub fn with_range(mut self, range: Range<usize>, topo: LayerTopology) -> Self {
+        self.add_from_range(range, topo);
+        self
     }
 
     fn add_from_range(&mut self, range: Range<usize>, topo: LayerTopology) {
@@ -113,7 +121,7 @@ impl Topology {
         // Sort so that we increase in end points
         layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
 
-        let mut this = Self::new();
+        let mut this = Self::empty();
         for (range, layer) in layers {
             this.add_from_range(range.into(), layer);
         }

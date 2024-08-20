@@ -27,6 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         VisionSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,

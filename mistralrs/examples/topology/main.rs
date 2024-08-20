@@ -4,10 +4,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, IsqType, MistralRs,
-    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, IsqType, LayerTopology,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
     NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource,
+    SchedulerConfig, TokenSource, Topology,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -28,7 +28,33 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         NormalSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
-            topology: None,
+            topology: Some(
+                Topology::empty()
+                    .with_range(
+                        0..8,
+                        LayerTopology {
+                            isq: Some(IsqType::Q3K),
+                        },
+                    )
+                    .with_range(
+                        8..16,
+                        LayerTopology {
+                            isq: Some(IsqType::Q4K),
+                        },
+                    )
+                    .with_range(
+                        16..24,
+                        LayerTopology {
+                            isq: Some(IsqType::Q6K),
+                        },
+                    )
+                    .with_range(
+                        24..32,
+                        LayerTopology {
+                            isq: Some(IsqType::Q8_0),
+                        },
+                    ),
+            ),
         },
         None,
         None,

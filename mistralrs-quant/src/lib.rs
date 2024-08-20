@@ -74,7 +74,7 @@ pub enum QuantMethodConfig {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
-pub enum IsqType {
+pub enum    IsqType {
     Q4_0,
     Q4_1,
     Q5_0,
