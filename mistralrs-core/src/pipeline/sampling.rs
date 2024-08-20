@@ -326,14 +326,14 @@ pub async fn sample_sequence(
             token_set.apply_to(&mut acc);
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
-            let ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
+            let ctxt = seq.get_toks().to_vec();
             let rng_clone = rng.clone();
             let sampler = seq.sampler();
             if use_async_pool {
                 tokio_rayon::spawn(move || {
                     sampler.sample(
                         new_logits,
-                        Some(&ctx_clone),
+                        Some(&ctxt),
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
@@ -343,7 +343,7 @@ pub async fn sample_sequence(
             } else {
                 sampler.sample(
                     new_logits,
-                    Some(&ctx_clone),
+                    Some(&ctxt),
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
