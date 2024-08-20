@@ -151,7 +151,7 @@ pub(crate) struct TextConfig {
     #[serde(default = "default_14336")]
     intermediate_size: usize,
     #[serde(default = "default_32")]
-    num_hidden_layers: usize,
+    pub(crate) num_hidden_layers: usize,
     #[serde(default = "default_32")]
     num_attention_heads: usize,
     #[serde(default = "default_8")]

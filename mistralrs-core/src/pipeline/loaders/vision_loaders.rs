@@ -60,6 +60,8 @@ pub trait VisionModelLoader {
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    /// Get total num_hidden_layers for the layers which will be device mapped.
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
     fn get_processor(
         &self,
         model_config: &str,
@@ -137,6 +139,10 @@ impl VisionModelLoader for Phi3VLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Phi3Config = serde_json::from_str(config)?;
+        Ok(config.num_hidden_layers)
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -184,6 +190,11 @@ impl VisionModelLoader for Idefics2Loader {
             preprocessor_config,
         ))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Idefics2Config = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -228,6 +239,11 @@ impl VisionModelLoader for LLaVANextLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
 }
 
 // ======================== LLaVA Loader
@@ -271,5 +287,10 @@ impl VisionModelLoader for LLaVALoader {
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVAProcessor::new(model_config))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
     }
 }

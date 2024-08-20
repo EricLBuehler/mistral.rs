@@ -15,7 +15,6 @@ use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
-use crate::utils::normal::get_num_hidden_layers;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -180,14 +179,11 @@ impl Loader for VisionLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let dtype = if let Ok(n_layers) = get_num_hidden_layers(&config) {
-            let mapper_full = mapper.into_mapper(n_layers, device)?;
-            mapper_full.get_min_dtype(dtype)?
-        } else {
-            let dtype = dtype.try_into_dtype(&[device])?;
-            warn!("Model config does not have key `num_hidden_layers`. The dtype this may be incorrect in the context of device mapping!");
-            dtype
-        };
+        let mapper_full = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+        )?;
+        let dtype = mapper_full.get_min_dtype(dtype)?;
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()
