@@ -5,7 +5,7 @@ use mistralrs_core::{
     initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
     MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Topology, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};

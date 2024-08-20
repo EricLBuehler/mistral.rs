@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
 
 use itertools::Itertools;
 use mistralrs_quant::IsqType;
@@ -16,9 +16,10 @@ pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
 
 #[derive(Clone)]
 pub struct LayerTopology {
-    isq: Option<IsqType>,
+    pub(crate) isq: Option<IsqType>,
 }
 
+#[derive(Clone)]
 pub struct Topology(Vec<Option<LayerTopology>>);
 
 impl Topology {
@@ -76,5 +77,25 @@ impl Topology {
         }
 
         Ok(this)
+    }
+
+    pub fn from_reader<R: Read>(mut reader: R) -> anyhow::Result<Self> {
+        let mut buf = String::new();
+        reader.read_to_string(&mut buf)?;
+        Self::from_str(&buf)
+    }
+
+    pub fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let buf = fs::read_to_string(path)?;
+        Self::from_str(&buf)
+    }
+
+    pub fn from_option_path<P: AsRef<Path>>(path: Option<P>) -> anyhow::Result<Option<Self>> {
+        if let Some(path) = path {
+            let buf = fs::read_to_string(path)?;
+            Ok(Some(Self::from_str(&buf)?))
+        } else {
+            Ok(None)
+        }
     }
 }

@@ -30,7 +30,7 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -86,11 +86,12 @@ pub struct NormalLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 impl NormalLoaderBuilder {
