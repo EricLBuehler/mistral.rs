@@ -243,7 +243,7 @@
     <span class="kw">let </span>num_gpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     <span class="kw">let </span>num_cpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
     <span class="kw">if </span>num_gpu_blocks == <span class="number">0 </span>{
-        <span class="macro">anyhow::bail!</span>(<span class="string">"Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory allocated or reduce the memory utilization."</span>);
+        <span class="macro">anyhow::bail!</span>(<span class="string">"Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention."</span>);
     }
     <span class="macro">info!</span>(<span class="string">"Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens"</span>, num_gpu_blocks<span class="kw-2">*</span>block_size);
     <span class="prelude-val">Ok</span>(CacheConfig {
