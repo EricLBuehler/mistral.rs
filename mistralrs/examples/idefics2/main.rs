@@ -54,8 +54,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     .build())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
     let bytes = match reqwest::blocking::get(
