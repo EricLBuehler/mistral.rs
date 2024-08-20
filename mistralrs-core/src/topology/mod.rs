@@ -40,7 +40,7 @@ impl Topology {
                 .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
         } else if range.end >= self.0.len() && range.start < self.0.len() {
             // Replacing some layers at least but the range exceeds
-            self.0.extend(vec![None; self.0.len() - (range.end - 1)]);
+            self.0.extend(vec![None; range.end - self.0.len()]);
             self.0
                 .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
         } else {
