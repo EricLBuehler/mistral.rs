@@ -731,8 +731,6 @@
 <a href="#731" id="731">731</a>
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
-<a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -1145,9 +1143,7 @@
                 quant_cfg.bits
             );
         }
-        <span class="kw">let </span>mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
 
         <span class="kw">let </span>embed_tokens = candle_nn::embedding(

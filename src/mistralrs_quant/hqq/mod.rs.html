@@ -1152,18 +1152,18 @@
 
     <span class="kw">fn </span>apply_isq(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        dtype: IsqType,
+        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
         <span class="kw">let </span>bits = <span class="kw">match </span>dtype {
-            IsqType::HQQ8 =&gt; HqqBits::Eight,
-            IsqType::HQQ4 =&gt; HqqBits::Four,
-            <span class="comment">// IsqType::HQQ3 =&gt; HqqBits::Three,
-            // IsqType::HQQ2 =&gt; HqqBits::Two,
-            // IsqType::HQQ1 =&gt; HqqBits::One,
-            </span><span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected HQQ ISQ type."</span>),
+            <span class="prelude-val">Some</span>(IsqType::HQQ8) =&gt; HqqBits::Eight,
+            <span class="prelude-val">Some</span>(IsqType::HQQ4) =&gt; HqqBits::Four,
+            <span class="comment">// Some(IsqType::HQQ3) =&gt; HqqBits::Three,
+            // Some(IsqType::HQQ2) =&gt; HqqBits::Two,
+            // Some(IsqType::HQQ1) =&gt; HqqBits::One,
+            </span><span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected a HQQ ISQ type."</span>),
         };
         <span class="kw">let </span>cfg = HqqConfig {
             bits,

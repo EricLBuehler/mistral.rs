@@ -340,6 +340,14 @@
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
 <a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
@@ -348,7 +356,7 @@
 <span class="kw">use crate</span>::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
     VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
@@ -462,10 +470,12 @@
             tokenizer_json,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -480,10 +490,12 @@
             tgt_non_granular_index,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -506,10 +518,12 @@
             order,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -669,10 +683,12 @@
             tokenizer_json,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,

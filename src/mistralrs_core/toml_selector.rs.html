@@ -576,6 +576,26 @@
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize};
 
 <span class="kw">use </span>serde::Deserialize;
@@ -583,7 +603,7 @@
 <span class="kw">use crate</span>::{
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
     Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
+    SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType,
     VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
@@ -613,6 +633,9 @@
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
+
+        <span class="doccomment">/// Path to a topology YAML file.
+        </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
     },
 
     <span class="doccomment">/// Select an X-LoRA architecture
@@ -636,6 +659,9 @@
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
+
+        <span class="doccomment">/// Path to a topology YAML file.
+        </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
     },
 
     <span class="doccomment">/// Select a LoRA architecture
@@ -655,6 +681,9 @@
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
+
+        <span class="doccomment">/// Path to a topology YAML file.
+        </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
     },
 
     <span class="doccomment">/// Select a GGUF model.
@@ -801,6 +830,9 @@
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
         </span>dtype: ModelDType,
+
+        <span class="doccomment">/// Path to a topology YAML file.
+        </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
     },
 }
 
@@ -891,10 +923,12 @@
             model_id,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -908,10 +942,12 @@
             tgt_non_granular_index,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -933,10 +969,12 @@
             order,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -1092,10 +1130,12 @@
             model_id,
             arch,
             dtype: <span class="kw">_</span>,
+            topology,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             args.tokenizer_json,

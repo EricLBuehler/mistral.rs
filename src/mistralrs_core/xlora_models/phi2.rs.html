@@ -851,8 +851,6 @@
 <a href="#851" id="851">851</a>
 <a href="#852" id="852">852</a>
 <a href="#853" id="853">853</a>
-<a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1298,9 +1296,7 @@
                 quant_cfg.bits
             );
         }
-        <span class="kw">let </span>mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, <span class="kw-2">&amp;</span>normal_loading_metadata.real_device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
 
         <span class="kw">let </span>embed_tokens = embedding(

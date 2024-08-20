@@ -135,6 +135,19 @@
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
 <a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -190,15 +203,15 @@
 
     <span class="kw">fn </span>apply_isq(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        dtype: IsqType,
+        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">match </span>dtype {
-            <span class="comment">/*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            </span>IsqType::HQQ4 | IsqType::HQQ8 =&gt; {
+            <span class="comment">/*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            </span><span class="prelude-val">Some</span>(IsqType::HQQ4 | IsqType::HQQ8) =&gt; {
                 n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-                <span class="kw">let </span>bits = <span class="kw">match </span>dtype {
+                <span class="kw">let </span>bits = <span class="kw">match </span>dtype.unwrap() {
                     IsqType::HQQ8 =&gt; HqqBits::Eight,
                     IsqType::HQQ4 =&gt; HqqBits::Four,
                     <span class="comment">// IsqType::HQQ3 =&gt; HqqBits::Three,
@@ -224,19 +237,21 @@
                     <span class="prelude-val">Ok</span>(Arc::new(res))
                 }
             }
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1 =&gt; {
-                <span class="kw">let </span>dtype = dtype.try_into()<span class="question-mark">?</span>;
+            <span class="prelude-val">Some</span>(
+                IsqType::Q2K
+                | IsqType::Q3K
+                | IsqType::Q4K
+                | IsqType::Q4_0
+                | IsqType::Q4_1
+                | IsqType::Q5K
+                | IsqType::Q5_0
+                | IsqType::Q5_1
+                | IsqType::Q6K
+                | IsqType::Q8K
+                | IsqType::Q8_0
+                | IsqType::Q8_1,
+            ) =&gt; {
+                <span class="kw">let </span>dtype: GgmlDType = dtype.unwrap().try_into()<span class="question-mark">?</span>;
                 <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(<span class="self">self</span>.<span class="number">0</span>.weight(), device, dtype, n_quantized);
                 <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -246,6 +261,17 @@
                         .cloned()
                         .map(|b| b.to_dtype(DType::F32).unwrap()),
                 })<span class="question-mark">?</span>))
+            }
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>w = <span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+                    <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
+                } <span class="kw">else </span>{
+                    <span class="prelude-val">None
+                </span>};
+                <span class="prelude-val">Ok</span>(Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                )<span class="question-mark">?</span>))
             }
         }
     }

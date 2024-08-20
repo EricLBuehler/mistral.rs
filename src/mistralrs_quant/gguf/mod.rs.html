@@ -117,13 +117,30 @@
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
 <a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
 <span class="kw">use </span>candle_core::{
-    quantized::{GgmlDType, QMatMul},
+    quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, <span class="prelude-ty">Result</span>, Tensor,
 };
 <span class="kw">use </span>candle_nn::Module;
@@ -216,20 +233,37 @@
 
     <span class="kw">fn </span>apply_isq(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        dtype: IsqType,
+        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-        <span class="kw">let </span>t = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.w {
-            QMatMul::QTensor(q) =&gt; q.dequantize(<span class="kw-2">&amp;</span>q.device())<span class="question-mark">?</span>,
-            QMatMul::TensorF16(t) | QMatMul::Tensor(t) =&gt; t.clone(),
-        };
-        <span class="kw">let </span>dtype = dtype.try_into()<span class="question-mark">?</span>;
-        <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(t, device, dtype, n_quantized);
-        <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-            q_weight: res,
-            b: <span class="self">self</span>.b.clone(),
-        })<span class="question-mark">?</span>))
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(dtype) = dtype {
+            <span class="kw">let </span>t = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.w {
+                QMatMul::QTensor(q) =&gt; q.dequantize(<span class="kw-2">&amp;</span>q.device())<span class="question-mark">?</span>,
+                QMatMul::TensorF16(t) | QMatMul::Tensor(t) =&gt; t.clone(),
+            };
+            <span class="kw">let </span>dtype = dtype.try_into()<span class="question-mark">?</span>;
+            <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(t, device, dtype, n_quantized);
+            <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: res,
+                b: <span class="self">self</span>.b.clone(),
+            })<span class="question-mark">?</span>))
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>w = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.w {
+                QMatMul::QTensor(q) =&gt; QMatMul::QTensor(Arc::new(QTensor::quantize(
+                    <span class="kw-2">&amp;</span>q.dequantize(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>,
+                    q.dtype(),
+                )<span class="question-mark">?</span>)),
+                QMatMul::Tensor(t) =&gt; QMatMul::Tensor(t.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>),
+                QMatMul::TensorF16(t) =&gt; QMatMul::TensorF16(t.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>),
+            };
+            <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="kw-2">&amp;</span><span class="self">self</span>.b {
+                <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>};
+            <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul { w, b }))
+        }
     }
 
     <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {

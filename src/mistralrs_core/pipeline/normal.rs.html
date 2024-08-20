@@ -636,6 +636,17 @@
 <a href="#636" id="636">636</a>
 <a href="#637" id="637">637</a>
 <a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -668,7 +679,7 @@
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    Topology, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
@@ -694,6 +705,7 @@
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     model_id: String,
     metadata: Arc&lt;GeneralMetadata&gt;,
+    topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 }
 
 <span class="doccomment">/// A loader for a "normal" (non-quantized) model.
@@ -724,11 +736,12 @@
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
-<span class="attr">#[derive(Clone, Copy, Default)]
+<span class="attr">#[derive(Clone, Default)]
 </span><span class="doccomment">/// Config specific to loading a normal model.
 </span><span class="kw">pub struct </span>NormalSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
@@ -880,11 +893,11 @@
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
-        <span class="kw">let </span>mapper_full = mapper.into_mapper(
+        <span class="kw">let </span>mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>dtype = mapper_full.get_min_dtype(dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
 
         <span class="macro">info!</span>(
             <span class="string">"Model config: {:?}"</span>,
@@ -892,7 +905,15 @@
                 .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
         </span>);
 
-        <span class="kw">let </span>load_device = <span class="kw">if </span>in_situ_quant.is_none() {
+        <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some();
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>topology) = <span class="self">self</span>.config.topology {
+            loading_isq |= topology
+                .<span class="number">0
+                </span>.iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        <span class="kw">let </span>load_device = <span class="kw">if </span>!loading_isq {
             device.clone()
         } <span class="kw">else </span>{
             Device::Cpu
@@ -916,7 +937,7 @@
                 <span class="self">self</span>.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone(),
                 attention_mechanism
             ),
@@ -931,7 +952,7 @@
                 <span class="self">self</span>.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             ModelKind::Adapter {
@@ -945,7 +966,7 @@
                 <span class="self">self</span>.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
@@ -957,8 +978,8 @@
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
         <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, <span class="prelude-val">None</span>);
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())<span class="question-mark">?</span>;
+        <span class="kw">if </span>in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some() {
+            model.quantize(in_situ_quant, device.clone(), <span class="self">self</span>.config.topology.as_ref())<span class="question-mark">?</span>;
         }
 
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }) {
@@ -1014,6 +1035,7 @@
                 cache_engine,
                 prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
+            topology: <span class="self">self</span>.config.topology.clone(),
         })))
     }
 
@@ -1042,7 +1064,7 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="self">self</span>.model
-            .quantize(dtype, device)
+            .quantize(<span class="prelude-val">Some</span>(dtype), device, <span class="self">self</span>.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }

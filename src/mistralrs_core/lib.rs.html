@@ -450,6 +450,8 @@
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
 <a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -506,6 +508,7 @@
 <span class="kw">mod </span>sequence;
 <span class="kw">mod </span>toml_selector;
 <span class="kw">mod </span>tools;
+<span class="kw">mod </span>topology;
 <span class="kw">mod </span>utils;
 <span class="kw">mod </span>vision_models;
 <span class="kw">mod </span>xlora_models;
@@ -535,6 +538,7 @@
 <span class="kw">pub use </span>tools::{
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
 };
+<span class="kw">pub use </span>topology::{LayerTopology, Topology};
 <span class="kw">pub use </span>utils::debug::initialize_logging;
 <span class="kw">pub use </span>utils::memory_usage::MemoryUsage;
 <span class="kw">pub use </span>utils::normal::{ModelDType, TryIntoDType};

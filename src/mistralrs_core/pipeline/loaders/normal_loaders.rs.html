@@ -1008,6 +1008,7 @@
 
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -1029,7 +1030,6 @@
 <span class="kw">use crate</span>::{
     models,
     xlora_models::{<span class="self">self</span>, XLoraConfig},
-    DeviceMapMetadata,
 };
 
 <span class="kw">pub trait </span>NormalModel: IsqModel + AnyMoeBaseModelMixin {
@@ -1072,7 +1072,7 @@
 <span class="doccomment">/// Metadata for loading a model with ISQ or device mapping.
 </span><span class="kw">pub struct </span>NormalLoadingMetadata {
     <span class="comment">// Device mapping metadata which can be used to construct a concrete device mapper
-    </span><span class="kw">pub </span>mapper: DeviceMapMetadata,
+    </span><span class="kw">pub </span>mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     <span class="comment">// Flag to check if loading in ISQ
     </span><span class="kw">pub </span>loading_isq: bool,
     <span class="comment">// Device mapping target device (the one that is not the cpu)

@@ -251,6 +251,25 @@
 <a href="#251" id="251">251</a>
 <a href="#252" id="252">252</a>
 <a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -326,7 +345,7 @@
     },
 }
 
-<span class="attr">#[derive(Clone, Copy, Debug, PartialEq)]
+<span class="attr">#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
 </span><span class="kw">pub enum </span>IsqType {
     Q4_0,
     Q4_1,
@@ -351,21 +370,40 @@
     <span class="kw">type </span>Error = candle_core::Error;
 
     <span class="kw">fn </span>try_from(value: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">match </span>value {
-            IsqType::Q2K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q2K),
-            IsqType::Q3K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q3K),
-            IsqType::Q4K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4K),
-            IsqType::Q4_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4_0),
-            IsqType::Q4_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q4_1),
-            IsqType::Q5K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5K),
-            IsqType::Q5_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5_0),
-            IsqType::Q5_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q5_1),
-            IsqType::Q6K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q6K),
-            IsqType::Q8K =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8K),
-            IsqType::Q8_0 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8_0),
-            IsqType::Q8_1 =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Q8_1),
+        <span class="kw">let </span>tp = <span class="kw">match </span>value {
+            IsqType::Q2K =&gt; <span class="self">Self</span>::Q2K,
+            IsqType::Q3K =&gt; <span class="self">Self</span>::Q3K,
+            IsqType::Q4K =&gt; <span class="self">Self</span>::Q4K,
+            IsqType::Q4_0 =&gt; <span class="self">Self</span>::Q4_0,
+            IsqType::Q4_1 =&gt; <span class="self">Self</span>::Q4_1,
+            IsqType::Q5K =&gt; <span class="self">Self</span>::Q5K,
+            IsqType::Q5_0 =&gt; <span class="self">Self</span>::Q5_0,
+            IsqType::Q5_1 =&gt; <span class="self">Self</span>::Q5_1,
+            IsqType::Q6K =&gt; <span class="self">Self</span>::Q6K,
+            IsqType::Q8K =&gt; <span class="self">Self</span>::Q8K,
+            IsqType::Q8_0 =&gt; <span class="self">Self</span>::Q8_0,
+            IsqType::Q8_1 =&gt; <span class="self">Self</span>::Q8_1,
             <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected valid GGML ISQ type."</span>),
+        };
+        <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+        </span>{
+            <span class="kw">if </span>!<span class="macro">matches!</span>(
+                tp,
+                GgmlDType::Q4_0
+                    | GgmlDType::Q4_1
+                    | GgmlDType::Q5_0
+                    | GgmlDType::Q5_1
+                    | GgmlDType::Q8_0
+                    | GgmlDType::Q2K
+                    | GgmlDType::Q3K
+                    | GgmlDType::Q4K
+                    | GgmlDType::Q5K
+                    | GgmlDType::Q6K
+            ) {
+                <span class="macro">candle_core::bail!</span>(<span class="string">"GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`"</span>)
+            }
         }
+        <span class="prelude-val">Ok</span>(tp)
     }
 }
 
@@ -396,7 +434,7 @@
     <span class="doccomment">/// If the quant is backed by a qmatmul.
     </span><span class="kw">fn </span>apply_isq(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        dtype: IsqType,
+        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
