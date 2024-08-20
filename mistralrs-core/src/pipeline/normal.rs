@@ -256,7 +256,15 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let load_device = if in_situ_quant.is_none() {
+        let mut loading_isq = in_situ_quant.is_some();
+        if let Some(ref topology) = self.config.topology {
+            loading_isq |= topology
+                .0
+                .iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -280,7 +288,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone(),
                 attention_mechanism
             ),
@@ -295,7 +303,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             ModelKind::Adapter {
@@ -309,7 +317,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             _ => unreachable!(),
@@ -321,7 +329,7 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if let Some(in_situ_quant) = in_situ_quant {
+        if in_situ_quant.is_some() || self.config.topology.is_some() {
             model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
         }
 
@@ -407,7 +415,7 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device, self.topology.as_ref())
+            .quantize(Some(dtype), device, self.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }

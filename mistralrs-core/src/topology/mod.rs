@@ -14,12 +14,12 @@ pub struct DeserLayerTopology {
 #[derive(Deserialize)]
 pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LayerTopology {
     pub(crate) isq: Option<IsqType>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Topology(pub Vec<Option<LayerTopology>>);
 
 impl Topology {
@@ -28,24 +28,32 @@ impl Topology {
     }
 
     fn add_from_range(&mut self, range: Range<usize>, topo: LayerTopology) {
-        if range.start == 0 && self.0.len() == 0 {
+        let n_repeat = 0..=range.end - range.start;
+        if range.start == 0 && self.0.is_empty() {
             // Simple case, starting out
-            self.0.extend(range.into_iter().map(|_| Some(topo.clone())));
+            self.0
+                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
         } else if range.end >= self.0.len() && range.start > self.0.len() {
             // Adding new layers. Add Nones to pad
-            self.0.extend(vec![None; self.0.len() - range.start]);
-            self.0.extend(range.into_iter().map(|_| Some(topo.clone())));
+            self.0.extend(vec![None; range.start - self.0.len()]);
+            self.0
+                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
         } else if range.end >= self.0.len() && range.start < self.0.len() {
             // Replacing some layers at least but the range exceeds
             self.0.extend(vec![None; self.0.len() - (range.end - 1)]);
-            self.0.extend(range.into_iter().map(|_| Some(topo.clone())));
-        } else {
-            assert!(self.0.len() > range.end);
             self.0
-                .splice(range.clone(), range.into_iter().map(|_| Some(topo.clone())));
+                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
+        } else {
+            dbg!(self.0.len(), range.end);
+            assert!(self.0.len() > range.end);
+            self.0.splice(
+                range.clone(),
+                n_repeat.into_iter().map(|_| Some(topo.clone())),
+            );
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(topology: &str) -> anyhow::Result<Self> {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
         let mut this = Topology::new();
@@ -68,14 +76,13 @@ impl Topology {
             }
             let range = Range { start, end };
             let isq = if let Some(isq) = isq {
-                Some(parse_isq_value(&isq).map_err(|e| anyhow::Error::msg(e))?)
+                Some(parse_isq_value(&isq).map_err(anyhow::Error::msg)?)
             } else {
                 None
             };
             let layer_topo = LayerTopology { isq };
             this.add_from_range(range, layer_topo);
         }
-
         Ok(this)
     }
 

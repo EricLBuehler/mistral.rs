@@ -73,7 +73,7 @@ pub enum QuantMethodConfig {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
 pub enum IsqType {
     Q4_0,
     Q4_1,
@@ -143,7 +143,7 @@ pub trait QuantMethod: Send + Sync + Debug {
     /// If the quant is backed by a qmatmul.
     fn apply_isq(
         self: Arc<Self>,
-        dtype: IsqType,
+        dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>>;
