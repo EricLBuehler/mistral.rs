@@ -46,5 +46,5 @@ cargo run --features ... -- --port 1234 plain -m microsoft/Phi-3-mini-128k-instr
 ## Rust example
 Example [here](../mistralrs/examples/topology/main.rs).
 
-## Pytohn example
+## Python example
 Example [here](../examples/python/topology.py).
