@@ -285,10 +285,12 @@ fn parse_which(
             model_id,
             tokenizer_json,
             arch,
+            topology,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,

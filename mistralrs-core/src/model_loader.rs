@@ -333,10 +333,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tokenizer_json,
             arch,
             dtype: _,
+            topology,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             tokenizer_json,

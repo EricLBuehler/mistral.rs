@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_quant::{IsqType, QuantMethod};
 use tracing::info;
 
-use crate::device_map::DeviceMapper;
+use crate::{device_map::DeviceMapper, Topology};
 
 /// Parse ISQ value: one of
 /// - `Q4_0`
@@ -60,12 +60,21 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     );
     /// Quantize the model in-situ.
-    fn quantize(&mut self, dtype: IsqType, device: Device) -> candle_core::Result<()> {
+    fn quantize(
+        &mut self,
+        dtype: IsqType,
+        device: Device,
+        topology: Option<&Topology>,
+    ) -> candle_core::Result<()> {
         {
             let (tensors, mapper) = self.get_layers();
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
-            info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
+            if topology.is_some() {
+                info!("Applying in-situ quantization to {total_tensors} tensors according to topology.");
+            } else {
+                info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
+            }
             let bar = ProgressBar::new(total_tensors as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
@@ -74,14 +83,26 @@ pub trait IsqModel {
                     .progress_chars("#>-"),
             );
 
-            let mut devices = Vec::new();
-            for (_, layer) in &tensors {
+            let layers = topology.map(|x| {
+                x.0.iter()
+                    .map(|topo| topo.as_ref().map(|x| x.isq))
+                    .flatten()
+                    .collect::<Vec<_>>()
+            });
+
+            let mut devices_and_dtypes = Vec::new();
+            for (i, (_, layer)) in tensors.iter().enumerate() {
                 let device = if let Some(layer) = layer {
                     mapper.device_for(*layer, false).unwrap_or(&device)
                 } else {
                     &device
                 };
-                devices.push(device.clone());
+                let dtype = if let Some(ref layers) = layers {
+                    layers.get(i).cloned().unwrap_or(None)
+                } else {
+                    Some(dtype)
+                };
+                devices_and_dtypes.push((device.clone(), dtype));
             }
 
             let t_start = Instant::now();
@@ -113,14 +134,16 @@ pub trait IsqModel {
                     };
                     tensors
                         .into_par_iter()
-                        .zip(devices)
+                        .zip(devices_and_dtypes)
                         .progress_with(bar)
-                        .for_each(|((tensor, _), device)| {
-                            *tensor = tensor
-                                .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized)
-                                .unwrap();
-                            device.synchronize().unwrap();
+                        .for_each(|((tensor, _), (device, dtype))| {
+                            if let Some(dtype) = dtype {
+                                *tensor = tensor
+                                    .clone()
+                                    .apply_isq(dtype, device.clone(), &n_quantized)
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            }
                         });
                 });
             }
@@ -132,12 +155,14 @@ pub trait IsqModel {
                     .into_iter()
                     .zip(devices)
                     .progress_with(bar)
-                    .for_each(|((tensor, _), device)| {
-                        *tensor = tensor
-                            .clone()
-                            .apply_isq(dtype, device.clone(), &n_quantized)
-                            .unwrap();
-                        device.synchronize().unwrap();
+                    .for_each(|((tensor, _), (device, dtype))| {
+                        if let Some(dtype) = dtype {
+                            *tensor = tensor
+                                .clone()
+                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .unwrap();
+                            device.synchronize().unwrap();
+                        }
                     });
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();

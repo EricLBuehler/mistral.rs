@@ -22,7 +22,7 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -48,6 +48,7 @@ pub struct VisionPipeline {
     metadata: Arc<GeneralMetadata>,
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
+    topology: Option<Topology>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -72,11 +73,12 @@ pub struct VisionLoaderBuilder {
     tokenizer_json: Option<String>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 impl VisionLoaderBuilder {
@@ -179,11 +181,11 @@ impl Loader for VisionLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let mapper_full = mapper.into_mapper(
+        let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
         )?;
-        let dtype = mapper_full.get_min_dtype(dtype)?;
+        let dtype = mapper.get_min_dtype(dtype)?;
 
         let load_device = if in_situ_quant.is_none() {
             device.clone()
@@ -243,7 +245,7 @@ impl Loader for VisionLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
         }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
@@ -291,6 +293,7 @@ impl Loader for VisionLoader {
             }),
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
+            topology: self.config.topology.clone(),
         })))
     }
 
@@ -319,7 +322,7 @@ impl IsqPipelineMixin for VisionPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(dtype, device, self.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }

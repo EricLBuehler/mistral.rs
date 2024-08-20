@@ -587,9 +587,7 @@ impl XLoraLlama {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let mapper = normal_loading_metadata.mapper;
         let dtype = vb.dtype();
         let mut count = 0;
 

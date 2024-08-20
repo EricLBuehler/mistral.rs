@@ -56,6 +56,7 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
+    topology: Option<Topology>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -243,11 +244,11 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
-        let mapper_full = mapper.into_mapper(
+        let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
         )?;
-        let dtype = mapper_full.get_min_dtype(dtype)?;
+        let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
             "Model config: {:?}",
@@ -321,7 +322,7 @@ impl Loader for NormalLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -377,6 +378,7 @@ impl Loader for NormalLoader {
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
+            topology: self.config.topology.clone(),
         })))
     }
 
@@ -405,7 +407,7 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(dtype, device, self.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }

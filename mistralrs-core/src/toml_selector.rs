@@ -232,6 +232,9 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 }
 
@@ -529,10 +532,12 @@ fn loader_from_selected(
             model_id,
             arch,
             dtype: _,
+            topology,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,

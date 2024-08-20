@@ -208,10 +208,12 @@ pub enum Which {
         model_id,
         arch,
         tokenizer_json = None,
+        topology = None,
     ))]
     VisionPlain {
         model_id: String,
         arch: VisionArchitecture,
         tokenizer_json: Option<String>,
+        topology: Option<String>,
     },
 }

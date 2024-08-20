@@ -304,5 +304,9 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 }

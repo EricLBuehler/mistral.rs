@@ -20,7 +20,7 @@ pub struct LayerTopology {
 }
 
 #[derive(Clone)]
-pub struct Topology(Vec<Option<LayerTopology>>);
+pub struct Topology(pub Vec<Option<LayerTopology>>);
 
 impl Topology {
     fn new() -> Self {
