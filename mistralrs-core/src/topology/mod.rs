@@ -50,11 +50,18 @@ impl Topology {
         let mut this = Topology::new();
 
         for (range, DeserLayerTopology { isq }) in deser.0 {
-            let Some((start, end)) = range.splitn(2, '-').collect_tuple() else {
-                anyhow::bail!("Topology range segment must follow the format START-END")
+            let (start, end) = if range.contains('-') {
+                // Range (inclusive, exclusive)
+                let Some((start, end)) = range.splitn(2, '-').collect_tuple() else {
+                    anyhow::bail!("Topology range segment must follow the format START-END")
+                };
+                (start.parse::<usize>()?, end.parse::<usize>()?)
+            } else {
+                // Single layer here
+                let layer = range.parse::<usize>()?;
+                (layer, layer + 1)
             };
-            let start = start.parse::<usize>()?;
-            let end = end.parse::<usize>()?;
+
             if end <= start {
                 anyhow::bail!("Topology range end must be > start, got {end} <= {start}");
             }
