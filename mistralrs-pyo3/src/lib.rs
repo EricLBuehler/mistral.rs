@@ -394,7 +394,7 @@ impl Runner {
                     expert_type: amoe_conf.expert_type.into(),
                     gate_model_id: amoe_conf.gate_model_id.clone(),
                     training: amoe_conf.training,
-                    loss_svg: amoe_conf.loss_svg.clone(),
+                    loss_csv_path: amoe_conf.loss_csv_path.clone(),
                 },
                 path: amoe_conf.dataset_json,
                 prefix: amoe_conf.prefix,

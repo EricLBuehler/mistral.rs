@@ -10,7 +10,7 @@ It has the following features:
 
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
 
-> Note: By default, this has the capability to create an SVG loss image. When building from source (for Python or CLI), you may use `--no-default-features` command line to disable this. This may be necessary if networking is unavailable.
+> Note: By default, this has the capability to create an csv loss image. When building from source (for Python or CLI), you may use `--no-default-features` command line to disable this. This may be necessary if networking is unavailable.
 
 ## Dataset
 Currently, AnyMoE expects a JSON dataset with one top-level key `row`, which is an array of objects with keys `prompt` (string), `expert` (integer), and `image_urls` (optional array of strings). For example:
@@ -187,7 +187,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             expert_type: AnyMoeExpertType::FineTuned,
             gate_model_id: None, // Set this to Some("path/to/model/id") for the pretrained gating model id
             training: true,
-            loss_svg: None,
+            loss_csv_path: None,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),

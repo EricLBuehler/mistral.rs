@@ -282,7 +282,7 @@ class AnyMoeConfig:
         batch_size: int = 4,
         gate_model_id: str | None = None,
         training: bool = False,
-        loss_svg: str | None = None,
+        loss_csv_path: str | None = None,
     ) -> None:
         """
         Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
@@ -299,7 +299,7 @@ class AnyMoeConfig:
         > Note: `gate_model_id` specifies the gating model ID. If `training == True`, then safetensors will be written here.
             Otherwise, the pretrained safetensors will be loaded and no training occurs.
 
-        > Note: if `training == True`, `loss_svg` has no effect. Otherwise, an SVG image will be saved here.
+        > Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, an csv loss file will be saved here.
         """
         ...
 

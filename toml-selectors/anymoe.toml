@@ -14,4 +14,4 @@ hidden_size = 4096
 epochs = 25
 expert_type = "fine_tuned"
 gate_model_id = "saved_gate"
-loss_svg = "loss.svg"
+loss_csv_path = "loss.csv"

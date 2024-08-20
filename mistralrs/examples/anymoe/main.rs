@@ -44,7 +44,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             expert_type: AnyMoeExpertType::FineTuned,
             gate_model_id: None, // Set this to Some("path/to/model/id") for the pretrained gating model id
             training: true,
-            loss_svg: None,
+            loss_csv_path: None,
         },
         prefix: "model.layers".to_string(),
         mlp: "mlp".to_string(),

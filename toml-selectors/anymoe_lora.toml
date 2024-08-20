@@ -12,7 +12,7 @@ model_ids = ["typeof/zephyr-7b-beta-lora"]
 hidden_size = 4096
 epochs = 25
 gate_model_id = "saved_gate"
-loss_svg = "loss.svg"
+loss_csv_path = "loss.csv"
 
 [anymoe.config.expert_type.lora_adapter]
 rank = 64

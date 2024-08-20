@@ -151,9 +151,9 @@ pub struct AnyMoeConfig {
     pub gate_model_id: Option<String>,
     #[serde(default = "default_true")]
     pub training: bool,
-    /// If `training == true`, `loss_svg` will not save anything.
-    /// Otherwise, this will save a .svg file here.
-    pub loss_svg: Option<String>,
+    /// If `training == true`, `loss_csv_path` will not save anything.
+    /// Otherwise, this will save a .csv loss file here.
+    pub loss_csv_path: Option<String>,
 }
 
 #[derive(Clone)]

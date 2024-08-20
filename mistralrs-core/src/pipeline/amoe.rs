@@ -13,8 +13,6 @@ use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
-#[cfg(feature = "plotly")]
-use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
@@ -294,7 +292,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             expert_type,
             gate_model_id,
             training,
-            loss_svg,
+            loss_csv_path,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -489,45 +487,28 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
-        #[cfg(feature = "plotly")]
-        if let Some(loss_svg) = loss_svg {
-            let mut plot = Plot::new();
-            for gate in 0..all_losses[0].len() {
-                let gate_loss = all_losses
-                    .iter()
-                    .map(|losses| losses[gate])
-                    .collect::<Vec<_>>();
-                #[allow(clippy::cast_precision_loss)]
-                plot.add_trace(Scatter::new(
-                    (0..gate_loss.len())
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .map(|x| x as f32)
-                        .collect::<Vec<_>>(),
-                    gate_loss,
-                ));
-            }
-
-            plot.set_layout(
-                plot.layout()
-                    .clone()
-                    .show_legend(false)
-                    .title(format!("Gating layers ({} layers)", all_losses[0].len()))
-                    .x_axis(Axis::new().title("Step"))
-                    .y_axis(Axis::new().title("Loss")),
-            );
-
-            let path = Path::new(&loss_svg);
+        if let Some(loss_csv_path) = loss_csv_path {
+            let path = Path::new(&loss_csv_path);
             if !path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy() == *"svg")
+                .is_some_and(|e| e.to_string_lossy() == *"csv")
             {
-                candle_core::bail!("`loss_svg` must have an extension `svg`.");
+                candle_core::bail!("`loss_csv_path` must have an extension `csv`.");
             }
-            plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
+
+            let mut writer =
+                csv::Writer::from_path(path).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            for (i, row) in all_losses.into_iter().enumerate() {
+                let mut new_row = vec![format!("Step {i}")];
+                new_row.extend(row.iter().map(|x| x.to_string()));
+                writer
+                    .write_record(&new_row)
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            }
+            writer
+                .flush()
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         }
-        #[cfg(not(feature = "plotly"))]
-        if let Some(_loss_svg) = loss_svg {}
 
         Ok(Some(AnyMoeTrainingResult {
             steps,
