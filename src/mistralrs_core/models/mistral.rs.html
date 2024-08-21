@@ -793,6 +793,8 @@
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
 <a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
@@ -1082,6 +1084,7 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
@@ -1318,6 +1321,7 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
+                head_dim: <span class="prelude-val">None</span>,
             },
         })
     }

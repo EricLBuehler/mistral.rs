@@ -1183,6 +1183,8 @@
 <a href="#1183" id="1183">1183</a>
 <a href="#1184" id="1184">1184</a>
 <a href="#1185" id="1185">1185</a>
+<a href="#1186" id="1186">1186</a>
+<a href="#1187" id="1187">1187</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1438,6 +1440,7 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
@@ -2129,6 +2132,7 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
+                head_dim: <span class="prelude-val">None</span>,
             },
         })
     }

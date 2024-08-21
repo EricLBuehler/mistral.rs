@@ -27,11 +27,22 @@
 <a href="#27" id="27">27</a>
 <a href="#28" id="28">28</a>
 <a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+<a href="#36" id="36">36</a>
+<a href="#37" id="37">37</a>
 </pre></div><pre class="rust"><code><span class="kw">pub trait </span>ModelConfigLike {
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>hidden_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>num_kv_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>num_attn_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+    <span class="kw">fn </span>head_dim(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.hidden_size() / <span class="self">self</span>.num_attn_heads()
+    }
 }
 
 <span class="kw">pub struct </span>ModelConfigMetadata {
@@ -40,6 +51,7 @@
     <span class="kw">pub </span>num_kv_heads: usize,
     <span class="kw">pub </span>num_attn_heads: usize,
     <span class="kw">pub </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub </span>head_dim: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">impl </span>ModelConfigLike <span class="kw">for </span>ModelConfigMetadata {
@@ -54,6 +66,10 @@
     }
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.num_layers
+    }
+    <span class="kw">fn </span>head_dim(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.head_dim
+            .unwrap_or(<span class="self">self</span>.hidden_size() / <span class="self">self</span>.num_attn_heads())
     }
 }
 </code></pre></div></section></main></body></html>

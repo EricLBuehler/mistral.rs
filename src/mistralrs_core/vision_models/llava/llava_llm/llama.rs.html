@@ -703,6 +703,8 @@
 <a href="#703" id="703">703</a>
 <a href="#704" id="704">704</a>
 <a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
 </pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
@@ -800,6 +802,7 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
@@ -1156,6 +1159,7 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
+                head_dim: <span class="prelude-val">None</span>,
             },
         })
     }

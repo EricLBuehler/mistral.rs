@@ -66,6 +66,7 @@
 <a href="#66" id="66">66</a>
 <a href="#67" id="67">67</a>
 <a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -130,6 +131,7 @@
         _key_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         _value_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         _input_metadata: <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata,
+        _softcapping: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>();
     }

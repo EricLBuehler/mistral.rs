@@ -676,6 +676,7 @@
 <a href="#676" id="676">676</a>
 <a href="#677" id="677">677</a>
 <a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -867,6 +868,7 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
+                    <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
