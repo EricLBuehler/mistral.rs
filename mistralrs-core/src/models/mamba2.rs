@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
-use candle_core::Tensor;
-use candle_nn::{Activation, Conv1d, Embedding, Linear};
-use mistralrs_quant::QuantMethod;
+use candle_core::{Result, Tensor};
+use candle_nn::{Activation, Conv1d, Embedding, Linear, VarBuilder};
+use mistralrs_quant::{
+    linear, linear_no_bias, QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear,
+};
 use serde::Deserialize;
 
 use crate::{
     layers::{GatedRmsNorm, RmsNorm},
+    paged_attention::AttentionImplementation,
+    pipeline::NormalLoadingMetadata,
     serde_default_fn,
 };
 
@@ -87,6 +91,7 @@ pub struct Mamba2Config {
     rms_norm: bool,
     #[serde(default = "chunk_size_default")]
     chunk_size: usize,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/mamba2/modeling_mamba2.py#L406
@@ -107,8 +112,51 @@ struct Layer {
 }
 
 pub struct Model {
-    lm_head: Linear,
+    lm_head: Arc<dyn QuantMethod>,
     embeddings: Embedding,
     norm_f: RmsNorm,
     layers: Vec<Layer>,
+}
+
+impl Model {
+    pub fn new(
+        cfg: &Mamba2Config,
+        vb: VarBuilder,
+        _is_gptx: bool,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
+
+        let vb = vb.pp("backbone");
+
+        let embeddings = candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("embeddings"), false),
+        )?;
+        // Tied lm_head...
+        let lm_head = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(
+                mapper.cast_nm_device(
+                    &embeddings.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ),
+        ))?);
+        let norm_f = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.layer_norm_epsilon,
+            mapper.set_nm_device(vb.pp("norm_f"), false),
+        )?;
+        todo!()
+    }
 }
