@@ -45,7 +45,7 @@ pub enum RequestMessage {
 /// - `return_logprobs`: Whether to return logprobs
 /// - `is_streaming`: Control whether the request is streaming, if so chunk responses will be sent
 /// - `id`: Request ID
-/// - `contraint`: Contraint to use during generation
+/// - `constraint`: Constraint to use during generation
 /// - `suffix`: Suffix to add
 /// - `adapters`: Adapters to use in this request
 /// - `tools`: Tools available in this request
