@@ -56,8 +56,17 @@ impl Default for SamplingParams {
     }
 }
 
-/// Logits and sequence context (prompt and generated tokens), returning modified tokens.
-pub type GenericLogitsProcessor = Arc<dyn Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync>;
+/// Customizable logtis processor
+pub trait CustomLogitsProcessor: Send + Sync {
+    /// Logits and sequence context (prompt and generated tokens), returning modified tokens.
+    fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor>;
+}
+
+impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcessor for T {
+    fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor> {
+        self(logits, context)
+    }
+}
 
 /// Sampler for sampling.
 #[derive(Clone)]
@@ -70,7 +79,7 @@ pub struct Sampler {
     top_k: i64,
     top_p: f64,
     min_p: f64,
-    logits_processors: Vec<GenericLogitsProcessor>,
+    logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -106,7 +115,7 @@ impl Sampler {
         top_k: i64,
         top_p: f64,
         min_p: f64,
-        logits_processors: Vec<GenericLogitsProcessor>,
+        logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -399,7 +408,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let mut logits = self.apply_penalties(logits.to_vec1()?, context)?;
         for processor in &self.logits_processors {
-            logits = processor(&logits, context)?;
+            logits = processor.apply(&logits, context)?;
         }
         let next_token = if sample_speculative {
             match self.temperature {

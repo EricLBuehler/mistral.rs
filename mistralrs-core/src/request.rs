@@ -6,9 +6,9 @@ use crate::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
-    GenericLogitsProcessor,
+    CustomLogitsProcessor,
 };
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ pub struct NormalRequest {
     pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
-    pub logits_processors: Option<Vec<GenericLogitsProcessor>>,
+    pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
 }
 
 impl NormalRequest {

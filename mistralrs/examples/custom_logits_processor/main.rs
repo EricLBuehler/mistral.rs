@@ -5,10 +5,23 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    Request, RequestMessage, Response, Result, SamplingParams, SchedulerConfig, TokenSource,
+    Constraint, CustomLogitsProcessor, DefaultSchedulerMethod, Device, DeviceMapMetadata,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
+    NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
+    SchedulerConfig, Tensor, TokenSource,
 };
+
+struct ThresholdLogitsProcessor {
+    threshold: f64,
+}
+
+impl CustomLogitsProcessor for ThresholdLogitsProcessor {
+    fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+        // Mask is 1 for true, 0 for false.
+        let mask = logits.ge(self.threshold)?;
+        logits.broadcast_mul(&mask.to_dtype(logits.dtype())?)
+    }
+}
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
 pub(crate) fn best_device() -> Result<Device> {
@@ -60,7 +73,8 @@ fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
     let mut rng = rand::thread_rng();
-    let random_temperature: f64 = rng.gen_range(0.0..=1.0);
+    let random_value: f64 = rng.gen_range(0.0..=1.0);
+    let threshold: f64 = rng.gen_range(0.0..=0.5);
 
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
@@ -78,9 +92,10 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
-        logits_processors: Some(vec![Arc::new(move |logits, _context| {
-            logits * random_temperature
-        })]),
+        logits_processors: Some(vec![
+            Arc::new(move |logits: &Tensor, _context: &[u32]| logits * random_value),
+            Arc::new(ThresholdLogitsProcessor { threshold }),
+        ]),
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
