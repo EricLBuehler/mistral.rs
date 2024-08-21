@@ -1,10 +1,12 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{Result, Tensor};
-use candle_nn::{Activation, Conv1d, Embedding, Linear, VarBuilder};
-use mistralrs_quant::{
-    linear, linear_no_bias, QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear,
+use candle_nn::{
+    conv1d, conv1d_no_bias, Activation, Conv1d, Conv1dConfig, Embedding, Linear, VarBuilder,
 };
+use mistralrs_quant::{linear_b, QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 
 use crate::{
@@ -21,7 +23,7 @@ serde_default_fn!(usize, hidden_size_default, 4096);
 serde_default_fn!(usize, state_size_default, 128);
 serde_default_fn!(usize, num_hidden_layers_default, 64);
 serde_default_fn!(f64, layer_norm_epsilon_default, 1e-5);
-serde_default_fn!(usize, expand_default, 2);
+serde_default_fn!(f64, expand_default, 2.0);
 serde_default_fn!(usize, conv_kernel_default, 4);
 serde_default_fn!(usize, n_groups_default, 2);
 serde_default_fn!(bool, use_bias_default, false);
@@ -60,7 +62,7 @@ pub struct Mamba2Config {
     #[serde(default = "layer_norm_epsilon_default")]
     layer_norm_epsilon: f64,
     #[serde(default = "expand_default")]
-    expand: usize,
+    expand: f64,
     #[serde(default = "conv_kernel_default")]
     conv_kernel: usize,
     #[serde(default = "n_groups_default")]
@@ -105,10 +107,84 @@ struct Mixer {
     out_proj: Arc<dyn QuantMethod>,
 }
 
+impl Mixer {
+    fn new(cfg: &Mamba2Config, vb: VarBuilder) -> Result<Self> {
+        let intermediate_size = (cfg.expand * cfg.hidden_size as f64) as usize;
+        let conv_dim = intermediate_size + 2 * cfg.n_groups * cfg.state_size;
+        let projection_size = intermediate_size + conv_dim + cfg.num_heads;
+
+        let conv1d_fn = if cfg.use_conv_bias {
+            conv1d
+        } else {
+            conv1d_no_bias
+        };
+
+        let conv1d = conv1d_fn(
+            conv_dim,
+            conv_dim,
+            cfg.conv_kernel,
+            Conv1dConfig {
+                padding: cfg.conv_kernel - 1,
+                groups: conv_dim,
+                stride: 1,
+                dilation: 1,
+            },
+            vb.pp("conv1d"),
+        )?;
+
+        let in_proj = linear_b(
+            cfg.hidden_size,
+            projection_size,
+            cfg.use_bias,
+            &cfg.quantization_config,
+            vb.pp("in_proj"),
+        )?;
+
+        let out_proj = linear_b(
+            intermediate_size,
+            cfg.hidden_size,
+            cfg.use_bias,
+            &cfg.quantization_config,
+            vb.pp("in_proj"),
+        )?;
+
+        // Time step proj, discretization
+        let dt_bias = vb.get((cfg.num_heads,), "dt_bias")?;
+
+        // S4D real init, not discretized
+        let a_log = vb.get((1, cfg.num_heads + 1), "A_log")?;
+        let d = vb.get((cfg.num_heads,), "D")?;
+
+        let norm = GatedRmsNorm::new(intermediate_size, cfg.layer_norm_epsilon, vb.pp("norm"))?;
+
+        Ok(Self {
+            conv1d,
+            in_proj,
+            out_proj,
+            dt_bias,
+            a_log,
+            d,
+            norm,
+        })
+    }
+}
+
 struct Layer {
     norm: RmsNorm,
     mixer: Mixer,
     res_in_f32: bool,
+}
+
+impl Layer {
+    fn new(cfg: &Mamba2Config, vb: VarBuilder) -> Result<Self> {
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm"))?;
+        let mixer = Mixer::new(cfg, vb.pp("mixer"))?;
+        Ok(Self {
+            norm,
+            mixer,
+            res_in_f32: cfg.residual_in_fp32,
+        })
+    }
 }
 
 pub struct Model {
@@ -123,8 +199,8 @@ impl Model {
         cfg: &Mamba2Config,
         vb: VarBuilder,
         _is_gptx: bool,
-        normal_loading_metadata: NormalLoadingMetadata,
-        attention_mechanism: AttentionImplementation,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -133,30 +209,27 @@ impl Model {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata.mapper;
 
         let vb = vb.pp("backbone");
 
-        let embeddings = candle_nn::embedding(
-            cfg.vocab_size,
-            cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("embeddings"), false),
-        )?;
-        // Tied lm_head...
+        let embeddings =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embeddings"))?;
+        // Tied to lm_head...
         let lm_head = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-            Linear::new(
-                mapper.cast_nm_device(
-                    &embeddings.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ),
+            Linear::new(embeddings.embeddings().clone(), None),
         ))?);
-        let norm_f = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.layer_norm_epsilon,
-            mapper.set_nm_device(vb.pp("norm_f"), false),
-        )?;
-        todo!()
+        let norm_f = RmsNorm::new(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("norm_f"))?;
+
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for idx in 0..cfg.num_hidden_layers {
+            layers.push(Layer::new(cfg, vb.pp(idx))?);
+        }
+
+        Ok(Self {
+            lm_head,
+            embeddings,
+            norm_f,
+            layers,
+        })
     }
 }
