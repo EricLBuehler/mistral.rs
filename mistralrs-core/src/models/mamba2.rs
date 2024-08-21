@@ -145,7 +145,7 @@ impl Mixer {
             cfg.hidden_size,
             cfg.use_bias,
             &cfg.quantization_config,
-            vb.pp("in_proj"),
+            vb.pp("out_proj"),
         )?;
 
         // Time step proj, discretization
