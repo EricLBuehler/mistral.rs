@@ -1,21 +1,15 @@
 use std::{
+    collections::HashSet,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
 
-use candle_core::{
-    quantized::{GgmlDType, QMatMul, QTensor},
-    DType, Device, Tensor,
-};
+use candle_core::Device;
 use indicatif::{ProgressBar, ProgressStyle};
-use tracing::{info, warn};
+use mistralrs_quant::{IsqType, QuantMethod};
+use tracing::info;
 
-use crate::device_map::DeviceMapper;
-
-pub enum QuantizationBehaviour {
-    Quantize(GgmlDType),
-    Skip,
-}
+use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
 /// Parse ISQ value: one of
 /// - `Q4_0`
@@ -30,96 +24,90 @@ pub enum QuantizationBehaviour {
 /// - `Q5K`
 /// - `Q6K`
 /// - `Q8K`
-pub fn parse_isq_value(s: &str) -> Result<GgmlDType, String> {
-    match s.to_lowercase().as_str() {
-        "q4_0" => Ok(GgmlDType::Q4_0),
-        "q4_1" => Ok(GgmlDType::Q4_1),
-        "q5_0" => Ok(GgmlDType::Q5_0),
-        "q5_1" => Ok(GgmlDType::Q5_1),
-        "q8_0" => Ok(GgmlDType::Q8_0),
-        "q8_1" => Ok(GgmlDType::Q8_1),
-        "q2k" => Ok(GgmlDType::Q2K),
-        "q3k" => Ok(GgmlDType::Q3K),
-        "q4k" => Ok(GgmlDType::Q4K),
-        "q5k" => Ok(GgmlDType::Q5K),
-        "q6k" => Ok(GgmlDType::Q6K),
-        "q8k" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
-}
-
-/// Return the fallback dtype for the given dtype.
-fn get_fallback(dtype: GgmlDType) -> QuantizationBehaviour {
-    // The normal `Q` quants are a bit more lenient than the `K` quants.
-    // => Try to fallback to a similar `Q` quant.
-    // If that's not possible, skip this tensor.
-    match dtype {
-        GgmlDType::Q2K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
-        GgmlDType::Q3K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
-        GgmlDType::Q4K => QuantizationBehaviour::Quantize(GgmlDType::Q4_1),
-        GgmlDType::Q5K => QuantizationBehaviour::Quantize(GgmlDType::Q5_0),
-        GgmlDType::Q6K => QuantizationBehaviour::Quantize(GgmlDType::Q5_1),
-        GgmlDType::Q8K => QuantizationBehaviour::Quantize(GgmlDType::Q8_1),
-        _ => QuantizationBehaviour::Skip,
-    }
-}
-
-/// Check if the tensor can be quantized with the given dtype.
-fn can_quantize(tensor: &Tensor, dtype: GgmlDType) -> bool {
-    let dims = tensor.shape().dims();
-    // The tensor must not be empty and the last dimension must be a multiple of the block size.
-    !(dims.is_empty() || (dims[dims.len() - 1] % dtype.block_size() != 0))
-}
-
-/// Check if we should quantize the tensor and if so, with which dtype.
-fn get_quantization_behaviour(tensor: &Tensor, dtype: GgmlDType) -> QuantizationBehaviour {
-    if dtype == GgmlDType::F32 {
-        return QuantizationBehaviour::Skip;
-    }
-
-    if can_quantize(tensor, dtype) {
-        return QuantizationBehaviour::Quantize(dtype);
-    }
-    let fallback = get_fallback(dtype);
-    match fallback {
-        QuantizationBehaviour::Skip => fallback,
-        QuantizationBehaviour::Quantize(new_dtype) => get_quantization_behaviour(tensor, new_dtype),
-    }
-}
-
-macro_rules! generate_isq {
-    ($tensor:expr, $device:expr, $dtype:expr, $n_quantized:expr) => {
-        if let QMatMul::Tensor(t) = $tensor {
-            let quantization_behaviour = get_quantization_behaviour(&t, $dtype);
-            *$tensor =  match quantization_behaviour{
-                QuantizationBehaviour::Skip => {
-                    let shape = t.shape();
-                    warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, GgmlDType::F32, &$device).unwrap()))
-                },
-                QuantizationBehaviour::Quantize(dtype) => {
-                    $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    QMatMul::QTensor(Arc::new(QTensor::quantize_onto(&t, dtype, &$device).unwrap()))
-                }
-            };
-            $device.synchronize().unwrap();
-        }
+/// - `HQQ1`
+/// - `HQQ2`
+/// - `HQQ3`
+/// - `HQQ4`
+/// - `HQQ8`
+pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
+    let tp = match s.to_lowercase().as_str() {
+        "q4_0" => IsqType::Q4_0,
+        "q4_1" => IsqType::Q4_1,
+        "q5_0" => IsqType::Q5_0,
+        "q5_1" => IsqType::Q5_1,
+        "q8_0" => IsqType::Q8_0,
+        "q8_1" => IsqType::Q8_1,
+        "q2k" => IsqType::Q2K,
+        "q3k" => IsqType::Q3K,
+        "q4k" => IsqType::Q4K,
+        "q5k" => IsqType::Q5K,
+        "q6k" => IsqType::Q6K,
+        "q8k" => IsqType::Q8K,
+        "hqq8" => IsqType::HQQ8,
+        "hqq4" => IsqType::HQQ4,
+        // "hqq3" => IsqType::HQQ3,
+        // "hqq2" => IsqType::HQQ2,
+        // "hqq1" => IsqType::HQQ1,
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`.")),
     };
+    #[cfg(feature = "cuda")]
+    {
+        if !matches!(
+            tp,
+            IsqType::Q4_0
+                | IsqType::Q4_1
+                | IsqType::Q5_0
+                | IsqType::Q5_1
+                | IsqType::Q8_0
+                | IsqType::Q2K
+                | IsqType::Q3K
+                | IsqType::Q4K
+                | IsqType::Q5K
+                | IsqType::Q6K
+                | IsqType::HQQ8
+                | IsqType::HQQ4 // | IsqType::HQQ3
+                                // | IsqType::HQQ2
+                                // | IsqType::HQQ1
+        ) {
+            return Err("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`".to_string());
+        }
+    }
+    Ok(tp)
 }
 
 pub trait IsqModel {
-    /// Get matmuls for ISQ quantization
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper);
     #[allow(clippy::type_complexity)]
-    /// Get biases for ISQ device mapping
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper);
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    );
     /// Quantize the model in-situ.
-    fn quantize(&mut self, dtype: GgmlDType, device: Device) -> candle_core::Result<()> {
+    fn quantize(
+        &mut self,
+        dtype: Option<IsqType>,
+        device: Device,
+        topology: Option<&Topology>,
+    ) -> candle_core::Result<()> {
         {
-            let (tensors, mapper) = self.get_matmuls();
+            let (tensors, mapper) = self.get_layers();
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
-            info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
+            if let Some(topology) = topology {
+                let mut dtypes = HashSet::new();
+                for layer in topology.0.iter().flatten() {
+                    if let LayerTopology {
+                        isq: Some(isq_dtype),
+                    } = layer
+                    {
+                        dtypes.insert(isq_dtype);
+                    }
+                }
+                info!("Applying in-situ quantization into {:?} to {total_tensors} tensors according to topology.", dtypes.into_iter().collect::<Vec<_>>());
+            } else {
+                info!("Applying in-situ quantization into {dtype:?} to {total_tensors} tensors.");
+            }
             let bar = ProgressBar::new(total_tensors as u64);
             bar.set_style(
                 ProgressStyle::default_bar()
@@ -128,32 +116,74 @@ pub trait IsqModel {
                     .progress_chars("#>-"),
             );
 
-            let mut devices = Vec::new();
+            let layers = topology.map(|x| {
+                x.0.iter()
+                    .filter_map(|topo| topo.as_ref().map(|x| x.isq))
+                    .collect::<Vec<_>>()
+            });
+
+            let mut devices_and_dtypes = Vec::new();
             for (_, layer) in &tensors {
                 let device = if let Some(layer) = layer {
                     mapper.device_for(*layer, false).unwrap_or(&device)
                 } else {
                     &device
                 };
-                devices.push(device.clone());
+                let dtype = if let Some(ref layers) = layers {
+                    if let Some(layer) = layer {
+                        layers.get(*layer).cloned().unwrap_or(dtype)
+                    } else {
+                        dtype
+                    }
+                } else {
+                    dtype
+                };
+                devices_and_dtypes.push((device.clone(), dtype));
             }
 
             let t_start = Instant::now();
             #[cfg(not(feature = "metal"))]
             {
-                info!("Applying ISQ on {} threads.", rayon::current_num_threads());
+                let current_rayon_threads = rayon::current_num_threads();
+                // Get the MINIMUM of the max isq threads the quant method allows
+                let minimum_max_threads = tensors
+                    .iter()
+                    .map(|(q, _)| {
+                        if let Some(dtype) = dtype {
+                            q.get_max_isq_cpu_threads(dtype)
+                                .map(usize::from)
+                                .unwrap_or(current_rayon_threads)
+                        } else {
+                            current_rayon_threads
+                        }
+                    })
+                    .min()
+                    .unwrap_or(current_rayon_threads);
 
-                use indicatif::ParallelProgressIterator;
-                use rayon::iter::{
-                    IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
-                };
-                tensors
-                    .into_par_iter()
-                    .zip(devices)
-                    .progress_with(bar)
-                    .for_each(|((tensor, _), device)| {
-                        generate_isq!(tensor, device, dtype, n_quantized)
-                    });
+                info!("Applying ISQ on {minimum_max_threads} threads.");
+
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(minimum_max_threads)
+                    .build()
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+
+                pool.install(|| {
+                    use indicatif::ParallelProgressIterator;
+                    use rayon::iter::{
+                        IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
+                    };
+                    tensors
+                        .into_par_iter()
+                        .zip(devices_and_dtypes)
+                        .progress_with(bar)
+                        .for_each(|((tensor, _), (device, dtype))| {
+                            *tensor = tensor
+                                .clone()
+                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .unwrap();
+                            device.synchronize().unwrap();
+                        });
+                });
             }
 
             #[cfg(feature = "metal")]
@@ -163,88 +193,16 @@ pub trait IsqModel {
                     .into_iter()
                     .zip(devices)
                     .progress_with(bar)
-                    .for_each(|((tensor, _), device)| {
-                        generate_isq!(tensor, device, dtype, n_quantized)
+                    .for_each(|((tensor, _), (device, dtype))| {
+                        *tensor = tensor
+                            .clone()
+                            .apply_isq(dtype, device.clone(), &n_quantized)
+                            .unwrap();
+                        device.synchronize().unwrap();
                     });
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
             info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
-        }
-        {
-            let (tensors, mapper) = self.get_biases();
-            let total_tensors = tensors.len();
-            if total_tensors > 0 {
-                info!(
-                    "Applying in-situ quantization bias device mapping to {total_tensors} biases."
-                );
-                let bar = ProgressBar::new(total_tensors as u64);
-                bar.set_style(
-                    ProgressStyle::default_bar()
-                        .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-                        .unwrap()
-                        .progress_chars("#>-"),
-                );
-
-                let mut devices = Vec::new();
-                for (_, layer) in &tensors {
-                    let device = if let Some(layer) = layer {
-                        mapper.device_for(*layer, false).unwrap_or(&device)
-                    } else {
-                        &device
-                    };
-                    devices.push(device.clone());
-                }
-
-                let t_start = Instant::now();
-                #[cfg(not(feature = "metal"))]
-                {
-                    // NOTE(EricLBuehler): On version 0.2.0, remove this
-                    let isq_low_mem = std::env::var("ISQ_LOW_MEMORY").is_ok();
-                    if isq_low_mem {
-                        warn!("ISQ_LOW_MEMORY is set but as of version 0.1.24, this is irrelevant");
-                    }
-
-                    info!("Applying ISQ on {} threads.", rayon::current_num_threads());
-
-                    use indicatif::ParallelProgressIterator;
-                    use rayon::iter::{
-                        IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
-                    };
-                    tensors
-                        .into_par_iter()
-                        .zip(devices)
-                        .progress_with(bar)
-                        .for_each(|((tensor, _), device)| {
-                            if let Some(tensor) = tensor {
-                                *tensor = tensor
-                                    .to_device(&device)
-                                    .unwrap()
-                                    .to_dtype(DType::F32)
-                                    .unwrap();
-                            }
-                        });
-                }
-
-                #[cfg(feature = "metal")]
-                {
-                    use indicatif::ProgressIterator;
-                    tensors
-                        .into_iter()
-                        .zip(devices)
-                        .progress_with(bar)
-                        .for_each(|((tensor, _), device)| {
-                            if let Some(tensor) = tensor {
-                                *tensor = tensor
-                                    .to_device(&device)
-                                    .unwrap()
-                                    .to_dtype(DType::F32)
-                                    .unwrap();
-                            }
-                        });
-                }
-                let delta = Instant::now().duration_since(t_start).as_secs_f32();
-                info!("Applied in-situ quantization device mapping. Took {delta:.2}s",);
-            }
         }
         Ok(())
     }

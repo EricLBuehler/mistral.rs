@@ -43,6 +43,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select an X-LoRA architecture
@@ -75,6 +79,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a LoRA architecture
@@ -102,6 +110,10 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model.
@@ -112,12 +124,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
     },
@@ -130,12 +143,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -161,12 +175,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -189,12 +204,12 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -213,12 +228,12 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -250,12 +265,12 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -289,5 +304,9 @@ pub enum ModelSelected {
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 }

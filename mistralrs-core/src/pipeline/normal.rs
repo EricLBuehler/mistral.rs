@@ -1,8 +1,4 @@
 use super::cache_manager::DefaultCacheManager;
-use super::normal_loaders::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
-};
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -11,6 +7,10 @@ use super::{
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
     MetadataMixin, ModelCategory, PreProcessingMixin,
+};
+use super::{
+    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -30,12 +30,12 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -56,6 +56,7 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
+    topology: Option<Topology>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -86,11 +87,12 @@ pub struct NormalLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 impl NormalLoaderBuilder {
@@ -195,7 +197,7 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
@@ -226,11 +228,10 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
             info!(
@@ -243,13 +244,27 @@ impl Loader for NormalLoader {
             paged_attn_config = None;
         }
 
+        let mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+        )?;
+        let dtype = mapper.get_min_dtype(dtype)?;
+
         info!(
             "Model config: {:?}",
             self.inner
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let load_device = if in_situ_quant.is_none() {
+        let mut loading_isq = in_situ_quant.is_some();
+        if let Some(ref topology) = self.config.topology {
+            loading_isq |= topology
+                .0
+                .iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -273,7 +288,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone(),
                 attention_mechanism
             ),
@@ -288,7 +303,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             ModelKind::Adapter {
@@ -302,7 +317,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             _ => unreachable!(),
@@ -314,8 +329,8 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+        if in_situ_quant.is_some() || self.config.topology.is_some() {
+            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -371,6 +386,7 @@ impl Loader for NormalLoader {
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
+            topology: self.config.topology.clone(),
         })))
     }
 
@@ -396,10 +412,10 @@ impl PreProcessingMixin for NormalPipeline {
 }
 
 impl IsqPipelineMixin for NormalPipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(Some(dtype), device, self.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }

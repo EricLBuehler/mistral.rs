@@ -64,23 +64,27 @@ Mistal.rs supports several model categories:
 
 ## Description
 **Fast**:
-- Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
+- Apple silicon support with the Metal framework.
+- CPU inference with `mkl`, `accelerate` support and optimized backend.
+- CUDA support with flash attention and cuDNN.
 - Continuous batching and PagedAttention support.
 - Prefix caching.
 - [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
-**Accelerator support**:
-- Apple silicon support with the Metal framework.
-- CPU inference with `mkl`, `accelerate` support and optimized backend.
-- CUDA support with flash attention and cuDNN.
+**Quantization**:
+- [Details](docs/QUANTS.md)
+- GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
+- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
+- HQQ: 4-bit and 8 bit, with ISQ support
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
+    - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
+    - Extremely fast due to working in parallel
+- Use a [model topology](docs/TOPOLOGY.md) to configure ISQ types *per layer* with a single [YAML file](topologies/isq.yml)
 
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
-    - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
-    - Extremely fast due to working in parallel
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -98,7 +102,6 @@ Mistal.rs supports several model categories:
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
-- Various quantizations (GGUF, GPTQ, ISQ): [docs](docs/QUANTS.md)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -197,7 +200,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.4)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.5)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 

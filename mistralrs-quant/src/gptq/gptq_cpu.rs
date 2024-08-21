@@ -1,10 +1,14 @@
-use crate::{QuantMethod, QuantMethodConfig};
-use candle_core::{quantized::QMatMul, DType, Result, Tensor};
-use std::sync::Arc;
+use crate::{IsqType, QuantMethod, QuantMethodConfig};
+use candle_core::{DType, Device, Result, Tensor};
+use std::{
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
-pub struct GptqMatMul;
+#[derive(Debug)]
+pub struct GptqLayer;
 
-impl QuantMethod for GptqMatMul {
+impl QuantMethod for GptqLayer {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -19,7 +23,9 @@ impl QuantMethod for GptqMatMul {
                 g_idx: _,
                 bias: _,
             } => candle_core::bail!("GPTQ is only supported on CUDA."),
-            QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
+            QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Hqq { .. } => {
                 unreachable!()
             }
         }
@@ -41,15 +47,20 @@ impl QuantMethod for GptqMatMul {
         todo!()
     }
 
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        todo!()
-    }
-
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         todo!()
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+    fn apply_isq(
+        self: Arc<Self>,
+        _dtype: Option<IsqType>,
+        _device: Device,
+        _n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
+    }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
     }
 }

@@ -1,3 +1,4 @@
+use either::Either;
 use mistralrs_core::{NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
@@ -57,12 +58,14 @@ pub enum Which {
     #[pyo3(constructor = (
         model_id,
         arch,
-        tokenizer_json = None
+        tokenizer_json = None,
+        topology = None
     ))]
     Plain {
         model_id: String,
         arch: Architecture,
         tokenizer_json: Option<String>,
+        topology: Option<String>,
     },
 
     #[pyo3(constructor = (
@@ -71,7 +74,8 @@ pub enum Which {
         arch,
         model_id = None,
         tokenizer_json = None,
-        tgt_non_granular_index = None
+        tgt_non_granular_index = None,
+        topology = None
     ))]
     XLora {
         xlora_model_id: String,
@@ -80,6 +84,7 @@ pub enum Which {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        topology: Option<String>,
     },
 
     #[pyo3(constructor = (
@@ -87,7 +92,8 @@ pub enum Which {
         order,
         arch,
         model_id = None,
-        tokenizer_json = None
+        tokenizer_json = None,
+        topology = None
     ))]
     Lora {
         adapters_model_id: String,
@@ -95,6 +101,7 @@ pub enum Which {
         arch: Architecture,
         model_id: Option<String>,
         tokenizer_json: Option<String>,
+        topology: Option<String>,
     },
 
     #[pyo3(constructor = (
@@ -105,7 +112,7 @@ pub enum Which {
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         tok_model_id: Option<String>,
     },
 
@@ -119,7 +126,7 @@ pub enum Which {
     ))]
     XLoraGGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         xlora_model_id: String,
         order: String,
         tok_model_id: Option<String>,
@@ -135,7 +142,7 @@ pub enum Which {
     ))]
     LoraGGUF {
         quantized_model_id: String,
-        quantized_filename: String,
+        quantized_filename: Either<String, Vec<String>>,
         adapters_model_id: String,
         order: String,
         tok_model_id: Option<String>,
@@ -201,10 +208,12 @@ pub enum Which {
         model_id,
         arch,
         tokenizer_json = None,
+        topology = None,
     ))]
     VisionPlain {
         model_id: String,
         arch: VisionArchitecture,
         tokenizer_json: Option<String>,
+        topology: Option<String>,
     },
 }

@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantizedConfig};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::sync::Arc;
 
 use crate::{
@@ -100,38 +100,8 @@ impl MlpLayer for MLP {
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        {
-            let gate_proj = self.gate_proj.clone().convert_to_isq().unwrap();
-            self.gate_proj = gate_proj;
-            let up_proj = self.up_proj.clone().convert_to_isq().unwrap();
-            self.up_proj = up_proj;
-            let down_proj = self.down_proj.clone().convert_to_isq().unwrap();
-            self.down_proj = down_proj;
-        }
-        vec![
-            Arc::get_mut(&mut self.gate_proj).unwrap().get_qmatmul(),
-            Arc::get_mut(&mut self.up_proj).unwrap().get_qmatmul(),
-            Arc::get_mut(&mut self.down_proj).unwrap().get_qmatmul(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        {
-            let gate_proj = self.gate_proj.clone().convert_to_isq().unwrap();
-            self.gate_proj = gate_proj;
-            let up_proj = self.up_proj.clone().convert_to_isq().unwrap();
-            self.up_proj = up_proj;
-            let down_proj = self.down_proj.clone().convert_to_isq().unwrap();
-            self.down_proj = down_proj;
-        }
-        vec![
-            Arc::get_mut(&mut self.gate_proj).unwrap().get_bias_mut(),
-            Arc::get_mut(&mut self.up_proj).unwrap().get_bias_mut(),
-            Arc::get_mut(&mut self.down_proj).unwrap().get_bias_mut(),
-        ]
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -416,7 +386,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     sliding_window: usize,
     pub device: Device,
     pub cache: Cache,
@@ -440,10 +410,7 @@ impl Model {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -505,7 +472,7 @@ impl Model {
             embed_tokens,
             layers,
             norm,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -559,98 +526,33 @@ impl Model {
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            {
-                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.q_proj = q_proj;
-                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.k_proj = k_proj;
-                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.v_proj = v_proj;
-                let o_proj = layer.self_attn.o_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.o_proj = o_proj;
-            }
-            if let Some(q) = Arc::get_mut(&mut layer.self_attn.q_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((q, Some(i)));
-            }
-            if let Some(k) = Arc::get_mut(&mut layer.self_attn.k_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((k, Some(i)));
-            }
-            if let Some(b) = Arc::get_mut(&mut layer.self_attn.v_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((b, Some(i)));
-            }
-            if let Some(o) = Arc::get_mut(&mut layer.self_attn.o_proj)
-                .unwrap()
-                .get_qmatmul()
-            {
-                tensors.push((o, Some(i)));
-            }
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            {
-                let q_proj = layer.self_attn.q_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.q_proj = q_proj;
-                let k_proj = layer.self_attn.k_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.k_proj = k_proj;
-                let v_proj = layer.self_attn.v_proj.clone().convert_to_isq().unwrap();
-                layer.self_attn.v_proj = v_proj;
-            }
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj)
-                    .unwrap()
-                    .get_bias_mut(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj)
-                    .unwrap()
-                    .get_bias_mut(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj)
-                    .unwrap()
-                    .get_bias_mut(),
-                Some(i),
-            ));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_biases()
-                    .into_iter()
-                    .map(|b| (b, Some(i)))
                     .collect::<Vec<_>>(),
             );
         }

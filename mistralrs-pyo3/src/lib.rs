@@ -25,8 +25,8 @@ use mistralrs_core::{
     GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
     Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, VisionLoaderBuilder,
-    VisionSpecificConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 use std::fs::File;
@@ -75,10 +75,12 @@ fn parse_which(
             model_id,
             tokenizer_json,
             arch,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,
@@ -93,10 +95,12 @@ fn parse_which(
             tokenizer_json,
             tgt_non_granular_index,
             arch,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,
@@ -120,10 +124,12 @@ fn parse_which(
             adapters_model_id,
             order,
             arch,
+            topology,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,
@@ -147,7 +153,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .build(),
@@ -162,7 +168,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .with_xlora(
@@ -186,7 +192,7 @@ fn parse_which(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
             prompt_batchsize,
         )
         .with_lora(
@@ -279,10 +285,12 @@ fn parse_which(
             model_id,
             tokenizer_json,
             arch,
+            topology,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,

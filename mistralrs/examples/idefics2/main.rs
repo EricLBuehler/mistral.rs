@@ -1,13 +1,13 @@
 use either::Either;
-use image::{ColorType, DynamicImage};
 use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, IsqType, MistralRs,
+    MistralRsBuilder, ModelDType, NormalRequest, Request, RequestMessage, Response, Result,
+    SamplingParams, SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType,
+    VisionSpecificConfig,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -28,6 +28,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         VisionSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
@@ -42,7 +43,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         &best_device()?,
         false,
         DeviceMapMetadata::dummy(),
-        None,
+        Some(IsqType::Q4K),
         None, // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
@@ -58,15 +59,29 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
+    let bytes = match reqwest::blocking::get(
+        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+    ) {
+        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+        Err(e) => anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&bytes)?;
+
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
         messages: RequestMessage::VisionChat {
-            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
+            images: vec![image],
             messages: vec![IndexMap::from([
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.".to_string()),
+                    Either::Right(vec![
+                        IndexMap::from([("type".to_string(),"image".to_string())]),
+                        IndexMap::from([
+                            ("type".to_string(),"text".to_string()),
+                            ("content".to_string(), "What is shown in this image? Write a detailed response analyzing the scene.".to_string()
+                        )])
+                    ]),
                 ),
             ])],
         },

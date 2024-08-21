@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, GgmlDType, MistralRs,
+    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, IsqType, MistralRs,
     MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
     NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
     SchedulerConfig, TokenSource,
@@ -28,6 +28,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         NormalSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
@@ -42,8 +43,8 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         &best_device()?,
         false,
         DeviceMapMetadata::dummy(),
-        Some(GgmlDType::Q4K), // In-situ quantize the model into q4k
-        None,                 // No PagedAttention.
+        Some(IsqType::Q4K), // In-situ quantize the model into q4k
+        None,               // No PagedAttention.
     )?;
     // Create the MistralRs, which is a runner
     Ok(MistralRsBuilder::new(

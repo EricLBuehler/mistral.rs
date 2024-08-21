@@ -1,7 +1,9 @@
+use std::any::Any;
 use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
+use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -9,8 +11,11 @@ use pyo3::pyclass;
 
 use serde::Deserialize;
 
-use super::{NormalLoadingMetadata, Processor, ProcessorCreator, VisionModel};
-use crate::paged_attention::AttentionImplementation;
+use super::NormalLoadingMetadata;
+use crate::amoe::AnyMoeBaseModelMixin;
+use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -23,6 +28,27 @@ use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 
+pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
+    // pixel_values and pixel_attention_mask only specified for prompt seqs
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+    ) -> candle_core::Result<Tensor>;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
+    fn has_conv2d(&self) -> bool;
+    fn config(&self) -> &ModelConfigMetadata;
+}
+
 pub trait VisionModelLoader {
     fn load(
         &self,
@@ -34,6 +60,8 @@ pub trait VisionModelLoader {
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    /// Get total num_hidden_layers for the layers which will be device mapped.
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
     fn get_processor(
         &self,
         model_config: &str,
@@ -111,6 +139,10 @@ impl VisionModelLoader for Phi3VLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Phi3Config = serde_json::from_str(config)?;
+        Ok(config.num_hidden_layers)
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -158,6 +190,11 @@ impl VisionModelLoader for Idefics2Loader {
             preprocessor_config,
         ))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Idefics2Config = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -202,6 +239,11 @@ impl VisionModelLoader for LLaVANextLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
 }
 
 // ======================== LLaVA Loader
@@ -245,5 +287,10 @@ impl VisionModelLoader for LLaVALoader {
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVAProcessor::new(model_config))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: LLaVAConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
     }
 }

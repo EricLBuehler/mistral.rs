@@ -1,12 +1,16 @@
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
-    paged_attention::AttentionImplementation,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel},
+    xlora_models::NonGranularState,
 };
 use anyhow::Result;
-use candle_core::Device;
+use candle_core::{Device, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use either::Either;
 
@@ -17,10 +21,52 @@ use pyo3::pyclass;
 use serde::Deserialize;
 use tracing::warn;
 
+use crate::{
+    models,
+    xlora_models::{self, XLoraConfig},
+};
+
+pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+    ) -> candle_core::Result<Tensor>;
+    #[allow(clippy::too_many_arguments)]
+    fn xlora_forward(
+        &self,
+        input_ids: &Tensor,
+        input_ids_full: &Tensor,
+        seqlen_offsets: &[usize],
+        seqlen_offsets_full: &[usize],
+        start_offsets_kernel: Tensor,
+        start_offsets_kernel_full: Tensor,
+        no_kv_cache: bool,
+        non_granular_state: &Option<NonGranularState>,
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+    ) -> candle_core::Result<Tensor>;
+    fn is_xlora(&self) -> bool;
+    fn device(&self) -> &Device;
+    fn cache(&self) -> &Cache;
+    fn max_seq_len(&self) -> usize;
+    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
+        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
+        candle_core::bail!(
+            "Activating adapters is only supported for models fine-tuned with LoRA."
+        );
+    }
+    fn config(&self) -> &ModelConfigMetadata;
+}
+
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     // Device mapping metadata which can be used to construct a concrete device mapper
-    pub mapper: DeviceMapMetadata,
+    pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     // Flag to check if loading in ISQ
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
@@ -50,14 +96,9 @@ pub trait NormalModelLoader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    /// Get total num_hidden_layers for the layers which will be device mapped.
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
 }
-
-use super::NormalModel;
-use crate::{
-    models,
-    xlora_models::{self, XLoraConfig},
-    DeviceMapMetadata,
-};
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -192,6 +233,9 @@ impl NormalModelLoader for MistralLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(MistralBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Gemma loader
@@ -297,6 +341,9 @@ impl NormalModelLoader for GemmaLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(GemmaBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Llama loader
@@ -396,6 +443,9 @@ impl NormalModelLoader for LlamaLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(LlamaBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Mixtral loader
@@ -490,6 +540,9 @@ impl NormalModelLoader for MixtralLoader {
             config,
             use_flash_attn,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(MixtralBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -586,6 +639,9 @@ impl NormalModelLoader for Phi2Loader {
             config,
             use_flash_attn,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi2BasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -692,6 +748,9 @@ impl NormalModelLoader for Phi3Loader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Qwen2 loader
@@ -777,6 +836,9 @@ impl NormalModelLoader for Qwen2Loader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Qwen2BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Gemma2 loader
@@ -839,6 +901,9 @@ impl NormalModelLoader for Gemma2Loader {
         Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
             config,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(serde_json::from_str::<models::gemma2::Config>(config)?.num_hidden_layers)
     }
 }
 
@@ -934,5 +999,8 @@ impl NormalModelLoader for Starcoder2Loader {
         Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
     }
 }

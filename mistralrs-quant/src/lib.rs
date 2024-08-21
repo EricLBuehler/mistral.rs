@@ -1,16 +1,23 @@
-use std::{fmt::Display, sync::Arc};
+use std::{
+    fmt::{Debug, Display},
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use candle_core::{
-    quantized::{QMatMul, QTensor},
+    quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
 };
 
 mod gguf;
 mod gptq;
+mod hqq;
 mod unquantized;
+mod utils;
 
 pub use gguf::GgufMatMul;
-pub use gptq::GptqMatMul;
+pub use gptq::GptqLayer;
+pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
@@ -54,10 +61,82 @@ pub enum QuantMethodConfig {
         b: Option<Tensor>,
     },
     Unquantized(Linear),
+    Hqq {
+        tensor: Tensor,
+        bits: HqqBits,
+        group_size: NonZeroUsize,
+        axis: HqqAxis,
+        optimization_steps: Option<usize>,
+        round_zeros: Option<bool>,
+        channel_wise: Option<bool>,
+        bias: Option<Tensor>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+pub enum IsqType {
+    Q4_0,
+    Q4_1,
+    Q5_0,
+    Q5_1,
+    Q8_0,
+    Q8_1,
+    Q2K,
+    Q3K,
+    Q4K,
+    Q5K,
+    Q6K,
+    Q8K,
+    HQQ8,
+    HQQ4,
+    // HQQ3,
+    // HQQ2,
+    // HQQ1,
+}
+
+impl TryFrom<IsqType> for GgmlDType {
+    type Error = candle_core::Error;
+
+    fn try_from(value: IsqType) -> Result<Self> {
+        let tp = match value {
+            IsqType::Q2K => Self::Q2K,
+            IsqType::Q3K => Self::Q3K,
+            IsqType::Q4K => Self::Q4K,
+            IsqType::Q4_0 => Self::Q4_0,
+            IsqType::Q4_1 => Self::Q4_1,
+            IsqType::Q5K => Self::Q5K,
+            IsqType::Q5_0 => Self::Q5_0,
+            IsqType::Q5_1 => Self::Q5_1,
+            IsqType::Q6K => Self::Q6K,
+            IsqType::Q8K => Self::Q8K,
+            IsqType::Q8_0 => Self::Q8_0,
+            IsqType::Q8_1 => Self::Q8_1,
+            _ => candle_core::bail!("Expected valid GGML ISQ type."),
+        };
+        #[cfg(feature = "cuda")]
+        {
+            if !matches!(
+                tp,
+                GgmlDType::Q4_0
+                    | GgmlDType::Q4_1
+                    | GgmlDType::Q5_0
+                    | GgmlDType::Q5_1
+                    | GgmlDType::Q8_0
+                    | GgmlDType::Q2K
+                    | GgmlDType::Q3K
+                    | GgmlDType::Q4K
+                    | GgmlDType::Q5K
+                    | GgmlDType::Q6K
+            ) {
+                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+            }
+        }
+        Ok(tp)
+    }
 }
 
 /// Quantized method for a quantized matmul.
-pub trait QuantMethod: Send + Sync {
+pub trait QuantMethod: Send + Sync + Debug {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;
@@ -81,13 +160,17 @@ pub trait QuantMethod: Send + Sync {
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul>;
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: Option<IsqType>,
+        device: Device,
+        n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
-    /// Convert this layer to an ISQ-able layer if possible.
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 }
 
 macro_rules! pack_factor {
@@ -185,5 +268,5 @@ pub fn gptq_linear(
         g_idx,
         bias,
     };
-    Ok(Arc::new(GptqMatMul::new(config)?))
+    Ok(Arc::new(GptqLayer::new(config)?))
 }

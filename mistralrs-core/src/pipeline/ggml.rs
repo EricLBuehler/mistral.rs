@@ -30,9 +30,10 @@ use crate::{
     xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
-use candle_core::quantized::{ggml_file, GgmlDType};
+use candle_core::quantized::ggml_file;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
@@ -234,7 +235,7 @@ impl Loader for GGMLLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
@@ -371,7 +372,7 @@ impl Loader for GGMLLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
@@ -416,7 +417,7 @@ impl PreProcessingMixin for GGMLPipeline {
 }
 
 impl IsqPipelineMixin for GGMLPipeline {
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
         anyhow::bail!(
             "You are trying to in-situ requantize a GGML model. This will not do anything."
         )

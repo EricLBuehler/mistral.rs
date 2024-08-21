@@ -190,13 +190,10 @@ impl Merge for LoraLinear {
 }
 
 impl LinearLayerLike for LoraLinear {
-    fn inner(&mut self) -> Option<&mut candle_core::quantized::QMatMul> {
-        Arc::get_mut(&mut self.old).unwrap().get_qmatmul()
+    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
+        &mut self.old
     }
     fn bias(&self) -> Option<&Tensor> {
-        unreachable!()
-    }
-    fn bias_mut(&mut self) -> Option<&mut Tensor> {
         unreachable!()
     }
     fn weight(&self) -> &Tensor {

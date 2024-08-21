@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
+use crate::gguf::Content;
 use crate::layers::{
     repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
 };
@@ -14,7 +15,6 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
-use candle_core::quantized::gguf_file;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
@@ -208,8 +208,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
         attention_mechanism: AttentionImplementation,
@@ -217,7 +216,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "starcoder2",
-            metadata: &ct.metadata,
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,
@@ -229,15 +228,15 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_freq_base,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let head_dim = embedding_length / head_count;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             layer_norm_epsilon,
         )?;
-        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
+        let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
 
         let mapper = mapper.into_mapper(block_count, device)?;
@@ -254,8 +253,8 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 DType::F32,
             )?;
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
             let QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() else {
                 unreachable!()
             };
@@ -273,19 +272,19 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 })?),
             };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
             let ffn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
-            let attn_q = QLinear::new(&ct, reader, &format!("{prefix}.attn_q"), device)?;
-            let attn_k = QLinear::new(&ct, reader, &format!("{prefix}.attn_k"), device)?;
-            let attn_v = QLinear::new(&ct, reader, &format!("{prefix}.attn_v"), device)?;
-            let attn_output = QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?;
+            let attn_q = QLinear::new(&mut ct, &format!("{prefix}.attn_q"), device)?;
+            let attn_k = QLinear::new(&mut ct, &format!("{prefix}.attn_k"), device)?;
+            let attn_v = QLinear::new(&mut ct, &format!("{prefix}.attn_v"), device)?;
+            let attn_output = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(

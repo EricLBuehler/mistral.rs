@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
 use candle_core::{
@@ -9,16 +10,17 @@ use candle_core::{
             cublas::{result::hgemm, sys::cublasOperation_t},
             driver::{CudaSlice, DevicePtr},
         },
-        CudaDType, CudaStorageSlice, WrapErr,
+        CudaStorageSlice, WrapErr,
     },
-    from_storage_no_op,
-    quantized::QMatMul,
-    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, WithDType, D,
+    from_storage_no_op, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
 use half::f16;
 use lazy_static::lazy_static;
 
-use crate::{QuantMethod, QuantMethodConfig};
+use crate::{
+    utils::{get_cuda_device, get_cuda_slice},
+    IsqType, QuantMethod, QuantMethodConfig,
+};
 
 use super::ffi::{
     gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
@@ -33,7 +35,8 @@ lazy_static! {
     static ref TMP_DQS: Mutex<HashMap<usize, CudaSlice<f16>>> = Mutex::new(HashMap::new());
 }
 
-pub struct GptqMatMul {
+#[derive(Debug)]
+pub struct GptqLayer {
     q_weight: Tensor,    // u32
     gptq_qzeros: Tensor, // u32
     gptq_scales: Tensor, // f16
@@ -43,24 +46,7 @@ pub struct GptqMatMul {
     use_exllama: bool,
 }
 
-fn get_cuda_slice<T: WithDType + CudaDType>(x: &Tensor) -> *const T {
-    match &*x.storage_and_layout().0 {
-        Storage::Cuda(a_storage) => *a_storage
-            .as_cuda_slice::<T>()
-            .expect("DType is not T")
-            .device_ptr() as *const T,
-        _ => panic!("Expected CUDA storage."),
-    }
-}
-
-fn get_cuda_device(x: &Tensor) -> &CudaDevice {
-    match x.device() {
-        Device::Cuda(dev) => dev,
-        _ => panic!("Expected CUDA device"),
-    }
-}
-
-impl GptqMatMul {
+impl GptqLayer {
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1490
     // https://github.com/vllm-project/vllm/blob/966fe72141e8365721840b7ababfb78601c23ead/csrc/quantization/gptq/q_gemm.cu#L1823
     fn gptq_gemm(&self, a: Tensor, groups: i32, use_exllama: bool) -> Result<Tensor> {
@@ -70,13 +56,13 @@ impl GptqMatMul {
                 a.layout().stride()
             )
         }
-        let a_ptr = get_cuda_slice::<f16>(&a);
-        let b_q_weight = get_cuda_slice::<i32>(&self.q_weight) as *const u32;
-        let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros) as *const u32;
-        let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales);
-        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx);
+        let a_ptr = get_cuda_slice::<f16>(&a)?;
+        let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
+        let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros)? as *const u32;
+        let b_gptq_scales = get_cuda_slice::<f16>(&self.gptq_scales)?;
+        let b_g_idx = get_cuda_slice::<i32>(&self.g_idx)?;
 
-        let dev = get_cuda_device(&a);
+        let dev = get_cuda_device(&a)?;
 
         let c_shape = Shape::from_dims(&[a.dims()[0], self.q_weight.dims()[1]]);
 
@@ -218,7 +204,7 @@ impl GptqMatMul {
     }
 }
 
-impl QuantMethod for GptqMatMul {
+impl QuantMethod for GptqLayer {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -233,14 +219,13 @@ impl QuantMethod for GptqMatMul {
                 g_idx,
                 bias,
             } => {
-                let dev = get_cuda_device(&g_idx);
+                let dev = get_cuda_device(&g_idx)?;
                 let len = (q_weight.dims()[0] * 32 / bits as usize) * q_weight.dims()[1];
                 // SAFETY: used in the kernel as a tmp space, just preallocating it here.
-                if !TMP_DQS.lock().unwrap().contains_key(&len) {
-                    TMP_DQS
-                        .lock()
-                        .unwrap()
-                        .insert(len, unsafe { dev.alloc::<f16>(len).w()? });
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    TMP_DQS.lock().unwrap().entry(len)
+                {
+                    e.insert(unsafe { dev.alloc::<f16>(len).w()? });
                 }
                 Ok(Self {
                     q_weight,
@@ -252,7 +237,9 @@ impl QuantMethod for GptqMatMul {
                     bias,
                 })
             }
-            QuantMethodConfig::Gguf { q_weight: _, b: _ } | QuantMethodConfig::Unquantized(_) => {
+            QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Hqq { .. } => {
                 unreachable!()
             }
         }
@@ -269,7 +256,7 @@ impl QuantMethod for GptqMatMul {
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
         if !reshaped_a.device().is_cuda() {
-            candle_core::bail!("Expected CUDA input to GptqMatMul");
+            candle_core::bail!("Expected CUDA input to GptqLayer");
         }
         let out = self.gptq_gemm(
             reshaped_a,
@@ -288,18 +275,23 @@ impl QuantMethod for GptqMatMul {
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
-        (self.q_weight.dtype(), self.q_weight.device().clone())
-    }
-
-    fn get_qmatmul(&mut self) -> Option<&mut QMatMul> {
-        None
+        (self.gptq_scales.dtype(), self.gptq_scales.device().clone())
     }
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
         None
     }
 
-    fn convert_to_isq(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+    fn apply_isq(
+        self: Arc<Self>,
+        _dtype: Option<IsqType>,
+        _device: Device,
+        _n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
+    }
+
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
+        None
     }
 }
