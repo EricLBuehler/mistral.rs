@@ -1,13 +1,27 @@
 use either::Either;
 use indexmap::IndexMap;
+use rand::Rng;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    Constraint, CustomLogitsProcessor, DefaultSchedulerMethod, Device, DeviceMapMetadata,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
+    NormalSpecificConfig, Request, RequestMessage, Response, Result, SamplingParams,
+    SchedulerConfig, Tensor, TokenSource,
 };
+
+struct ThresholdLogitsProcessor {
+    threshold: f64,
+}
+
+impl CustomLogitsProcessor for ThresholdLogitsProcessor {
+    fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+        // Mask is 1 for true, 0 for false.
+        let mask = logits.ge(self.threshold)?;
+        logits.broadcast_mul(&mask.to_dtype(logits.dtype())?)
+    }
+}
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
 pub(crate) fn best_device() -> Result<Device> {
@@ -23,17 +37,17 @@ pub(crate) fn best_device() -> Result<Device> {
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
     // Select a Mistral model
-    let loader = VisionLoaderBuilder::new(
-        VisionSpecificConfig {
+    let loader = NormalLoaderBuilder::new(
+        NormalSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
             topology: None,
         },
         None,
         None,
-        Some("microsoft/Phi-3-vision-128k-instruct".to_string()),
+        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(VisionLoaderType::Phi3V);
+    .build(NormalLoaderType::Mistral)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
@@ -58,26 +72,16 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
-    let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
-    ) {
-        Ok(http_resp) => http_resp.bytes()?.to_vec(),
-        Err(e) => anyhow::bail!(e),
-    };
-    let image = image::load_from_memory(&bytes)?;
+    let mut rng = rand::thread_rng();
+    let random_value: f64 = rng.gen_range(0.0..=1.0);
+    let threshold: f64 = rng.gen_range(0.0..=0.5);
 
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::VisionChat {
-            images: vec![image],
-            messages: vec![IndexMap::from([
-                ("role".to_string(), Either::Left("user".to_string())),
-                (
-                    "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.".to_string()),
-                ),
-            ])],
-        },
+        messages: RequestMessage::Chat(vec![IndexMap::from([
+            ("role".to_string(), Either::Left("user".to_string())),
+            ("content".to_string(), Either::Left("Hello!".to_string())),
+        ])]),
         sampling_params: SamplingParams::default(),
         response: tx,
         return_logprobs: false,
@@ -88,7 +92,10 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
-        logits_processors: None,
+        logits_processors: Some(vec![
+            Arc::new(move |logits: &Tensor, _context: &[u32]| logits * random_value),
+            Arc::new(ThresholdLogitsProcessor { threshold }),
+        ]),
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

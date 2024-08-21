@@ -23,6 +23,7 @@ indexmap.workspace = true
 either.workspace = true
 futures.workspace = true
 reqwest.workspace = true
+rand = "0.8.5"
 
 [features]
 cuda = ["mistralrs-core/cuda"]

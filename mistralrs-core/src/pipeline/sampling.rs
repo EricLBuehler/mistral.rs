@@ -287,14 +287,14 @@ pub async fn sample_sequence(
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
     let sampler = seq.sampler();
-    let ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
+    let ctx_clone = seq.get_toks().to_vec();
     let rng_clone = rng.clone();
     let logits_clone = logits.clone();
     let first_lobprobs_response = if use_async_pool {
         tokio_rayon::spawn(move || {
             sampler.sample(
                 logits_clone,
-                Some(&ctx_clone),
+                &ctx_clone,
                 return_logprobs,
                 rng_clone,
                 sample_speculative,
@@ -304,7 +304,7 @@ pub async fn sample_sequence(
     } else {
         sampler.sample(
             logits_clone,
-            Some(&ctx_clone),
+            &ctx_clone,
             return_logprobs,
             rng_clone,
             sample_speculative,
@@ -326,14 +326,14 @@ pub async fn sample_sequence(
             token_set.apply_to(&mut acc);
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
-            let ctx_clone = seq.get_toks()[seq.prompt_tokens()..].to_vec();
+            let ctx_clone = seq.get_toks().to_vec();
             let rng_clone = rng.clone();
             let sampler = seq.sampler();
             if use_async_pool {
                 tokio_rayon::spawn(move || {
                     sampler.sample(
                         new_logits,
-                        Some(&ctx_clone),
+                        &ctx_clone,
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
@@ -343,7 +343,7 @@ pub async fn sample_sequence(
             } else {
                 sampler.sample(
                     new_logits,
-                    Some(&ctx_clone),
+                    &ctx_clone,
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
