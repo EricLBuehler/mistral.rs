@@ -407,6 +407,7 @@
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
 <a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -733,6 +734,7 @@
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            logits_processors: <span class="prelude-val">None</span>,
         }),
         is_streaming,
     ))

@@ -732,6 +732,7 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -1384,6 +1385,7 @@
             topk,
             topp,
             minp,
+            request.logits_processors.unwrap_or_default(),
         );
 
         <span class="kw">if </span>request.sampling_params.n_choices == <span class="number">0 </span>{

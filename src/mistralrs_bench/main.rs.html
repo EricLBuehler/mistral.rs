@@ -540,6 +540,8 @@
 <a href="#540" id="540">540</a>
 <a href="#541" id="541">541</a>
 <a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -622,6 +624,7 @@
         adapters: <span class="prelude-val">None</span>,
         tools: <span class="prelude-val">None</span>,
         tool_choice: <span class="prelude-val">None</span>,
+        logits_processors: <span class="prelude-val">None</span>,
     });
 
     <span class="kw">let </span><span class="kw-2">mut </span>usages = Vec::new();
@@ -788,6 +791,7 @@
         adapters: <span class="prelude-val">None</span>,
         tools: <span class="prelude-val">None</span>,
         tool_choice: <span class="prelude-val">None</span>,
+        logits_processors: <span class="prelude-val">None</span>,
     });
 
     sender

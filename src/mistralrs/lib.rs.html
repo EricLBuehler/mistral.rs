@@ -50,6 +50,7 @@
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
 <a href="#52" id="52">52</a>
+<a href="#53" id="53">53</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous, multithreaded API to `mistral.rs`.
 //!
 //! ## Example
@@ -88,6 +89,7 @@
 //!         adapters: None,
 //!         tool_choice: None,
 //!         tools: None,
+//!         logits_processors: None,
 //!     });
 //!     mistralrs.get_sender()?.blocking_send(request)?;
 //!
@@ -100,6 +102,6 @@
 //! }
 //! ```
 
-</span><span class="kw">pub use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>};
+</span><span class="kw">pub use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub use </span>mistralrs_core::<span class="kw-2">*</span>;
 </code></pre></div></section></main></body></html>

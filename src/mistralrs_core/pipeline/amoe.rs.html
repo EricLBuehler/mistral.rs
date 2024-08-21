@@ -571,6 +571,7 @@
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -925,9 +926,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>rng = thread_rng();
         <span class="kw">let </span><span class="kw-2">mut </span>samples = inputs.into_inner();
 
-        <span class="comment">// Create several dummy objects for the sequences.
+        <span class="comment">// Create several dummy objects for the sequences. No custom logits processors.
         </span><span class="kw">let </span>(dummy_sender, <span class="kw">_</span>) = tokio::sync::mpsc::channel(<span class="number">10000</span>);
-        <span class="kw">let </span>dummy_sampler = Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>);
+        <span class="kw">let </span>dummy_sampler =
+            Sampler::new(<span class="prelude-val">None</span>, <span class="number">0</span>, tokenizer.clone(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, -<span class="number">1</span>, <span class="number">0.0</span>, <span class="number">0.0</span>, <span class="macro">vec!</span>[]);
 
         <span class="kw">let </span>dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="number">0</span>,

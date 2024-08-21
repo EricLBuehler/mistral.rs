@@ -116,6 +116,20 @@
 <a href="#116" id="116">116</a>
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -124,8 +138,9 @@
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
+    CustomLogitsProcessor,
 };
-<span class="kw">use </span>std::fmt::Debug;
+<span class="kw">use </span>std::{fmt::Debug, sync::Arc};
 <span class="kw">use </span>tokio::sync::mpsc::Sender;
 
 <span class="attr">#[derive(Clone)]
@@ -155,7 +170,23 @@
 }
 
 <span class="attr">#[derive(Clone)]
-</span><span class="doccomment">/// A normal request request to the `MistralRs`
+</span><span class="doccomment">/// A normal request request to the `MistralRs`.
+/// - `messages`: Messages for the request
+/// - `sampling_params`: Sampling parameters for generation
+/// - `response`: Object to send the result through
+/// - `return_logprobs`: Whether to return logprobs
+/// - `is_streaming`: Control whether the request is streaming, if so chunk responses will be sent
+/// - `id`: Request ID
+/// - `constraint`: Constraint to use during generation
+/// - `suffix`: Suffix to add
+/// - `adapters`: Adapters to use in this request
+/// - `tools`: Tools available in this request
+/// - `tool_choice`: Choice of tools
+/// - `logits_processors`: Custom logits processors. Order of application:
+///     1) Apply penalties from `sampling_params`
+///     2) Apply these custom logits processors sequentially
+///     3) Apply temperature and softmax
+///     4) Sample the next token (topk, topp, minp, etc)
 </span><span class="kw">pub struct </span>NormalRequest {
     <span class="kw">pub </span>messages: RequestMessage,
     <span class="kw">pub </span>sampling_params: SamplingParams,
@@ -168,6 +199,7 @@
     <span class="kw">pub </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     <span class="kw">pub </span>tools: <span class="prelude-ty">Option</span>&lt;Vec&lt;Tool&gt;&gt;,
     <span class="kw">pub </span>tool_choice: <span class="prelude-ty">Option</span>&lt;ToolChoice&gt;,
+    <span class="kw">pub </span>logits_processors: <span class="prelude-ty">Option</span>&lt;Vec&lt;Arc&lt;<span class="kw">dyn </span>CustomLogitsProcessor&gt;&gt;&gt;,
 }
 
 <span class="kw">impl </span>NormalRequest {
@@ -191,6 +223,7 @@
             constraint: Constraint::None,
             suffix: <span class="prelude-val">None</span>,
             adapters: <span class="prelude-val">None</span>,
+            logits_processors: <span class="prelude-val">None</span>,
         }
     }
 }
@@ -210,15 +243,10 @@
             Request::Normal(NormalRequest {
                 messages,
                 sampling_params,
-                response: <span class="kw">_</span>,
-                return_logprobs: <span class="kw">_</span>,
                 is_streaming,
-                id,
-                constraint: <span class="kw">_</span>,
-                suffix: <span class="kw">_</span>,
                 adapters,
-                tool_choice: <span class="kw">_</span>,
-                tools: <span class="kw">_</span>,
+                id,
+                ..
             }) =&gt; {
                 <span class="macro">write!</span>(
                     f,
