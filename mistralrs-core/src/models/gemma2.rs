@@ -544,10 +544,6 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
-            // TODO softcapping in paged attn
-            candle_core::bail!("Gemma 2 does not support PagedAttention.");
-        }
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
