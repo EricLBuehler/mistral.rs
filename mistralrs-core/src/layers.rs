@@ -39,6 +39,13 @@ impl RmsNorm {
         Ok(Self { eps, weight: w })
     }
 
+    /// Gemma uses weight + 1.0
+    pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        let w = (inner.inner().weight().clone() + 1.0)?;
+        Ok(Self { eps, weight: w })
+    }
+
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
         Ok(Self { eps, weight: w })
     }
