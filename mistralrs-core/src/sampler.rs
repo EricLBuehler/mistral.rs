@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{bail, Device, Error, Result, Tensor, D};
+use candle_core::{Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -56,6 +56,9 @@ impl Default for SamplingParams {
     }
 }
 
+/// Logits and sequence context (prompt and generated tokens), returning modified tokens.
+pub type GenericLogitsProcessor = Arc<dyn Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync>;
+
 /// Sampler for sampling.
 #[derive(Clone)]
 pub struct Sampler {
@@ -67,6 +70,7 @@ pub struct Sampler {
     top_k: i64,
     top_p: f64,
     min_p: f64,
+    logits_processors: Vec<GenericLogitsProcessor>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -102,6 +106,7 @@ impl Sampler {
         top_k: i64,
         top_p: f64,
         min_p: f64,
+        logits_processors: Vec<GenericLogitsProcessor>,
     ) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
@@ -117,6 +122,7 @@ impl Sampler {
             top_k,
             top_p,
             min_p,
+            logits_processors,
         }
     }
 
@@ -356,12 +362,8 @@ impl Sampler {
         self.sample_multinomial(probs, argsort_indices, return_logprobs, rng)
     }
 
-    fn apply_penalties(&self, mut logits: Vec<f32>, context: Option<&[u32]>) -> Result<Tensor> {
+    fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
         if self.frequency_penalty.is_some() || self.presence_penalty.is_some() {
-            if context.is_none() {
-                bail!("Must specify penalty context.");
-            }
-            let context = context.as_ref().unwrap();
             let frequency_penalty = self.frequency_penalty.unwrap_or(0.);
             let presence_penalty = self.presence_penalty.unwrap_or(0.);
 
@@ -387,16 +389,18 @@ impl Sampler {
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
-    /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     pub fn sample(
         &self,
         logits: Tensor,
-        penalty_ctxt: Option<&[u32]>,
+        context: &[u32],
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
-        let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
+        let mut logits = self.apply_penalties(logits.to_vec1()?, context)?;
+        for processor in &self.logits_processors {
+            logits = processor(&logits, context)?;
+        }
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
@@ -468,10 +472,22 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        );
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
-        let res = sampler.sample(logits, None, false, rng, false).unwrap();
+        let res = sampler
+            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, false)
+            .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
@@ -486,10 +502,22 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            get_tokenizer().into(),
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        );
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
-        let res = sampler.sample(logits, None, false, rng, true).unwrap();
+        let res = sampler
+            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, true)
+            .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)

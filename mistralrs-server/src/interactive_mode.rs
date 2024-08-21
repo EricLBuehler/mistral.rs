@@ -144,6 +144,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
             adapters: None,
             tool_choice: None,
             tools: None,
+            logits_processors: None,
         });
         sender.send(req).await.unwrap();
 

@@ -6,6 +6,7 @@ use crate::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
+    GenericLogitsProcessor,
 };
 use std::fmt::Debug;
 use tokio::sync::mpsc::Sender;
@@ -37,7 +38,23 @@ pub enum RequestMessage {
 }
 
 #[derive(Clone)]
-/// A normal request request to the `MistralRs`
+/// A normal request request to the `MistralRs`.
+/// - `messages`: Messages for the request
+/// - `sampling_params`: Sampling parameters for generation
+/// - `response`: Object to send the result through
+/// - `return_logprobs`: Whether to return logprobs
+/// - `is_streaming`: Control whether the request is streaming, if so chunk responses will be sent
+/// - `id`: Request ID
+/// - `contraint`: Contraint to use during generation
+/// - `suffix`: Suffix to add
+/// - `adapters`: Adapters to use in this request
+/// - `tools`: Tools available in this request
+/// - `tool_choice`: Choice of tools
+/// - `logits_processors`: Custom logits processors. Order of application:
+///     1) Apply penalties from `sampling_params`
+///     2) Apply these custom logits processors sequentially
+///     3) Apply temperature and softmax
+///     4) Sample the next token (topk, topp, minp, etc)
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
@@ -50,6 +67,7 @@ pub struct NormalRequest {
     pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
+    pub logits_processors: Option<Vec<GenericLogitsProcessor>>,
 }
 
 impl NormalRequest {
@@ -73,6 +91,7 @@ impl NormalRequest {
             constraint: Constraint::None,
             suffix: None,
             adapters: None,
+            logits_processors: None,
         }
     }
 }
@@ -92,15 +111,10 @@ impl Debug for Request {
             Request::Normal(NormalRequest {
                 messages,
                 sampling_params,
-                response: _,
-                return_logprobs: _,
                 is_streaming,
-                id,
-                constraint: _,
-                suffix: _,
                 adapters,
-                tool_choice: _,
-                tools: _,
+                id,
+                ..
             }) => {
                 write!(
                     f,

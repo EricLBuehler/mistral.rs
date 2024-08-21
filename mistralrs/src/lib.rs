@@ -48,5 +48,5 @@
 //! }
 //! ```
 
-pub use candle_core::{DType, Device, Result};
+pub use candle_core::{DType, Device, Result, Tensor};
 pub use mistralrs_core::*;
