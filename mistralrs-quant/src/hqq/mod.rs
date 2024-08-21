@@ -556,18 +556,18 @@ impl QuantMethod for HqqLayer {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: IsqType,
+        dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
         n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bits = match dtype {
-            IsqType::HQQ8 => HqqBits::Eight,
-            IsqType::HQQ4 => HqqBits::Four,
-            // IsqType::HQQ3 => HqqBits::Three,
-            // IsqType::HQQ2 => HqqBits::Two,
-            // IsqType::HQQ1 => HqqBits::One,
-            _ => candle_core::bail!("Expected HQQ ISQ type."),
+            Some(IsqType::HQQ8) => HqqBits::Eight,
+            Some(IsqType::HQQ4) => HqqBits::Four,
+            // Some(IsqType::HQQ3) => HqqBits::Three,
+            // Some(IsqType::HQQ2) => HqqBits::Two,
+            // Some(IsqType::HQQ1) => HqqBits::One,
+            _ => candle_core::bail!("Expected a HQQ ISQ type."),
         };
         let cfg = HqqConfig {
             bits,

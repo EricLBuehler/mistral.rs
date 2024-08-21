@@ -170,7 +170,7 @@ macro_rules! get_paths {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! get_paths_gguf {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filenames:expr, $silent:expr) => {{
         let api = ApiBuilder::new()
             .with_progress(!$silent)
             .with_token(get_token($token_source)?)
@@ -209,7 +209,7 @@ macro_rules! get_paths_gguf {
             revision.clone(),
             &$token_source,
             &Some($quantized_model_id),
-            &Some(vec![$quantized_filename]),
+            &Some($quantized_filenames),
             &api,
             &model_id,
         )?;

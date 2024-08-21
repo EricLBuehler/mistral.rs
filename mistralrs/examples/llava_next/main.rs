@@ -16,6 +16,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         VisionSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
@@ -69,6 +70,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
     let response = rx.blocking_recv().unwrap();

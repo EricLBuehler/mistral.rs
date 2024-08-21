@@ -300,6 +300,7 @@ impl Attention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
@@ -426,9 +427,7 @@ impl Model {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(
@@ -502,6 +501,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads(),
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: None,
             },
         })
     }

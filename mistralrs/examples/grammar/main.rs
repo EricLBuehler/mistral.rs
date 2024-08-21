@@ -27,6 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         NormalSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
@@ -73,6 +74,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tool_choice: None,
         tools: None,
+        logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

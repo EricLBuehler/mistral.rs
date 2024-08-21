@@ -79,6 +79,7 @@ Mistal.rs supports several model categories:
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
     - Extremely fast due to working in parallel
+- Use a [model topology](docs/TOPOLOGY.md) to configure ISQ types *per layer* with a single [YAML file](topologies/isq.yml)
 
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server.
@@ -101,6 +102,7 @@ Mistal.rs supports several model categories:
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
+- Custom logits processor API in Rust: [example](mistralrs/examples/custom_logits_processor/main.rs)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.

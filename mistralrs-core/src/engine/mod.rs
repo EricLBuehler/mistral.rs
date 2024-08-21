@@ -650,6 +650,7 @@ impl Engine {
             topk,
             topp,
             minp,
+            request.logits_processors.unwrap_or_default(),
         );
 
         if request.sampling_params.n_choices == 0 {

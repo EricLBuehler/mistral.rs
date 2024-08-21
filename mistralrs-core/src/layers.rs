@@ -12,7 +12,7 @@ use std::{
 };
 
 use candle_core::{
-    quantized::{gguf_file, QMatMul, QTensor},
+    quantized::{QMatMul, QTensor},
     DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
@@ -22,7 +22,8 @@ use serde::Deserialize;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::{flash_attn, repeat_kv};
 use crate::{
-    cublaslt::CUBLASLT_HANDLE, models::llama, pipeline::Phi3RopeScaling, INHIBIT_GEMM_F16,
+    cublaslt::CUBLASLT_HANDLE, gguf::Content, models::llama, pipeline::Phi3RopeScaling,
+    INHIBIT_GEMM_F16,
 };
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,13 @@ impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = inner.inner().weight().clone();
+        Ok(Self { eps, weight: w })
+    }
+
+    /// Gemma uses weight + 1.0
+    pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        let w = (inner.inner().weight().clone() + 1.0)?;
         Ok(Self { eps, weight: w })
     }
 
@@ -612,13 +620,12 @@ pub struct QLinear {
 
 impl QLinear {
     pub fn new<R: std::io::Read + std::io::Seek>(
-        ct: &gguf_file::Content,
-        r: &mut R,
+        ct: &mut Content<'_, R>,
         name: &str,
         device: &Device,
     ) -> Result<Self> {
-        let w = ct.tensor(r, &format!("{name}.weight"), device)?;
-        let b = ct.tensor(r, &format!("{name}.bias"), device)?;
+        let w = ct.tensor(&format!("{name}.weight"), device)?;
+        let b = ct.tensor(&format!("{name}.bias"), device)?;
         let inner = QMatMul::from_qtensor(w)?;
         let bias = b.dequantize(device)?;
         Ok(Self {

@@ -74,6 +74,7 @@ mistralrs-paged-attn = { version = "0.2.5", path = "../mistralrs-paged-attn", op
 mistralrs-quant = { version = "0.2.0", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
+serde_yaml = "0.9.34"
 
 [features]
 default = ["plotly"]

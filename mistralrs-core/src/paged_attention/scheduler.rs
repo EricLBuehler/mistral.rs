@@ -222,6 +222,7 @@ impl PagedAttentionScheduler {
                 true
             }
         });
+
         for id in to_free_ids {
             self._free(id);
         }

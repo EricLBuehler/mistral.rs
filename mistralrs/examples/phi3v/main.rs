@@ -1,5 +1,4 @@
 use either::Either;
-use image::{ColorType, DynamicImage};
 use indexmap::IndexMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
@@ -28,6 +27,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         VisionSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
@@ -58,10 +58,18 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 fn main() -> anyhow::Result<()> {
     let mistralrs = setup()?;
 
+    let bytes = match reqwest::blocking::get(
+        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+    ) {
+        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+        Err(e) => anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&bytes)?;
+
     let (tx, mut rx) = channel(10_000);
     let request = Request::Normal(NormalRequest {
         messages: RequestMessage::VisionChat {
-            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
+            images: vec![image],
             messages: vec![IndexMap::from([
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
@@ -80,6 +88,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

@@ -28,7 +28,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
         "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
-        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
+        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()],
         None,
     )
     .build();
@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
