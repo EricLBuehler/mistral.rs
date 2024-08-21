@@ -81,6 +81,7 @@ fn main() -> anyhow::Result<()> {
         adapters: Some(vec!["adapter_2".to_string()]),
         tool_choice: None,
         tools: None,
+        logits_processors: None,
     });
 
     mistralrs.get_sender()?.blocking_send(request)?;

@@ -14,7 +14,7 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
         NormalLoadingMetadata, NormalModel,
@@ -169,7 +169,6 @@ impl MlpLayer for MLP {
     }
 }
 
-#[derive(Clone)]
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -184,6 +183,7 @@ struct Attention {
     attn_logit_softcapping: Option<f64>,
     use_sliding_window: bool,
     sliding_window: Option<usize>,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl Attention {
@@ -192,6 +192,7 @@ impl Attention {
         cfg: &Config,
         layer_idx: usize,
         vb: VarBuilder,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
@@ -246,9 +247,11 @@ impl Attention {
             } else {
                 None
             },
+            paged_attn,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -257,6 +260,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -312,38 +316,55 @@ impl Attention {
             attention_mask
         };
 
-        // self.sliding_window is None if !self.use_sliding_window
-        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            mask,
-            self.sliding_window,
-            false,
-        )?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    self.attn_logit_softcapping,
+                )?
+            }
+            None => {
+                // self.sliding_window is None if !self.use_sliding_window
+                let (k, v, mask) = Cache::update_kv_cache_sliding_window(
+                    kv_cache,
+                    k,
+                    v,
+                    mask,
+                    self.sliding_window,
+                    false,
+                )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
+                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let mut att = MatMul.matmul_affine_div(
-            &q.contiguous()?,
-            &k.t()?.contiguous()?,
-            (self.query_pre_attn_scalar as f64).sqrt(),
-        )?;
+                let mut att = MatMul.matmul_affine_div(
+                    &q.contiguous()?,
+                    &k.t()?.contiguous()?,
+                    (self.query_pre_attn_scalar as f64).sqrt(),
+                )?;
 
-        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
-            att = (att / attn_logit_softcapping)?;
-            att = att.tanh()?;
-            att = (att * attn_logit_softcapping)?;
-        }
+                if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
+                    att = (att / attn_logit_softcapping)?;
+                    att = att.tanh()?;
+                    att = (att * attn_logit_softcapping)?;
+                }
 
-        let att = match mask {
-            Some(m) => att.broadcast_add(&m)?,
-            None => att,
+                let att = match mask {
+                    Some(m) => att.broadcast_add(&m)?,
+                    None => att,
+                };
+                let att = candle_nn::ops::softmax_last_dim(&att)?;
+                // Convert to contiguous as matmul doesn't support strided vs for now.
+                MatMul.matmul(&att, &v.contiguous()?)?
+            }
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
@@ -378,12 +399,14 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             layer_idx,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = RmsNorm::new_gemma(
@@ -416,6 +439,7 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -424,6 +448,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -436,6 +461,7 @@ impl DecoderLayer {
                 seqlen_offsets,
                 start_offsets_kernel,
                 kv_cache,
+                metadata,
             )?
             .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
@@ -488,10 +514,6 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
-            // TODO softcapping in paged attn
-            candle_core::bail!("Gemma 2 does not support PagedAttention.");
-        }
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
@@ -505,6 +527,25 @@ impl Model {
                 is_gptx,
                 vb.dtype(),
             )?);
+            let head_dim = cfg.head_dim;
+            let sliding_window = if layer_idx % 2 == 0 {
+                // ^ Order is SWA, global, SWA
+                Some(cfg.sliding_window)
+            } else {
+                None
+            };
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (1.0 / (cfg.query_pre_attn_scalar as f64).sqrt()) as f32,
+                    Some(cfg.num_key_value_heads),
+                    sliding_window,
+                    &normal_loading_metadata.real_device,
+                    None,
+                )?),
+            };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -512,6 +553,7 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
             )?;
             layers.push(layer)
         }
@@ -544,6 +586,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: Some(cfg.head_dim),
             },
         })
     }
@@ -554,6 +597,7 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
@@ -587,6 +631,9 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -642,13 +689,14 @@ impl NormalModel for Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
         )
     }
     fn xlora_forward(
