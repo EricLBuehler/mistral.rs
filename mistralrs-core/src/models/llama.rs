@@ -127,6 +127,7 @@ impl CausalSelfAttention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
@@ -521,6 +522,7 @@ impl Llama {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: None,
             },
         })
     }
