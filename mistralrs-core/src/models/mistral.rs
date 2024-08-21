@@ -450,9 +450,7 @@ impl Model {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let mapper = normal_loading_metadata.mapper;
 
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,

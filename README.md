@@ -79,6 +79,7 @@ Mistal.rs supports several model categories:
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
     - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
     - Extremely fast due to working in parallel
+- Use a [model topology](docs/TOPOLOGY.md) to configure ISQ types *per layer* with a single [YAML file](topologies/isq.yml)
 
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server.

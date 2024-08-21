@@ -871,9 +871,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(

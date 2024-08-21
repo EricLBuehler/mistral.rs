@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -23,7 +24,6 @@ use tracing::warn;
 use crate::{
     models,
     xlora_models::{self, XLoraConfig},
-    DeviceMapMetadata,
 };
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
@@ -66,7 +66,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     // Device mapping metadata which can be used to construct a concrete device mapper
-    pub mapper: DeviceMapMetadata,
+    pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     // Flag to check if loading in ISQ
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
@@ -96,6 +96,8 @@ pub trait NormalModelLoader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    /// Get total num_hidden_layers for the layers which will be device mapped.
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -231,6 +233,9 @@ impl NormalModelLoader for MistralLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(MistralBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Gemma loader
@@ -336,6 +341,9 @@ impl NormalModelLoader for GemmaLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(GemmaBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Llama loader
@@ -435,6 +443,9 @@ impl NormalModelLoader for LlamaLoader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(LlamaBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Mixtral loader
@@ -529,6 +540,9 @@ impl NormalModelLoader for MixtralLoader {
             config,
             use_flash_attn,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(MixtralBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -625,6 +639,9 @@ impl NormalModelLoader for Phi2Loader {
             config,
             use_flash_attn,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi2BasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -731,6 +748,9 @@ impl NormalModelLoader for Phi3Loader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Qwen2 loader
@@ -816,6 +836,9 @@ impl NormalModelLoader for Qwen2Loader {
             use_flash_attn,
         )?))
     }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Qwen2BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
 }
 
 // ======================== Gemma2 loader
@@ -878,6 +901,9 @@ impl NormalModelLoader for Gemma2Loader {
         Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
             config,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(serde_json::from_str::<models::gemma2::Config>(config)?.num_hidden_layers)
     }
 }
 
@@ -973,5 +999,8 @@ impl NormalModelLoader for Starcoder2Loader {
         Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
         )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
     }
 }
