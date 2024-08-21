@@ -978,41 +978,11 @@
 <a href="#978" id="978">978</a>
 <a href="#979" id="979">979</a>
 <a href="#980" id="980">980</a>
-<a href="#981" id="981">981</a>
-<a href="#982" id="982">982</a>
-<a href="#983" id="983">983</a>
-<a href="#984" id="984">984</a>
-<a href="#985" id="985">985</a>
-<a href="#986" id="986">986</a>
-<a href="#987" id="987">987</a>
-<a href="#988" id="988">988</a>
-<a href="#989" id="989">989</a>
-<a href="#990" id="990">990</a>
-<a href="#991" id="991">991</a>
-<a href="#992" id="992">992</a>
-<a href="#993" id="993">993</a>
-<a href="#994" id="994">994</a>
-<a href="#995" id="995">995</a>
-<a href="#996" id="996">996</a>
-<a href="#997" id="997">997</a>
-<a href="#998" id="998">998</a>
-<a href="#999" id="999">999</a>
-<a href="#1000" id="1000">1000</a>
-<a href="#1001" id="1001">1001</a>
-<a href="#1002" id="1002">1002</a>
-<a href="#1003" id="1003">1003</a>
-<a href="#1004" id="1004">1004</a>
-<a href="#1005" id="1005">1005</a>
-<a href="#1006" id="1006">1006</a>
-<a href="#1007" id="1007">1007</a>
-<a href="#1008" id="1008">1008</a>
-<a href="#1009" id="1009">1009</a>
-<a href="#1010" id="1010">1010</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
-<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>tqdm::Iter;
@@ -1021,7 +991,7 @@
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul},
+    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
@@ -1034,36 +1004,6 @@
 };
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
-
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(dim: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>weight = vb.get(dim, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ weight, eps })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>x_dtype = x.dtype();
-        <span class="kw">let </span>internal_dtype = <span class="kw">match </span>x_dtype {
-            DType::F16 | DType::BF16 =&gt; DType::F32,
-            d =&gt; d,
-        };
-        <span class="kw">let </span>hidden_size = x.dim(D::Minus1)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.to_dtype(internal_dtype)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm_x = (x.sqr()<span class="question-mark">?</span>.sum_keepdim(D::Minus1)<span class="question-mark">? </span>/ hidden_size <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x_normed = x.broadcast_div(<span class="kw-2">&amp;</span>(norm_x + <span class="self">self</span>.eps)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        x_normed
-            .to_dtype(x_dtype)<span class="question-mark">?
-            </span>.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.weight + <span class="number">1.0</span>)<span class="question-mark">?</span>)
-    }
-}
 
 <span class="attr">#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -1451,22 +1391,22 @@
             loading_isq,
             preload_adapters,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = RmsNorm::new(
+        <span class="kw">let </span>input_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>pre_feedforward_layernorm = RmsNorm::new(
+        <span class="kw">let </span>pre_feedforward_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"pre_feedforward_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_feedforward_layernorm = RmsNorm::new(
+        <span class="kw">let </span>post_feedforward_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_feedforward_layernorm"</span>), <span class="bool-val">false</span>),
@@ -1627,7 +1567,7 @@
                     .merge_weights()<span class="question-mark">?</span>;
             }
         }
-        <span class="kw">let </span>norm = RmsNorm::new(
+        <span class="kw">let </span>norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),

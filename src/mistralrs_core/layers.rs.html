@@ -835,6 +835,13 @@
 <a href="#835" id="835">835</a>
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -873,6 +880,13 @@
     <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
         <span class="kw">let </span>w = inner.inner().weight().clone();
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
+    }
+
+    <span class="doccomment">/// Gemma uses weight + 1.0
+    </span><span class="kw">pub fn </span>new_gemma(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
+        <span class="kw">let </span>w = (inner.inner().weight().clone() + <span class="number">1.0</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 

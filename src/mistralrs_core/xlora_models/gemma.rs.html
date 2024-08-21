@@ -899,43 +899,13 @@
 <a href="#899" id="899">899</a>
 <a href="#900" id="900">900</a>
 <a href="#901" id="901">901</a>
-<a href="#902" id="902">902</a>
-<a href="#903" id="903">903</a>
-<a href="#904" id="904">904</a>
-<a href="#905" id="905">905</a>
-<a href="#906" id="906">906</a>
-<a href="#907" id="907">907</a>
-<a href="#908" id="908">908</a>
-<a href="#909" id="909">909</a>
-<a href="#910" id="910">910</a>
-<a href="#911" id="911">911</a>
-<a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a>
-<a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a>
-<a href="#916" id="916">916</a>
-<a href="#917" id="917">917</a>
-<a href="#918" id="918">918</a>
-<a href="#919" id="919">919</a>
-<a href="#920" id="920">920</a>
-<a href="#921" id="921">921</a>
-<a href="#922" id="922">922</a>
-<a href="#923" id="923">923</a>
-<a href="#924" id="924">924</a>
-<a href="#925" id="925">925</a>
-<a href="#926" id="926">926</a>
-<a href="#927" id="927">927</a>
-<a href="#928" id="928">928</a>
-<a href="#929" id="929">929</a>
-<a href="#930" id="930">930</a>
-<a href="#931" id="931">931</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    layers::{RmsNorm, ScaledDotProductAttention},
     lora::{linear_b <span class="kw">as </span>linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -943,7 +913,7 @@
     },
     utils::progress::NiceProgressBar,
 };
-<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>tqdm::Iter;
@@ -961,36 +931,6 @@
 <span class="kw">fn </span>default_max_position_embeddings() -&gt; usize {
     <span class="number">4096
 </span>}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(dim: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>weight = vb.get(dim, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ weight, eps })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>x_dtype = x.dtype();
-        <span class="kw">let </span>internal_dtype = <span class="kw">match </span>x_dtype {
-            DType::F16 | DType::BF16 =&gt; DType::F32,
-            d =&gt; d,
-        };
-        <span class="kw">let </span>hidden_size = x.dim(D::Minus1)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.to_dtype(internal_dtype)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm_x = (x.sqr()<span class="question-mark">?</span>.sum_keepdim(D::Minus1)<span class="question-mark">? </span>/ hidden_size <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x_normed = x.broadcast_div(<span class="kw-2">&amp;</span>(norm_x + <span class="self">self</span>.eps)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        x_normed
-            .to_dtype(x_dtype)<span class="question-mark">?
-            </span>.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.weight + <span class="number">1.0</span>)<span class="question-mark">?</span>)
-    }
-}
 
 <span class="attr">#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -1342,12 +1282,12 @@
             loading_isq,
             preload_adapters,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = RmsNorm::new(
+        <span class="kw">let </span>input_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
@@ -1496,7 +1436,7 @@
                     .merge_weights()<span class="question-mark">?</span>;
             }
         }
-        <span class="kw">let </span>norm = RmsNorm::new(
+        <span class="kw">let </span>norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),

@@ -763,41 +763,11 @@
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
 <a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a>
-<a href="#767" id="767">767</a>
-<a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
@@ -808,7 +778,7 @@
     },
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, ScaledDotProductAttention},
+    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -853,36 +823,6 @@
             }
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"none of hidden_act and hidden_activation are set"</span>),
         }
-    }
-}
-
-<span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">struct </span>RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-<span class="kw">impl </span>RmsNorm {
-    <span class="kw">fn </span>new(dim: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>weight = vb.get(dim, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ weight, eps })
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>x_dtype = x.dtype();
-        <span class="kw">let </span>internal_dtype = <span class="kw">match </span>x_dtype {
-            DType::F16 | DType::BF16 =&gt; DType::F32,
-            d =&gt; d,
-        };
-        <span class="kw">let </span>hidden_size = x.dim(D::Minus1)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = x.to_dtype(internal_dtype)<span class="question-mark">?</span>;
-        <span class="kw">let </span>norm_x = (x.sqr()<span class="question-mark">?</span>.sum_keepdim(D::Minus1)<span class="question-mark">? </span>/ hidden_size <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x_normed = x.broadcast_div(<span class="kw-2">&amp;</span>(norm_x + <span class="self">self</span>.eps)<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        x_normed
-            .to_dtype(x_dtype)<span class="question-mark">?
-            </span>.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.weight + <span class="number">1.0</span>)<span class="question-mark">?</span>)
     }
 }
 
@@ -1192,12 +1132,12 @@
             paged_attn,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = RmsNorm::new(
+        <span class="kw">let </span>input_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
@@ -1313,7 +1253,7 @@
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
-        <span class="kw">let </span>norm = RmsNorm::new(
+        <span class="kw">let </span>norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
