@@ -2326,6 +2326,7 @@ dependencies = [
  "image",
  "indexmap 2.4.0",
  "mistralrs-core",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

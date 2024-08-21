@@ -805,6 +805,7 @@ impl Runner {
                 adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
+                logits_processors: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -929,6 +930,7 @@ impl Runner {
                 adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
+                logits_processors: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));

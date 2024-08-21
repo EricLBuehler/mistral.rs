@@ -651,6 +651,7 @@ impl Engine {
             topk,
             topp,
             minp,
+            request.logits_processors.unwrap_or_default(),
         );
         let sampler = handle_seq_error!(sampler, request.response);
 

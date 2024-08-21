@@ -102,6 +102,7 @@ Mistal.rs supports several model categories:
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
+- Custom logits processor API in Rust: [example](mistralrs/examples/custom_logits_processor/main.rs)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.

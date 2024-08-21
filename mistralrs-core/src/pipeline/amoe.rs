@@ -352,11 +352,21 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut rng = thread_rng();
         let mut samples = inputs.into_inner();
 
-        // Create several dummy objects for the sequences.
+        // Create several dummy objects for the sequences. No custom logits processors.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler =
-            Sampler::new(None, 0, tokenizer.clone(), None, None, None, -1, 0.0, 0.0)
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let dummy_sampler = Sampler::new(
+            None,
+            0,
+            tokenizer.clone(),
+            None,
+            None,
+            None,
+            -1,
+            0.0,
+            0.0,
+            vec![],
+        )
+        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,

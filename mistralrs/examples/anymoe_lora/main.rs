@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 

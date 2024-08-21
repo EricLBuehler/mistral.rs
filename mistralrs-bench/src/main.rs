@@ -82,6 +82,7 @@ fn run_bench(
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
 
     let mut usages = Vec::new();
@@ -249,6 +250,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
 
     sender
