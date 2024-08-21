@@ -127,6 +127,7 @@ impl CausalSelfAttention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
