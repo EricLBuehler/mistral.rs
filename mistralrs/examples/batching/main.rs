@@ -81,6 +81,7 @@ async fn bench_mistralrs(n_requests: usize) -> anyhow::Result<()> {
             adapters: None,
             tools: None,
             tool_choice: None,
+            logits_processors: None,
         });
         mistralrs.get_sender()?.send(request).await?;
         handles.push(rx);

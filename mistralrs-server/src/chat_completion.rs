@@ -324,6 +324,7 @@ async fn parse_request(
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            logits_processors: None,
         }),
         is_streaming,
     ))

@@ -81,6 +81,7 @@ fn main() -> anyhow::Result<()> {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
 
     // Example: Make adapter_3 the active adapter

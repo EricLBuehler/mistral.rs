@@ -191,7 +191,7 @@ pub trait IsqModel {
                 use indicatif::ProgressIterator;
                 tensors
                     .into_iter()
-                    .zip(devices)
+                    .zip(devices_and_dtypes)
                     .progress_with(bar)
                     .for_each(|((tensor, _), (device, dtype))| {
                         *tensor = tensor
