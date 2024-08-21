@@ -400,7 +400,7 @@
                 <span class="kw">use </span>indicatif::ProgressIterator;
                 tensors
                     .into_iter()
-                    .zip(devices)
+                    .zip(devices_and_dtypes)
                     .progress_with(bar)
                     .for_each(|((tensor, <span class="kw">_</span>), (device, dtype))| {
                         <span class="kw-2">*</span>tensor = tensor
