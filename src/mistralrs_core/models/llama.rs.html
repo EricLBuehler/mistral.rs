@@ -1129,8 +1129,8 @@
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    <span class="kw">pub </span>kv_cache: <span class="kw">crate</span>::pipeline::Cache,
-    <span class="kw">pub </span>device: Device,
+    kv_cache: <span class="kw">crate</span>::pipeline::Cache,
+    device: Device,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     cfg: ModelConfigMetadata,
 }

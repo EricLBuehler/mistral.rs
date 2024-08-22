@@ -1150,9 +1150,9 @@
     norm: RmsNorm,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    <span class="kw">pub </span>device: Device,
-    <span class="kw">pub </span>cache: Cache,
-    <span class="kw">pub </span>max_seq_len: usize,
+    device: Device,
+    cache: Cache,
+    max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     cfg: ModelConfigMetadata,
 }
