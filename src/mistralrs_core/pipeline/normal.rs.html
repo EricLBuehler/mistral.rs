@@ -647,6 +647,11 @@
 <a href="#647" id="647">647</a>
 <a href="#648" id="648">648</a>
 <a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1129,6 +1134,8 @@
             context_lens,
             position_ids,
             <span class="kw-2">mut </span>paged_attn_meta,
+            flash_meta,
+            flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
@@ -1143,6 +1150,7 @@
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
+                <span class="kw-2">&amp;</span>flash_meta,
             ),
             <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -1155,6 +1163,8 @@
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
                 position_ids,
+                <span class="kw-2">&amp;</span>flash_meta,
+                flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             ),
         }
     }

@@ -806,17 +806,36 @@
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    attention::SdpaParams,
+    layers::Sdpa,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -829,7 +848,7 @@
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, PhiRotaryEmbedding, RmsNorm},
+    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -838,17 +857,15 @@
 
 <span class="kw">use super</span>::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>Attention {
+<span class="kw">struct </span>Attention {
     qkv_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     o_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
-    use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>Attention {
@@ -895,10 +912,15 @@
             rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: <span class="prelude-val">None</span>,
+                softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -913,6 +935,7 @@
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
@@ -970,19 +993,13 @@
             <span class="bool-val">true</span>,
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = ScaledDotProductAttention.run_attention(
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa.run_attention(
             <span class="kw-2">&amp;</span>q,
             <span class="kw-2">&amp;</span>k,
             <span class="kw-2">&amp;</span>v,
-            <span class="self">self</span>.num_heads,
-            <span class="self">self</span>.head_dim,
             attn_mask.as_ref(),
-            <span class="self">self</span>.use_flash_attn,
-            b_sz,
-            q_len,
+            <span class="prelude-val">Some</span>(flash_params),
+            <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
         )<span class="question-mark">?</span>;
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.qkv_proj.quantized_act_type() {
@@ -1086,8 +1103,7 @@
     }
 }
 
-<span class="attr">#[derive(Clone)]
-</span><span class="kw">struct </span>DecoderLayer {
+<span class="kw">struct </span>DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
     input_layernorm: RmsNorm,
@@ -1160,6 +1176,7 @@
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
         <span class="kw">let </span>xs = <span class="self">self</span>.input_layernorm.forward(xs)<span class="question-mark">?</span>;
@@ -1172,6 +1189,7 @@
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = (xs + residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
@@ -1327,6 +1345,7 @@
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
@@ -1367,6 +1386,7 @@
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
+                flash_params,
             )<span class="question-mark">?
         </span>}
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
@@ -1386,6 +1406,8 @@
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+        flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
             <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
@@ -1398,6 +1420,8 @@
                 no_kv_cache,
                 non_granular_state,
                 <span class="kw-2">&amp;</span>position_ids,
+                flash_params,
+                flash_params_full,
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1410,6 +1434,7 @@
                         <span class="bool-val">true</span>,
                         no_kv_cache,
                         <span class="prelude-val">None</span>,
+                        flash_params_full,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?</span>;
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
@@ -1430,6 +1455,7 @@
                         <span class="bool-val">true</span>,
                         no_kv_cache,
                         <span class="prelude-val">None</span>,
+                        flash_params,
                     )<span class="question-mark">?
                     </span>.contiguous()<span class="question-mark">?</span>;
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
@@ -1450,6 +1476,7 @@
                     <span class="bool-val">false</span>,
                     no_kv_cache,
                     <span class="prelude-val">None</span>,
+                    flash_params,
                 )<span class="question-mark">?
                 </span>.contiguous()<span class="question-mark">?</span>;
             <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
@@ -1511,6 +1538,7 @@
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
         _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()
     }
@@ -1526,6 +1554,8 @@
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+        flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
@@ -1538,6 +1568,8 @@
             non_granular_state,
             context_lens,
             position_ids,
+            flash_params,
+            flash_params_full,
         )
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
@@ -1599,6 +1631,7 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
         context_lens: <span class="kw-2">&amp;</span>[usize],
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="comment">// NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         </span><span class="self">self</span>.inner_forward(
@@ -1609,6 +1642,7 @@
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

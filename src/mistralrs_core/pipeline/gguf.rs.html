@@ -712,6 +712,12 @@
 <a href="#712" id="712">712</a>
 <a href="#713" id="713">713</a>
 <a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1339,6 +1345,8 @@
             context_lens,
             position_ids: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
             </span><span class="kw-2">mut </span>paged_attn_meta,
+            flash_meta,
+            flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
@@ -1374,6 +1382,8 @@
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
+                <span class="kw-2">&amp;</span>flash_meta,
+                flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             ),
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
@@ -1395,6 +1405,8 @@
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
+                <span class="kw-2">&amp;</span>flash_meta,
+                flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             ),
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,

@@ -374,12 +374,6 @@
 <a href="#374" id="374">374</a>
 <a href="#375" id="375">375</a>
 <a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a>
-<a href="#380" id="380">380</a>
-<a href="#381" id="381">381</a>
-<a href="#382" id="382">382</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -392,11 +386,12 @@
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>mistralrs_quant::QuantMethodConfig;
 
+<span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
-<span class="kw">use </span><span class="kw">crate</span>::layers::ScaledDotProductAttention;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, QLinear};
+<span class="kw">use </span><span class="kw">crate</span>::layers::Sdpa;
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QLinear};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::PagedAttention;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -426,12 +421,12 @@
     attn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
-    n_kv_head: usize,
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -492,20 +487,7 @@
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-
-                ScaledDotProductAttention.run_attention(
-                    <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
-                    <span class="self">self</span>.n_head,
-                    <span class="self">self</span>.head_dim,
-                    mask,
-                    <span class="bool-val">false</span>,
-                    b_sz,
-                    seq_len,
-                )<span class="question-mark">?
+                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
         };
 
@@ -702,12 +684,18 @@
                 attn_norm,
                 mlp,
                 n_head: head_count,
-                n_kv_head: head_count_kv,
                 head_dim,
                 cos: cos.clone().to_device(device)<span class="question-mark">?</span>,
                 sin: sin.clone().to_device(device)<span class="question-mark">?</span>,
                 rope_dim,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">None</span>,
+                },
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

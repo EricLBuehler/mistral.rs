@@ -436,6 +436,11 @@
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
 <a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -448,7 +453,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::ops::NonZeroOp;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::IsqModel;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
@@ -740,6 +745,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>pixel_values) = pixel_values {
             <span class="comment">// we assume(as it should be) only prompt request contains image
@@ -757,6 +763,7 @@
                 start_offsets_kernel,
                 context_lens,
                 metadata,
+                flash_params,
             )
         } <span class="kw">else </span>{
             <span class="self">self</span>.llm.forward(
@@ -766,6 +773,7 @@
                 context_lens,
                 position_ids,
                 metadata,
+                flash_params,
             )
         }
     }
@@ -796,6 +804,7 @@
         position_ids: Vec&lt;usize&gt;,
         model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
         </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; candle_core::Result&lt;Tensor&gt; {
         <span class="kw">let </span>LLaVANextVisionSpecificArgs {
             image_sizes,
@@ -821,6 +830,7 @@
             context_lens,
             position_ids,
             metadata,
+            flash_params,
         )
     }
 

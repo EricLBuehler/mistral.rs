@@ -705,6 +705,17 @@
 <a href="#705" id="705">705</a>
 <a href="#706" id="706">706</a>
 <a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
 </pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
@@ -720,15 +731,17 @@
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
@@ -744,9 +757,9 @@
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     max_seq_len: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>CausalSelfAttention {
@@ -760,6 +773,7 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
         rope_parameter: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, <span class="kw">_</span>) = x.dims3()<span class="question-mark">?</span>;
 
@@ -809,21 +823,13 @@
                 <span class="kw">let </span>(k, v) =
                     <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_attention_heads / <span class="self">self</span>.num_key_value_heads)<span class="question-mark">?
-                    </span>.contiguous()<span class="question-mark">?</span>;
-
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
-                    <span class="self">self</span>.num_attention_heads,
-                    <span class="self">self</span>.head_dim,
                     attention_mask.clone().as_ref(),
-                    <span class="self">self</span>.use_flash_attn,
-                    b_sz,
-                    seq_len,
+                    <span class="prelude-val">Some</span>(flash_params),
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
                 )<span class="question-mark">?
             </span>}
         };
@@ -879,9 +885,15 @@
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: <span class="prelude-val">None</span>,
+                softmax_scale: <span class="number">1.0 </span>/ ((cfg.hidden_size / cfg.num_attention_heads) <span class="kw">as </span>f32).sqrt(),
+                sliding_window: <span class="prelude-val">None</span>,
+            },
         })
     }
 }
@@ -999,6 +1011,7 @@
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
         rope_parameters: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = x;
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.rms_1.forward(x)<span class="question-mark">?</span>;
@@ -1011,6 +1024,7 @@
             kv_cache,
             rope_parameters,
             metadata,
+            flash_params,
         )<span class="question-mark">? </span>+ residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>x;
         x = (<span class="self">self</span>.mlp.forward(<span class="kw-2">&amp;</span><span class="self">self</span>.rms_2.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>)<span class="question-mark">? </span>+ residual)<span class="question-mark">?</span>;
@@ -1070,6 +1084,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>x = <span class="self">self</span>.wte.forward(input_ids)<span class="question-mark">?</span>;
         <span class="self">self</span>.forward_input_embed(
@@ -1079,6 +1094,7 @@
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
 
@@ -1204,6 +1220,7 @@
         start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>x = input_embed;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.kv_cache.lock();
@@ -1229,6 +1246,7 @@
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
+                flash_params,
             )<span class="question-mark">?</span>;
         }
         x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
@@ -1250,6 +1268,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward_input(
             input_ids,
@@ -1257,6 +1276,7 @@
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
     <span class="kw">fn </span>xlora_forward(
@@ -1271,6 +1291,8 @@
         _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
+        _flash_params: <span class="kw-2">&amp;</span>FlashParams,
+        _flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }

@@ -1185,6 +1185,14 @@
 <a href="#1185" id="1185">1185</a>
 <a href="#1186" id="1186">1186</a>
 <a href="#1187" id="1187">1187</a>
+<a href="#1188" id="1188">1188</a>
+<a href="#1189" id="1189">1189</a>
+<a href="#1190" id="1190">1190</a>
+<a href="#1191" id="1191">1191</a>
+<a href="#1192" id="1192">1192</a>
+<a href="#1193" id="1193">1193</a>
+<a href="#1194" id="1194">1194</a>
+<a href="#1195" id="1195">1195</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1199,18 +1207,19 @@
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
-        RmsNorm, ScaledDotProductAttention,
+        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -1330,12 +1339,11 @@
     o_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
-    use_flash_attn: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>Attention {
@@ -1370,15 +1378,21 @@
             rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: <span class="prelude-val">None</span>,
+                softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
-    <span class="kw">fn </span>forward(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
@@ -1386,6 +1400,7 @@
         position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
@@ -1453,19 +1468,13 @@
                     <span class="bool-val">true</span>,
                 )<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
-                    <span class="self">self</span>.num_heads,
-                    <span class="self">self</span>.head_dim,
                     attn_mask.as_ref(),
-                    <span class="self">self</span>.use_flash_attn,
-                    b_sz,
-                    q_len,
+                    <span class="prelude-val">Some</span>(flash_params),
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
                 )<span class="question-mark">?
             </span>}
         };
@@ -1621,7 +1630,8 @@
         })
     }
 
-    <span class="kw">fn </span>forward(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
@@ -1629,6 +1639,7 @@
         position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
         <span class="kw">let </span>xs = <span class="self">self</span>.input_layernorm.forward(xs)<span class="question-mark">?</span>;
@@ -1639,6 +1650,7 @@
             position_ids,
             kv_cache,
             metadata,
+            flash_params,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = (xs + residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
@@ -2147,6 +2159,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         image_sizes: <span class="prelude-ty">Option</span>&lt;Vec&lt;(usize, usize)&gt;&gt;,
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>pixel_values) = pixel_values {
             <span class="self">self</span>.vision_embed_tokens
@@ -2180,6 +2193,7 @@
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
+                flash_params,
             )<span class="question-mark">?
         </span>}
         <span class="kw">let </span>xs = xs.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
@@ -2231,6 +2245,7 @@
         position_ids: Vec&lt;usize&gt;,
         model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>Phi3VisionSpecificArgs { image_sizes } = <span class="kw-2">*</span>model_specific_args
             .downcast()
@@ -2243,6 +2258,7 @@
             context_lens,
             image_sizes,
             metadata,
+            flash_params,
         )
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {

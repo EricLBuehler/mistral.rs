@@ -294,6 +294,7 @@
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
@@ -310,7 +311,7 @@
 <span class="kw">use </span><span class="kw">super</span>::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeBaseModelMixin;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -337,6 +338,7 @@
         position_ids: Vec&lt;usize&gt;,
         model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
         </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;

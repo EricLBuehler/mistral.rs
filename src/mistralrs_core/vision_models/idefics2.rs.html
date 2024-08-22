@@ -1149,6 +1149,10 @@
 <a href="#1149" id="1149">1149</a>
 <a href="#1150" id="1150">1150</a>
 <a href="#1151" id="1151">1151</a>
+<a href="#1152" id="1152">1152</a>
+<a href="#1153" id="1153">1153</a>
+<a href="#1154" id="1154">1154</a>
+<a href="#1155" id="1155">1155</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1166,8 +1170,8 @@
     models::mistral::Model <span class="kw">as </span>Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel, VisionModel,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -2106,6 +2110,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>input_embeds = <span class="kw">if let </span><span class="prelude-val">Some</span>(pixel_values) = pixel_values {
             <span class="comment">// == START VISUAL INPUTS INTEGRATION ==
@@ -2210,6 +2215,7 @@
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
 }
@@ -2270,6 +2276,7 @@
         <span class="kw">_</span>: Vec&lt;usize&gt;, <span class="comment">// Ignore, it is for phi3
         </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; candle_core::Result&lt;Tensor&gt; {
         <span class="kw">let </span>pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="kw-2">*</span>model_specific_args
             .downcast()
@@ -2282,6 +2289,7 @@
             context_lens,
             pixel_attention_mask,
             metadata,
+            flash_params,
         )
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {

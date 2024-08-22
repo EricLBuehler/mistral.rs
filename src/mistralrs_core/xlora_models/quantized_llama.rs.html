@@ -977,14 +977,40 @@
 <a href="#977" id="977">977</a>
 <a href="#978" id="978">978</a>
 <a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
+<span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
 <span class="kw">use </span><span class="kw">crate</span>::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
 <span class="kw">use </span>candle_core::quantized::ggml_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
@@ -994,7 +1020,7 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
 
@@ -1157,6 +1183,7 @@
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -1171,6 +1198,7 @@
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
         <span class="kw">let </span>q = <span class="self">self</span>.attention_wq.lora_forward(
@@ -1226,19 +1254,13 @@
 
         <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-
-        <span class="kw">let </span>y = ScaledDotProductAttention.run_attention(
+        <span class="kw">let </span>y = Sdpa.run_attention(
             <span class="kw-2">&amp;</span>q,
             <span class="kw-2">&amp;</span>k,
             <span class="kw-2">&amp;</span>v,
-            <span class="self">self</span>.n_head,
-            <span class="self">self</span>.head_dim,
             mask.as_ref(),
-            <span class="bool-val">false</span>,
-            b_sz,
-            seq_len,
+            <span class="prelude-val">Some</span>(flash_params),
+            <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
         )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
@@ -1342,6 +1364,7 @@
             <span class="kw">let </span>cfgk = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wk);
             <span class="kw">let </span>cfgv = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wv);
             <span class="kw">let </span>cfgo = get_lora_cfg(<span class="kw-2">&amp;</span>attention_wo);
+            <span class="kw">let </span>n_kv_head = ct.hparams.n_head <span class="kw">as </span>usize / gqa;
             layers.push(LayerWeights {
                 attention_wq: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wq)<span class="question-mark">?</span>,
@@ -1390,6 +1413,13 @@
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
                 rotary: rotary.clone(),
+                sdpa_params: SdpaParams {
+                    n_kv_groups: ct.hparams.n_head <span class="kw">as </span>usize / n_kv_head,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">None</span>,
+                },
             })
         }
         <span class="kw">if </span>xlora_config.is_none() &amp;&amp; preload_adapters.is_none() {
@@ -1665,6 +1695,13 @@
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 rotary: rotary.clone(),
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">None</span>,
+                },
             })
         }
         <span class="kw">if </span>xlora_config.is_none() &amp;&amp; preload_adapters.is_none() {
@@ -1770,6 +1807,7 @@
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>layer_in = <span class="self">self</span>.tok_embeddings.forward(x)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
@@ -1810,6 +1848,7 @@
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(<span class="number">1.0</span>),
                 is_scaling_pass,
+                flash_params,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>x = (attn + residual)<span class="question-mark">?</span>;
 
@@ -1844,6 +1883,8 @@
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
         context_lens: Vec&lt;(usize, usize)&gt;,
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+        flash_params_full: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
             <span class="kw">let </span>scalings = <span class="self">self</span>.get_scalings(
@@ -1856,6 +1897,8 @@
                 no_kv_cache,
                 non_granular_state,
                 <span class="kw-2">&amp;</span><span class="macro">vec!</span>[usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )<span class="question-mark">?</span>;
 
             <span class="kw">if </span>no_kv_cache {
@@ -1870,6 +1913,7 @@
                                 <span class="bool-val">true</span>,
                                 no_kv_cache,
                                 <span class="prelude-val">None</span>,
+                                flash_params_full,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
                         <span class="prelude-val">None</span>,
@@ -1891,6 +1935,7 @@
                                 <span class="bool-val">true</span>,
                                 no_kv_cache,
                                 <span class="prelude-val">None</span>,
+                                flash_params,
                             )<span class="question-mark">?
                             </span>.contiguous()<span class="question-mark">?</span>,
                         <span class="prelude-val">None</span>,
@@ -1912,6 +1957,7 @@
                             <span class="bool-val">false</span>,
                             no_kv_cache,
                             <span class="prelude-val">None</span>,
+                            flash_params,
                         )<span class="question-mark">?
                         </span>.contiguous()<span class="question-mark">?</span>,
                     <span class="prelude-val">None</span>,
@@ -1944,6 +1990,7 @@
         no_kv_cache: bool,
         is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
         _context_lens: <span class="kw-2">&amp;</span>[usize],
+        flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.inner_forward(
             input_ids,
@@ -1953,6 +2000,7 @@
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

@@ -677,6 +677,10 @@
 <a href="#677" id="677">677</a>
 <a href="#678" id="678">678</a>
 <a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -687,9 +691,10 @@
 <span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
+<span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -807,6 +812,7 @@
     head_dim: usize,
     rotary: RotaryEmbedding,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -874,20 +880,7 @@
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-
-                ScaledDotProductAttention.run_attention(
-                    <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
-                    <span class="self">self</span>.n_head,
-                    <span class="self">self</span>.head_dim,
-                    mask,
-                    <span class="bool-val">false</span>,
-                    b_sz,
-                    seq_len,
-                )<span class="question-mark">?
+                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
         };
 
@@ -959,6 +952,7 @@
             };
             <span class="kw">let </span>attention_norm = ct.remove(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attention_norm.weight"</span>))<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_norm = ct.remove(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>))<span class="question-mark">?</span>;
+            <span class="kw">let </span>n_kv_head = ct.hparams.n_head <span class="kw">as </span>usize / gqa;
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wq),
@@ -984,7 +978,14 @@
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
                 rotary: rotary.clone(),
                 paged_attn: <span class="prelude-val">None</span>, <span class="comment">// TODO
-            </span>})
+                </span>sdpa_params: SdpaParams {
+                    n_kv_groups: ct.hparams.n_head <span class="kw">as </span>usize / n_kv_head,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">None</span>,
+                },
+            })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd <span class="kw">as </span>usize),
@@ -1282,6 +1283,13 @@
                 head_dim,
                 rotary: rotary.clone(),
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">None</span>,
+                },
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

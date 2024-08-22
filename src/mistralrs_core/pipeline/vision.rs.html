@@ -543,6 +543,8 @@
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
 <a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -932,6 +934,7 @@
             pixel_values,
             model_specific_args,
             <span class="kw-2">mut </span>paged_attn_meta,
+            flash_meta,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
         <span class="self">self</span>.model.forward(
             <span class="kw-2">&amp;</span>input_ids,
@@ -947,6 +950,7 @@
                     paged_attn_meta.as_mut().unwrap(),
                 )
             }),
+            <span class="kw-2">&amp;</span>flash_meta,
         )
     }
     <span class="kw">async fn </span>sample(

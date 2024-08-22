@@ -29,6 +29,7 @@
 <a href="#29" id="29">29</a>
 <a href="#30" id="30">30</a>
 <a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 
 <span class="kw">use </span>candle_core::Tensor;
@@ -48,7 +49,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next_inputs_processor;
 
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
 <span class="kw">pub struct </span>ModelInputs {
     <span class="kw">pub </span>input_ids: Tensor,
@@ -59,5 +60,6 @@
     <span class="kw">pub </span>pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
     <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
+    <span class="kw">pub </span>flash_meta: FlashParams,
 }
 </code></pre></div></section></main></body></html>

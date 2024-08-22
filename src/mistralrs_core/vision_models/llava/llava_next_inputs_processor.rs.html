@@ -418,6 +418,11 @@
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
@@ -610,6 +615,8 @@
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: <span class="kw">_</span>,
                         } = <span class="kw-2">*</span>inputs
                             .downcast::&lt;text_models_inputs_processor::ModelInputs&gt;()
                             .expect(<span class="string">"Downcast failed."</span>);
@@ -627,6 +634,7 @@
                                 num_image_samples: <span class="prelude-val">None</span>,
                             }),
                             paged_attn_meta,
+                            flash_meta,
                         });
                         <span class="prelude-val">Ok</span>(InputProcessorOutput {
                             inputs,
@@ -746,6 +754,7 @@
                         context_lens,
                         position_ids,
                         paged_attn_meta,
+                        flash_meta,
                     },
                 seq_indices,
             } = metadata<span class="question-mark">?</span>;
@@ -762,6 +771,7 @@
                     num_image_samples: <span class="prelude-val">Some</span>(num_image_samples.clone()),
                 }),
                 paged_attn_meta,
+                flash_meta,
             });
             <span class="prelude-val">Ok</span>(InputProcessorOutput {
                 inputs,

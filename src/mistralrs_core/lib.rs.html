@@ -452,6 +452,7 @@
 <a href="#452" id="452">452</a>
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -499,6 +500,7 @@
 </span><span class="kw">mod </span>paged_attention;
 <span class="attr">#[cfg(not(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>)))]
 </span><span class="kw">use </span>dummy_paged_attention <span class="kw">as </span>paged_attention;
+<span class="kw">mod </span>attention;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
 <span class="kw">mod </span>request;

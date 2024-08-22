@@ -744,7 +744,78 @@
 <a href="#744" id="744">744</a>
 <a href="#745" id="745">745</a>
 <a href="#746" id="746">746</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+</pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+
+</span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::Device;
@@ -794,7 +865,7 @@
     <span class="kw">use </span>std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     <span class="kw">use </span>anyhow::Result;
-    <span class="kw">use </span>candle_core::{Device, Tensor, WithDType};
+    <span class="kw">use </span>candle_core::{DType, Device, Tensor, WithDType};
     <span class="kw">use </span>tokenizers::Tokenizer;
 
     <span class="kw">use crate</span>::{
@@ -838,6 +909,14 @@
         <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     }
 
+    <span class="attr">#[derive(Clone, Debug)]
+    </span><span class="kw">pub struct </span>FlashParams {
+        <span class="kw">pub </span>max_q: u32,
+        <span class="kw">pub </span>max_k: u32,
+        <span class="kw">pub </span>cumulative_seqlens_q: Tensor,
+        <span class="kw">pub </span>cumulative_seqlens_k: Tensor,
+    }
+
     <span class="kw">pub struct </span>InputMetadata {
         <span class="kw">pub </span>input: Tensor,
         <span class="kw">pub </span>positions: Vec&lt;usize&gt;,
@@ -845,7 +924,8 @@
         </span><span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;, <span class="comment">// (start index, len)
         </span><span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
         <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;, <span class="comment">// For paged attention
-    </span>}
+        </span><span class="kw">pub </span>flash_meta: FlashParams,
+    }
 
     <span class="kw">pub struct </span>InnerInputProcessorOutput {
         <span class="kw">pub </span>inputs: InputMetadata,
@@ -876,6 +956,8 @@
         <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="macro">vec!</span>[<span class="number">0</span>];
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="macro">vec!</span>[<span class="number">0</span>];
         <span class="kw">for </span>(seq, <span class="kw-2">mut </span>ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
             <span class="kw">let </span>prompt_len = ctxt.len();
             <span class="kw">let </span>offset = last_n_context_len.unwrap_or_default();
@@ -887,6 +969,9 @@
                 ctxt.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
                 last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
             ));
+
+            seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
+            seqlens_k.push((ctxt.len() + chunk_offset_toks) <span class="kw">as </span>u32);
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
@@ -963,7 +1048,18 @@
                 tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
             }
         }
-        <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
+        <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
+        <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+        <span class="comment">//dbg!(&amp;seqlens_q, &amp;seqlens_k, &amp;seqlen_offsets, &amp;position_ids);
+        </span><span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
         <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 512
         </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; VIA_F16_TOK_THRESHOLD {
@@ -978,8 +1074,7 @@
                 _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-            </span><span class="kw">let </span>block_tables = _make_tensor_with_pad(
+            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
                     .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
@@ -995,8 +1090,8 @@
                 .map(|x| x.len())
                 .max()
                 .unwrap();
-            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-            </span><span class="kw">let </span>context_lens = _make_tensor_with_pad(
+
+            <span class="kw">let </span>context_lens = _make_tensor_with_pad(
                 paged_attn_context_lens
                     .iter()
                     .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
@@ -1024,6 +1119,12 @@
             context_lens,
             position_ids,
             paged_attn_meta,
+            flash_meta: FlashParams {
+                max_k,
+                max_q,
+                cumulative_seqlens_k: seqlens_k,
+                cumulative_seqlens_q: seqlens_q,
+            },
         })
     }
 
@@ -1042,12 +1143,17 @@
         <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>block_tables = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="macro">vec!</span>[<span class="number">0</span>];
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="macro">vec!</span>[<span class="number">0</span>];
         <span class="kw">for </span>(seq, ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
             <span class="kw">let </span>start_pos = ctxt.len().saturating_sub(<span class="number">1</span>);
             <span class="kw">let </span>ctxt = ctxt[start_pos..].to_vec();
             seqlen_offsets.push(start_pos);
             context_lens.push((<span class="number">0</span>, <span class="number">1</span>));
             position_ids.push(seq.len());
+
+            seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
+            seqlens_k.push((ctxt.len() + start_pos) <span class="kw">as </span>u32);
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
@@ -1103,15 +1209,26 @@
         {
             tmp.push(Tensor::from_slice(<span class="kw-2">&amp;</span>pos, pos.len(), device)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
         }
-        <span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>max_q = <span class="kw-2">*</span>seqlens_q.iter().max().unwrap();
+        <span class="kw">let </span>max_k = <span class="kw-2">*</span>seqlens_k.iter().max().unwrap();
+        <span class="kw">let </span>seqlens_q = Tensor::new(seqlens_q, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>seqlens_k = Tensor::new(seqlens_k, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+        <span class="comment">//dbg!(&amp;seqlens_q, &amp;seqlens_k, &amp;seqlen_offsets, &amp;position_ids);
+        </span><span class="kw">let </span>positions_kernel = Tensor::cat(<span class="kw-2">&amp;</span>tmp, <span class="number">0</span>)<span class="question-mark">?</span>;
         set_use_matmul_via_f16(<span class="bool-val">false</span>);
 
         <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
             <span class="kw">let </span>slot_mappings = _make_tensor_with_pad(slot_mappings, <span class="number">1</span>, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-            </span><span class="kw">let </span>block_tables = _make_tensor_with_pad(
+
+            <span class="kw">let </span>block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
                     .map(|x| x.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
@@ -1123,8 +1240,8 @@
             <span class="kw">let </span>block_tables = block_tables.reshape(((), max_block_table_len))<span class="question-mark">?</span>;
 
             <span class="kw">let </span>max_context_len = paged_attn_context_lens.iter().max().unwrap();
-            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-            </span><span class="kw">let </span>context_lens = Tensor::from_vec(
+
+            <span class="kw">let </span>context_lens = Tensor::from_vec(
                 paged_attn_context_lens
                     .iter()
                     .map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>u32)
@@ -1150,6 +1267,12 @@
             context_lens,
             position_ids,
             paged_attn_meta,
+            flash_meta: FlashParams {
+                max_k,
+                max_q,
+                cumulative_seqlens_k: seqlens_k,
+                cumulative_seqlens_q: seqlens_q,
+            },
         })
     }
 
@@ -1267,6 +1390,8 @@
         <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
         <span class="kw">pub </span>paged_attn_meta: <span class="prelude-ty">Option</span>&lt;PagedAttentionInputMetadata&gt;,
+        <span class="kw">pub </span>flash_meta: FlashParams,
+        <span class="kw">pub </span>flash_meta_full: <span class="prelude-ty">Option</span>&lt;FlashParams&gt;,
     }
 
     <span class="kw">pub struct </span>TextInputsProcessor;
@@ -1320,6 +1445,7 @@
                                     context_lens: <span class="kw">_</span>,
                                     position_ids,
                                     paged_attn_meta: <span class="kw">_</span>,
+                                    flash_meta: flash_meta_full,
                                 },
                             seq_indices,
                         } = prompt<span class="question-mark">?</span>;
@@ -1332,6 +1458,7 @@
                                     context_lens,
                                     position_ids: <span class="kw">_</span>,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices: <span class="kw">_</span>,
                         } = completion<span class="question-mark">?</span>;
@@ -1345,6 +1472,8 @@
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: <span class="prelude-val">Some</span>(flash_meta_full),
                         });
                         <span class="prelude-val">Ok</span>(InputProcessorOutput {
                             inputs,
@@ -1375,6 +1504,7 @@
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata<span class="question-mark">?</span>;
@@ -1388,6 +1518,8 @@
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta: flash_meta.clone(),
+                            flash_meta_full: <span class="prelude-val">Some</span>(flash_meta),
                         });
                         <span class="prelude-val">Ok</span>(InputProcessorOutput {
                             inputs,
@@ -1418,6 +1550,7 @@
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata<span class="question-mark">?</span>;
@@ -1431,6 +1564,8 @@
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: <span class="prelude-val">None</span>,
                         });
                         <span class="prelude-val">Ok</span>(InputProcessorOutput {
                             inputs,
@@ -1462,6 +1597,7 @@
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata<span class="question-mark">?</span>;
@@ -1475,6 +1611,8 @@
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: <span class="prelude-val">None</span>,
                         });
                         <span class="prelude-val">Ok</span>(InputProcessorOutput {
                             inputs,

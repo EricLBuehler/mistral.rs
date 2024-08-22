@@ -410,17 +410,14 @@
 <a href="#410" id="410">410</a>
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
-<a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
+<span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, RmsNorm, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -471,6 +468,7 @@
     sin: Tensor,
     sliding_window: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -553,20 +551,7 @@
                     <span class="bool-val">true</span>,
                 )<span class="question-mark">?</span>;
 
-                <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-                <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.n_head / <span class="self">self</span>.n_kv_head)<span class="question-mark">?</span>;
-
-                ScaledDotProductAttention.run_attention(
-                    <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
-                    <span class="self">self</span>.n_head,
-                    <span class="self">self</span>.head_dim,
-                    attn_mask.as_ref(),
-                    <span class="bool-val">false</span>,
-                    b_sz,
-                    seq_len,
-                )<span class="question-mark">?
+                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, attn_mask.as_ref(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
         };
 
@@ -767,6 +752,13 @@
                 sin: sin.to_device(device)<span class="question-mark">?</span>,
                 sliding_window: context_window,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: <span class="bool-val">false</span>,
+                    softcap: <span class="prelude-val">None</span>,
+                    softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+                    sliding_window: <span class="prelude-val">Some</span>(context_window),
+                },
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
