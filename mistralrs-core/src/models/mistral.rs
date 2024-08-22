@@ -411,9 +411,9 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     sliding_window: Option<usize>,
-    pub device: Device,
-    pub cache: Cache,
-    pub max_seq_len: usize,
+    device: Device,
+    pub(crate) cache: Cache,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
 }

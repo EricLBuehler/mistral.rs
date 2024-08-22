@@ -405,9 +405,9 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
-    pub cache: Cache,
-    pub device: Device,
-    pub max_seq_len: usize,
+    cache: Cache,
+    device: Device,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
 }

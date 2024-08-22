@@ -423,9 +423,9 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     hidden_size: usize,
-    pub device: Device,
-    pub cache: Cache,
-    pub max_seq_len: usize,
+    device: Device,
+    cache: Cache,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
 }

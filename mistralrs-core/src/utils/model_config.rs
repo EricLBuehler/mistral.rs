@@ -21,7 +21,7 @@ pub struct FileGGML {
 
 #[derive(derive_more::From)]
 pub struct Device<'a> {
-    pub device: &'a candle_core::Device,
+    device: &'a candle_core::Device,
     pub mapper: DeviceMapMetadata,
 }
 
