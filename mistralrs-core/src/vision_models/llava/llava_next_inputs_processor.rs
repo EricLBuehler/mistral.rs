@@ -190,6 +190,8 @@ impl InputsProcessor for LLaVANextInputProcessor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: _,
                         } = *inputs
                             .downcast::<text_models_inputs_processor::ModelInputs>()
                             .expect("Downcast failed.");
@@ -207,6 +209,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                                 num_image_samples: None,
                             }),
                             paged_attn_meta,
+                            flash_meta,
                         });
                         Ok(InputProcessorOutput {
                             inputs,
@@ -326,6 +329,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                         context_lens,
                         position_ids,
                         paged_attn_meta,
+                        flash_meta,
                     },
                 seq_indices,
             } = metadata?;
@@ -342,6 +346,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     num_image_samples: Some(num_image_samples.clone()),
                 }),
                 paged_attn_meta,
+                flash_meta,
             });
             Ok(InputProcessorOutput {
                 inputs,

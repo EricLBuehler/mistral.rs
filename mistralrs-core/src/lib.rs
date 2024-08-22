@@ -45,6 +45,7 @@ mod models;
 mod paged_attention;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 use dummy_paged_attention as paged_attention;
+mod attention;
 mod pipeline;
 mod prefix_cacher;
 mod request;

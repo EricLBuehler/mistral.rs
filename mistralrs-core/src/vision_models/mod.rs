@@ -17,7 +17,7 @@ pub(crate) use llava::llava_inputs_processor;
 pub(crate) use llava::llava_next;
 pub(crate) use llava::llava_next_inputs_processor;
 
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
 pub struct ModelInputs {
     pub input_ids: Tensor,
@@ -28,4 +28,5 @@ pub struct ModelInputs {
     pub pixel_values: Option<Tensor>,
     pub model_specific_args: Box<dyn Any>,
     pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
+    pub flash_meta: FlashParams,
 }

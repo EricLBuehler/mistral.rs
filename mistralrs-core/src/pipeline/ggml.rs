@@ -498,6 +498,8 @@ impl Pipeline for GGMLPipeline {
             context_lens,
             position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
+            flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -517,6 +519,8 @@ impl Pipeline for GGMLPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
         }
     }

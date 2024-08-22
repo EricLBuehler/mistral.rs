@@ -166,6 +166,8 @@ impl InputsProcessor for Phi3InputsProcessor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: _,
                         } = *inputs
                             .downcast::<text_models_inputs_processor::ModelInputs>()
                             .expect("Downcast failed.");
@@ -181,6 +183,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                                 image_sizes: None,
                             }),
                             paged_attn_meta,
+                            flash_meta,
                         });
                         Ok(InputProcessorOutput {
                             inputs,
@@ -319,6 +322,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         context_lens,
                         position_ids,
                         paged_attn_meta,
+                        flash_meta,
                     },
                 seq_indices,
             } = metadata?;
@@ -333,6 +337,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     image_sizes: image_sizes.clone(),
                 }),
                 paged_attn_meta,
+                flash_meta,
             });
             Ok(InputProcessorOutput {
                 inputs,
