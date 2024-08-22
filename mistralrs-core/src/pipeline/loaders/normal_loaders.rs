@@ -53,6 +53,8 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
@@ -847,6 +849,58 @@ impl NormalModelLoader for Qwen2Loader {
 
 // ======================== Gemma2 loader
 
+#[derive(Deserialize)]
+struct Gemma2BasicConfig {
+    attention_bias: bool,
+    head_dim: usize,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    hidden_act: Option<Activation>,
+    hidden_activation: Option<Activation>,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_attention_heads: usize,
+    num_hidden_layers: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    vocab_size: usize,
+    sliding_window: usize,
+    attn_logit_softcapping: Option<f64>,
+    final_logit_softcapping: Option<f64>,
+    query_pre_attn_scalar: usize,
+
+    #[serde(default = "default_max_position_embeddings")]
+    max_position_embeddings: usize,
+    quantization_config: Option<QuantizedConfig>,
+}
+
+impl Gemma2BasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gemma2::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::gemma2::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            hidden_activation: basic_config.hidden_activation,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            rope_theta: basic_config.rope_theta,
+            attention_bias: basic_config.attention_bias,
+            head_dim: basic_config.head_dim,
+            use_flash_attn,
+            quantization_config: basic_config.quantization_config,
+            sliding_window: basic_config.sliding_window,
+            attn_logit_softcapping: basic_config.attn_logit_softcapping,
+            final_logit_softcapping: basic_config.final_logit_softcapping,
+            query_pre_attn_scalar: basic_config.query_pre_attn_scalar,
+        })
+    }
+}
+
 /// [`NormalLoader`] for a Gemma2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -865,7 +919,7 @@ impl NormalModelLoader for Gemma2Loader {
             warn!("Gemma 2 does not support flash attention.");
         }
         Ok(Box::new(models::gemma2::Model::new(
-            &serde_json::from_str(config)?,
+            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -887,7 +941,7 @@ impl NormalModelLoader for Gemma2Loader {
             warn!("Gemma 2 does not support flash attention.");
         }
         Ok(Box::new(xlora_models::XLoraGemma2::new(
-            &serde_json::from_str(config)?,
+            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             lora_config,
             xlora_config,
@@ -900,14 +954,15 @@ impl NormalModelLoader for Gemma2Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
-        Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+        Ok(Box::new(Gemma2BasicConfig::deserialize(
             config,
+            use_flash_attn,
         )?))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(serde_json::from_str::<models::gemma2::Config>(config)?.num_hidden_layers)
+        Ok(Gemma2BasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 

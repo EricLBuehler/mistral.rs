@@ -11,10 +11,9 @@ fn flash_attn(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    softmax_scale: f32,
-    softcap: Option<f32>,
     causal: bool,
     flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
     use crate::pipeline::text_models_inputs_processor::FlashParams;
 
@@ -38,13 +37,20 @@ fn flash_attn(
             cumulative_seqlens_k,
             *max_q as usize,
             *max_k as usize,
-            softmax_scale,
-            softcap,
+            sdpa_params.softmax_scale,
+            sdpa_params.softcap,
             causal,
         )?
         .reshape(qshape)
     } else {
-        candle_flash_attn::flash_attn_softcap(q, k, v, softmax_scale, softcap, causal)
+        candle_flash_attn::flash_attn_softcap(
+            q,
+            k,
+            v,
+            sdpa_params.softmax_scale,
+            sdpa_params.softcap,
+            causal,
+        )
     }
 }
 
@@ -53,9 +59,9 @@ fn flash_attn(
     _: &Tensor,
     _: &Tensor,
     _: &Tensor,
-    _: f32,
-    _: Option<f32>,
-    _: bool,
+    causal: bool,
+    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
     unimplemented!("Compile with '--features flash-attn'")
 }
@@ -74,14 +80,20 @@ fn naive_sdpa(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    head_dim: usize,
     mask: Option<&Tensor>,
+    head_dim: usize,
+    sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    let att = MatMul.matmul_affine_div(
+    let mut att = MatMul.matmul_affine_div(
         &q.contiguous()?,
         &k.t()?.contiguous()?,
         (head_dim as f64).sqrt(),
     )?;
+    if let Some(softcap) = sdpa_params.softcap {
+        att = (att / softcap as f64)?;
+        att = att.tanh()?;
+        att = (att * softcap as f64)?;
+    }
 
     let att = match mask {
         Some(m) => att.broadcast_add(m)?,
@@ -92,10 +104,23 @@ fn naive_sdpa(
     MatMul.matmul(&att, &v.contiguous()?)
 }
 
-pub struct ScaledDotProductAttention;
+pub struct SdpaParams {
+    pub n_kv_groups: usize,
+    pub use_flash_attn: bool,
+    pub softcap: Option<f32>,
+    pub softmax_scale: f32,
+    pub sliding_window: Option<usize>,
+}
 
-impl ScaledDotProductAttention {
+pub struct Sdpa;
+
+impl Sdpa {
     /// Computes softmax(QK^T*sqrt(d_k))V
+    ///
+    /// Inputs:
+    /// - q: (b_sz, n_attn_heads, q_len, head_dim)
+    /// - k: (b_sz, n_kv_heads, q_len, head_dim)
+    /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
     /// The attention implementation is dispatched as follows:
     /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
@@ -107,36 +132,21 @@ impl ScaledDotProductAttention {
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
-        n_attn_heads: usize,
-        head_dim: usize,
         mask: Option<&Tensor>,
-        use_flash_attn: bool,
-        b_sz: usize,
-        seq_len: usize,
-        softcap: Option<f32>,
-        n_kv_groups: usize,
         flash_params: Option<&FlashParams>,
+        sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
-        if use_flash_attn {
+        let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
+        if sdpa_params.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (head_dim as f32).sqrt();
-            return flash_attn(
-                &q,
-                &k,
-                &v,
-                softmax_scale,
-                softcap,
-                seq_len > 1,
-                flash_params,
-            )?
-            .transpose(1, 2);
+            return flash_attn(&q, &k, &v, seq_len > 1, flash_params, sdpa_params)?.transpose(1, 2);
         }
 
-        let k = repeat_kv(k.clone(), n_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v.clone(), n_kv_groups)?.contiguous()?;
+        let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?.contiguous()?;
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]
@@ -156,15 +166,18 @@ impl ScaledDotProductAttention {
 
                     // Batch matrix multiplication
                     // Fuse softmax scale and attention_bias add
-                    let attention_scores = cublaslt.batch_matmul(
+                    let mut attention_scores = cublaslt.batch_matmul(
                         &k,
                         &q,
                         attention_bias.as_ref(),
-                        Some((1.0 / (head_dim as f64).sqrt()) as f32),
+                        Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
                         beta,
                         None,
                         None,
                     )?;
+                    if let Some(softcap) = sdpa_params.softcap {
+                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
+                    }
                     let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
 
                     let context_layer = cublaslt.batch_matmul(
@@ -187,10 +200,10 @@ impl ScaledDotProductAttention {
                 }
             } else {
                 // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, &k, &v, head_dim, mask)
+                naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
             }
         } else {
-            naive_sdpa(q, &k, &v, head_dim, mask)
+            naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
         }
     }
 }

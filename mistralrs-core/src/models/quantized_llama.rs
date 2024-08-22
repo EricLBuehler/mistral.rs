@@ -8,9 +8,10 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -128,6 +129,7 @@ struct LayerWeights {
     head_dim: usize,
     rotary: RotaryEmbedding,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -195,20 +197,7 @@ impl LayerWeights {
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    seq_len,
-                    None,
-                    self.n_head / self.n_kv_head,
-                    None,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -280,6 +269,7 @@ impl ModelConfig::FromGGML for ModelWeights {
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
+            let n_kv_head = ct.hparams.n_head as usize / gqa;
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: Arc::new(attention_wq),
@@ -305,6 +295,13 @@ impl ModelConfig::FromGGML for ModelWeights {
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rotary: rotary.clone(),
                 paged_attn: None, // TODO
+                sdpa_params: SdpaParams {
+                    n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {
@@ -603,6 +600,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 rotary: rotary.clone(),
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

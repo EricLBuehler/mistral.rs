@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention};
+use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -56,6 +57,7 @@ struct LayerWeights {
     head_dim: usize,
     rotary_emb: RotaryEmbedding,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -123,20 +125,7 @@ impl LayerWeights {
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    q_len,
-                    None,
-                    self.n_head / self.n_kv_head,
-                    None,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -333,6 +322,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 rotary_emb: rotary,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

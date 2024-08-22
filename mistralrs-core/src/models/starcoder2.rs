@@ -7,9 +7,10 @@ use std::sync::Arc;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RotaryEmbedding, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -134,12 +135,11 @@ struct Attention {
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    use_flash_attn: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -152,7 +152,6 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
         let b = cfg.use_bias;
         let q_proj = mistralrs_quant::linear_b(
@@ -190,12 +189,17 @@ impl Attention {
             o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
             head_dim,
             rotary_emb,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -281,19 +285,13 @@ impl Attention {
                     false,
                 )?;
 
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_heads,
-                    self.head_dim,
                     attn_mask.as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    q_len,
-                    None,
-                    self.num_kv_groups,
                     Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
@@ -600,6 +598,8 @@ impl NormalModel for Model {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

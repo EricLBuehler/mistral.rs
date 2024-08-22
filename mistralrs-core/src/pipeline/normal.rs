@@ -509,6 +509,8 @@ impl Pipeline for NormalPipeline {
                 &self.non_granular_state,
                 context_lens,
                 position_ids,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
         }
     }

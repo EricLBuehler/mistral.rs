@@ -12,11 +12,11 @@ use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
-        ScaledDotProductAttention,
+        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -144,12 +144,11 @@ struct Attention {
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<PhiRotaryEmbedding>,
-    use_flash_attn: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -184,11 +183,16 @@ impl Attention {
             rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -268,19 +272,13 @@ impl Attention {
                     true,
                 )?;
 
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_heads,
-                    self.head_dim,
                     attn_mask.as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    q_len,
-                    None,
-                    self.num_kv_groups,
                     Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };

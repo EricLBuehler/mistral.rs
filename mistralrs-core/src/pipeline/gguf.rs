@@ -625,8 +625,8 @@ impl Pipeline for GGUFPipeline {
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
             mut paged_attn_meta,
-            flash_meta: _, // NOTE(EricLBuehler): ignore it for ggml dequant into f32
-            flash_meta_full: _, // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            flash_meta,
+            flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -662,6 +662,8 @@ impl Pipeline for GGUFPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
             Model::Phi3(ref model) => model.forward(
                 &input_ids,
@@ -683,6 +685,8 @@ impl Pipeline for GGUFPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
             Model::Starcoder2(ref model) => model.forward(
                 &input_ids,

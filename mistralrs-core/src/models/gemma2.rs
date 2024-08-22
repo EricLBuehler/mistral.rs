@@ -11,9 +11,10 @@ use crate::{
         AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
         MoeMlp,
     },
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
+    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -23,11 +24,7 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -46,10 +43,9 @@ pub struct Config {
     pub attn_logit_softcapping: Option<f64>,
     pub final_logit_softcapping: Option<f64>,
     pub query_pre_attn_scalar: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
+    pub use_flash_attn: bool,
 }
 
 impl Config {
@@ -177,14 +173,13 @@ struct Attention {
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    query_pre_attn_scalar: usize,
     attn_logit_softcapping: Option<f64>,
     use_sliding_window: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -198,7 +193,6 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = cfg.head_dim;
         let bias = cfg.attention_bias;
         let q_proj = mistralrs_quant::linear_b(
@@ -229,6 +223,12 @@ impl Attention {
             &cfg.quantization_config,
             vb.pp("o_proj"),
         )?;
+        let sliding_window = if layer_idx % 2 == 0 {
+            // ^ Order is SWA, global, SWA
+            Some(cfg.sliding_window)
+        } else {
+            None
+        };
         Ok(Self {
             q_proj,
             k_proj,
@@ -236,19 +236,19 @@ impl Attention {
             o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
             head_dim,
             rotary_emb,
-            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
-            sliding_window: if layer_idx % 2 == 0 {
-                // ^ Order is SWA, global, SWA
-                Some(cfg.sliding_window)
-            } else {
-                None
-            },
+            sliding_window,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
+                softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
+                sliding_window,
+            },
         })
     }
 
@@ -262,6 +262,7 @@ impl Attention {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -342,28 +343,14 @@ impl Attention {
                     false,
                 )?;
 
-                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-                let mut att = MatMul.matmul_affine_div(
-                    &q.contiguous()?,
-                    &k.t()?.contiguous()?,
-                    (self.query_pre_attn_scalar as f64).sqrt(),
-                )?;
-
-                if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
-                    att = (att / attn_logit_softcapping)?;
-                    att = att.tanh()?;
-                    att = (att * attn_logit_softcapping)?;
-                }
-
-                let att = match mask {
-                    Some(m) => att.broadcast_add(&m)?,
-                    None => att,
-                };
-                let att = candle_nn::ops::softmax_last_dim(&att)?;
-                // Convert to contiguous as matmul doesn't support strided vs for now.
-                MatMul.matmul(&att, &v.contiguous()?)?
+                Sdpa.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    mask.as_ref(),
+                    Some(flash_params),
+                    &self.sdpa_params,
+                )?
             }
         };
 
@@ -450,6 +437,7 @@ impl DecoderLayer {
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -463,6 +451,7 @@ impl DecoderLayer {
                 start_offsets_kernel,
                 kv_cache,
                 metadata,
+                flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
@@ -636,6 +625,7 @@ impl Model {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -715,6 +705,8 @@ impl NormalModel for Model {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

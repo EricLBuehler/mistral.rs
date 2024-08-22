@@ -11,12 +11,10 @@ use crate::{
         AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
         MoeMlp,
     },
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{
-        CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm,
-        ScaledDotProductAttention,
-    },
+    layers::{CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -51,10 +49,10 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl CausalSelfAttention {
@@ -136,19 +134,13 @@ impl CausalSelfAttention {
                 let (k, v) =
                     crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_attention_heads,
-                    self.head_dim,
                     attention_mask.clone().as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    seq_len,
-                    None,
-                    self.num_attention_heads / self.num_key_value_heads,
                     Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
@@ -209,10 +201,16 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 }
@@ -591,6 +589,8 @@ impl NormalModel for Llama {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

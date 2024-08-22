@@ -10,10 +10,11 @@ use mistralrs_quant::GgufMatMul;
 use mistralrs_quant::QuantMethod;
 use mistralrs_quant::QuantMethodConfig;
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
 use crate::layers::MatMul;
-use crate::layers::ScaledDotProductAttention;
+use crate::layers::Sdpa;
 use crate::layers::{CausalMasker, QLinear};
 use crate::paged_attention::AttentionImplementation;
 use crate::paged_attention::PagedAttention;
@@ -44,12 +45,12 @@ struct LayerWeights {
     attn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
-    n_kv_head: usize,
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -110,20 +111,7 @@ impl LayerWeights {
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    seq_len,
-                    None,
-                    self.n_head / self.n_kv_head,
-                    None,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -320,12 +308,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 attn_norm,
                 mlp,
                 n_head: head_count,
-                n_kv_head: head_count_kv,
                 head_dim,
                 cos: cos.clone().to_device(device)?,
                 sin: sin.clone().to_device(device)?,
                 rope_dim,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

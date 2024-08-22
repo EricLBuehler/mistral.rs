@@ -19,7 +19,7 @@ use candle_nn::{Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use serde::Deserialize;
 
-pub use crate::attention::ScaledDotProductAttention;
+pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
 use crate::{

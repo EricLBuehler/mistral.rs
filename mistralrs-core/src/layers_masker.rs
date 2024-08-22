@@ -218,7 +218,7 @@ impl CausalMasker {
     #[deprecated(
         since = "0.1.10",
         note = "use `make_causal_mask_as_attn_bias` instead! \
-        This is *not* compatible with `ScaledDotProductAttention`"
+        This is *not* compatible with `Sdpa`"
     )]
     pub fn make_causal_mask(
         &self,
@@ -242,7 +242,7 @@ impl CausalMasker {
     #[deprecated(
         since = "0.1.10",
         note = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
-        This is *not* compatible with `ScaledDotProductAttention`"
+        This is *not* compatible with `Sdpa`"
     )]
     pub fn make_causal_mask_with_sliding_window(
         &self,

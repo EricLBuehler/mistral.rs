@@ -18,9 +18,10 @@ use crate::{
         AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
         MoeMlp,
     },
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -158,8 +159,8 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -214,8 +215,14 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 
@@ -308,20 +315,7 @@ impl Attention {
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.num_heads,
-                    self.head_dim,
-                    mask,
-                    self.use_flash_attn,
-                    b_size,
-                    seq_len,
-                    None,
-                    self.num_heads / self.num_kv_heads,
-                    Some(flash_params),
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
         };
 
@@ -614,6 +608,8 @@ impl NormalModel for Model {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }
