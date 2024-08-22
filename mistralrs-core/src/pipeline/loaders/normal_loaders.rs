@@ -22,7 +22,6 @@ use mistralrs_quant::QuantizedConfig;
 use pyo3::pyclass;
 
 use serde::Deserialize;
-use tracing::warn;
 
 use crate::{
     models,
@@ -916,9 +915,6 @@ impl NormalModelLoader for Gemma2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if use_flash_attn {
-            warn!("Gemma 2 does not support flash attention.");
-        }
         Ok(Box::new(models::gemma2::Model::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -938,9 +934,6 @@ impl NormalModelLoader for Gemma2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if use_flash_attn {
-            warn!("Gemma 2 does not support flash attention.");
-        }
         Ok(Box::new(xlora_models::XLoraGemma2::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
