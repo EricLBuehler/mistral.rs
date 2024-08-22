@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
@@ -257,7 +259,6 @@ pub mod text_models_inputs_processor {
                 _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
             let block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
@@ -274,7 +275,7 @@ pub mod text_models_inputs_processor {
                 .map(|x| x.len())
                 .max()
                 .unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let context_lens = _make_tensor_with_pad(
                 paged_attn_context_lens
                     .iter()
@@ -411,7 +412,7 @@ pub mod text_models_inputs_processor {
             let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
@@ -424,7 +425,7 @@ pub mod text_models_inputs_processor {
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
             let max_context_len = paged_attn_context_lens.iter().max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let context_lens = Tensor::from_vec(
                 paged_attn_context_lens
                     .iter()

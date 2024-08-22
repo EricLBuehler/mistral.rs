@@ -497,6 +497,7 @@ impl Model {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,

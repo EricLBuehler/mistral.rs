@@ -399,6 +399,7 @@ impl ModelWeights {
         Ok(sum)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn inner_forward(
         &self,
         input_ids: &Tensor,

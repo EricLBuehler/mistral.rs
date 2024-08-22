@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss)]
+
 use crate::{
     cublaslt::CUBLASLT_HANDLE,
     layers::{get_use_matmul_via_f16, MatMul},
@@ -11,10 +13,12 @@ fn flash_attn(
     q: &Tensor,
     k: &Tensor,
     v: &Tensor,
-    causal: bool,
     flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
+    let (_b_sz, _n_attn_heads, seq_len, _head_dim) = q.dims4()?;
+    let causal = seq_len > 1;
+
     use crate::pipeline::text_models_inputs_processor::FlashParams;
 
     if let Some(FlashParams {
@@ -28,8 +32,12 @@ fn flash_attn(
         let q = q.flatten_to(1)?;
         let k = k.flatten_to(1)?;
         let v = v.flatten_to(1)?;
+
+        let window_size_left = sdpa_params.sliding_window;
+        let window_size_right = if causal { Some(0) } else { None };
+
         //dbg!(&qshape);
-        candle_flash_attn::flash_attn_varlen_softcap(
+        candle_flash_attn::flash_attn_varlen_windowed_softcap(
             &q,
             &k,
             &v,
@@ -39,7 +47,8 @@ fn flash_attn(
             *max_k as usize,
             sdpa_params.softmax_scale,
             sdpa_params.softcap,
-            causal,
+            window_size_left,
+            window_size_right,
         )?
         .reshape(qshape)
     } else {
@@ -59,9 +68,8 @@ fn flash_attn(
     _: &Tensor,
     _: &Tensor,
     _: &Tensor,
-    causal: bool,
-    flash_params: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
-    sdpa_params: &SdpaParams,
+    _: Option<&crate::pipeline::text_models_inputs_processor::FlashParams>,
+    _: &SdpaParams,
 ) -> Result<Tensor> {
     unimplemented!("Compile with '--features flash-attn'")
 }
@@ -142,7 +150,7 @@ impl Sdpa {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            return flash_attn(&q, &k, &v, seq_len > 1, flash_params, sdpa_params)?.transpose(1, 2);
+            return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
         }
 
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?.contiguous()?;

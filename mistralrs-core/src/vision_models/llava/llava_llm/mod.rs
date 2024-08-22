@@ -9,6 +9,7 @@ use crate::pipeline::{
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
     //Normal model without anymoe, but add embed and forward_input_embed. This is only a temporary solution. Finally when the rope problem solved for normal LLM models, we should refactor this.
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor>;
+    #[allow(clippy::too_many_arguments)]
     fn forward_input_embed(
         &self,
         input_ids: &Tensor,  // only for masking

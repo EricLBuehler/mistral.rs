@@ -30,6 +30,7 @@ use crate::{
 };
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
