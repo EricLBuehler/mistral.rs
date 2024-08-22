@@ -388,8 +388,8 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    pub kv_cache: crate::pipeline::Cache,
-    pub device: Device,
+    kv_cache: crate::pipeline::Cache,
+    device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
 }
