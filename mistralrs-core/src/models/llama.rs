@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor, IndexOp};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use serde::Deserialize;
@@ -430,7 +430,7 @@ impl Llama {
 
         let mut chunks: Vec<Tensor> = Vec::with_capacity(num_devices);
         // chunks.push(x.copy().unwrap());
-        
+
         // Handle the case where sequence length is less than number of devices
         if seq_len <= num_devices {
             for j in 0..seq_len {
