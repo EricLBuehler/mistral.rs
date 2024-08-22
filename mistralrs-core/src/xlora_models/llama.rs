@@ -2,10 +2,14 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
+    attention::SdpaParams,
+    layers::{Llama3RotaryEmbedding, Sdpa},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
-    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel,
+    },
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
@@ -17,14 +21,13 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Clone)]
 struct CausalSelfAttention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -33,9 +36,9 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
+    sdpa_params: SdpaParams,
 }
 
 impl CausalSelfAttention {
@@ -51,6 +54,7 @@ impl CausalSelfAttention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
@@ -118,19 +122,13 @@ impl CausalSelfAttention {
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-
-        let y = ScaledDotProductAttention.run_attention(
+        let y = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            self.num_attention_heads,
-            self.head_dim,
             mask.clone().as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            seq_len,
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
 
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
@@ -213,9 +211,15 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 }
@@ -315,7 +319,6 @@ impl Mlp {
     }
 }
 
-#[derive(Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
@@ -336,6 +339,7 @@ impl Block {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -349,6 +353,7 @@ impl Block {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(
@@ -439,6 +444,7 @@ impl XLoraLlama {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
         let mut cache = if is_full_pass {
@@ -475,6 +481,7 @@ impl XLoraLlama {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?;
         }
         let x = x.to_device(&self.device)?;
@@ -493,6 +500,8 @@ impl XLoraLlama {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -505,6 +514,8 @@ impl XLoraLlama {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -517,6 +528,7 @@ impl XLoraLlama {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -537,6 +549,7 @@ impl XLoraLlama {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -557,6 +570,7 @@ impl XLoraLlama {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
             if let Some(t) = self.lm_head.quantized_act_type() {
@@ -750,6 +764,7 @@ impl NormalModel for XLoraLlama {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -765,6 +780,8 @@ impl NormalModel for XLoraLlama {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -776,6 +793,8 @@ impl NormalModel for XLoraLlama {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &super::Cache {
@@ -846,6 +865,7 @@ impl ScalingsMaker for XLoraLlama {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -855,6 +875,7 @@ impl ScalingsMaker for XLoraLlama {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

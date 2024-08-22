@@ -387,6 +387,7 @@ impl Pipeline for VisionPipeline {
             pixel_values,
             model_specific_args,
             mut paged_attn_meta,
+            flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         self.model.forward(
             &input_ids,
@@ -402,6 +403,7 @@ impl Pipeline for VisionPipeline {
                     paged_attn_meta.as_mut().unwrap(),
                 )
             }),
+            &flash_meta,
         )
     }
     async fn sample(

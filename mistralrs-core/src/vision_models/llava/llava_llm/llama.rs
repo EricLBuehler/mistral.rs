@@ -13,15 +13,17 @@ use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
@@ -37,9 +39,9 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl CausalSelfAttention {
@@ -53,6 +55,7 @@ impl CausalSelfAttention {
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameter: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -102,21 +105,13 @@ impl CausalSelfAttention {
                 let (k, v) =
                     crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-                let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?
-                    .contiguous()?;
-                let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?
-                    .contiguous()?;
-
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_attention_heads,
-                    self.head_dim,
                     attention_mask.clone().as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    seq_len,
+                    Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
@@ -172,9 +167,15 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 }
@@ -292,6 +293,7 @@ impl Block {
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameters: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let mut x = self.rms_1.forward(x)?;
@@ -304,6 +306,7 @@ impl Block {
             kv_cache,
             rope_parameters,
             metadata,
+            flash_params,
         )? + residual)?;
         let residual = &x;
         x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
@@ -363,6 +366,7 @@ impl Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let x = self.wte.forward(input_ids)?;
         self.forward_input_embed(
@@ -372,6 +376,7 @@ impl Llama {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
 
@@ -497,6 +502,7 @@ impl LLaVALLM for Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
         let mut cache = self.kv_cache.lock();
@@ -522,6 +528,7 @@ impl LLaVALLM for Llama {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                flash_params,
             )?;
         }
         x = x.to_device(&self.device)?;
@@ -543,6 +550,7 @@ impl NormalModel for Llama {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward_input(
             input_ids,
@@ -550,6 +558,7 @@ impl NormalModel for Llama {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
     fn xlora_forward(
@@ -564,6 +573,8 @@ impl NormalModel for Llama {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

@@ -15,8 +15,8 @@ use crate::{
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel, VisionModel,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -955,6 +955,7 @@ impl Idefics2 {
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
             // == START VISUAL INPUTS INTEGRATION ==
@@ -1059,6 +1060,7 @@ impl Idefics2 {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
 }
@@ -1119,6 +1121,7 @@ impl VisionModel for Idefics2 {
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args
             .downcast()
@@ -1131,6 +1134,7 @@ impl VisionModel for Idefics2 {
             context_lens,
             pixel_attention_mask,
             metadata,
+            flash_params,
         )
     }
     fn cache(&self) -> &Cache {

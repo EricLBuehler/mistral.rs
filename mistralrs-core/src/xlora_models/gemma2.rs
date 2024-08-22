@@ -10,14 +10,16 @@ use tracing::info;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
+    attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
+    layers::{CausalMasker, RmsNorm, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     Ordering,
@@ -130,7 +132,6 @@ impl MLP {
     }
 }
 
-#[derive(Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -138,13 +139,11 @@ struct Attention {
     o_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    query_pre_attn_scalar: usize,
-    attn_logit_softcapping: Option<f64>,
     use_sliding_window: bool,
     sliding_window: Option<usize>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -164,7 +163,6 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = cfg.head_dim;
         let bias = cfg.attention_bias;
         let q_proj = linear_b(
@@ -211,6 +209,12 @@ impl Attention {
             ord,
             preload_adapters,
         )?;
+        let sliding_window = if layer_idx % 2 == 0 {
+            // ^ Order is SWA, global, SWA
+            Some(cfg.sliding_window)
+        } else {
+            None
+        };
         Ok(Self {
             q_proj,
             k_proj,
@@ -218,17 +222,16 @@ impl Attention {
             o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
             head_dim,
             rotary_emb,
-            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
-            attn_logit_softcapping: cfg.attn_logit_softcapping,
             use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
-            sliding_window: if layer_idx % 2 == 0 {
-                // ^ Order is SWA, global, SWA
-                Some(cfg.sliding_window)
-            } else {
-                None
+            sliding_window,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
+                softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
+                sliding_window,
             },
         })
     }
@@ -245,6 +248,7 @@ impl Attention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -325,28 +329,14 @@ impl Attention {
             false,
         )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-        let mut att = MatMul.matmul_affine_div(
-            &q.contiguous()?,
-            &k.t()?.contiguous()?,
-            (self.query_pre_attn_scalar as f64).sqrt(),
+        let mut attn_output = Sdpa.run_attention(
+            &q,
+            &k,
+            &v,
+            mask.as_ref(),
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
-
-        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
-            att = (att / attn_logit_softcapping)?;
-            att = att.tanh()?;
-            att = (att * attn_logit_softcapping)?;
-        }
-
-        let att = match mask {
-            Some(m) => att.broadcast_add(&m)?,
-            None => att,
-        };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
@@ -364,7 +354,6 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -453,6 +442,7 @@ impl DecoderLayer {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -468,6 +458,7 @@ impl DecoderLayer {
                 scalings.clone(),
                 global_scaling_weight,
                 is_scaling_pass,
+                flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
@@ -645,6 +636,7 @@ impl Model {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
@@ -696,6 +688,7 @@ impl Model {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -727,6 +720,8 @@ impl Model {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -739,6 +734,8 @@ impl Model {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -751,6 +748,7 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -771,6 +769,7 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -791,6 +790,7 @@ impl Model {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
             if let Some(t) = self.lm_head.quantized_act_type() {
@@ -868,6 +868,7 @@ impl NormalModel for Model {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -883,6 +884,8 @@ impl NormalModel for Model {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -894,6 +897,8 @@ impl NormalModel for Model {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &Cache {
@@ -964,6 +969,7 @@ impl ScalingsMaker for Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -973,6 +979,7 @@ impl ScalingsMaker for Model {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }
