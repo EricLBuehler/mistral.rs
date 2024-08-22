@@ -5,7 +5,10 @@ use crate::{
     layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
-    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel,
+    },
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
@@ -17,7 +20,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -118,9 +121,6 @@ impl CausalSelfAttention {
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-
         let y = ScaledDotProductAttention.run_attention(
             &q,
             &k,
@@ -131,6 +131,9 @@ impl CausalSelfAttention {
             self.use_flash_attn,
             b_sz,
             seq_len,
+            None,
+            self.num_attention_heads / self.num_key_value_heads,
+            None,
         )?;
 
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
@@ -750,6 +753,7 @@ impl NormalModel for XLoraLlama {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }

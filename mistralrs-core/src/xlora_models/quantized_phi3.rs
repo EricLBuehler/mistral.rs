@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::repeat_kv;
 use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
 use crate::layers::ScaledDotProductAttention;
@@ -168,9 +167,6 @@ impl LayerWeights {
             true,
         )?;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
         let y = ScaledDotProductAttention.run_attention(
             &q,
             &k,
@@ -181,6 +177,9 @@ impl LayerWeights {
             false,
             b_sz,
             seq_len,
+            None,
+            self.n_head / self.n_kv_head,
+            None,
         )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;

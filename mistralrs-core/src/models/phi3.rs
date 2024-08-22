@@ -15,14 +15,14 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        repeat_kv, CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
-        ScaledDotProductAttention,
+        CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, ScaledDotProductAttention,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
     },
     utils::progress::NiceProgressBar,
 };
@@ -128,6 +128,7 @@ impl Attention {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -171,8 +172,8 @@ impl Attention {
             .rotary_emb
             .forward(&q, &k, seqlen_offsets, position_ids)?;
 
-        let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => {
+        let mut attn_output = match (&self.paged_attn, self.use_flash_attn) {
+            (Some(paged_attn), false) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
                 paged_attn.forward(
                     &q,
@@ -185,7 +186,7 @@ impl Attention {
                     None,
                 )?
             }
-            None => {
+            _ => {
                 let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
                     kv_cache,
                     k,
@@ -194,9 +195,6 @@ impl Attention {
                     self.sliding_window,
                     true,
                 )?;
-
-                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
                 ScaledDotProductAttention.run_attention(
                     &q,
@@ -208,6 +206,9 @@ impl Attention {
                     self.use_flash_attn,
                     b_sz,
                     q_len,
+                    None,
+                    self.num_kv_groups,
+                    Some(flash_params),
                 )?
             }
         };
@@ -371,6 +372,7 @@ impl DecoderLayer {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -381,6 +383,7 @@ impl DecoderLayer {
             position_ids,
             kv_cache,
             metadata,
+            flash_params,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -497,6 +500,7 @@ impl Model {
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
@@ -525,6 +529,7 @@ impl Model {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -570,6 +575,7 @@ impl NormalModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -577,6 +583,7 @@ impl NormalModel for Model {
             &position_ids,
             context_lens,
             metadata,
+            flash_params,
         )
     }
     fn xlora_forward(

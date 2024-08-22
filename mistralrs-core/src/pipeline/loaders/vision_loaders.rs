@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -41,6 +41,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &Cache;

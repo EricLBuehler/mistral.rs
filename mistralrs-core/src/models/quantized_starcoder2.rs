@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::{
-    repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
-};
+use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -125,9 +123,6 @@ impl LayerWeights {
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
                 ScaledDotProductAttention.run_attention(
                     &q,
                     &k,
@@ -138,6 +133,9 @@ impl LayerWeights {
                     false,
                     b_sz,
                     q_len,
+                    None,
+                    self.n_head / self.n_kv_head,
+                    None,
                 )?
             }
         };

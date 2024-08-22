@@ -2,7 +2,8 @@
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::pipeline::{
-    text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalModel,
+    text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+    IsqModel, NormalModel,
 };
 
 pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
@@ -16,6 +17,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor>;
 }
 

@@ -8,7 +8,8 @@ use crate::{
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -27,7 +28,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker},
+    layers::CausalMasker,
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -289,9 +290,6 @@ impl Attention {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
-
         let attn_output = ScaledDotProductAttention.run_attention(
             &q,
             &k,
@@ -302,6 +300,9 @@ impl Attention {
             self.use_flash_attn,
             b_size,
             seq_len,
+            None,
+            self.num_heads / self.num_kv_heads,
+            None,
         )?;
 
         let mut attn_output = attn_output
@@ -745,6 +746,7 @@ impl NormalModel for Model {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }

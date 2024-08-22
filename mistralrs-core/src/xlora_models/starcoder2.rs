@@ -11,13 +11,13 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{CausalMasker, RotaryEmbedding, ScaledDotProductAttention},
-    layers_utils::repeat_kv,
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     Ordering,
@@ -289,9 +289,6 @@ impl Attention {
             false,
         )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
         let mut attn_output = ScaledDotProductAttention.run_attention(
             &q,
             &k,
@@ -302,6 +299,9 @@ impl Attention {
             self.use_flash_attn,
             b_sz,
             q_len,
+            None,
+            self.num_kv_groups,
+            None,
         )?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -761,6 +761,7 @@ impl NormalModel for Model {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

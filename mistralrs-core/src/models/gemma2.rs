@@ -16,8 +16,9 @@ use crate::{
     layers::{repeat_kv, CausalMasker, MatMul, RmsNorm},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
 };
@@ -598,6 +599,7 @@ impl Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
@@ -690,6 +692,7 @@ impl NormalModel for Model {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -697,6 +700,7 @@ impl NormalModel for Model {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
     fn xlora_forward(

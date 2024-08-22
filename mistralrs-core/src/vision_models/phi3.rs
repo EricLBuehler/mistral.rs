@@ -15,15 +15,16 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
-        RmsNorm, ScaledDotProductAttention,
+        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm,
+        ScaledDotProductAttention,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -199,6 +200,7 @@ impl Attention {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -266,9 +268,6 @@ impl Attention {
                     true,
                 )?;
 
-                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
                 ScaledDotProductAttention.run_attention(
                     &q,
                     &k,
@@ -279,6 +278,9 @@ impl Attention {
                     self.use_flash_attn,
                     b_sz,
                     q_len,
+                    None,
+                    self.num_kv_groups,
+                    Some(flash_params),
                 )?
             }
         };
@@ -442,6 +444,7 @@ impl DecoderLayer {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -452,6 +455,7 @@ impl DecoderLayer {
             position_ids,
             kv_cache,
             metadata,
+            flash_params,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -960,6 +964,7 @@ impl Model {
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
             self.vision_embed_tokens
@@ -993,6 +998,7 @@ impl Model {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -1044,6 +1050,7 @@ impl VisionModel for Model {
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args
             .downcast()
@@ -1056,6 +1063,7 @@ impl VisionModel for Model {
             context_lens,
             image_sizes,
             metadata,
+            flash_params,
         )
     }
     fn cache(&self) -> &Cache {

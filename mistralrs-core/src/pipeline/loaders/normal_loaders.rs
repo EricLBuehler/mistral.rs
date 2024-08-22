@@ -6,7 +6,10 @@ use crate::{
     layers::Llama3RopeConfig,
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel,
+    },
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
@@ -35,6 +38,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
