@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -460,11 +460,18 @@ impl Llama {
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if vb.contains_tensor("lm_head.weight") {
+            candle_nn::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            Linear::new(
+                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
+                None,
+            )
+        };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
