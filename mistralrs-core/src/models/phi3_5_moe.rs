@@ -341,9 +341,14 @@ impl MoeMlp {
         // Compute mask for sparsity
         let selected_experts = scores.argmax_keepdim(D::Minus1)?;
         let mask_logits_threshold = scores.gather(&selected_experts, D::Minus1)?;
-        let factor = scores.abs()?.clamp(&mask_logits_threshold, f64::MAX)?;
-        let mask_logits_threshold =
-            ((mask_logits_threshold - scores)? / factor)?.gt(2. * jitter_eps)?;
+        let factor = scores.abs()?.clamp(
+            &mask_logits_threshold.broadcast_as(scores.shape())?,
+            f64::MAX,
+        )?;
+        let mask_logits_threshold = mask_logits_threshold
+            .broadcast_sub(&scores)?
+            .broadcast_div(&factor)?
+            .gt(2. * jitter_eps)?;
 
         // Apply mask
         let masked_gates = masked_fill(scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
@@ -354,22 +359,29 @@ impl MoeMlp {
 
         // Mask out first expert
         let masked_scores = scores.scatter_add(
-            &selected_experts,
+            &selected_experts
+                .broadcast_as(scores.shape())?
+                .contiguous()?,
             &(scores.ones_like()? * f64::NEG_INFINITY)?,
             D::Minus1,
         )?;
 
         // Compute mask for sparsity
-        let max_ind = masked_scores.argmax_keepdim(D::Minus1)?;
-        let mask_logits_threshold = masked_scores.gather(&max_ind, D::Minus1)?;
-        let factor = scores.abs()?.clamp(&mask_logits_threshold, f64::MAX)?;
-        let mask_logits_threshold =
-            ((mask_logits_threshold - scores)? / factor)?.gt(2. * jitter_eps)?;
+        let selected_experts_top2 = masked_scores.argmax_keepdim(D::Minus1)?;
+        let mask_logits_threshold = masked_scores.gather(&selected_experts_top2, D::Minus1)?;
+        let factor = scores.abs()?.clamp(
+            &mask_logits_threshold.broadcast_as(scores.shape())?,
+            f64::MAX,
+        )?;
+        let mask_logits_threshold = mask_logits_threshold
+            .broadcast_sub(&scores)?
+            .broadcast_div(&factor)?
+            .gt(2. * jitter_eps)?;
 
         // Apply mask
-        let selected_experts_top2 =
+        let masked_gates_top2 =
             masked_fill(&masked_scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
-        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&selected_experts_top2)?;
+        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&masked_gates_top2)?;
         let multiplier_top2 = masked_gates_top2.gather(&selected_experts_top2, D::Minus1)?;
 
         let multiplier = Tensor::cat(&[multiplier, multiplier_top2], D::Minus1)?;
@@ -388,6 +400,7 @@ impl MoeMlp {
         let mut router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
         if self.gate.quantized_act_type().is_some() {
             router_logits = router_logits.to_dtype(original_dtype)?;
+            xs = xs.to_dtype(original_dtype)?;
         }
         let (routing_weights, selected_experts) =
             self.sparsemixer(&router_logits, self.router_jitter_noise)?;
@@ -417,20 +430,21 @@ impl MoeMlp {
             // for the current expert, we need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1, top-2)
             let current_state = xs
-                .unsqueeze(0)?
-                .gather(&top_x, D::Minus1)?
+                .index_select(&top_x, 0)?
                 .reshape(((), hidden))?;
             let current_routing_weights = routing_weights
-                .gather(&top_x, 0)?
-                .gather(&idx, 1)?
+                .index_select(&top_x, 0)?
+                .index_select(&idx, 1)?
                 .unsqueeze(D::Minus1)?;
+            dbg!(&current_state,&xs);
             let current_hidden_states = expert
                 .forward(&current_state)?
                 .broadcast_mul(&current_routing_weights)?;
-
+            dbg!(&final_hidden_states);
+            dbg!(&current_hidden_states);
             final_hidden_states = final_hidden_states.index_add(
                 &top_x,
-                &current_hidden_states.to_dtype(xs.dtype())?,
+                &current_hidden_states.to_dtype(xs.dtype())?.squeeze(0)?,
                 0,
             )?;
         }
