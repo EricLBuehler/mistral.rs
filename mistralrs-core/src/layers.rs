@@ -269,8 +269,8 @@ impl PhiRotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs_short = t_short.matmul(&inv_freq_short)?;
-        let sin_short = (freqs_short.sin()?.to_dtype(dtype)? * long_mscale)?;
-        let cos_short = (freqs_short.cos()?.to_dtype(dtype)? * long_mscale)?;
+        let sin_short = (freqs_short.sin()?.to_dtype(dtype)? * short_mscale)?;
+        let cos_short = (freqs_short.cos()?.to_dtype(dtype)? * short_mscale)?;
 
         // Long cos/sin
         let inv_freq_long: Vec<_> = (0..dim)
@@ -283,8 +283,8 @@ impl PhiRotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs_long = t_long.matmul(&inv_freq_long)?;
-        let sin_long = (freqs_long.sin()?.to_dtype(dtype)? * short_mscale)?;
-        let cos_long = (freqs_long.cos()?.to_dtype(dtype)? * short_mscale)?;
+        let sin_long = (freqs_long.sin()?.to_dtype(dtype)? * long_mscale)?;
+        let cos_long = (freqs_long.cos()?.to_dtype(dtype)? * long_mscale)?;
         Ok(Self {
             short_cos: cos_short,
             short_sin: sin_short,
