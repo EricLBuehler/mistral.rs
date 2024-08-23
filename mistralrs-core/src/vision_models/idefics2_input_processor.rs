@@ -68,7 +68,11 @@ impl Processor for Idefics2Processor {
         let mut image_str = format!(
             "{}{}{}",
             self.fake_image_token,
-            self.image_token.repeat(self.config.image_seq_len.expect("Idefics 2 model needs `image_seq_len`")),
+            self.image_token.repeat(
+                self.config
+                    .image_seq_len
+                    .expect("Idefics 2 model needs `image_seq_len`")
+            ),
             self.fake_image_token
         );
         if self
