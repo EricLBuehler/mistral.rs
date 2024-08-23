@@ -2022,7 +2022,7 @@
                 (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(Either::Right(image_set_tensor))) =&gt; {
                     <span class="kw">let </span><span class="kw-2">mut </span>idx = <span class="number">0</span>;
                     <span class="comment">// Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
-                    // https://huggingface.co/microsoft/Phi-3-vision-128k-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
+                    // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
                     </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..pixel_values.dim(<span class="number">0</span>)<span class="question-mark">? </span>{
                         <span class="kw">let </span>cnt = <span class="self">self</span>.num_img_tokens;
                         <span class="kw">let </span>img_set_tensor = image_set_tensor

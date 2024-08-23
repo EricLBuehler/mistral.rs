@@ -349,6 +349,10 @@
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -419,7 +423,11 @@
         <span class="kw">let </span><span class="kw-2">mut </span>image_str = <span class="macro">format!</span>(
             <span class="string">"{}{}{}"</span>,
             <span class="self">self</span>.fake_image_token,
-            <span class="self">self</span>.image_token.repeat(<span class="self">self</span>.config.image_seq_len),
+            <span class="self">self</span>.image_token.repeat(
+                <span class="self">self</span>.config
+                    .image_seq_len
+                    .expect(<span class="string">"Idefics 2 model needs `image_seq_len`"</span>)
+            ),
             <span class="self">self</span>.fake_image_token
         );
         <span class="kw">if </span><span class="self">self
