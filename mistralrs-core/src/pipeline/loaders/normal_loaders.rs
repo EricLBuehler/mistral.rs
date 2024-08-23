@@ -1070,8 +1070,6 @@ struct Phi3_5MoEBasicConfig {
     num_key_value_heads: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
-    bos_token_id: Option<u32>,
-    eos_token_id: Option<u32>,
     rope_scaling: Option<PhiRopeScalingConfig>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
@@ -1079,10 +1077,7 @@ struct Phi3_5MoEBasicConfig {
     quantization_config: Option<QuantizedConfig>,
     lm_head_bias: bool,
     attention_bias: bool,
-    num_experts_per_tok: usize,
     num_local_experts: usize,
-    output_router_logits: bool,
-    router_aux_loss_coef: f64,
     router_jitter_noise: f64,
 }
 
@@ -1100,8 +1095,6 @@ impl Phi3_5MoEBasicConfig {
             max_position_embeddings: basic_config.max_position_embeddings,
             rope_theta: basic_config.rope_theta,
             rms_norm_eps: basic_config.rms_norm_eps,
-            eos_token_id: basic_config.eos_token_id,
-            bos_token_id: basic_config.bos_token_id,
             rope_scaling: basic_config.rope_scaling,
             original_max_position_embeddings: basic_config.original_max_position_embeddings,
             use_flash_attn,
@@ -1109,10 +1102,7 @@ impl Phi3_5MoEBasicConfig {
             quantization_config: basic_config.quantization_config,
             lm_head_bias: basic_config.lm_head_bias,
             attention_bias: basic_config.attention_bias,
-            num_experts_per_tok: basic_config.num_experts_per_tok,
             num_local_experts: basic_config.num_local_experts,
-            output_router_logits: basic_config.output_router_logits,
-            router_aux_loss_coef: basic_config.router_aux_loss_coef,
             router_jitter_noise: basic_config.router_jitter_noise,
         })
     }
