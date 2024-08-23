@@ -581,9 +581,10 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
+        let lm_head = candle_nn::linear_b(
             cfg.hidden_size,
             cfg.vocab_size,
+            cfg.lm_head_bias,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {

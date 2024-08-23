@@ -107,6 +107,7 @@ impl FromStr for ScaledRopeType {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
 pub enum PhiRopeScalingConfig {
     Classic {
         short_factor: Vec<f64>,
@@ -261,7 +262,8 @@ impl PhiRotaryEmbedding {
         // Short cos/sin
         let inv_freq_short: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / (short_factor[i] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32)
+            .enumerate()
+            .map(|(k, i)| 1f32 / (short_factor[k] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32)
             .collect();
         let inv_freq_len_short = inv_freq_short.len();
         let inv_freq_short = Tensor::from_vec(inv_freq_short, (1, inv_freq_len_short), dev)?;
@@ -275,7 +277,8 @@ impl PhiRotaryEmbedding {
         // Long cos/sin
         let inv_freq_long: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / (long_factor[i] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32)
+            .enumerate()
+            .map(|(k, i)| 1f32 / (long_factor[k] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32)
             .collect();
         let inv_freq_len_long = inv_freq_long.len();
         let inv_freq_long = Tensor::from_vec(inv_freq_long, (1, inv_freq_len_long), dev)?;
