@@ -1,4 +1,4 @@
-# Phi 3 Vision Model: `microsoft/Phi-3-vision-128k-instruct`
+# Phi 3 Vision Model: `microsoft/Phi-3.5-vision-instruct`
 
 The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
 
@@ -34,14 +34,16 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Output:**
 ```
-The image captures a breathtaking view of a snow-covered mountain peak under a cloudy sky. The mountain, blanketed in pristine white snow, stands majestically against the backdrop of the sky. A winding road snakes its way up the side of the mountain, disappearing into the distance and adding a sense of scale to the scene. The road is flanked by trees on both sides, their branches heavy with snow. The perspective of the image is from a low angle, looking up at the mountain and giving it an imposing presence. Despite its grandeur, there's a sense of tranquility that pervades the scene - a testament to nature's quiet beauty.
+The image captures a breathtaking view of a mountain peak, bathed in the soft glow of sunlight. The peak, dusted with a layer of snow, stands tall against the backdrop of a clear blue sky. A trail, etched into the mountain's side by countless hikers before it, winds its way up to the summit. The trail's white color contrasts sharply with the surrounding landscape, drawing attention to its path and inviting exploration.
+
+The perspective from which this photo is taken offers an expansive view of the mountain and its surroundings. It seems as if one could look down from this vantage point and see miles upon miles of untouched wilderness stretching out into the distance. The colors in the image are predominantly blue and white, reflecting both sky and snow-covered mountains respectively. However, there are also hints of green from trees dotting lower parts of mountainsides or valleys below them - adding another layer to this picturesque scene. This serene landscape evokes feelings of tranquility and adventure at once - an invitation to explore nature's grandeur while respecting its majesty at all times!
 ```
 
 ---
 
 1) Start the server
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
 ```
 
 2) Send a request
@@ -124,7 +126,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("microsoft/Phi-3-vision-128k-instruct".to_string()),
+        Some("microsoft/Phi-3.5-vision-instruct".to_string()),
     )
     .build(VisionLoaderType::Phi3V);
     // Load, into a Pipeline
@@ -197,7 +199,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="microsoft/Phi-3-vision-128k-instruct",
+        model_id="microsoft/Phi-3.5-vision-instruct",
         arch=VisionArchitecture.Phi3V,
     ),
 )
