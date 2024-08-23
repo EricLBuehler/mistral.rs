@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{layer_norm, LayerNorm, LayerNormConfig, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::sync::Arc;
 
@@ -11,10 +11,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{
-        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
-        Sdpa,
-    },
+    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -341,10 +338,7 @@ impl MoeMlp {
         // Compute mask for sparsity
         let selected_experts = scores.argmax_keepdim(D::Minus1)?;
         let mask_logits_threshold = scores.gather(&selected_experts, D::Minus1)?;
-        let factor = scores.abs()?.clamp(
-            &mask_logits_threshold.broadcast_as(scores.shape())?,
-            f64::MAX,
-        )?;
+        let factor = scores.abs()?.broadcast_minimum(&mask_logits_threshold)?;
         let mask_logits_threshold = mask_logits_threshold
             .broadcast_sub(scores)?
             .broadcast_div(&factor)?
@@ -369,10 +363,7 @@ impl MoeMlp {
         // Compute mask for sparsity
         let selected_experts_top2 = masked_scores.argmax_keepdim(D::Minus1)?;
         let mask_logits_threshold = masked_scores.gather(&selected_experts_top2, D::Minus1)?;
-        let factor = scores.abs()?.clamp(
-            &mask_logits_threshold.broadcast_as(scores.shape())?,
-            f64::MAX,
-        )?;
+        let factor = scores.abs()?.broadcast_minimum(&mask_logits_threshold)?;
         let mask_logits_threshold = mask_logits_threshold
             .broadcast_sub(scores)?
             .broadcast_div(&factor)?
@@ -451,8 +442,8 @@ impl MoeMlp {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MoeMlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: LayerNorm,
+    post_attention_layernorm: LayerNorm,
 }
 
 impl DecoderLayer {
@@ -475,14 +466,22 @@ impl DecoderLayer {
             cfg,
             mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
         )?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            LayerNormConfig {
+                eps: cfg.rms_norm_eps,
+                remove_mean: true,
+                affine: true,
+            },
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            LayerNormConfig {
+                eps: cfg.rms_norm_eps,
+                remove_mean: true,
+                affine: true,
+            },
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
@@ -527,7 +526,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
     device: Device,
     cache: Cache,
@@ -592,9 +591,13 @@ impl Model {
             )?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(
+        let norm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            LayerNormConfig {
+                eps: cfg.rms_norm_eps,
+                remove_mean: true,
+                affine: true,
+            },
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = candle_nn::linear_b(
