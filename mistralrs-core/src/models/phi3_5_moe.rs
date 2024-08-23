@@ -429,22 +429,17 @@ impl MoeMlp {
             // Index the correct hidden staters and compute the expert hidden state
             // for the current expert, we need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1, top-2)
-            let current_state = xs
-                .index_select(&top_x, 0)?
-                .reshape(((), hidden))?;
+            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden))?;
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
-                .index_select(&idx, 1)?
-                .unsqueeze(D::Minus1)?;
-            dbg!(&current_state,&xs);
-            let current_hidden_states = expert
-                .forward(&current_state)?
-                .broadcast_mul(&current_routing_weights)?;
-            dbg!(&final_hidden_states);
-            dbg!(&current_hidden_states);
+                .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
+            let exp_out = expert.forward(&current_state)?;
+
+            let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
+
             final_hidden_states = final_hidden_states.index_add(
-                &top_x,
-                &current_hidden_states.to_dtype(xs.dtype())?.squeeze(0)?,
+                &top_x.contiguous()?,
+                &current_hidden_states.to_dtype(xs.dtype())?,
                 0,
             )?;
         }
