@@ -2,21 +2,21 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::{num, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    get_delta_from_lora_ab,
     layers::{
         CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
         Sdpa,
     },
-    layers_masker::PastKvLenCache,
+    layers_masker::{masked_fill, PastKvLenCache},
+    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -48,7 +48,6 @@ pub struct Config {
     pub quantization_config: Option<QuantizedConfig>,
     pub lm_head_bias: bool,
     pub attention_bias: bool,
-    pub input_jitter_noise: f64,
     pub num_experts_per_tok: usize,
     pub num_local_experts: usize,
     pub output_router_logits: bool,
@@ -311,7 +310,7 @@ struct MoeMlp {
     gate: Arc<dyn QuantMethod>,
     experts: Vec<Mlp>,
     router_jitter_noise: f64,
-    input_jitter_noise: f64,
+    num_experts: usize,
 }
 
 impl MoeMlp {
@@ -334,14 +333,108 @@ impl MoeMlp {
             gate,
             experts,
             router_jitter_noise: cfg.router_jitter_noise,
-            input_jitter_noise: cfg.input_jitter_noise,
+            num_experts,
         })
+    }
+
+    fn sparsemixer(&self, scores: &Tensor, jitter_eps: f64) -> Result<(Tensor, Tensor)> {
+        // Compute mask for sparsity
+        let selected_experts = scores.argmax_keepdim(D::Minus1)?;
+        let mask_logits_threshold = scores.gather(&selected_experts, D::Minus1)?;
+        let factor = scores.abs()?.clamp(&mask_logits_threshold, f64::MAX)?;
+        let mask_logits_threshold =
+            ((mask_logits_threshold - scores)? / factor)?.gt(2. * jitter_eps)?;
+
+        // Apply mask
+        let masked_gates = masked_fill(&scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
+
+        // Compute scores
+        let masked_gates = candle_nn::ops::softmax_last_dim(&masked_gates)?;
+        let multiplier = masked_gates.gather(&selected_experts, D::Minus1)?;
+
+        // Mask out first expert
+        let masked_scores = scores.scatter_add(
+            &selected_experts,
+            &(scores.ones_like()? * f64::NEG_INFINITY)?,
+            D::Minus1,
+        )?;
+
+        // Compute mask for sparsity
+        let max_ind = masked_scores.argmax_keepdim(D::Minus1)?;
+        let mask_logits_threshold = masked_scores.gather(&max_ind, D::Minus1)?;
+        let factor = scores.abs()?.clamp(&mask_logits_threshold, f64::MAX)?;
+        let mask_logits_threshold =
+            ((mask_logits_threshold - scores)? / factor)?.gt(2. * jitter_eps)?;
+
+        // Apply mask
+        let selected_experts_top2 =
+            masked_fill(&masked_scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
+        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&selected_experts_top2)?;
+        let multiplier_top2 = masked_gates_top2.gather(&selected_experts_top2, D::Minus1)?;
+
+        let multiplier = Tensor::cat(&[multiplier, multiplier_top2], D::Minus1)?;
+        let selected_experts = Tensor::cat(&[selected_experts, selected_experts_top2], D::Minus1)?;
+
+        Ok((multiplier, selected_experts))
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (bs, seq, hidden) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden))?;
+        let router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
+        let (routing_weights, selected_experts) =
+            self.sparsemixer(&router_logits, self.router_jitter_noise)?;
+
+        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
+
+        // One hot encode the selected experts to create an expert mask
+        // this will be used to easily index which expert to activate
+        let experts_mask =
+            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
+                .permute((2, 1, 0))?;
+
+        // Loop over all avail experts in the model and perform the computation on each expert
+        for expert_idx in 0..self.num_experts {
+            let expert = &self.experts[expert_idx];
+            let expert_mask = experts_mask.i(expert_idx)?;
+            assert_eq!(expert_mask.rank(), 2);
+            let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
+            let idx = nonzero_mask.i((.., 0))?;
+            let top_x = nonzero_mask.i((.., 1))?;
+
+            if top_x.dim(0)? == 0 {
+                continue;
+            }
+
+            // Index the correct hidden staters and compute the expert hidden state
+            // for the current expert, we need to make sure to multiply the output hidden
+            // states by `routing_weights` on the corresponding tokens (top-1, top-2)
+            let current_state = xs
+                .unsqueeze(0)?
+                .gather(&top_x, D::Minus1)?
+                .reshape(((), hidden))?;
+            let current_routing_weights = routing_weights
+                .gather(&top_x, 0)?
+                .gather(&idx, 1)?
+                .unsqueeze(D::Minus1)?;
+            let current_hidden_states = expert
+                .forward(&current_state)?
+                .broadcast_mul(&current_routing_weights)?;
+
+            final_hidden_states = final_hidden_states.index_add(
+                &top_x,
+                &current_hidden_states.to_dtype(xs.dtype())?,
+                0,
+            )?;
+        }
+
+        final_hidden_states.reshape((bs, seq, hidden))
     }
 }
 
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Mlp,
+    mlp: MoeMlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -362,7 +455,10 @@ impl DecoderLayer {
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
         )?;
-        let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MoeMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -573,7 +669,12 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            // TODO ISQ
+            tensors.push((&mut layer.mlp.gate, Some(i)));
+            for expert in &mut layer.mlp.experts {
+                tensors.push((&mut expert.w1, Some(i)));
+                tensors.push((&mut expert.w2, Some(i)));
+                tensors.push((&mut expert.w3, Some(i)));
+            }
         }
         (tensors, &*self.mapper)
     }

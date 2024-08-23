@@ -127,6 +127,8 @@ pub enum NormalLoaderType {
     Gemma2,
     #[serde(rename = "starcoder2")]
     Starcoder2,
+    #[serde(rename = "phi3.5moe")]
+    Phi3_5MoE,
 }
 
 impl FromStr for NormalLoaderType {
@@ -142,7 +144,8 @@ impl FromStr for NormalLoaderType {
             "qwen2" => Ok(Self::Qwen2),
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`.")),
+            "phi3.5moe" => Ok(Self::Phi3_5MoE),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`.")),
         }
     }
 }
@@ -1051,5 +1054,124 @@ impl NormalModelLoader for Starcoder2Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
+    }
+}
+
+// ======================== Phi3 loader
+
+#[derive(Deserialize)]
+struct Phi3_5MoEBasicConfig {
+    vocab_size: usize,
+    hidden_act: candle_nn::Activation,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    bos_token_id: Option<u32>,
+    eos_token_id: Option<u32>,
+    rope_scaling: Option<PhiRopeScalingConfig>,
+    max_position_embeddings: usize,
+    original_max_position_embeddings: usize,
+    sliding_window: Option<usize>,
+    quantization_config: Option<QuantizedConfig>,
+    lm_head_bias: bool,
+    attention_bias: bool,
+    num_experts_per_tok: usize,
+    num_local_experts: usize,
+    output_router_logits: bool,
+    router_aux_loss_coef: f64,
+    router_jitter_noise: f64,
+}
+
+impl Phi3_5MoEBasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3_5_moe::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::phi3_5_moe::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rope_theta: basic_config.rope_theta,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            eos_token_id: basic_config.eos_token_id,
+            bos_token_id: basic_config.bos_token_id,
+            rope_scaling: basic_config.rope_scaling,
+            original_max_position_embeddings: basic_config.original_max_position_embeddings,
+            use_flash_attn,
+            sliding_window: basic_config.sliding_window,
+            quantization_config: basic_config.quantization_config,
+            lm_head_bias: basic_config.lm_head_bias,
+            attention_bias: basic_config.attention_bias,
+            num_experts_per_tok: basic_config.num_experts_per_tok,
+            num_local_experts: basic_config.num_local_experts,
+            output_router_logits: basic_config.output_router_logits,
+            router_aux_loss_coef: basic_config.router_aux_loss_coef,
+            router_jitter_noise: basic_config.router_jitter_noise,
+        })
+    }
+}
+
+/// [`NormalLoader`] for a Phi 3.5 MoE model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Phi3_5MoELoader;
+
+impl NormalModelLoader for Phi3_5MoELoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::phi3_5_moe::Model::new(
+            &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(xlora_models::XLoraPhi3::new(
+            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }

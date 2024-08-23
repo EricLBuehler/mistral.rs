@@ -27,8 +27,8 @@ pub use loaders::{
     AdapterKind, Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader,
     LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
-    Phi3Loader, Phi3VLoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader,
-    TokenSource, VisionLoaderType, VisionModel, VisionModelLoader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Starcoder2Loader, TokenSource, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};

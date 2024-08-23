@@ -10,7 +10,7 @@ use super::{
 };
 use super::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
+    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -171,6 +171,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
+            NormalLoaderType::Phi3_5MoE => Box::new(Phi3_5MoELoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,
