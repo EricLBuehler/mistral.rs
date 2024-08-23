@@ -5,7 +5,7 @@
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     amoe::{
@@ -15,13 +15,16 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{
+        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
+        Sdpa,
+    },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
 };
@@ -40,7 +43,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
+    pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,

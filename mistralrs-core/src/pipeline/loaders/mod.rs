@@ -8,8 +8,8 @@ use candle_core::Device;
 use mistralrs_quant::IsqType;
 pub use normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling,
-    Qwen2Loader, Starcoder2Loader,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Qwen2Loader,
+    Starcoder2Loader,
 };
 
 use tokio::sync::Mutex;

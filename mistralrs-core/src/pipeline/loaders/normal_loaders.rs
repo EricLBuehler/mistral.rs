@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::Llama3RopeConfig,
+    layers::{Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -15,7 +15,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::{Activation, VarBuilder};
-use either::Either;
 
 use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
@@ -653,9 +652,6 @@ impl NormalModelLoader for Phi2Loader {
 
 // ======================== Phi3 loader
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct Phi3RopeScaling(#[serde(with = "either::serde_untagged")] pub Either<Vec<f64>, String>);
-
 #[derive(Deserialize)]
 struct Phi3BasicConfig {
     vocab_size: usize,
@@ -669,7 +665,7 @@ struct Phi3BasicConfig {
     rope_theta: f64,
     bos_token_id: Option<u32>,
     eos_token_id: Option<u32>,
-    rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
+    rope_scaling: Option<PhiRopeScalingConfig>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
     sliding_window: Option<usize>,

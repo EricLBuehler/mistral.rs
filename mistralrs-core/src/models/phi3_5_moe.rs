@@ -5,23 +5,23 @@
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::{collections::HashMap, sync::Arc};
+use std::{num, sync::Arc};
 
 use crate::{
-    amoe::{
-        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
-        MoeMlp,
-    },
+    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{
+        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
+        Sdpa,
+    },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel, Phi3RopeScaling,
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
 };
@@ -40,12 +40,20 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
+    pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
+    pub lm_head_bias: bool,
+    pub attention_bias: bool,
+    pub input_jitter_noise: f64,
+    pub num_experts_per_tok: usize,
+    pub num_local_experts: usize,
+    pub output_router_logits: bool,
+    pub router_aux_loss_coef: f64,
+    pub router_jitter_noise: f64,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -67,7 +75,9 @@ impl Config {
 }
 
 struct Attention {
-    qkv_proj: Arc<dyn QuantMethod>,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
@@ -88,24 +98,40 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
-        let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
 
-        let qkv_proj = mistralrs_quant::linear_no_bias(
+        let q_proj = mistralrs_quant::linear_b(
             cfg.hidden_size,
-            op_size,
+            num_heads * head_dim,
+            cfg.attention_bias,
             &cfg.quantization_config,
-            vb.pp("qkv_proj"),
+            vb.pp("q_proj"),
         )?;
-
-        let o_proj = mistralrs_quant::linear_no_bias(
+        let k_proj = mistralrs_quant::linear_b(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_b(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_b(
             num_heads * head_dim,
             cfg.hidden_size,
+            cfg.attention_bias,
             &cfg.quantization_config,
             vb.pp("o_proj"),
         )?;
 
         Ok(Self {
-            qkv_proj,
+            q_proj,
+            k_proj,
+            v_proj,
             o_proj,
             rotary_emb,
             num_heads,
@@ -138,21 +164,17 @@ impl Attention {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
+        if let Some(t) = self.q_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut qkv = MatMul.qmethod_matmul(&xs, &*self.qkv_proj)?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            qkv = qkv.to_dtype(original_dtype)?;
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
         }
-        let query_pos = self.num_heads * self.head_dim;
-        let q = qkv.narrow(D::Minus1, 0, query_pos)?;
-        let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
-        let v = qkv.narrow(
-            D::Minus1,
-            query_pos + self.num_kv_heads * self.head_dim,
-            self.num_kv_heads * self.head_dim,
-        )?;
 
         let (q, k, v) = if q_len != 1 {
             let q = q
@@ -211,7 +233,7 @@ impl Attention {
             }
         };
 
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
+        if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
@@ -220,7 +242,7 @@ impl Attention {
             attn_output.reshape((b_sz, q_len, ()))?
         };
         let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
-        if self.qkv_proj.quantized_act_type().is_some() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -229,11 +251,10 @@ impl Attention {
 
 #[derive(Clone)]
 struct Mlp {
-    gate_up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
+    w1: Arc<dyn QuantMethod>,
+    w2: Arc<dyn QuantMethod>,
+    w3: Arc<dyn QuantMethod>,
     act_fn: candle_nn::Activation,
-    i_size: usize,
-    params: Vec<usize>,
 }
 
 impl Mlp {
@@ -241,88 +262,86 @@ impl Mlp {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
 
-        let gate_up_proj = mistralrs_quant::linear_no_bias(
+        let w1 = mistralrs_quant::linear_no_bias(
             hidden_size,
-            2 * i_size,
+            i_size,
             &cfg.quantization_config,
-            vb.pp("gate_up_proj"),
+            vb.pp("w1"),
         )?;
-
-        let down_proj = mistralrs_quant::linear_no_bias(
+        let w2 = mistralrs_quant::linear_no_bias(
             i_size,
             hidden_size,
             &cfg.quantization_config,
-            vb.pp("down_proj"),
+            vb.pp("w2"),
+        )?;
+        let w3 = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            i_size,
+            &cfg.quantization_config,
+            vb.pp("w3"),
         )?;
 
         Ok(Self {
-            gate_up_proj,
-            down_proj,
+            w1,
+            w2,
+            w3,
             act_fn: cfg.hidden_act,
-            i_size,
-            params: vec![hidden_size, i_size],
         })
     }
-}
 
-impl AnyMoeTrainableLayer for Mlp {}
-
-impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if let Some(t) = self.gate_up_proj.quantized_act_type() {
+        if let Some(t) = self.w1.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let up_states = MatMul.qmethod_matmul(&xs, &*self.gate_up_proj)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
-        if self.gate_up_proj.quantized_act_type().is_some() {
+        let mut current_hidden_states =
+            MatMul.qmethod_matmul(&xs, &*self.w1)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.w3)?;
+        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
+        let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.w2)?;
+        if self.w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_up_proj, &mut self.down_proj]
-    }
-    fn clone(&self) -> Box<dyn MlpLayer> {
-        Box::new(Clone::clone(self))
-    }
-    fn get_params(&self) -> &[usize] {
-        &self.params
-    }
-    // gate_up, down
-    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        let new_gate_up = if let Some(ref delta) = deltas[0] {
-            self.gate_up_proj.add_delta_w(delta)?
-        } else {
-            self.gate_up_proj.clone()
-        };
-        let new_down = if let Some(ref delta) = deltas[1] {
-            self.down_proj.add_delta_w(delta)?
-        } else {
-            self.down_proj.clone()
-        };
+}
 
-        Ok(Box::new(Self {
-            gate_up_proj: new_gate_up,
-            down_proj: new_down,
-            act_fn: self.act_fn,
-            i_size: self.i_size,
-            params: self.params.clone(),
-        }))
-    }
+struct MoeMlp {
+    gate: Arc<dyn QuantMethod>,
+    experts: Vec<Mlp>,
+    router_jitter_noise: f64,
+    input_jitter_noise: f64,
+}
 
-    fn dtype_device(&self) -> (DType, Device) {
-        self.gate_up_proj.dtype_and_device()
+impl MoeMlp {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let num_experts = cfg.num_local_experts;
+        let gate = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            &cfg.quantization_config,
+            vb.pp("gate"),
+        )?;
+
+        let experts_vb = vb.pp("experts");
+        let mut experts = Vec::with_capacity(num_experts);
+        for i in 0..num_experts {
+            experts.push(Mlp::new(&cfg, experts_vb.pp(i))?);
+        }
+
+        Ok(Self {
+            gate,
+            experts,
+            router_jitter_noise: cfg.router_jitter_noise,
+            input_jitter_noise: cfg.input_jitter_noise,
+        })
     }
 }
 
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Box<dyn MlpLayer>,
+    mlp: Mlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -356,7 +375,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp: Box::new(mlp),
+            mlp,
             input_layernorm,
             post_attention_layernorm,
         })
@@ -550,16 +569,11 @@ impl IsqModel for Model {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
+            // TODO ISQ
         }
         (tensors, &*self.mapper)
     }
@@ -619,114 +633,4 @@ impl NormalModel for Model {
     }
 }
 
-impl AnyMoeBaseModelMixin for Model {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        let mut mlps = Vec::new();
-        for layer in &self.layers {
-            mlps.push(&*layer.mlp);
-        }
-        mlps
-    }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        let mut mlps = Vec::new();
-        for layer in &mut self.layers {
-            mlps.push(&mut layer.mlp);
-        }
-        mlps
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<VarBuilder>,
-        config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
-        mut layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
-    ) -> Result<()> {
-        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        if layers.is_empty() {
-            layers = (0..self.layers.len()).collect::<Vec<_>>();
-        }
-        for _ in 0..layers.len() {
-            experts.push(Vec::new());
-        }
-        for vb in additional_vbs {
-            let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
-                    continue;
-                }
-
-                let intermediate_size = self.layers[layer].mlp.get_params()[1];
-                let hidden_size = self.layers[layer].mlp.get_params()[0];
-                match expert_type {
-                    AnyMoeExpertType::FineTuned => {
-                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
-                        row.push(Box::new(Mlp::new(
-                            &Config {
-                                intermediate_size: self.layers[layer].mlp.get_params()[1],
-                                hidden_size: self.layers[layer].mlp.get_params()[0],
-                                ..Default::default()
-                            },
-                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                        )?));
-                    }
-                    AnyMoeExpertType::LoraAdapter {
-                        rank,
-                        alpha,
-                        ref target_modules,
-                    } => {
-                        let vb_mlp = vb.pp(layer).pp(&mlp);
-
-                        let gate_up_proj_delta =
-                            if target_modules.contains(&"gate_up_proj".to_string()) {
-                                Some(get_delta_from_lora_ab!(
-                                    vb_mlp,
-                                    rank,
-                                    alpha,
-                                    (hidden_size, 2 * intermediate_size),
-                                    "gate_up_proj"
-                                ))
-                            } else {
-                                None
-                            };
-                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "down_proj"
-                            ))
-                        } else {
-                            None
-                        };
-
-                        row.push(
-                            self.layers[layer]
-                                .mlp
-                                .new_added_delta(vec![gate_up_proj_delta, down_proj_delta])?,
-                        );
-                    }
-                }
-            }
-        }
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.layers[layer].mlp.clone()];
-            experts_all.extend(expert);
-            let (dtype, device) = self.layers[layer].mlp.dtype_device();
-            self.layers[layer].mlp = Box::new(MoeMlp::new(
-                experts_all,
-                config.clone(),
-                dtype,
-                &device,
-                layer,
-                gate_vb.as_ref(),
-            )?);
-        }
-        Ok(())
-    }
-    fn amoe_supported(&self) -> bool {
-        true
-    }
-}
+impl AnyMoeBaseModelMixin for Model {}
