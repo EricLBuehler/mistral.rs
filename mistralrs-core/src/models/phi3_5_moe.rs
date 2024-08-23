@@ -380,8 +380,15 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden))?;
-        let router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
+        let mut xs = xs.reshape(((), hidden))?;
+        let original_dtype = xs.dtype();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let mut router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
+        if self.gate.quantized_act_type().is_some() {
+            router_logits = router_logits.to_dtype(original_dtype)?;
+        }
         let (routing_weights, selected_experts) =
             self.sparsemixer(&router_logits, self.router_jitter_noise)?;
 
