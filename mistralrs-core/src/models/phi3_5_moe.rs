@@ -326,7 +326,7 @@ impl MoeMlp {
         let experts_vb = vb.pp("experts");
         let mut experts = Vec::with_capacity(num_experts);
         for i in 0..num_experts {
-            experts.push(Mlp::new(&cfg, experts_vb.pp(i))?);
+            experts.push(Mlp::new(cfg, experts_vb.pp(i))?);
         }
 
         Ok(Self {
@@ -346,7 +346,7 @@ impl MoeMlp {
             ((mask_logits_threshold - scores)? / factor)?.gt(2. * jitter_eps)?;
 
         // Apply mask
-        let masked_gates = masked_fill(&scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
+        let masked_gates = masked_fill(scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
 
         // Compute scores
         let masked_gates = candle_nn::ops::softmax_last_dim(&masked_gates)?;

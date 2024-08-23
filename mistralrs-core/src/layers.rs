@@ -225,6 +225,7 @@ impl PhiRotaryEmbedding {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_scaled(
         short_factor: &[f64],
         long_factor: &[f64],
