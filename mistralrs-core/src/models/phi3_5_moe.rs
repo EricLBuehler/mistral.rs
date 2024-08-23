@@ -346,7 +346,7 @@ impl MoeMlp {
             f64::MAX,
         )?;
         let mask_logits_threshold = mask_logits_threshold
-            .broadcast_sub(&scores)?
+            .broadcast_sub(scores)?
             .broadcast_div(&factor)?
             .gt(2. * jitter_eps)?;
 
@@ -374,7 +374,7 @@ impl MoeMlp {
             f64::MAX,
         )?;
         let mask_logits_threshold = mask_logits_threshold
-            .broadcast_sub(&scores)?
+            .broadcast_sub(scores)?
             .broadcast_div(&factor)?
             .gt(2. * jitter_eps)?;
 
