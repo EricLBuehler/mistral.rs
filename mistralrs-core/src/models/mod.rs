@@ -5,6 +5,7 @@ pub(crate) mod mistral;
 pub(crate) mod mixtral;
 pub(crate) mod phi2;
 pub(crate) mod phi3;
+pub(crate) mod phi3_5_moe;
 pub(crate) mod quantized_llama;
 pub(crate) mod quantized_phi2;
 pub(crate) mod quantized_phi3;
