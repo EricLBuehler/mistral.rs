@@ -2,13 +2,10 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, LayerNormConfig, VarBuilder};
-use mistralrs_quant::{IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::{
-    num::NonZeroUsize,
-    sync::{Arc, Mutex},
-};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use std::sync::{Arc, Mutex};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -284,83 +281,20 @@ impl Mlp {
         })
     }
 
-    fn cast_to_device_inner(
-        &self,
-        device: Device,
-    ) -> Result<(
-        Arc<dyn QuantMethod>,
-        Arc<dyn QuantMethod>,
-        Arc<dyn QuantMethod>,
-    )> {
-        Ok((
-            get_mut_arcmutex!(self.w1)
-                .clone()
-                .cast_to_device(device.clone())?,
-            get_mut_arcmutex!(self.w2)
-                .clone()
-                .cast_to_device(device.clone())?,
-            get_mut_arcmutex!(self.w3)
-                .clone()
-                .cast_to_device(device.clone())?,
-        ))
-    }
-}
-
-impl mistralrs_quant::QuantMethod for Mlp {
-    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("Phi 3.5 MoE doesn't support `add_delta_w`.");
-    }
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
-    }
-    fn new(_method: QuantMethodConfig) -> Result<Self>
-    where
-        Self: Sized,
-    {
-        candle_core::bail!("Phi 3.5 MoE doesn't support `construction`.");
-    }
-    fn dtype_and_device(&self) -> (DType, Device) {
-        get_mut_arcmutex!(self.w1).dtype_and_device()
-    }
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        get_mut_arcmutex!(self.w1).get_max_isq_cpu_threads(dtype)
-    }
-    fn quantized_act_type(&self) -> Option<DType> {
-        get_mut_arcmutex!(self.w1).quantized_act_type()
-    }
-    fn apply_isq(
-        self: Arc<Self>,
-        dtype: Option<IsqType>,
-        _device: Device,
-        n_quantized: &std::sync::atomic::AtomicUsize,
-    ) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self {
-            w1: Arc::new(Mutex::new(get_mut_arcmutex!(self.w1).clone().apply_isq(
-                dtype,
-                Device::Cpu,
-                n_quantized,
-            )?)),
-            w2: Arc::new(Mutex::new(get_mut_arcmutex!(self.w2).clone().apply_isq(
-                dtype,
-                Device::Cpu,
-                n_quantized,
-            )?)),
-            w3: Arc::new(Mutex::new(get_mut_arcmutex!(self.w3).clone().apply_isq(
-                dtype,
-                Device::Cpu,
-                n_quantized,
-            )?)),
-            act_fn: self.act_fn,
-        }))
-    }
-    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>> {
-        let (w1, w2, w3) = self.cast_to_device_inner(device)?;
-        Ok(Arc::new(Self {
-            w1: Arc::new(Mutex::new(w1)),
-            w2: Arc::new(Mutex::new(w2)),
-            w3: Arc::new(Mutex::new(w3)),
-            act_fn: self.act_fn.clone(),
-        }))
+    fn cast_ourselves(&self, device: Device) -> Result<()> {
+        let w1 = get_mut_arcmutex!(self.w1)
+            .clone()
+            .cast_to_device(device.clone())?;
+        let w2 = get_mut_arcmutex!(self.w2)
+            .clone()
+            .cast_to_device(device.clone())?;
+        let w3 = get_mut_arcmutex!(self.w3)
+            .clone()
+            .cast_to_device(device.clone())?;
+        *get_mut_arcmutex!(self.w1) = w1;
+        *get_mut_arcmutex!(self.w2) = w2;
+        *get_mut_arcmutex!(self.w3) = w3;
+        Ok(())
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -494,16 +428,10 @@ impl MoeMlp {
             let expert = &self.experts[expert_idx];
 
             if top_x.dim(0)? == 0 {
-                let (w1, w2, w3) = expert.cast_to_device_inner(Device::Cpu)?;
-                *get_mut_arcmutex!(expert.w1) = w1;
-                *get_mut_arcmutex!(expert.w2) = w2;
-                *get_mut_arcmutex!(expert.w3) = w3;
+                expert.cast_ourselves(Device::Cpu)?;
                 continue;
             }
-            let (w1, w2, w3) = expert.cast_to_device_inner(xs.device().clone())?;
-            *get_mut_arcmutex!(expert.w1) = w1;
-            *get_mut_arcmutex!(expert.w2) = w2;
-            *get_mut_arcmutex!(expert.w3) = w3;
+            expert.cast_ourselves(xs.device().clone())?;
 
             // Index the correct hidden staters and compute the expert hidden state
             // for the current expert, we need to make sure to multiply the output hidden
