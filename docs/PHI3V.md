@@ -1,4 +1,4 @@
-# Phi 3 Vision Model: `microsoft/Phi-3-vision-128k-instruct`
+# Phi 3 Vision Model: [`microsoft/Phi-3-vision-128k-instruct`](https://huggingface.co/microsoft/Phi-3-vision-128k-instruct)
 
 The Phi 3 Vision Model has support in the Rust, Python, and HTTP APIs. The Phi 3 Vision Model supports ISQ for increased performance.
 

@@ -41,10 +41,16 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
     ```
 
-- φ³ Run the Phi 3 model with 128K context window
+- φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
     ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+    ```
+
+- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+
+    ```
+    ./mistralrs_server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
