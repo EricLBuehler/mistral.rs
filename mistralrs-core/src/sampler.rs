@@ -548,7 +548,7 @@ impl Sampler {
                 if match_len >= params.allowed_length {
                     let penalty = params.multiplier
                         * params.base.powf((match_len - params.allowed_length) as f32);
-                    logits[tok as usize] = penalty;
+                    logits[tok as usize] -= penalty;
                 }
             }
         }
