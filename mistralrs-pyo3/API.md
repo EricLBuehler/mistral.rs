@@ -23,6 +23,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `Qwen2`
 - `Gemma2`
 - `Starcoder2`
+- `Phi3_5MoE`
 
 ### Architecture for vision models
 - `Phi3V`
