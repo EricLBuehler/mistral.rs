@@ -440,7 +440,9 @@ impl MoeMlp {
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
+
             let exp_out = expert.forward(&current_state)?;
+            expert.cast_ourselves(Device::Cpu)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
