@@ -130,6 +130,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Mixtral|✅|✅|✅| |
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
+|Phi 3.5 MoE|✅| |✅| |
 |Qwen 2|✅| |✅|✅|
 |Phi 3 Vision|✅| |✅|✅|
 |Idefics 2|✅| |✅|✅|
@@ -370,6 +371,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `llama`
 - `phi2`
 - `phi3`
+- `phi3.5moe`
 - `qwen2`
 - `gemma2`
 - `starcoder2`
@@ -478,6 +480,7 @@ Example:
 |Mixtral|✅| |✅|
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
+|Phi 3.5 MoE| | |✅|
 |Qwen 2| | |✅|
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
@@ -503,6 +506,7 @@ Example:
 |Mixtral|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
+|Phi 3.5 MoE| | | |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
@@ -517,9 +521,10 @@ Example:
 |Mistral 7B|✅|
 |Gemma|✅|
 |Llama|✅|
-|Mixtral|✅|
+|Mixtral| |
 |Phi 2|✅|
 |Phi 3|✅|
+|Phi 3.5 MoE| |
 |Qwen 2|✅|
 |Phi 3 Vision| |
 |Idefics 2| |
