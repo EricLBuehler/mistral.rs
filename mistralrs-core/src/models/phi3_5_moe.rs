@@ -333,7 +333,7 @@ impl MoeMlp {
             vb.pp("gate"),
         )?;
 
-        let experts_vb = vb.pp("experts");
+        let experts_vb = vb.pp("experts").set_device(Device::Cpu);
         let mut experts = Vec::with_capacity(num_experts);
         for i in 0..num_experts {
             experts.push(Mlp::new(cfg, experts_vb.pp(i))?);
