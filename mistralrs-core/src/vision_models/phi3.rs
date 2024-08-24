@@ -828,7 +828,7 @@ impl ImageEmbedding {
                 (None, Some(Either::Right(image_set_tensor))) => {
                     let mut idx = 0;
                     // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
-                    // https://huggingface.co/microsoft/Phi-3-vision-128k-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
+                    // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
                     for i in 0..pixel_values.dim(0)? {
                         let cnt = self.num_img_tokens;
                         let img_set_tensor = image_set_tensor

@@ -44,7 +44,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
-    ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+    ./mistralrs_server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
 - 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
@@ -59,7 +59,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
-    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
     ```
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
@@ -410,7 +410,7 @@ You can launch interactive mode, a simple chat application running in the termin
 You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+./mistralrs_server --vi plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
 ```
 
 ## More quick examples:
