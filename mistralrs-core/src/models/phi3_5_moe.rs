@@ -568,7 +568,9 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = vb.pp("model");
+        let vb_m = vb
+            .pp("model")
+            .set_device(normal_loading_metadata.real_device.clone());
 
         let embed_tokens = candle_nn::embedding(
             cfg.vocab_size,

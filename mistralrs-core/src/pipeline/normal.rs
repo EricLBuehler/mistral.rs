@@ -71,6 +71,7 @@ pub struct NormalLoader {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    tp: NormalLoaderType,
 }
 
 #[derive(Default)]
@@ -160,8 +161,8 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
-        let loader: Box<dyn NormalModelLoader> = match loader {
+    pub fn build(self, loader_tp: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
+        let loader: Box<dyn NormalModelLoader> = match loader_tp.clone() {
             NormalLoaderType::Mistral => Box::new(MistralLoader),
             NormalLoaderType::Gemma => Box::new(GemmaLoader),
             NormalLoaderType::Llama => Box::new(LlamaLoader),
@@ -184,6 +185,7 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
+            tp: loader_tp,
         }))
     }
 }
@@ -265,7 +267,8 @@ impl Loader for NormalLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
-        let load_device = if !loading_isq {
+        // Phi 3.5 MoE requires loading on the CPU because
+        let load_device = if !loading_isq && !matches!(self.tp, NormalLoaderType::Phi3_5MoE) {
             device.clone()
         } else {
             Device::Cpu
