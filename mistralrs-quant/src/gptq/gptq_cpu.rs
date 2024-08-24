@@ -63,4 +63,8 @@ impl QuantMethod for GptqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
     }
+
+    fn cast_to_device(self: Arc<Self>, _device: Device) -> Result<Arc<dyn QuantMethod>> {
+        todo!()
+    }
 }
