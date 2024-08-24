@@ -109,7 +109,7 @@ impl QuantMethod for UnquantLinear {
                         .0
                         .bias()
                         .cloned()
-                        .map(|b| b.to_dtype(DType::F32).unwrap()),
+                        .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
                 })?))
             }
             None => {
