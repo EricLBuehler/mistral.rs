@@ -601,7 +601,7 @@ impl QuantMethod for HqqLayer {
             scales: self.scales.to_device(&device)?,
             bias: self.bias.as_ref().map(|b| b.to_device(&device).unwrap()),
             w_shape: self.w_shape.clone(),
-            cfg: self.cfg.clone(),
+            cfg: self.cfg,
         }))
     }
 }
