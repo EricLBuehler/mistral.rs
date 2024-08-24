@@ -133,4 +133,20 @@ impl QuantMethod for GgufMatMul {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
     }
+
+    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>> {
+        let w = match &self.w {
+            QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
+                &q.dequantize(&device)?,
+                q.dtype(),
+            )?)),
+            QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
+            QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
+        };
+
+        Ok(Arc::new(GgufMatMul {
+            w,
+            b: self.b.as_ref().map(|b| b.to_device(&device).unwrap()),
+        }))
+    }
 }

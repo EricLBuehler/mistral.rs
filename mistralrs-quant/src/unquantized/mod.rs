@@ -147,4 +147,11 @@ impl QuantMethod for UnquantLinear {
             | IsqType::Q8_1 => None,
         }
     }
+
+    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self(Linear::new(
+            self.0.weight().to_device(&device)?,
+            self.0.bias().map(|b| b.to_device(&device).unwrap()),
+        ))))
+    }
 }

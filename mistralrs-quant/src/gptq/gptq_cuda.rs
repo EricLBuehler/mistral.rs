@@ -294,4 +294,16 @@ impl QuantMethod for GptqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
     }
+
+    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self {
+            q_weight: self.q_weight.to_device(&device)?,
+            gptq_qzeros: self.gptq_qzeros.to_device(&device)?,
+            gptq_scales: self.gptq_scales.to_device(&device)?,
+            bias: self.bias.to_device(&device)?,
+            g_idx: self.g_idx.to_device(&device)?,
+            bits: self.bits,
+            use_exllama: self.use_exllama,
+        }))
+    }
 }

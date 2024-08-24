@@ -2,15 +2,19 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, LayerNormConfig, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::sync::Arc;
+use mistralrs_quant::{IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use std::{
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
+    get_mut_arcmutex,
     layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
@@ -240,11 +244,11 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Mlp {
-    w1: Arc<dyn QuantMethod>,
-    w2: Arc<dyn QuantMethod>,
-    w3: Arc<dyn QuantMethod>,
+    w1: Arc<Mutex<Arc<dyn QuantMethod>>>,
+    w2: Arc<Mutex<Arc<dyn QuantMethod>>>,
+    w3: Arc<Mutex<Arc<dyn QuantMethod>>>,
     act_fn: candle_nn::Activation,
 }
 
@@ -273,25 +277,105 @@ impl Mlp {
         )?;
 
         Ok(Self {
-            w1,
-            w2,
-            w3,
+            w1: Arc::new(Mutex::new(w1)),
+            w2: Arc::new(Mutex::new(w2)),
+            w3: Arc::new(Mutex::new(w3)),
             act_fn: cfg.hidden_act,
         })
     }
 
+    fn cast_to_device_inner(
+        &self,
+        device: Device,
+    ) -> Result<(
+        Arc<dyn QuantMethod>,
+        Arc<dyn QuantMethod>,
+        Arc<dyn QuantMethod>,
+    )> {
+        Ok((
+            get_mut_arcmutex!(self.w1)
+                .clone()
+                .cast_to_device(device.clone())?,
+            get_mut_arcmutex!(self.w2)
+                .clone()
+                .cast_to_device(device.clone())?,
+            get_mut_arcmutex!(self.w3)
+                .clone()
+                .cast_to_device(device.clone())?,
+        ))
+    }
+}
+
+impl mistralrs_quant::QuantMethod for Mlp {
+    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("Phi 3.5 MoE doesn't support `add_delta_w`.");
+    }
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
+        None
+    }
+    fn new(_method: QuantMethodConfig) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!("Phi 3.5 MoE doesn't support `construction`.");
+    }
+    fn dtype_and_device(&self) -> (DType, Device) {
+        get_mut_arcmutex!(self.w1).dtype_and_device()
+    }
+    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
+        get_mut_arcmutex!(self.w1).get_max_isq_cpu_threads(dtype)
+    }
+    fn quantized_act_type(&self) -> Option<DType> {
+        get_mut_arcmutex!(self.w1).quantized_act_type()
+    }
+    fn apply_isq(
+        self: Arc<Self>,
+        dtype: Option<IsqType>,
+        _device: Device,
+        n_quantized: &std::sync::atomic::AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self {
+            w1: Arc::new(Mutex::new(get_mut_arcmutex!(self.w1).clone().apply_isq(
+                dtype,
+                Device::Cpu,
+                n_quantized,
+            )?)),
+            w2: Arc::new(Mutex::new(get_mut_arcmutex!(self.w2).clone().apply_isq(
+                dtype,
+                Device::Cpu,
+                n_quantized,
+            )?)),
+            w3: Arc::new(Mutex::new(get_mut_arcmutex!(self.w3).clone().apply_isq(
+                dtype,
+                Device::Cpu,
+                n_quantized,
+            )?)),
+            act_fn: self.act_fn,
+        }))
+    }
+    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>> {
+        let (w1, w2, w3) = self.cast_to_device_inner(device)?;
+        Ok(Arc::new(Self {
+            w1: Arc::new(Mutex::new(w1)),
+            w2: Arc::new(Mutex::new(w2)),
+            w3: Arc::new(Mutex::new(w3)),
+            act_fn: self.act_fn.clone(),
+        }))
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let w1 = get_mut_arcmutex!(self.w1);
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if let Some(t) = self.w1.quantized_act_type() {
+        if let Some(t) = w1.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let mut current_hidden_states =
-            MatMul.qmethod_matmul(&xs, &*self.w1)?.apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.w3)?;
+        let mut current_hidden_states = MatMul.qmethod_matmul(&xs, &**w1)?.apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &**get_mut_arcmutex!(self.w3))?;
         current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
-        let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.w2)?;
-        if self.w1.quantized_act_type().is_some() {
+        let mut res =
+            MatMul.qmethod_matmul(&current_hidden_states, &**get_mut_arcmutex!(self.w2))?;
+        if w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -401,16 +485,25 @@ impl MoeMlp {
 
         // Loop over all avail experts in the model and perform the computation on each expert
         for expert_idx in 0..self.num_experts {
-            let expert = &self.experts[expert_idx];
             let expert_mask = experts_mask.i(expert_idx)?;
             assert_eq!(expert_mask.rank(), 2);
             let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
             let idx = nonzero_mask.i((.., 0))?;
             let top_x = nonzero_mask.i((.., 1))?;
 
+            let expert = &self.experts[expert_idx];
+
             if top_x.dim(0)? == 0 {
+                let (w1, w2, w3) = expert.cast_to_device_inner(Device::Cpu)?;
+                *get_mut_arcmutex!(expert.w1) = w1;
+                *get_mut_arcmutex!(expert.w2) = w2;
+                *get_mut_arcmutex!(expert.w3) = w3;
                 continue;
             }
+            let (w1, w2, w3) = expert.cast_to_device_inner(xs.device().clone())?;
+            *get_mut_arcmutex!(expert.w1) = w1;
+            *get_mut_arcmutex!(expert.w2) = w2;
+            *get_mut_arcmutex!(expert.w3) = w3;
 
             // Index the correct hidden staters and compute the expert hidden state
             // for the current expert, we need to make sure to multiply the output hidden
@@ -686,9 +779,18 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
-                tensors.push((&mut expert.w1, Some(i)));
-                tensors.push((&mut expert.w2, Some(i)));
-                tensors.push((&mut expert.w3, Some(i)));
+                tensors.push((
+                    Arc::get_mut(&mut expert.w1).unwrap().get_mut().unwrap(),
+                    Some(i),
+                ));
+                tensors.push((
+                    Arc::get_mut(&mut expert.w2).unwrap().get_mut().unwrap(),
+                    Some(i),
+                ));
+                tensors.push((
+                    Arc::get_mut(&mut expert.w3).unwrap().get_mut().unwrap(),
+                    Some(i),
+                ));
             }
         }
         (tensors, &*self.mapper)

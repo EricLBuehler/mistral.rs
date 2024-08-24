@@ -171,6 +171,9 @@ pub trait QuantMethod: Send + Sync + Debug {
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
+
+    // Cast this layer to the device. This doesn't mean that the layer will work, only that it is on the new device.
+    fn cast_to_device(self: Arc<Self>, device: Device) -> Result<Arc<dyn QuantMethod>>;
 }
 
 macro_rules! pack_factor {
