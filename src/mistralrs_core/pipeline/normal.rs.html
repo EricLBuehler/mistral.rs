@@ -652,6 +652,7 @@
 <a href="#652" id="652">652</a>
 <a href="#653" id="653">653</a>
 <a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -664,7 +665,7 @@
 };
 <span class="kw">use super</span>::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
+    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -825,6 +826,7 @@
             NormalLoaderType::Qwen2 =&gt; Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 =&gt; Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 =&gt; Box::new(Starcoder2Loader),
+            NormalLoaderType::Phi3_5MoE =&gt; Box::new(Phi3_5MoELoader),
         };
         <span class="prelude-val">Ok</span>(Box::new(NormalLoader {
             inner: loader,

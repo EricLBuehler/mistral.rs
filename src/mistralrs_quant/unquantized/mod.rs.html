@@ -259,7 +259,7 @@
                         </span>.<span class="number">0
                         </span>.bias()
                         .cloned()
-                        .map(|b| b.to_dtype(DType::F32).unwrap()),
+                        .map(|b| b.to_dtype(DType::F32).unwrap().to_device(<span class="kw-2">&amp;</span>device).unwrap()),
                 })<span class="question-mark">?</span>))
             }
             <span class="prelude-val">None </span>=&gt; {

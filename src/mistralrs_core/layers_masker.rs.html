@@ -318,7 +318,7 @@
 
 <span class="comment">// https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 </span><span class="doccomment">/// xs are on false (0), value is on true (1)
-</span><span class="kw">fn </span>masked_fill&lt;D: WithDType&gt;(xs: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, value: D) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+</span><span class="kw">pub fn </span>masked_fill&lt;D: WithDType&gt;(xs: <span class="kw-2">&amp;</span>Tensor, mask: <span class="kw-2">&amp;</span>Tensor, value: D) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="kw">let </span>on_true = Tensor::full(value, xs.shape(), xs.device())<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
     <span class="kw">let </span>on_false = xs;
     <span class="kw">let </span>res = mask

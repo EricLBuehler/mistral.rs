@@ -1193,6 +1193,7 @@
 <a href="#1193" id="1193">1193</a>
 <a href="#1194" id="1194">1194</a>
 <a href="#1195" id="1195">1195</a>
+<a href="#1196" id="1196">1196</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1203,7 +1204,7 @@
 <span class="kw">use </span>candle_nn::{linear_b, linear_no_bias, VarBuilder};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-<span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
+<span class="kw">use </span>std::{any::Any, fmt::Debug, sync::Arc};
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
@@ -1211,7 +1212,8 @@
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding, RmsNorm, Sdpa,
+        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
+        PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -1219,7 +1221,7 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -1259,7 +1261,7 @@
     <span class="kw">pub </span>rope_theta: f64,
     <span class="kw">pub </span>bos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     <span class="kw">pub </span>eos_token_id: <span class="prelude-ty">Option</span>&lt;u32&gt;,
-    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Phi3RopeScaling&gt;&gt;,
+    <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;PhiRopeScalingConfig&gt;,
     <span class="kw">pub </span>max_position_embeddings: usize,
     <span class="attr">#[serde(default = <span class="string">"d_flash_attn"</span>)]
     </span><span class="kw">pub </span>use_flash_attn: bool,
