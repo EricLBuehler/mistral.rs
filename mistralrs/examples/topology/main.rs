@@ -34,24 +34,28 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                         0..8,
                         LayerTopology {
                             isq: Some(IsqType::Q3K),
+                            device: None,
                         },
                     )
                     .with_range(
                         8..16,
                         LayerTopology {
                             isq: Some(IsqType::Q4K),
+                            device: None,
                         },
                     )
                     .with_range(
                         16..24,
                         LayerTopology {
                             isq: Some(IsqType::Q6K),
+                            device: None,
                         },
                     )
                     .with_range(
                         24..32,
                         LayerTopology {
                             isq: Some(IsqType::Q8_0),
+                            device: None,
                         },
                     ),
             ),

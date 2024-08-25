@@ -1,14 +1,19 @@
 use std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
 
+use candle_core::Device;
 use itertools::Itertools;
 use mistralrs_quant::IsqType;
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::parse_isq_value;
 
+const DEVICE_PATTERN: &str = r"^(cpu|cuda\[(\d+)\]|metal\[(\d+)\])$";
+
 #[derive(Deserialize)]
 pub struct DeserLayerTopology {
     isq: Option<String>,
+    device: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -17,6 +22,7 @@ pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
 #[derive(Clone, Debug)]
 pub struct LayerTopology {
     pub isq: Option<IsqType>,
+    pub device: Option<Device>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -93,7 +99,8 @@ impl Topology {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
 
         let mut layers = Vec::new();
-        for (range, DeserLayerTopology { isq }) in deser.0 {
+        for (range, DeserLayerTopology { isq, device }) in deser.0 {
+            // Parse isq
             let (start, end) = if range.contains('-') {
                 // Range (inclusive, exclusive)
                 let Some((start, end)) = range.splitn(2, '-').collect_tuple() else {
@@ -115,7 +122,33 @@ impl Topology {
             } else {
                 None
             };
-            let layer_topo = LayerTopology { isq };
+
+            // Parse device
+            let device = if let Some(device) = device {
+                let device_regex = Regex::new(DEVICE_PATTERN)?;
+
+                let Some(captures) = device_regex.captures(&device) else {
+                    anyhow::bail!("Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`");
+                };
+
+                let device = if let Some(val) = captures.get(2).or(captures.get(3)) {
+                    let ord = val.as_str().parse::<usize>()?;
+                    let device = device.split('[').collect::<Vec<_>>()[0];
+                    match device {
+                        "cuda" => Device::new_cuda(ord)?,
+                        "metal" => Device::new_metal(ord)?,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    Device::Cpu
+                };
+
+                Some(device)
+            } else {
+                None
+            };
+
+            let layer_topo = LayerTopology { isq, device };
             layers.push((range, layer_topo));
         }
         // Sort so that we increase in end points

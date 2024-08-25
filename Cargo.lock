@@ -2394,6 +2394,7 @@ dependencies = [
  "rand",
  "rand_isaac",
  "rayon",
+ "regex",
  "regex-automata 0.4.7",
  "reqwest",
  "rustc-hash",
