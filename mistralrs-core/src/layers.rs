@@ -84,13 +84,29 @@ pub struct PhiRotaryEmbedding {
     original_max_position_embeddings: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub enum ScaledRopeType {
     #[serde(alias = "su")]
     #[serde(alias = "longrope")]
     Su,
     #[serde(alias = "yarn")]
     Yarn,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+enum ScaledRopeTypeInner {
+    Su,
+    Yarn,
+    ShortAndLong { short: f64, long: f64 },
+}
+
+impl From<ScaledRopeType> for ScaledRopeTypeInner {
+    fn from(value: ScaledRopeType) -> Self {
+        match value {
+            ScaledRopeType::Su => Self::Su,
+            ScaledRopeType::Yarn => Self::Yarn,
+        }
+    }
 }
 
 impl FromStr for ScaledRopeType {
@@ -109,12 +125,12 @@ impl FromStr for ScaledRopeType {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum PhiRopeScalingConfig {
-    Classic {
+    LongRoPE {
         short_factor: Vec<f64>,
         long_factor: Vec<f64>,
         scaling_type: ScaledRopeType,
     },
-    Scaled {
+    LongRoPEWithFactors {
         short_factor: Vec<f64>,
         long_factor: Vec<f64>,
         #[serde(rename = "type")]
@@ -133,10 +149,10 @@ pub struct PhiRopeConfig {
 }
 
 impl PhiRotaryEmbedding {
-    fn new_classic_scaled(
+    fn new_scaled(
         short_factor: &[f64],
         long_factor: &[f64],
-        scaling_type: &ScaledRopeType,
+        scaling_type: ScaledRopeTypeInner,
         cfg: &PhiRopeConfig,
         dtype: DType,
         dev: &Device,
@@ -151,10 +167,14 @@ impl PhiRotaryEmbedding {
             1.0
         } else {
             match scaling_type {
-                ScaledRopeType::Su => {
+                ScaledRopeTypeInner::Su => {
                     (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
                 }
-                ScaledRopeType::Yarn => 0.1 * scale.ln() + 1.0,
+                ScaledRopeTypeInner::Yarn => 0.1 * scale.ln() + 1.0,
+                ScaledRopeTypeInner::ShortAndLong { short, long } => {
+                    assert_eq!(short, long);
+                    short
+                }
             }
         };
 
@@ -226,109 +246,43 @@ impl PhiRotaryEmbedding {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn new_scaled(
-        short_factor: &[f64],
-        long_factor: &[f64],
-        scaling_type: &ScaledRopeType,
-        long_mscale: f64,
-        short_mscale: f64,
-        cfg: &PhiRopeConfig,
-        dtype: DType,
-        dev: &Device,
-    ) -> Result<Self> {
-        let max_seq_len = cfg.max_position_embeddings;
-        let dim = cfg.head_dim;
-
-        if !matches!(scaling_type, ScaledRopeType::Su) {
-            candle_core::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
-        }
-
-        if short_factor.len() != dim / 2 {
-            candle_core::bail!(
-                "Misaligned length {}, expected {} for `su`/`longrope` short rescale factors",
-                short_factor.len(),
-                dim / 2
-            );
-        }
-        if long_factor.len() != dim / 2 {
-            candle_core::bail!(
-                "Misaligned length {}, expected {} for `su`/`longrope` long rescale factors",
-                long_factor.len(),
-                dim / 2
-            );
-        }
-
-        // Short cos/sin
-        let inv_freq_short: Vec<_> = (0..dim)
-            .step_by(2)
-            .enumerate()
-            .map(|(k, i)| {
-                1f32 / (short_factor[k] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32
-            })
-            .collect();
-        let inv_freq_len_short = inv_freq_short.len();
-        let inv_freq_short = Tensor::from_vec(inv_freq_short, (1, inv_freq_len_short), dev)?;
-        let t_short = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(DType::F32)?
-            .reshape((max_seq_len, 1))?;
-        let freqs_short = t_short.matmul(&inv_freq_short)?;
-        let sin_short = (freqs_short.sin()?.to_dtype(dtype)? * short_mscale)?;
-        let cos_short = (freqs_short.cos()?.to_dtype(dtype)? * short_mscale)?;
-
-        // Long cos/sin
-        let inv_freq_long: Vec<_> = (0..dim)
-            .step_by(2)
-            .enumerate()
-            .map(|(k, i)| {
-                1f32 / (long_factor[k] * cfg.rope_theta.powf(i as f64 / dim as f64)) as f32
-            })
-            .collect();
-        let inv_freq_len_long = inv_freq_long.len();
-        let inv_freq_long = Tensor::from_vec(inv_freq_long, (1, inv_freq_len_long), dev)?;
-        let t_long = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(DType::F32)?
-            .reshape((max_seq_len, 1))?;
-        let freqs_long = t_long.matmul(&inv_freq_long)?;
-        let sin_long = (freqs_long.sin()?.to_dtype(dtype)? * long_mscale)?;
-        let cos_long = (freqs_long.cos()?.to_dtype(dtype)? * long_mscale)?;
-        Ok(Self {
-            short_cos: cos_short,
-            short_sin: sin_short,
-            long_cos: Some(cos_long),
-            long_sin: Some(sin_long),
-            original_max_position_embeddings: cfg.original_max_position_embeddings,
-        })
-    }
-
     pub fn new(dtype: DType, cfg: impl Into<PhiRopeConfig>, dev: &Device) -> Result<Self> {
         let cfg: PhiRopeConfig = cfg.into();
 
         match &cfg.rope_scaling {
-            Some(PhiRopeScalingConfig::Classic {
+            Some(PhiRopeScalingConfig::LongRoPE {
                 short_factor,
                 long_factor,
                 scaling_type,
-            }) => {
-                Self::new_classic_scaled(short_factor, long_factor, scaling_type, &cfg, dtype, dev)
-            }
+            }) => Self::new_scaled(
+                short_factor,
+                long_factor,
+                scaling_type.clone().into(),
+                &cfg,
+                dtype,
+                dev,
+            ),
 
-            Some(PhiRopeScalingConfig::Scaled {
+            Some(PhiRopeScalingConfig::LongRoPEWithFactors {
                 short_factor,
                 long_factor,
                 scaling_type,
                 long_mscale,
                 short_mscale,
-            }) => Self::new_scaled(
-                short_factor,
-                long_factor,
-                scaling_type,
-                *long_mscale,
-                *short_mscale,
-                &cfg,
-                dtype,
-                dev,
-            ),
+            }) => {
+                assert_eq!(scaling_type, &ScaledRopeType::Su);
+                Self::new_scaled(
+                    short_factor,
+                    long_factor,
+                    ScaledRopeTypeInner::ShortAndLong {
+                        short: *short_mscale,
+                        long: *long_mscale,
+                    },
+                    &cfg,
+                    dtype,
+                    dev,
+                )
+            }
 
             None => Self::new_unscaled(&cfg, dtype, dev),
         }
