@@ -14,7 +14,7 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
 ```
-./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+./mistralrs-server -i --isq Q8_0 plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
 ```
 
 ## HTTP API

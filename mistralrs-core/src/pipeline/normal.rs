@@ -235,6 +235,14 @@ impl Loader for NormalLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
+
+        let device = if matches!(self.tp, NormalLoaderType::Phi3_5MoE) && !device.is_cpu() {
+            info!("Phi 3.5 MoE runs better on the CPU, loading on cpu.");
+            Device::Cpu
+        } else {
+            device.clone()
+        };
+
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
             info!(
@@ -249,7 +257,7 @@ impl Loader for NormalLoader {
 
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
-            device,
+            &device,
         )?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
@@ -268,7 +276,7 @@ impl Loader for NormalLoader {
         }
 
         // Phi 3.5 MoE requires loading on the CPU because
-        let load_device = if !loading_isq && !matches!(self.tp, NormalLoaderType::Phi3_5MoE) {
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -351,9 +359,9 @@ impl Loader for NormalLoader {
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
-                device,
+                &device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, &device)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
