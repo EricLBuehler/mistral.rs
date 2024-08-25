@@ -282,18 +282,15 @@ impl Mlp {
     }
 
     fn cast_ourselves(&self, device: Device) -> Result<()> {
-        let w1 = get_mut_arcmutex!(self.w1)
+        *get_mut_arcmutex!(self.w1) = get_mut_arcmutex!(self.w1)
             .clone()
             .cast_to_device(device.clone())?;
-        let w2 = get_mut_arcmutex!(self.w2)
+        *get_mut_arcmutex!(self.w2) = get_mut_arcmutex!(self.w2)
             .clone()
             .cast_to_device(device.clone())?;
-        let w3 = get_mut_arcmutex!(self.w3)
+        *get_mut_arcmutex!(self.w3) = get_mut_arcmutex!(self.w3)
             .clone()
             .cast_to_device(device.clone())?;
-        *get_mut_arcmutex!(self.w1) = w1;
-        *get_mut_arcmutex!(self.w2) = w2;
-        *get_mut_arcmutex!(self.w3) = w3;
         Ok(())
     }
 
@@ -428,7 +425,6 @@ impl MoeMlp {
             let expert = &self.experts[expert_idx];
 
             if top_x.dim(0)? == 0 {
-                expert.cast_ourselves(Device::Cpu)?;
                 continue;
             }
             expert.cast_ourselves(xs.device().clone())?;
