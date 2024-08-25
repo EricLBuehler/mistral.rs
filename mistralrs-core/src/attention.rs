@@ -1,12 +1,12 @@
 #![allow(clippy::cast_precision_loss)]
 
 use crate::{
-    cublaslt::CUBLASLT_HANDLE,
     layers::{get_use_matmul_via_f16, MatMul},
     pipeline::text_models_inputs_processor::FlashParams,
 };
 
 use candle_core::{Device, Result, Tensor};
+use mistralrs_quant::CUBLASLT_HANDLE;
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(

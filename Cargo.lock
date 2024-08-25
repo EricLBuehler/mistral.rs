@@ -2456,6 +2456,7 @@ dependencies = [
  "candle-nn",
  "half",
  "lazy_static",
+ "once_cell",
  "paste",
  "rayon",
  "serde",

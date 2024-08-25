@@ -15,13 +15,13 @@ use candle_core::{
     DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{Linear, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{QuantMethod, CUBLASLT_HANDLE};
 use serde::Deserialize;
 
 pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
-use crate::{cublaslt::CUBLASLT_HANDLE, gguf::Content, models::llama, INHIBIT_GEMM_F16};
+use crate::{gguf::Content, models::llama, INHIBIT_GEMM_F16};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -735,8 +735,8 @@ mod tests {
         use candle_core::{DType, Device, IndexOp, Tensor};
         use candle_nn::{Linear, Module};
 
-        use crate::cublaslt::setup_cublas_lt_wrapper;
         use crate::layers::FusedBiasLinear;
+        use mistralrs_quant::setup_cublas_lt_wrapper;
 
         const IN: usize = 1921;
         const OUT: usize = 4096;
