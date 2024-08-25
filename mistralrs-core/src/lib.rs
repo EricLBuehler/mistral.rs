@@ -1,9 +1,9 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::TERMINATE_ALL_NEXT_STEP;
 pub use lora::Ordering;
+use mistralrs_quant::setup_cublas_lt_wrapper;
 use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
@@ -33,7 +33,6 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
-mod cublaslt;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 mod dummy_paged_attention;
 mod gguf;

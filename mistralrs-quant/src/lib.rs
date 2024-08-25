@@ -9,12 +9,14 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+mod cublaslt;
 mod gguf;
 mod gptq;
 mod hqq;
 mod unquantized;
 mod utils;
 
+pub use cublaslt::{setup_cublas_lt_wrapper, CUBLASLT_HANDLE};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};

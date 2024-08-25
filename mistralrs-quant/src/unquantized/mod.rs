@@ -3,13 +3,13 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Shape, Tensor, D};
 use candle_nn::{Linear, Module};
 
 use crate::{
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
+    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, CUBLASLT_HANDLE,
 };
 
 #[derive(Debug)]
@@ -29,7 +29,37 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward(a)
+        if let Some(bias) = self.0.bias() {
+            // If we have a bias, use a fused GEMM if possible!
+            let w = match *a.dims() {
+                [b1, b2, _, _] => self.0.weight().broadcast_left((b1, b2))?,
+                [bsize, _, _] => self.0.weight().broadcast_left(bsize)?,
+                _ => self.0.weight().clone(),
+            };
+            let mut tgt_shape = a.dims().to_vec();
+            tgt_shape[a.dims().len() - 1] = w.dim(D::Minus2)?;
+            let b = bias.broadcast_as(Shape::from_dims(&tgt_shape))?;
+
+            if let (Device::Cuda(_), Some(cublaslt)) =
+                (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
+            {
+                cublaslt
+                    .batch_matmul(
+                        a,
+                        &w,
+                        Some(&b.t()?.contiguous()?),
+                        None,
+                        Some(1.0),
+                        None,
+                        None,
+                    )?
+                    .t()
+            } else {
+                a.matmul(&w.t()?)? + b
+            }
+        } else {
+            self.0.forward(a)
+        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
