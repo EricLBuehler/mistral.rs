@@ -112,6 +112,7 @@ pub enum PhiRopeScalingConfig {
     Classic {
         short_factor: Vec<f64>,
         long_factor: Vec<f64>,
+        #[serde(rename = "type")]
         scaling_type: ScaledRopeType,
     },
     Scaled {
