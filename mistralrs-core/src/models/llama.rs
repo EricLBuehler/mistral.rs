@@ -469,7 +469,11 @@ impl Llama {
             // x = self.mapper.map(&chunks[0], block_idx)?;
             println!("x device {:?}", x.device());
             println!("chunk device {:?}", chunks[0].device());
-            x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
+            if block_idx == 0 {
+                x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
+            } else {
+                x = self.mapper.map(x, block_idx)?;
+            }
             x = block.forward(
                 &x,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
