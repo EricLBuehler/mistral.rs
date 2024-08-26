@@ -470,7 +470,7 @@ impl Llama {
         let mut target_device = &self.cuda_devices[0];
 
         let mut block_chunks: Vec<Tensor> = Vec::new();
-        
+
         for (block_idx, block) in self.blocks.iter().enumerate() {
             
             // x = self.mapper.map(x, block_idx)?;
@@ -500,7 +500,8 @@ impl Llama {
 
                 // Accumulate attention results
                 if let Some(ref mut acc) = accumulated_attention {
-                    *acc = acc.add(&x.to_device(acc.device())?)?;
+                    // *acc = acc.add(&x.to_device(acc.device())?)?;
+                    *acc = acc.add(x);
                 } else {
                     accumulated_attention = Some(x.clone());
                 }
