@@ -506,6 +506,7 @@ impl Llama {
 
             // Concatenate chunks for this block
             let block_chunks: Result<Vec<Tensor>> = block_chunks
+                .clone()
                 .into_iter()
                 .map(|chunk| chunk.to_device(&target_device))
                 .collect();
