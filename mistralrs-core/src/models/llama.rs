@@ -471,7 +471,7 @@ impl Llama {
 
         for (block_idx, block) in self.blocks.iter().enumerate() {
             
-            let mut block_chunks = Vec::new();
+            let mut block_chunks: Vec<T> = Vec::new();
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
             // println!("x device {:?}", x.device());
@@ -479,12 +479,12 @@ impl Llama {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut accumulated_attention: Option<Tensor> = None;
 
-                let x = if block_idx == 0 {
+                let mut x = if block_idx == 0 {
                     self.mapper.map(chunk.clone(), block_idx)?
                 } else {
                     self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
                 };
-                
+
                 x = block.forward(
                     &x,
                     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
