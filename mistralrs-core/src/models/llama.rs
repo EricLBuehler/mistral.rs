@@ -469,9 +469,10 @@ impl Llama {
         let mut processed_chunks = Vec::new();
         let mut target_device = &self.cuda_devices[0];
 
+        let mut block_chunks: Vec<Tensor> = Vec::new();
+        
         for (block_idx, block) in self.blocks.iter().enumerate() {
             
-            let mut block_chunks: Vec<Tensor> = Vec::new();
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
             // println!("x device {:?}", x.device());
