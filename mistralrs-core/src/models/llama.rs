@@ -499,9 +499,10 @@ impl Llama {
                 // Accumulate attention results
                 if block_chunks.len() <= chunk_idx {
                     block_chunks.push(x);
-                } else {
-                    block_chunks[chunk_idx] = block_chunks[chunk_idx].add(&x)?;
-                }
+                } 
+                // else {
+                //     block_chunks[chunk_idx] = block_chunks[chunk_idx].add(&x)?;
+                // }
             }   
 
             // Concatenate chunks for this block
