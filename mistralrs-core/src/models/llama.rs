@@ -361,7 +361,8 @@ impl Block {
             metadata,
         )? + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        // let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = self.rms_2.forward(&x)?;
         Ok(x)
     }
 
@@ -478,12 +479,12 @@ impl Llama {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut accumulated_attention: Option<Tensor> = None;
 
-                if block_idx == 0 {
-                    // x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
-                    let mut x = self.mapper.map(chunk.clone(), block_idx)?.clone();
+                let x = if block_idx == 0 {
+                    self.mapper.map(chunk.clone(), block_idx)?
                 } else {
-                    x = self.mapper.map(x, block_idx)?;
-                }
+                    self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
+                };
+                
                 x = block.forward(
                     &x,
                     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
@@ -508,6 +509,11 @@ impl Llama {
                     block_chunks.push(acc);
                 } 
             }
+
+            // do feedforward after attention has been run for each chunk
+            let residual = x.clone();
+            let mut x = block.mlp.forward(&x)?;
+            x = (x + &residual)?;
             x = x.to_device(&target_device)?;
             processed_chunks.push(x.clone()); 
         }
