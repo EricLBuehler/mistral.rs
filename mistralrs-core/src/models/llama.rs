@@ -500,7 +500,7 @@ impl Llama {
                 if let Some(ref mut acc) = accumulated_attention {
                     *acc = acc.add(&x.to_device(acc.device())?)?;
                 } else {
-                    accumulated_attention = Some(x);
+                    accumulated_attention = Some(x.clone());
                 }
 
                 // Add the accumulated attention for this chunk to block_chunks
