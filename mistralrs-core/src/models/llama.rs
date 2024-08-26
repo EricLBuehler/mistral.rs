@@ -508,7 +508,7 @@ impl Llama {
             let block_chunks: Vec<Tensor> = block_chunks
                 .into_iter()
                 .map(|chunk| chunk.to_device(&target_device))
-                .collect()?;
+                .collect::<Vec<_>>()?;
 
             let mut x = candle_core::Tensor::cat(&block_chunks, 1)?;
 
