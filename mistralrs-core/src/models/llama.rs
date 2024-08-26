@@ -470,6 +470,7 @@ impl Llama {
 
         for (block_idx, block) in self.blocks.iter().enumerate() {
             
+            let mut block_chunks = Vec::new();
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
             // println!("x device {:?}", x.device());
