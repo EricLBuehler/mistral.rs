@@ -464,28 +464,52 @@ impl Llama {
             chunks[0].dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
+
+        let mut processed_chunks = Vec::new();
+        let mut target_device = &self.cuda_devices[0];
+
         for (block_idx, block) in self.blocks.iter().enumerate() {
+            
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
-            println!("x device {:?}", x.device());
-            println!("chunk device {:?}", chunks[0].device());
-            if block_idx == 0 {
-                x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
-            } else {
-                x = self.mapper.map(x, block_idx)?;
+            // println!("x device {:?}", x.device());
+            // println!("chunk device {:?}", chunks[0].device());
+            for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                let mut accumulated_attention: Option<Tensor> = None;
+
+                if block_idx == 0 {
+                    x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
+                } else {
+                    x = self.mapper.map(x, block_idx)?;
+                }
+                x = block.forward(
+                    &x,
+                    &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                    seqlen_offsets,
+                    start_offsets_kernel.clone(),
+                    block_idx,
+                    &mut cache,
+                    metadata
+                        .as_mut()
+                        .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                )?;
+
+                // Accumulate attention results
+                if let Some(ref mut acc) = accumulated_attention {
+                    *acc = acc.add(&x.to_device(acc.device())?)?;
+                } else {
+                    accumulated_attention = Some(x);
+                }
+
+                // Add the accumulated attention for this chunk to block_chunks
+                if let Some(acc) = accumulated_attention {
+                    block_chunks.push(acc);
+                } 
             }
-            x = block.forward(
-                &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                block_idx,
-                &mut cache,
-                metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
-            )?;
+            x = x.to_device(&target_device)?;
+            processed_chunks.push(x.clone()); 
         }
+        x = candle_core::Tensor::cat(&processed_chunks, 1)?;
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
         if matches!(self.lm_head, QMatMul::QTensor(_)) {
