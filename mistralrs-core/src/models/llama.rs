@@ -479,7 +479,8 @@ impl Llama {
                 let mut accumulated_attention: Option<Tensor> = None;
 
                 if block_idx == 0 {
-                    x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
+                    // x = self.mapper.map(chunks[0].copy().unwrap(), block_idx)?;
+                    let mut x = self.mapper.map(chunk.clone(), block_idx)?.clone();
                 } else {
                     x = self.mapper.map(x, block_idx)?;
                 }
