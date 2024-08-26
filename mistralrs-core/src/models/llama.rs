@@ -478,14 +478,12 @@ impl Llama {
             // println!("x device {:?}", x.device());
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                let mut accumulated_attention: Option<Tensor> = None;
-
                 let mut x = if block_idx == 0 {
                     self.mapper.map(chunk.clone(), block_idx)?
                 } else {
                     self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
                 };
-
+            
                 x = block.forward(
                     &x,
                     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
@@ -497,20 +495,22 @@ impl Llama {
                         .as_mut()
                         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
                 )?;
-
+            
                 // Accumulate attention results
-                if let Some(ref mut acc) = accumulated_attention {
-                    // *acc = acc.add(&x.to_device(acc.device())?)?;
-                    *acc = acc.add(&x)?;
+                if block_chunks.len() <= chunk_idx {
+                    block_chunks.push(x);
                 } else {
-                    accumulated_attention = Some(x.clone());
+                    block_chunks[chunk_idx] = block_chunks[chunk_idx].add(&x)?;
                 }
+            }   
 
-                // Add the accumulated attention for this chunk to block_chunks
-                if let Some(acc) = accumulated_attention {
-                    block_chunks.push(acc);
-                } 
-            }
+            // Concatenate chunks for this block
+            let block_chunks: Vec<Tensor> = block_chunks
+                .into_iter()
+                .map(|chunk| chunk.to_device(&target_device))
+                .collect::<Result<Vec<Tensor>, _>>()?;
+
+            let mut x = candle_core::Tensor::cat(&block_chunks, 1)?;
 
             // do feedforward after attention has been run for each chunk
             let residual = x.clone();
