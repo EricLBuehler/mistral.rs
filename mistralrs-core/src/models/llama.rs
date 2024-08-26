@@ -501,7 +501,7 @@ impl Llama {
                 // Accumulate attention results
                 if let Some(ref mut acc) = accumulated_attention {
                     // *acc = acc.add(&x.to_device(acc.device())?)?;
-                    *acc = acc.add(x);
+                    *acc = acc.add(x)?;
                 } else {
                     accumulated_attention = Some(x.clone());
                 }
