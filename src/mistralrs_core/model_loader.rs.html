@@ -348,6 +348,24 @@
 <a href="#348" id="348">348</a>
 <a href="#349" id="349">349</a>
 <a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
@@ -356,8 +374,8 @@
 <span class="kw">use crate</span>::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    GGUFSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs,
+    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="doccomment">/// A builder for a loader using the selected model.
@@ -541,6 +559,7 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
         } =&gt; GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -549,7 +568,10 @@
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+            },
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -559,6 +581,7 @@
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
         } =&gt; GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -567,7 +590,10 @@
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -585,6 +611,7 @@
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
         } =&gt; GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -593,7 +620,10 @@
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+            },
         )
         .with_lora(
             adapters_model_id,
@@ -609,10 +639,12 @@
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -630,10 +662,12 @@
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -659,10 +693,12 @@
             adapters_model_id,
             order,
             gqa,
+            topology,
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
             tokenizer_json,

@@ -718,6 +718,20 @@
 <a href="#718" id="718">718</a>
 <a href="#719" id="719">719</a>
 <a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -750,7 +764,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, TryIntoDType,
+    Pipeline, Topology, TryIntoDType,
 };
 <span class="kw">use crate</span>::{
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
@@ -806,7 +820,14 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    config: GGUFSpecificConfig,
+}
+
+<span class="attr">#[derive(Clone, Default)]
+</span><span class="doccomment">/// Config for a GGUF loader.
+</span><span class="kw">pub struct </span>GGUFSpecificConfig {
+    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -821,7 +842,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    config: GGUFSpecificConfig,
 }
 
 <span class="kw">impl </span>GGUFLoaderBuilder {
@@ -833,7 +854,7 @@
         tok_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
         quantized_filenames: Vec&lt;String&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        config: GGUFSpecificConfig,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -845,7 +866,7 @@
             kind,
             quantized_filenames,
             quantized_model_id,
-            prompt_batchsize,
+            config,
             ..Default::default()
         }
     }
@@ -907,7 +928,7 @@
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
             quantized_filenames: <span class="self">self</span>.quantized_filenames,
             quantized_model_id: <span class="self">self</span>.quantized_model_id,
-            prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
+            config: <span class="self">self</span>.config,
         })
     }
 }
@@ -924,7 +945,7 @@
         no_kv_cache: bool,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        config: GGUFSpecificConfig,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
             <span class="prelude-val">Some</span>(id)
@@ -947,7 +968,7 @@
             chat_template,
             kind,
             tgt_non_granular_index,
-            prompt_batchsize,
+            config,
         }
     }
 }
@@ -1044,14 +1065,21 @@
             </span>);
         }
         <span class="comment">// Otherwise, the device mapper will print it
-        </span><span class="kw">if </span>mapper.is_dummy() {
+        </span><span class="kw">if </span>mapper.is_dummy()
+            &amp;&amp; (<span class="self">self</span>.config.topology.is_none()
+                || <span class="self">self
+                    </span>.config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             <span class="macro">info!</span>(
                 <span class="string">"Loading model `{}` on {}."</span>,
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
         } <span class="kw">else if </span>paged_attn_config.is_some() {
-            <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            <span class="macro">warn!</span>(<span class="string">"Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention."</span>);
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
@@ -1105,7 +1133,7 @@
             <span class="comment">// Base config (quantization only):
             </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper).into(),
+                (device, mapper, <span class="self">self</span>.config.topology.as_ref()).into(),
                 <span class="kw">if </span>paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } <span class="kw">else </span>{
@@ -1226,7 +1254,7 @@
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
+                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
         })))
     }

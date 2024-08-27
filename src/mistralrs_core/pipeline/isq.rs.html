@@ -207,6 +207,21 @@
 <a href="#207" id="207">207</a>
 <a href="#208" id="208">208</a>
 <a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashSet,
     sync::{atomic::AtomicUsize, Arc},
@@ -308,6 +323,7 @@
                 <span class="kw">for </span>layer <span class="kw">in </span>topology.<span class="number">0</span>.iter().flatten() {
                     <span class="kw">if let </span>LayerTopology {
                         isq: <span class="prelude-val">Some</span>(isq_dtype),
+                        device: <span class="kw">_</span>,
                     } = layer
                     {
                         dtypes.insert(isq_dtype);
@@ -327,27 +343,41 @@
 
             <span class="kw">let </span>layers = topology.map(|x| {
                 x.<span class="number">0</span>.iter()
-                    .filter_map(|topo| topo.as_ref().map(|x| x.isq))
+                    .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
             });
 
             <span class="kw">let </span><span class="kw-2">mut </span>devices_and_dtypes = Vec::new();
-            <span class="kw">for </span>(<span class="kw">_</span>, layer) <span class="kw">in </span><span class="kw-2">&amp;</span>tensors {
-                <span class="kw">let </span>device = <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer {
-                    mapper.device_for(<span class="kw-2">*</span>layer, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span>device)
+            <span class="kw">for </span>(<span class="kw">_</span>, layer_num) <span class="kw">in </span><span class="kw-2">&amp;</span>tensors {
+                <span class="kw">let </span>device = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>layers) = layers {
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer_num {
+                        layers
+                            .get(<span class="kw-2">*</span>layer)
+                            .as_ref()
+                            .map(|x| x.<span class="number">1</span>.clone())
+                            .unwrap_or(<span class="prelude-val">Some</span>(device.clone()))
+                            .unwrap_or(device.clone())
+                    } <span class="kw">else </span>{
+                        device.clone()
+                    }
+                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(layer_num) = layer_num {
+                    mapper
+                        .device_for(<span class="kw-2">*</span>layer_num, <span class="bool-val">false</span>)
+                        .cloned()
+                        .unwrap_or(device.clone())
                 } <span class="kw">else </span>{
-                    <span class="kw-2">&amp;</span>device
+                    device.clone()
                 };
                 <span class="kw">let </span>dtype = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>layers) = layers {
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer {
-                        layers.get(<span class="kw-2">*</span>layer).cloned().unwrap_or(dtype)
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(layer) = layer_num {
+                        layers.get(<span class="kw-2">*</span>layer).cloned().map(|x| x.<span class="number">0</span>).unwrap_or(dtype)
                     } <span class="kw">else </span>{
                         dtype
                     }
                 } <span class="kw">else </span>{
                     dtype
                 };
-                devices_and_dtypes.push((device.clone(), dtype));
+                devices_and_dtypes.push((device, dtype));
             }
 
             <span class="kw">let </span>t_start = Instant::now();

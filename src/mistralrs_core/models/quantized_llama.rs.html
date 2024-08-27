@@ -681,6 +681,8 @@
 <a href="#681" id="681">681</a>
 <a href="#682" id="682">682</a>
 <a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -703,6 +705,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
 <span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
+<span class="kw">use </span><span class="kw">crate</span>::Topology;
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 
 <span class="kw">struct </span>Mlp {
@@ -1078,6 +1081,7 @@
         <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         mapper: DeviceMapMetadata,
+        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="comment">// Parameter extraction from metadata.
@@ -1106,7 +1110,7 @@
         <span class="kw">let </span>output = ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
 
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>head_dim = key_length;
         <span class="kw">if </span>key_length != value_length {

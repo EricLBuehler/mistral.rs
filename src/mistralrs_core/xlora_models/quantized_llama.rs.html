@@ -1001,6 +1001,7 @@
 <a href="#1001" id="1001">1001</a>
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1022,7 +1023,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
-<span class="kw">use </span><span class="kw">crate</span>::DeviceMapMetadata;
+<span class="kw">use crate</span>::{DeviceMapMetadata, Topology};
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1492,6 +1493,7 @@
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         mapper: DeviceMapMetadata,
+        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         verify_sanity_adapters(ordering, <span class="kw-2">&amp;</span>SUPPORTED_LAYERS)<span class="question-mark">?</span>;
@@ -1530,7 +1532,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
 
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);

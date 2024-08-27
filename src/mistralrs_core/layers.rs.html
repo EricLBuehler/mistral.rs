@@ -848,6 +848,7 @@
 <a href="#848" id="848">848</a>
 <a href="#849" id="849">849</a>
 <a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -962,7 +963,8 @@
     Classic {
         short_factor: Vec&lt;f64&gt;,
         long_factor: Vec&lt;f64&gt;,
-        scaling_type: ScaledRopeType,
+        <span class="attr">#[serde(rename = <span class="string">"type"</span>)]
+        </span>scaling_type: ScaledRopeType,
     },
     Scaled {
         short_factor: Vec&lt;f64&gt;,

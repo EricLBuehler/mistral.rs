@@ -653,6 +653,14 @@
 <a href="#653" id="653">653</a>
 <a href="#654" id="654">654</a>
 <a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -889,20 +897,28 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="comment">// Otherwise, the device mapper will print it
-        </span><span class="kw">if </span>mapper.is_dummy() {
+        </span><span class="kw">if </span>mapper.is_dummy()
+            &amp;&amp; (<span class="self">self</span>.config.topology.is_none()
+                || <span class="self">self
+                    </span>.config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             <span class="macro">info!</span>(
                 <span class="string">"Loading model `{}` on {}."</span>,
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
         } <span class="kw">else if </span>paged_attn_config.is_some() {
-            <span class="macro">warn!</span>(<span class="string">"Device mapping and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            <span class="macro">warn!</span>(<span class="string">"Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention."</span>);
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
         <span class="kw">let </span>mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,
+            <span class="self">self</span>.config.topology.as_ref(),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
 
