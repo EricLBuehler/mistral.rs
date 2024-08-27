@@ -20,6 +20,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
@@ -395,6 +396,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
@@ -423,7 +425,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let head_dim = key_length;
         if key_length != value_length {

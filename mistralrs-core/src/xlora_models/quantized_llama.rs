@@ -19,7 +19,7 @@ use tracing::info;
 use crate::device_map::DeviceMapper;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache};
-use crate::DeviceMapMetadata;
+use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -489,6 +489,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
@@ -527,7 +528,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");

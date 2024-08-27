@@ -1,14 +1,19 @@
 use std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
 
+use candle_core::Device;
 use itertools::Itertools;
 use mistralrs_quant::IsqType;
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::parse_isq_value;
 
+const DEVICE_PATTERN: &str = r"^(cpu|cuda\[(\d+)\]|metal\[(\d+)\])$";
+
 #[derive(Deserialize)]
 pub struct DeserLayerTopology {
     isq: Option<String>,
+    device: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -17,6 +22,7 @@ pub struct DeserTopology(HashMap<String, DeserLayerTopology>);
 #[derive(Clone, Debug)]
 pub struct LayerTopology {
     pub isq: Option<IsqType>,
+    pub device: Option<Device>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -56,36 +62,24 @@ impl Topology {
         Topology(Vec::new())
     }
 
-    /// Add an topology item (which will be expanded to cover all elements) of a range.
-    /// Any overlapping items will be overwritten. Padding automatically occurs if gaps occur.
-    pub fn with_range(mut self, range: Range<usize>, topo: LayerTopology) -> Self {
-        self.add_from_range(range, topo);
-        self
+    pub fn with_capacity(cap: usize) -> Self {
+        Topology(vec![None; cap])
     }
 
-    fn add_from_range(&mut self, range: Range<usize>, topo: LayerTopology) {
-        let n_repeat = 0..=range.end - range.start;
-        if range.start == 0 && self.0.is_empty() {
-            // Simple case, starting out
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else if range.end >= self.0.len() && range.start > self.0.len() {
-            // Adding new layers. Add Nones to pad
-            self.0.extend(vec![None; range.start - self.0.len()]);
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else if range.end >= self.0.len() && range.start < self.0.len() {
-            // Replacing some layers at least but the range exceeds
+    pub fn is_dummy_device_map(&self) -> bool {
+        self.0
+            .iter()
+            .all(|l| l.is_none() || l.as_ref().is_some_and(|l| l.device.is_none()))
+    }
+
+    pub fn with_range(mut self, range: Range<usize>, layer: LayerTopology) -> Self {
+        if self.0.len() < range.end {
             self.0.extend(vec![None; range.end - self.0.len()]);
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else {
-            assert!(self.0.len() > range.end);
-            self.0.splice(
-                range.clone(),
-                n_repeat.into_iter().map(|_| Some(topo.clone())),
-            );
         }
+        for i in range.start..range.end {
+            self.0[i] = Some(layer.clone());
+        }
+        self
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -93,7 +87,8 @@ impl Topology {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
 
         let mut layers = Vec::new();
-        for (range, DeserLayerTopology { isq }) in deser.0 {
+        for (range, DeserLayerTopology { isq, device }) in deser.0 {
+            // Parse isq
             let (start, end) = if range.contains('-') {
                 // Range (inclusive, exclusive)
                 let Some((start, end)) = range.splitn(2, '-').collect_tuple() else {
@@ -115,15 +110,43 @@ impl Topology {
             } else {
                 None
             };
-            let layer_topo = LayerTopology { isq };
+
+            // Parse device
+            let device = if let Some(device) = device {
+                let device_regex = Regex::new(DEVICE_PATTERN)?;
+
+                let Some(captures) = device_regex.captures(&device) else {
+                    anyhow::bail!("Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`");
+                };
+                let device = if let Some(val) = captures.get(2).or(captures.get(3)) {
+                    let ord = val.as_str().parse::<usize>()?;
+                    let device = device.split('[').collect::<Vec<_>>()[0];
+                    match device {
+                        "cuda" => Device::new_cuda(ord)?,
+                        "metal" => Device::new_metal(ord)?,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    Device::Cpu
+                };
+                dbg!(&device, &range);
+
+                Some(device)
+            } else {
+                None
+            };
+
+            let layer_topo = LayerTopology { isq, device };
             layers.push((range, layer_topo));
         }
         // Sort so that we increase in end points
         layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
 
-        let mut this = Self::empty();
+        let mut this = Self::with_capacity(layers.last().unwrap().0.end);
         for (range, layer) in layers {
-            this.add_from_range(range.into(), layer);
+            for i in range.start..range.end {
+                this.0[i] = Some(layer.clone());
+            }
         }
         Ok(this)
     }

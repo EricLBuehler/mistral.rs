@@ -234,20 +234,28 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
+        if mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             info!(
                 "Loading model `{}` on {}.",
                 self.get_id(),
                 device.device_pretty_repr()
             );
         } else if paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
         }
 
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
+            self.config.topology.as_ref(),
         )?;
         let dtype = mapper.get_min_dtype(dtype)?;
 

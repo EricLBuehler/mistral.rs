@@ -6,8 +6,8 @@ use std::{
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    GGUFSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs,
+    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -191,6 +191,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -199,7 +200,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -209,6 +213,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -217,7 +222,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -235,6 +243,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -243,7 +252,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_lora(
             adapters_model_id,
@@ -259,10 +271,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             tokenizer_json,
@@ -280,10 +294,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             tokenizer_json,
@@ -309,10 +325,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             adapters_model_id,
             order,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             tokenizer_json,

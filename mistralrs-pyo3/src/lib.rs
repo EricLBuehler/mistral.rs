@@ -22,8 +22,8 @@ use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
     Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
     SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
@@ -149,12 +149,16 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
-            prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .build(),
         Which::XLoraGGUF {
@@ -164,12 +168,16 @@ fn parse_which(
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
-            prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -188,12 +196,16 @@ fn parse_which(
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
             quantized_filename.map_left(|f| vec![f]).into_inner(),
-            prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_lora(
             adapters_model_id,
@@ -210,10 +222,12 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,
@@ -231,10 +245,12 @@ fn parse_which(
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,
@@ -261,10 +277,12 @@ fn parse_which(
             adapters_model_id,
             order,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             chat_template,
             tokenizer_json,

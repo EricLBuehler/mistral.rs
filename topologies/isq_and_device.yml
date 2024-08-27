@@ -1,0 +1,12 @@
+0-8:
+  isq: Q3K
+  device: cuda[0]
+8-16:
+  isq: Q4K
+  device: cpu
+16-24:
+  isq: Q6K
+# Skip 24-28
+28-32:
+  isq: Q8_0
+  device: cuda[0]

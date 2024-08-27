@@ -20,7 +20,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFLoader, GGUFLoaderBuilder};
+pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel};
 pub use loaders::{
