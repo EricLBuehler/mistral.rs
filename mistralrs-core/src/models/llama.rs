@@ -500,7 +500,7 @@ impl Llama {
                 if block_chunks.len() <= chunk_idx {
                     block_chunks.push(x);
                 } else {
-                    block_chunks[chunk_idx] = &x;
+                    block_chunks[chunk_idx] = x;
                 }
             }   
 
