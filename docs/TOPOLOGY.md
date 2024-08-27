@@ -1,9 +1,11 @@
 # Model topology configuration
 
+<h3>Quantization and device mapping in one file.</h3>
+
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:
 
 1) Top-level keys are either:
-    - A range of layers (`start-end`) where `start < end`. `start` is inclusive and `end` is inclusive
+    - A range of layers (`start-end`) where `start < end`. `start` is inclusive and `end` is exclusive
     - A single layer number
     2) The topology for the range or layer:
         - An optional key (`isq`) which maps to a single value, which can be any [ISQ type](ISQ.md#isq-quantization-types). If not specified, there is no ISQ for this range of layers applied.
@@ -17,6 +19,7 @@ Note that:
 - If ranges overlap, the range with the higher end layer takes precedence and will overwrite
 - Any layers which are not covered will have no topology mapping. They will inherit any other ISQ (e.g. with `--isq`/`in_situ_quant`) set.
 - Unless the layer is not covered by the topology, the topology value will override any other ISQ (e.g. with `--isq`/`in_situ_quant`).
+- The topology device mapping will override any other device mapping.
 
 
 ```yml
