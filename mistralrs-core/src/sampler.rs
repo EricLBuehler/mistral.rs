@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use tokenizers::Tokenizer;
 
-static SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
-    LazyLock::new(|| ["\n", ":", "\\", "*"].map(String::from).to_vec());
+static DRY_SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
+    LazyLock::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -81,7 +81,7 @@ impl DrySamplingParams {
         Ok(Self {
             base: base.unwrap_or(1.75),
             allowed_length: allowed_length.unwrap_or(2),
-            sequence_breakers: sequence_breakers.unwrap_or(SEQUENCE_BREAKERS.clone()),
+            sequence_breakers: sequence_breakers.unwrap_or(DRY_SEQUENCE_BREAKERS.clone()),
             multiplier,
         })
     }
@@ -90,10 +90,10 @@ impl DrySamplingParams {
 impl Default for DrySamplingParams {
     fn default() -> Self {
         Self {
-            multiplier: 1.0,
+            multiplier: 0.0,
             base: 1.75,
             allowed_length: 2,
-            sequence_breakers: SEQUENCE_BREAKERS.clone(),
+            sequence_breakers: DRY_SEQUENCE_BREAKERS.clone(),
         }
     }
 }
