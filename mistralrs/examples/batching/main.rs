@@ -5,9 +5,9 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     initialize_logging, ChatCompletionResponse, Constraint, Device, DeviceMapMetadata,
-    GGUFLoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalRequest,
-    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    TokenSource, Usage,
+    GGUFLoaderBuilder, GGUFSpecificConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelDType, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 
 async fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -18,7 +18,10 @@ async fn setup() -> anyhow::Result<Arc<MistralRs>> {
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
         "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
         vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()],
-        None,
+        GGUFSpecificConfig {
+            prompt_batchsize: None,
+            topology: None,
+        },
     )
     .build();
     // Load, into a Pipeline

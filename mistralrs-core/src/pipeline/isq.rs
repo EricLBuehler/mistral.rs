@@ -136,15 +136,13 @@ pub trait IsqModel {
                     } else {
                         device.clone()
                     }
+                } else if let Some(layer_num) = layer_num {
+                    mapper
+                        .device_for(*layer_num, false)
+                        .cloned()
+                        .unwrap_or(device.clone())
                 } else {
-                    if let Some(layer_num) = layer_num {
-                        mapper
-                            .device_for(*layer_num, false)
-                            .cloned()
-                            .unwrap_or(device.clone())
-                    } else {
-                        device.clone()
-                    }
+                    device.clone()
                 };
                 let dtype = if let Some(ref layers) = layers {
                     if let Some(layer) = layer_num {

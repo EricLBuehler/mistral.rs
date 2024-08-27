@@ -13,7 +13,7 @@ use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
+use crate::{DeviceMapMetadata, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
@@ -199,6 +199,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
@@ -227,7 +228,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");

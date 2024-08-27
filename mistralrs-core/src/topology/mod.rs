@@ -62,36 +62,24 @@ impl Topology {
         Topology(Vec::new())
     }
 
-    /// Add an topology item (which will be expanded to cover all elements) of a range.
-    /// Any overlapping items will be overwritten. Padding automatically occurs if gaps occur.
-    pub fn with_range(mut self, range: Range<usize>, topo: LayerTopology) -> Self {
-        self.add_from_range(range, topo);
-        self
+    pub fn with_capacity(cap: usize) -> Self {
+        Topology(vec![None; cap])
     }
 
-    fn add_from_range(&mut self, range: Range<usize>, topo: LayerTopology) {
-        let n_repeat = 0..=range.end - range.start;
-        if range.start == 0 && self.0.is_empty() {
-            // Simple case, starting out
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else if range.end >= self.0.len() && range.start > self.0.len() {
-            // Adding new layers. Add Nones to pad
-            self.0.extend(vec![None; range.start - self.0.len()]);
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else if range.end >= self.0.len() && range.start < self.0.len() {
-            // Replacing some layers at least but the range exceeds
+    pub fn is_dummy_device_map(&self) -> bool {
+        self.0
+            .iter()
+            .all(|l| l.is_none() || l.as_ref().is_some_and(|l| l.device.is_none()))
+    }
+
+    pub fn with_range(mut self, range: Range<usize>, layer: LayerTopology) -> Self {
+        if self.0.len() < range.end {
             self.0.extend(vec![None; range.end - self.0.len()]);
-            self.0
-                .extend(n_repeat.into_iter().map(|_| Some(topo.clone())));
-        } else {
-            assert!(self.0.len() > range.end);
-            self.0.splice(
-                range.clone(),
-                n_repeat.into_iter().map(|_| Some(topo.clone())),
-            );
         }
+        for i in range.start..range.end {
+            self.0[i] = Some(layer.clone());
+        }
+        self
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -130,7 +118,6 @@ impl Topology {
                 let Some(captures) = device_regex.captures(&device) else {
                     anyhow::bail!("Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`");
                 };
-
                 let device = if let Some(val) = captures.get(2).or(captures.get(3)) {
                     let ord = val.as_str().parse::<usize>()?;
                     let device = device.split('[').collect::<Vec<_>>()[0];
@@ -142,6 +129,7 @@ impl Topology {
                 } else {
                     Device::Cpu
                 };
+                dbg!(&device, &range);
 
                 Some(device)
             } else {
@@ -154,9 +142,11 @@ impl Topology {
         // Sort so that we increase in end points
         layers.sort_by(|(r1, _), (r2, _)| r1.cmp(r2));
 
-        let mut this = Self::empty();
+        let mut this = Self::with_capacity(layers.last().unwrap().0.end);
         for (range, layer) in layers {
-            this.add_from_range(range.into(), layer);
+            for i in range.start..range.end {
+                this.0[i] = Some(layer.clone());
+            }
         }
         Ok(this)
     }

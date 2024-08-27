@@ -19,6 +19,7 @@ use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::Topology;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -229,6 +230,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
@@ -257,7 +259,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let mut count = 0;
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
