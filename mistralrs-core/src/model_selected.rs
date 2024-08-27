@@ -133,6 +133,10 @@ pub enum ModelSelected {
         /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -165,6 +169,10 @@ pub enum ModelSelected {
         /// This makes the maximum running sequences 1.
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with LoRA.
@@ -192,6 +200,10 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model.
@@ -216,6 +228,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -253,6 +269,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model with LoRA.
@@ -285,6 +305,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a vision plain model, without quantization or adapters

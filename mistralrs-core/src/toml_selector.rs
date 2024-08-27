@@ -4,9 +4,9 @@ use serde::Deserialize;
 
 use crate::{
     amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder,
+    VisionLoaderType, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -103,6 +103,9 @@ pub enum TomlModelSelected {
         /// Quantized filename(s).
         /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -129,6 +132,9 @@ pub enum TomlModelSelected {
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
         /// This makes the maximum running sequences 1.
         tgt_non_granular_index: Option<usize>,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with LoRA.
@@ -151,6 +157,9 @@ pub enum TomlModelSelected {
 
         /// Ordering JSON file
         order: String,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model.
@@ -169,6 +178,9 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -196,6 +208,9 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model with LoRA.
@@ -219,6 +234,9 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a vision plain model, without quantization or adapters
@@ -394,6 +412,7 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             Some(tok_model_id),
@@ -402,7 +421,10 @@ fn loader_from_selected(
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -412,6 +434,7 @@ fn loader_from_selected(
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -420,7 +443,10 @@ fn loader_from_selected(
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -438,6 +464,7 @@ fn loader_from_selected(
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -446,7 +473,10 @@ fn loader_from_selected(
                 .split(GGUF_MULTI_FILE_DELIMITER)
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
-            args.prompt_batchsize,
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_lora(
             adapters_model_id,
@@ -461,10 +491,12 @@ fn loader_from_selected(
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -481,10 +513,12 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -509,10 +543,12 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
                 prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
             args.tokenizer_json,

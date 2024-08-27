@@ -99,6 +99,7 @@ pub trait IsqModel {
                 for layer in topology.0.iter().flatten() {
                     if let LayerTopology {
                         isq: Some(isq_dtype),
+                        device: _,
                     } = layer
                     {
                         dtypes.insert(isq_dtype);
@@ -118,27 +119,41 @@ pub trait IsqModel {
 
             let layers = topology.map(|x| {
                 x.0.iter()
-                    .filter_map(|topo| topo.as_ref().map(|x| x.isq))
+                    .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
                     .collect::<Vec<_>>()
             });
 
             let mut devices_and_dtypes = Vec::new();
-            for (_, layer) in &tensors {
-                let device = if let Some(layer) = layer {
-                    mapper.device_for(*layer, false).unwrap_or(&device)
+            for (_, layer_num) in &tensors {
+                let device = if let Some(ref layers) = layers {
+                    if let Some(layer) = layer_num {
+                        layers
+                            .get(*layer)
+                            .as_ref()
+                            .map(|x| x.1.clone())
+                            .unwrap_or(Some(device.clone()))
+                            .unwrap_or(device.clone())
+                    } else {
+                        device.clone()
+                    }
+                } else if let Some(layer_num) = layer_num {
+                    mapper
+                        .device_for(*layer_num, false)
+                        .cloned()
+                        .unwrap_or(device.clone())
                 } else {
-                    &device
+                    device.clone()
                 };
                 let dtype = if let Some(ref layers) = layers {
-                    if let Some(layer) = layer {
-                        layers.get(*layer).cloned().unwrap_or(dtype)
+                    if let Some(layer) = layer_num {
+                        layers.get(*layer).cloned().map(|x| x.0).unwrap_or(dtype)
                     } else {
                         dtype
                     }
                 } else {
                     dtype
                 };
-                devices_and_dtypes.push((device.clone(), dtype));
+                devices_and_dtypes.push((device, dtype));
             }
 
             let t_start = Instant::now();
