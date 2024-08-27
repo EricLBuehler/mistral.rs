@@ -6,7 +6,11 @@ To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YA
     - A range of layers (`start-end`) where `start < end`. `start` is inclusive and `end` is inclusive
     - A single layer number
     2) The topology for the range or layer:
-        - A single key (`isq`) which mapps to a single value, which can be any [ISQ type](ISQ.md#isq-quantization-types)
+        - An optional key (`isq`) which maps to a single value, which can be any [ISQ type](ISQ.md#isq-quantization-types). If not specified, there is no ISQ for this range of layers applied.
+        - An optional key (`device`) which maps to a single value, which is one of the below. If not specified, the default loading deice will be used.
+          - `cpu`
+          - `cuda[ORDINAL]`
+          - `metal[ORDINAL]`
 
 Note that:
 - The topology for the range is expanded to fill the range
@@ -18,20 +22,19 @@ Note that:
 ```yml
 0-8:
   isq: Q3K
+  device: cuda[0]
 8-16:
   isq: Q4K
+  device: cpu
 16-24:
   isq: Q6K
 # Skip 24-28
 28-32:
   isq: Q8_0
+  device: cuda[0]
 ```
 
-Model topologies may be applied to the following model types:
-- `plain`/`Plain`
-- `xlora`/`XLora`
-- `lora`/`Lora`
-- `vision-plain`/`VisionPlain`
+Model topologies may be applied to all model types.
 
 ## CLI example
 ```

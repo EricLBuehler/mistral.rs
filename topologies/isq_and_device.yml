@@ -6,7 +6,6 @@
   device: cpu
 16-24:
   isq: Q6K
-  device: cuda[0]
 # Skip 24-28
 28-32:
   isq: Q8_0
