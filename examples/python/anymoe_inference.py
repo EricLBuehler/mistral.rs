@@ -24,7 +24,7 @@ runner = Runner(
         model_ids=["HuggingFaceH4/zephyr-7b-beta"],
         layers=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         gate_model_id="path/to/pretrained/gating_model_id",
-        loss_svg="loss.svg",
+        loss_csv_path="loss.csv",
     ),
 )
 
