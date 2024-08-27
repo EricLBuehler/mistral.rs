@@ -90,7 +90,7 @@ Mistal.rs supports several model categories:
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
-- Use a simple [model topology](docs/TOPOLOGY.md) to configure ISQ and device mapping for *per-layer* with a single [YAML file](topologies)
+- Use a simple [model topology](docs/TOPOLOGY.md) to configure ISQ and device mapping for *per-layer* with a single [YAML file](topologies/isq_and_device.yml) (examples [here](topologies))
 
 **Powerful**:
 - Fast LoRA support with weight merging.
