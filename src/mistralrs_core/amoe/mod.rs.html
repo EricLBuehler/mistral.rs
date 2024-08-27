@@ -482,9 +482,9 @@
     <span class="kw">pub </span>gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(default = <span class="string">"default_true"</span>)]
     </span><span class="kw">pub </span>training: bool,
-    <span class="doccomment">/// If `training == true`, `loss_svg` will not save anything.
-    /// Otherwise, this will save a .svg file here.
-    </span><span class="kw">pub </span>loss_svg: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="doccomment">/// If `training == true`, `loss_csv_path` will not save anything.
+    /// Otherwise, this will save a .csv loss file here.
+    </span><span class="kw">pub </span>loss_csv_path: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone)]
