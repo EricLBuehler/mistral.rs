@@ -21,11 +21,11 @@ use candle_core::Device;
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
-    Request as _Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, Topology,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, Request as _Request, RequestMessage, Response, SamplingParams,
+    SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, Topology,
     VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -598,6 +598,17 @@ impl Runner {
                 Constraint::None
             };
 
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
             let messages = match request.messages {
                 Either::Left(ref messages) => {
                     let mut messages_vec = Vec::new();
@@ -802,6 +813,7 @@ impl Runner {
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
+                    dry_params,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -890,6 +902,17 @@ impl Runner {
                 None
             };
 
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
+            };
+
             let model_request = _Request::Normal(NormalRequest {
                 id: {
                     let l = NEXT_REQUEST_ID.lock().unwrap();
@@ -915,6 +938,7 @@ impl Runner {
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
+                    dry_params,
                 },
                 response: tx,
                 return_logprobs: false,

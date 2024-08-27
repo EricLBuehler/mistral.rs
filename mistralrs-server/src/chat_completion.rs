@@ -26,8 +26,8 @@ use axum::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, StopTokens as InternalStopTokens,
+    ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 
@@ -294,6 +294,17 @@ async fn parse_request(
         }
     };
 
+    let dry_params = if let Some(dry_multiplier) = oairequest.dry_multiplier {
+        Some(DrySamplingParams::new_with_defaults(
+            dry_multiplier,
+            oairequest.dry_sequence_breakers,
+            oairequest.dry_base,
+            oairequest.dry_allowed_length,
+        )?)
+    } else {
+        None
+    };
+
     let is_streaming = oairequest.stream.unwrap_or(false);
     Ok((
         Request::Normal(NormalRequest {
@@ -311,6 +322,7 @@ async fn parse_request(
                 stop_toks,
                 logits_bias: oairequest.logit_bias,
                 n_choices: oairequest.n_choices,
+                dry_params,
             },
             response: tx,
             return_logprobs: oairequest.logprobs,

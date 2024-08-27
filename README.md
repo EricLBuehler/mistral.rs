@@ -101,10 +101,12 @@ Mistal.rs supports several model categories:
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
 - PagedAttention: [docs](docs/PAGED_ATTENTION.md)
-- Various sampling techniques:
+- Various sampling and penalty techniques:
     - Top K
     - Top P
     - Min P
+    - [Dry Penalty](https://github.com/oobabooga/text-generation-webui/pull/5677)
+    - Frequency and Presence Penalty
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
