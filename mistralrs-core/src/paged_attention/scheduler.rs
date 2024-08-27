@@ -338,7 +338,6 @@ impl PagedAttentionScheduler {
 
 impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
-        println!("Adding sequence {}", seq.id());
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
     fn schedule(&mut self) -> SchedulerOutput<'_> {

@@ -9,6 +9,7 @@ use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
 use crate::ops::NonZeroOp;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
@@ -224,6 +225,7 @@ impl Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -239,6 +241,7 @@ impl Model {
                 start_offsets_kernel,
                 context_lens,
                 metadata,
+                flash_params,
             )
         } else {
             self.llm.forward(
@@ -248,6 +251,7 @@ impl Model {
                 context_lens,
                 position_ids,
                 metadata,
+                flash_params,
             )
         }
     }
@@ -278,6 +282,7 @@ impl VisionModel for Model {
         position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         self.forward_inputs(
             input_ids,
@@ -291,6 +296,7 @@ impl VisionModel for Model {
             context_lens,
             position_ids,
             metadata,
+            flash_params,
         )
     }
 

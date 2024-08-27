@@ -4,11 +4,13 @@
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    attention::SdpaParams,
+    layers::Sdpa,
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -21,7 +23,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, PhiRotaryEmbedding, RmsNorm},
+    layers::{CausalMasker, PhiRotaryEmbedding, RmsNorm},
     models::phi3::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -30,17 +32,15 @@ use crate::pipeline::Cache;
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Clone)]
 struct Attention {
     qkv_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     o_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<PhiRotaryEmbedding>,
-    use_flash_attn: bool,
     sliding_window: Option<usize>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -87,10 +87,15 @@ impl Attention {
             rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -105,6 +110,7 @@ impl Attention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -162,19 +168,13 @@ impl Attention {
             true,
         )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-        let mut attn_output = ScaledDotProductAttention.run_attention(
+        let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            self.num_heads,
-            self.head_dim,
             attn_mask.as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            q_len,
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
 
         if let Some(t) = self.qkv_proj.quantized_act_type() {
@@ -278,7 +278,6 @@ impl Mlp {
     }
 }
 
-#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
@@ -352,6 +351,7 @@ impl DecoderLayer {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -364,6 +364,7 @@ impl DecoderLayer {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -383,9 +384,9 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     dtype: DType,
-    pub device: Device,
-    pub cache: Cache,
-    pub max_seq_len: usize,
+    device: Device,
+    cache: Cache,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     xlora_classifier: Option<XLoraClassifier>,
     sliding_window: Option<usize>,
@@ -411,9 +412,7 @@ impl Model {
                 quant_cfg.bits
             );
         }
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -506,6 +505,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
+                head_dim: None,
             },
         })
     }
@@ -520,6 +520,7 @@ impl Model {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = if is_full_pass {
@@ -560,6 +561,7 @@ impl Model {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -579,6 +581,8 @@ impl Model {
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -591,6 +595,8 @@ impl Model {
                 no_kv_cache,
                 non_granular_state,
                 &position_ids,
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -603,6 +609,7 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -623,6 +630,7 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
                 if let Some(t) = self.lm_head.quantized_act_type() {
@@ -643,6 +651,7 @@ impl Model {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
             if let Some(t) = self.lm_head.quantized_act_type() {
@@ -704,6 +713,7 @@ impl NormalModel for Model {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -719,6 +729,8 @@ impl NormalModel for Model {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -731,6 +743,8 @@ impl NormalModel for Model {
             non_granular_state,
             context_lens,
             position_ids,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &Cache {
@@ -792,6 +806,7 @@ impl ScalingsMaker for Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         // NOTE(EricLBuehler): hacky yes, but passing the context lens to start the position ids calculation works
         self.inner_forward(
@@ -802,6 +817,7 @@ impl ScalingsMaker for Model {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

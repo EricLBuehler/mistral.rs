@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
@@ -48,7 +50,7 @@ pub mod text_models_inputs_processor {
     use std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
-    use candle_core::{Device, Tensor, WithDType};
+    use candle_core::{DType, Device, Tensor, WithDType};
     use tokenizers::Tokenizer;
 
     use crate::{
@@ -92,6 +94,14 @@ pub mod text_models_inputs_processor {
         pub max_context_len: Option<usize>,
     }
 
+    #[derive(Clone, Debug)]
+    pub struct FlashParams {
+        pub max_q: u32,
+        pub max_k: u32,
+        pub cumulative_seqlens_q: Tensor,
+        pub cumulative_seqlens_k: Tensor,
+    }
+
     pub struct InputMetadata {
         pub input: Tensor,
         pub positions: Vec<usize>,
@@ -99,6 +109,7 @@ pub mod text_models_inputs_processor {
         pub context_lens: Vec<(usize, usize)>, // (start index, len)
         pub position_ids: Vec<usize>,
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>, // For paged attention
+        pub flash_meta: FlashParams,
     }
 
     pub struct InnerInputProcessorOutput {
@@ -130,6 +141,8 @@ pub mod text_models_inputs_processor {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
+        let mut seqlens_q = vec![0];
+        let mut seqlens_k = vec![0];
         for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
@@ -141,6 +154,9 @@ pub mod text_models_inputs_processor {
                 ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 last_n_context_len.map(|(a, _)| a).unwrap_or(1),
             ));
+
+            seqlens_q.push(ctxt.len() as u32);
+            seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
@@ -217,6 +233,17 @@ pub mod text_models_inputs_processor {
                 tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
             }
         }
+        let max_q = *seqlens_q.iter().max().unwrap();
+        let max_k = *seqlens_k.iter().max().unwrap();
+        let seqlens_q = Tensor::new(seqlens_q, device)?
+            .to_dtype(DType::F32)?
+            .cumsum(0)?
+            .to_dtype(DType::U32)?;
+        let seqlens_k = Tensor::new(seqlens_k, device)?
+            .to_dtype(DType::F32)?
+            .cumsum(0)?
+            .to_dtype(DType::U32)?;
+        //dbg!(&seqlens_q, &seqlens_k, &seqlen_offsets, &position_ids);
         let positions_kernel = Tensor::cat(&tmp, 0)?;
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
         // Only use matmul via f16 if prompt and seqlen > 512
@@ -232,7 +259,6 @@ pub mod text_models_inputs_processor {
                 _make_tensor_with_pad(slot_mappings, max_slot_mapping_len, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
             let block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
@@ -249,7 +275,7 @@ pub mod text_models_inputs_processor {
                 .map(|x| x.len())
                 .max()
                 .unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let context_lens = _make_tensor_with_pad(
                 paged_attn_context_lens
                     .iter()
@@ -278,6 +304,12 @@ pub mod text_models_inputs_processor {
             context_lens,
             position_ids,
             paged_attn_meta,
+            flash_meta: FlashParams {
+                max_k,
+                max_q,
+                cumulative_seqlens_k: seqlens_k,
+                cumulative_seqlens_q: seqlens_q,
+            },
         })
     }
 
@@ -296,12 +328,17 @@ pub mod text_models_inputs_processor {
         let mut slot_mappings = Vec::new();
         let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
+        let mut seqlens_q = vec![0];
+        let mut seqlens_k = vec![0];
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
             let start_pos = ctxt.len().saturating_sub(1);
             let ctxt = ctxt[start_pos..].to_vec();
             seqlen_offsets.push(start_pos);
             context_lens.push((0, 1));
             position_ids.push(seq.len());
+
+            seqlens_q.push(ctxt.len() as u32);
+            seqlens_k.push((ctxt.len() + start_pos) as u32);
 
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
@@ -357,6 +394,17 @@ pub mod text_models_inputs_processor {
         {
             tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
         }
+        let max_q = *seqlens_q.iter().max().unwrap();
+        let max_k = *seqlens_k.iter().max().unwrap();
+        let seqlens_q = Tensor::new(seqlens_q, device)?
+            .to_dtype(DType::F32)?
+            .cumsum(0)?
+            .to_dtype(DType::U32)?;
+        let seqlens_k = Tensor::new(seqlens_k, device)?
+            .to_dtype(DType::F32)?
+            .cumsum(0)?
+            .to_dtype(DType::U32)?;
+        //dbg!(&seqlens_q, &seqlens_k, &seqlen_offsets, &position_ids);
         let positions_kernel = Tensor::cat(&tmp, 0)?;
         set_use_matmul_via_f16(false);
 
@@ -364,7 +412,7 @@ pub mod text_models_inputs_processor {
             let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let block_tables = _make_tensor_with_pad(
                 block_tables
                     .iter()
@@ -377,7 +425,7 @@ pub mod text_models_inputs_processor {
             let block_tables = block_tables.reshape(((), max_block_table_len))?;
 
             let max_context_len = paged_attn_context_lens.iter().max().unwrap();
-            #[allow(clippy::cast_possible_truncation)]
+
             let context_lens = Tensor::from_vec(
                 paged_attn_context_lens
                     .iter()
@@ -404,6 +452,12 @@ pub mod text_models_inputs_processor {
             context_lens,
             position_ids,
             paged_attn_meta,
+            flash_meta: FlashParams {
+                max_k,
+                max_q,
+                cumulative_seqlens_k: seqlens_k,
+                cumulative_seqlens_q: seqlens_q,
+            },
         })
     }
 
@@ -521,6 +575,8 @@ pub mod text_models_inputs_processor {
         pub context_lens: Vec<(usize, usize)>,
         pub position_ids: Vec<usize>,
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
+        pub flash_meta: FlashParams,
+        pub flash_meta_full: Option<FlashParams>,
     }
 
     pub struct TextInputsProcessor;
@@ -574,6 +630,7 @@ pub mod text_models_inputs_processor {
                                     context_lens: _,
                                     position_ids,
                                     paged_attn_meta: _,
+                                    flash_meta: flash_meta_full,
                                 },
                             seq_indices,
                         } = prompt?;
@@ -586,6 +643,7 @@ pub mod text_models_inputs_processor {
                                     context_lens,
                                     position_ids: _,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices: _,
                         } = completion?;
@@ -599,6 +657,8 @@ pub mod text_models_inputs_processor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: Some(flash_meta_full),
                         });
                         Ok(InputProcessorOutput {
                             inputs,
@@ -629,6 +689,7 @@ pub mod text_models_inputs_processor {
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata?;
@@ -642,6 +703,8 @@ pub mod text_models_inputs_processor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta: flash_meta.clone(),
+                            flash_meta_full: Some(flash_meta),
                         });
                         Ok(InputProcessorOutput {
                             inputs,
@@ -672,6 +735,7 @@ pub mod text_models_inputs_processor {
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata?;
@@ -685,6 +749,8 @@ pub mod text_models_inputs_processor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: None,
                         });
                         Ok(InputProcessorOutput {
                             inputs,
@@ -716,6 +782,7 @@ pub mod text_models_inputs_processor {
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
+                                    flash_meta,
                                 },
                             seq_indices,
                         } = metadata?;
@@ -729,6 +796,8 @@ pub mod text_models_inputs_processor {
                             context_lens,
                             position_ids,
                             paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: None,
                         });
                         Ok(InputProcessorOutput {
                             inputs,

@@ -23,6 +23,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `Qwen2`
 - `Gemma2`
 - `Starcoder2`
+- `Phi3_5MoE`
 
 ### Architecture for vision models
 - `Phi3V`
@@ -42,6 +43,7 @@ class Which(Enum):
         model_id: str
         arch: Architecture
         tokenizer_json: str | None = None
+        topology: str | None = None
 
     @dataclass
     class XLora:
@@ -51,6 +53,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
+        topology: str | None = None
 
     @dataclass
     class Lora:
@@ -59,12 +62,14 @@ class Which(Enum):
         arch: Architecture
         model_id: str | None = None
         tokenizer_json: str | None = None
+        topology: str | None = None
 
     @dataclass
     class GGUF:
         quantized_model_id: str
         quantized_filename: str | list[str]
         tok_model_id: str | None = None
+        topology: str | None = None
 
     @dataclass
     class XLoraGGUF:
@@ -74,6 +79,7 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
+        topology: str | None = None
 
     @dataclass
     class LoraGGUF:
@@ -82,6 +88,7 @@ class Which(Enum):
         adapters_model_id: str
         order: str
         tok_model_id: str | None = None
+        topology: str | None = None
 
     @dataclass
     class GGML:
@@ -90,6 +97,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
         gqa: int | None = None
+        topology: str | None = None
 
     @dataclass
     class XLoraGGML:
@@ -101,6 +109,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         tokenizer_json: str | None = None
         gqa: int | None = None
+        topology: str | None = None
 
     @dataclass
     class LoraGGML:
@@ -110,12 +119,14 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
+        topology: str | None = None
 
     @dataclass
     class VisionPlain:
         model_id: str
         arch: VisionArchitecture
         tokenizer_json: str | None = None
+        topology: str | None = None
 ```
 
 

@@ -22,8 +22,8 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, TryIntoDType,
-    DEBUG,
+    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
@@ -75,11 +75,12 @@ pub struct GGMLLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
     pub gqa: usize,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 #[derive(Default)]
@@ -243,9 +244,29 @@ impl Loader for GGMLLoader {
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
-        if !mapper.is_dummy() {
+        if !(mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map())))
+        {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
+        if !(mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map())))
+            && paged_attn_config.is_some()
+        {
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
         if !mapper.is_dummy() && paged_attn_config.is_some() {
             warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
@@ -498,6 +519,8 @@ impl Pipeline for GGMLPipeline {
             context_lens,
             position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
+            flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -517,6 +540,8 @@ impl Pipeline for GGMLPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
         }
     }

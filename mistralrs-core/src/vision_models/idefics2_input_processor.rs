@@ -68,7 +68,11 @@ impl Processor for Idefics2Processor {
         let mut image_str = format!(
             "{}{}{}",
             self.fake_image_token,
-            self.image_token.repeat(self.config.image_seq_len),
+            self.image_token.repeat(
+                self.config
+                    .image_seq_len
+                    .expect("Idefics 2 model needs `image_seq_len`")
+            ),
             self.fake_image_token
         );
         if self
@@ -148,6 +152,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     context_lens,
                     position_ids,
                     paged_attn_meta,
+                    flash_meta,
                 },
             seq_indices,
         } = if is_prompt {
@@ -223,6 +228,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             pixel_values,
             model_specific_args: Box::new(pixel_attention_mask),
             paged_attn_meta,
+            flash_meta,
         });
         Box::new(std::iter::once(Ok(InputProcessorOutput {
             inputs,

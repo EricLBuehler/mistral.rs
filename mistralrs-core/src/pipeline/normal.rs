@@ -10,7 +10,7 @@ use super::{
 };
 use super::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
+    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -30,7 +30,7 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -56,6 +56,7 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
+    topology: Option<Topology>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -86,11 +87,12 @@ pub struct NormalLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 impl NormalLoaderBuilder {
@@ -169,6 +171,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
+            NormalLoaderType::Phi3_5MoE => Box::new(Phi3_5MoELoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,
@@ -231,22 +234,30 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
+        if mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             info!(
                 "Loading model `{}` on {}.",
                 self.get_id(),
                 device.device_pretty_repr()
             );
         } else if paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
         }
 
-        let mapper_full = mapper.into_mapper(
+        let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
+            self.config.topology.as_ref(),
         )?;
-        let dtype = mapper_full.get_min_dtype(dtype)?;
+        let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
             "Model config: {:?}",
@@ -254,7 +265,15 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let load_device = if in_situ_quant.is_none() {
+        let mut loading_isq = in_situ_quant.is_some();
+        if let Some(ref topology) = self.config.topology {
+            loading_isq |= topology
+                .0
+                .iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -278,7 +297,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone(),
                 attention_mechanism
             ),
@@ -293,7 +312,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             ModelKind::Adapter {
@@ -307,7 +326,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             _ => unreachable!(),
@@ -319,8 +338,8 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+        if in_situ_quant.is_some() || self.config.topology.is_some() {
+            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -376,6 +395,7 @@ impl Loader for NormalLoader {
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
+            topology: self.config.topology.clone(),
         })))
     }
 
@@ -404,7 +424,7 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(Some(dtype), device, self.topology.as_ref())
             .map_err(anyhow::Error::msg)
     }
 }
@@ -469,6 +489,8 @@ impl Pipeline for NormalPipeline {
             context_lens,
             position_ids,
             mut paged_attn_meta,
+            flash_meta,
+            flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model.is_xlora() {
             false => self.model.forward(
@@ -483,6 +505,7 @@ impl Pipeline for NormalPipeline {
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
+                &flash_meta,
             ),
             true => self.model.xlora_forward(
                 &input_ids,
@@ -495,6 +518,8 @@ impl Pipeline for NormalPipeline {
                 &self.non_granular_state,
                 context_lens,
                 position_ids,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
         }
     }

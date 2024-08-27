@@ -62,6 +62,7 @@ impl PagedAttention {
         _key_cache: Option<Tensor>,
         _value_cache: Option<Tensor>,
         _input_metadata: &mut PagedAttentionInputMetadata,
+        _softcapping: Option<f64>,
     ) -> Result<Tensor> {
         unreachable!();
     }

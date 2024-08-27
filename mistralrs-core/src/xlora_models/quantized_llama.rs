@@ -2,10 +2,12 @@
 
 use std::collections::HashMap;
 
+use crate::attention::SdpaParams;
 use crate::gguf::Content;
 use crate::lora::{
     get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
 };
+use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
@@ -15,9 +17,9 @@ use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache};
-use crate::DeviceMapMetadata;
+use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -178,6 +180,7 @@ struct LayerWeights {
     n_kv_head: usize,
     head_dim: usize,
     rotary: RotaryEmbedding,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -192,6 +195,7 @@ impl LayerWeights {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.lora_forward(
@@ -247,19 +251,13 @@ impl LayerWeights {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-        let y = ScaledDotProductAttention.run_attention(
+        let y = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            self.n_head,
-            self.head_dim,
             mask.as_ref(),
-            false,
-            b_sz,
-            seq_len,
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
@@ -363,6 +361,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
             let cfgk = get_lora_cfg(&attention_wk);
             let cfgv = get_lora_cfg(&attention_wv);
             let cfgo = get_lora_cfg(&attention_wo);
+            let n_kv_head = ct.hparams.n_head as usize / gqa;
             layers.push(LayerWeights {
                 attention_wq: QLoraLinear::new(
                     QMatMul::from_qtensor(attention_wq)?,
@@ -411,6 +410,13 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 rotary: rotary.clone(),
+                sdpa_params: SdpaParams {
+                    n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         if xlora_config.is_none() && preload_adapters.is_none() {
@@ -483,6 +489,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
@@ -521,7 +528,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
@@ -686,6 +693,13 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 rotary: rotary.clone(),
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         if xlora_config.is_none() && preload_adapters.is_none() {
@@ -791,6 +805,7 @@ impl ModelWeights {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = if is_full_pass {
@@ -831,6 +846,7 @@ impl ModelWeights {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?;
             let x = (attn + residual)?;
 
@@ -865,6 +881,8 @@ impl ModelWeights {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -877,6 +895,8 @@ impl ModelWeights {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -891,6 +911,7 @@ impl ModelWeights {
                                 true,
                                 no_kv_cache,
                                 None,
+                                flash_params_full,
                             )?
                             .contiguous()?,
                         None,
@@ -912,6 +933,7 @@ impl ModelWeights {
                                 true,
                                 no_kv_cache,
                                 None,
+                                flash_params,
                             )?
                             .contiguous()?,
                         None,
@@ -933,6 +955,7 @@ impl ModelWeights {
                             false,
                             no_kv_cache,
                             None,
+                            flash_params,
                         )?
                         .contiguous()?,
                     None,
@@ -965,6 +988,7 @@ impl ScalingsMaker for ModelWeights {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -974,6 +998,7 @@ impl ScalingsMaker for ModelWeights {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

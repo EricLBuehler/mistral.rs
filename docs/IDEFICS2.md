@@ -1,4 +1,4 @@
-# Idefics 2 Model: `HuggingFaceM4/idefics2-8b-chatty`
+# Idefics 2 Model: [`HuggingFaceM4/idefics2-8b-chatty`](https://huggingface.co/HuggingFaceM4/idefics2-8b-chatty)
 
 The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance. 
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use candle_core::{
-    quantized::{GgmlDType, QMatMul},
+    quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
 use candle_nn::Module;
@@ -97,20 +97,37 @@ impl QuantMethod for GgufMatMul {
 
     fn apply_isq(
         self: Arc<Self>,
-        dtype: IsqType,
+        dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let t = match &self.w {
-            QMatMul::QTensor(q) => q.dequantize(&q.device())?,
-            QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
-        };
-        let dtype = dtype.try_into()?;
-        let res = generate_isq!(t, device, dtype, n_quantized);
-        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-            q_weight: res,
-            b: self.b.clone(),
-        })?))
+        if let Some(dtype) = dtype {
+            let t = match &self.w {
+                QMatMul::QTensor(q) => q.dequantize(&q.device())?,
+                QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
+            };
+            let dtype = dtype.try_into()?;
+            let res = generate_isq!(t, device, dtype, n_quantized);
+            Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: res,
+                b: self.b.clone(),
+            })?))
+        } else {
+            let w = match &self.w {
+                QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
+                    &q.dequantize(&device)?,
+                    q.dtype(),
+                )?)),
+                QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
+                QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
+            };
+            let b = if let Some(b) = &self.b {
+                Some(b.to_device(&device)?)
+            } else {
+                None
+            };
+            Ok(Arc::new(GgufMatMul { w, b }))
+        }
     }
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {

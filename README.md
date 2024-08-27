@@ -41,10 +41,16 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
     ```
 
-- φ³ Run the Phi 3 model with 128K context window
+- φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
-    ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+    ./mistralrs_server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
+    ```
+
+- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+
+    ```
+    ./mistralrs_server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
@@ -53,7 +59,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
-    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
     ```
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
@@ -84,6 +90,7 @@ Mistal.rs supports several model categories:
 - Lightweight OpenAI API compatible HTTP server.
 - Python API.
 - Grammar support with Regex and Yacc.
+- Use a simple [model topology](docs/TOPOLOGY.md) to configure ISQ and device mapping for *per-layer* with a single [YAML file](topologies/isq_and_device.yml) (examples [here](topologies))
 
 **Powerful**:
 - Fast LoRA support with weight merging.
@@ -94,13 +101,16 @@ Mistal.rs supports several model categories:
     - [Paper](https://arxiv.org/abs/2405.19076)
     - [Docs](docs/ANYMOE.md)
 - PagedAttention: [docs](docs/PAGED_ATTENTION.md)
-- Various sampling techniques:
+- Various sampling and penalty techniques:
     - Top K
     - Top P
     - Min P
+    - [Dry Penalty](https://github.com/oobabooga/text-generation-webui/pull/5677)
+    - Frequency and Presence Penalty
     - Please suggest more by raising an issue!
 - Tool calling: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking (only without PagedAttention for now): handle larger prompts where the activation size would cause an OOM by sending chunks
+- Custom logits processor API in Rust: [example](mistralrs/examples/custom_logits_processor/main.rs)
 
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
@@ -122,6 +132,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Mixtral|✅|✅|✅| |
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
+|Phi 3.5 MoE|✅| |✅| |
 |Qwen 2|✅| |✅|✅|
 |Phi 3 Vision|✅| |✅|✅|
 |Idefics 2|✅| |✅|✅|
@@ -362,6 +373,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `llama`
 - `phi2`
 - `phi3`
+- `phi3.5moe`
 - `qwen2`
 - `gemma2`
 - `starcoder2`
@@ -402,7 +414,7 @@ You can launch interactive mode, a simple chat application running in the termin
 You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+./mistralrs_server --vi plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
 ```
 
 ## More quick examples:
@@ -470,6 +482,7 @@ Example:
 |Mixtral|✅| |✅|
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
+|Phi 3.5 MoE| | |✅|
 |Qwen 2| | |✅|
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
@@ -495,6 +508,7 @@ Example:
 |Mixtral|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
+|Phi 3.5 MoE| | | |
 |Qwen 2| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
@@ -509,9 +523,10 @@ Example:
 |Mistral 7B|✅|
 |Gemma|✅|
 |Llama|✅|
-|Mixtral|✅|
+|Mixtral| |
 |Phi 2|✅|
 |Phi 3|✅|
+|Phi 3.5 MoE| |
 |Qwen 2|✅|
 |Phi 3 Vision| |
 |Idefics 2| |

@@ -30,7 +30,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
     get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
-    Pipeline, TryIntoDType,
+    Pipeline, Topology, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -86,7 +86,14 @@ pub struct GGUFLoader {
     chat_template: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
-    prompt_batchsize: Option<NonZeroUsize>,
+    config: GGUFSpecificConfig,
+}
+
+#[derive(Clone, Default)]
+/// Config for a GGUF loader.
+pub struct GGUFSpecificConfig {
+    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 #[derive(Default)]
@@ -101,7 +108,7 @@ pub struct GGUFLoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tgt_non_granular_index: Option<usize>,
-    prompt_batchsize: Option<NonZeroUsize>,
+    config: GGUFSpecificConfig,
 }
 
 impl GGUFLoaderBuilder {
@@ -113,7 +120,7 @@ impl GGUFLoaderBuilder {
         tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filenames: Vec<String>,
-        prompt_batchsize: Option<NonZeroUsize>,
+        config: GGUFSpecificConfig,
     ) -> Self {
         let kind = ModelKind::Quantized {
             quant: QuantizationKind::Gguf,
@@ -125,7 +132,7 @@ impl GGUFLoaderBuilder {
             kind,
             quantized_filenames,
             quantized_model_id,
-            prompt_batchsize,
+            config,
             ..Default::default()
         }
     }
@@ -187,7 +194,7 @@ impl GGUFLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filenames: self.quantized_filenames,
             quantized_model_id: self.quantized_model_id,
-            prompt_batchsize: self.prompt_batchsize,
+            config: self.config,
         })
     }
 }
@@ -204,7 +211,7 @@ impl GGUFLoader {
         no_kv_cache: bool,
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
-        prompt_batchsize: Option<NonZeroUsize>,
+        config: GGUFSpecificConfig,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             Some(id)
@@ -227,7 +234,7 @@ impl GGUFLoader {
             chat_template,
             kind,
             tgt_non_granular_index,
-            prompt_batchsize,
+            config,
         }
     }
 }
@@ -324,14 +331,21 @@ impl Loader for GGUFLoader {
             );
         }
         // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
+        if mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             info!(
                 "Loading model `{}` on {}.",
                 self.get_id(),
                 device.device_pretty_repr()
             );
         } else if paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
         }
 
@@ -385,7 +399,7 @@ impl Loader for GGUFLoader {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper).into(),
+                (device, mapper, self.config.topology.as_ref()).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
@@ -506,7 +520,7 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: self.prompt_batchsize,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -625,6 +639,8 @@ impl Pipeline for GGUFPipeline {
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
             mut paged_attn_meta,
+            flash_meta,
+            flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         match self.model {
             Model::Llama(ref model) => model.forward(
@@ -660,6 +676,8 @@ impl Pipeline for GGUFPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
             Model::Phi3(ref model) => model.forward(
                 &input_ids,
@@ -681,6 +699,8 @@ impl Pipeline for GGUFPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
             ),
             Model::Starcoder2(ref model) => model.forward(
                 &input_ids,

@@ -10,11 +10,12 @@ use mistralrs_quant::GgufMatMul;
 use mistralrs_quant::QuantMethod;
 use mistralrs_quant::QuantMethodConfig;
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
 use crate::layers::MatMul;
-use crate::layers::ScaledDotProductAttention;
-use crate::layers::{repeat_kv, CausalMasker, QLinear};
+use crate::layers::Sdpa;
+use crate::layers::{CausalMasker, QLinear};
 use crate::paged_attention::AttentionImplementation;
 use crate::paged_attention::PagedAttention;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -23,6 +24,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -44,12 +46,12 @@ struct LayerWeights {
     attn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
-    n_kv_head: usize,
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -104,25 +106,13 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    seq_len,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -228,6 +218,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
@@ -258,7 +249,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
@@ -319,12 +310,18 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 attn_norm,
                 mlp,
                 n_head: head_count,
-                n_kv_head: head_count_kv,
                 head_dim,
                 cos: cos.clone().to_device(device)?,
                 sin: sin.clone().to_device(device)?,
                 rope_dim,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

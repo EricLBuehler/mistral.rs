@@ -2,31 +2,33 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::Llama3RopeConfig,
+    device_map::DeviceMapper,
+    layers::{Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel,
+    },
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::{Activation, VarBuilder};
-use either::Either;
 
 use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
 use serde::Deserialize;
-use tracing::warn;
 
 use crate::{
     models,
     xlora_models::{self, XLoraConfig},
-    DeviceMapMetadata,
 };
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -35,6 +37,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
     fn xlora_forward(
@@ -49,6 +52,8 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
@@ -66,7 +71,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
 /// Metadata for loading a model with ISQ or device mapping.
 pub struct NormalLoadingMetadata {
     // Device mapping metadata which can be used to construct a concrete device mapper
-    pub mapper: DeviceMapMetadata,
+    pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     // Flag to check if loading in ISQ
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
@@ -122,6 +127,8 @@ pub enum NormalLoaderType {
     Gemma2,
     #[serde(rename = "starcoder2")]
     Starcoder2,
+    #[serde(rename = "phi3.5moe")]
+    Phi3_5MoE,
 }
 
 impl FromStr for NormalLoaderType {
@@ -137,7 +144,8 @@ impl FromStr for NormalLoaderType {
             "qwen2" => Ok(Self::Qwen2),
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`.")),
+            "phi3.5moe" => Ok(Self::Phi3_5MoE),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`.")),
         }
     }
 }
@@ -647,9 +655,6 @@ impl NormalModelLoader for Phi2Loader {
 
 // ======================== Phi3 loader
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct Phi3RopeScaling(#[serde(with = "either::serde_untagged")] pub Either<Vec<f64>, String>);
-
 #[derive(Deserialize)]
 struct Phi3BasicConfig {
     vocab_size: usize,
@@ -663,7 +668,7 @@ struct Phi3BasicConfig {
     rope_theta: f64,
     bos_token_id: Option<u32>,
     eos_token_id: Option<u32>,
-    rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
+    rope_scaling: Option<PhiRopeScalingConfig>,
     max_position_embeddings: usize,
     original_max_position_embeddings: usize,
     sliding_window: Option<usize>,
@@ -843,6 +848,58 @@ impl NormalModelLoader for Qwen2Loader {
 
 // ======================== Gemma2 loader
 
+#[derive(Deserialize)]
+struct Gemma2BasicConfig {
+    attention_bias: bool,
+    head_dim: usize,
+    // The code gemma configs include both hidden_act and hidden_activation.
+    hidden_act: Option<Activation>,
+    hidden_activation: Option<Activation>,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_attention_heads: usize,
+    num_hidden_layers: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    vocab_size: usize,
+    sliding_window: usize,
+    attn_logit_softcapping: Option<f64>,
+    final_logit_softcapping: Option<f64>,
+    query_pre_attn_scalar: usize,
+
+    #[serde(default = "default_max_position_embeddings")]
+    max_position_embeddings: usize,
+    quantization_config: Option<QuantizedConfig>,
+}
+
+impl Gemma2BasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::gemma2::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::gemma2::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            hidden_activation: basic_config.hidden_activation,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            rope_theta: basic_config.rope_theta,
+            attention_bias: basic_config.attention_bias,
+            head_dim: basic_config.head_dim,
+            use_flash_attn,
+            quantization_config: basic_config.quantization_config,
+            sliding_window: basic_config.sliding_window,
+            attn_logit_softcapping: basic_config.attn_logit_softcapping,
+            final_logit_softcapping: basic_config.final_logit_softcapping,
+            query_pre_attn_scalar: basic_config.query_pre_attn_scalar,
+        })
+    }
+}
+
 /// [`NormalLoader`] for a Gemma2 model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -857,11 +914,8 @@ impl NormalModelLoader for Gemma2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if use_flash_attn {
-            warn!("Gemma 2 does not support flash attention.");
-        }
         Ok(Box::new(models::gemma2::Model::new(
-            &serde_json::from_str(config)?,
+            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -879,11 +933,8 @@ impl NormalModelLoader for Gemma2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if use_flash_attn {
-            warn!("Gemma 2 does not support flash attention.");
-        }
         Ok(Box::new(xlora_models::XLoraGemma2::new(
-            &serde_json::from_str(config)?,
+            &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             lora_config,
             xlora_config,
@@ -896,14 +947,15 @@ impl NormalModelLoader for Gemma2Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
-        Ok(Box::new(serde_json::from_str::<models::gemma2::Config>(
+        Ok(Box::new(Gemma2BasicConfig::deserialize(
             config,
+            use_flash_attn,
         )?))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(serde_json::from_str::<models::gemma2::Config>(config)?.num_hidden_layers)
+        Ok(Gemma2BasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -1002,5 +1054,114 @@ impl NormalModelLoader for Starcoder2Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
+    }
+}
+
+// ======================== Phi3 loader
+
+#[derive(Deserialize)]
+struct Phi3_5MoEBasicConfig {
+    vocab_size: usize,
+    hidden_act: candle_nn::Activation,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_hidden_layers: usize,
+    num_attention_heads: usize,
+    num_key_value_heads: usize,
+    rms_norm_eps: f64,
+    rope_theta: f64,
+    rope_scaling: Option<PhiRopeScalingConfig>,
+    max_position_embeddings: usize,
+    original_max_position_embeddings: usize,
+    sliding_window: Option<usize>,
+    quantization_config: Option<QuantizedConfig>,
+    lm_head_bias: bool,
+    attention_bias: bool,
+    num_local_experts: usize,
+    router_jitter_noise: f64,
+}
+
+impl Phi3_5MoEBasicConfig {
+    fn deserialize(slice: &str, use_flash_attn: bool) -> Result<models::phi3_5_moe::Config> {
+        let basic_config: Self = serde_json::from_str(slice)?;
+        Ok(models::phi3_5_moe::Config {
+            vocab_size: basic_config.vocab_size,
+            hidden_size: basic_config.hidden_size,
+            intermediate_size: basic_config.intermediate_size,
+            num_hidden_layers: basic_config.num_hidden_layers,
+            num_attention_heads: basic_config.num_attention_heads,
+            num_key_value_heads: basic_config.num_key_value_heads,
+            hidden_act: basic_config.hidden_act,
+            max_position_embeddings: basic_config.max_position_embeddings,
+            rope_theta: basic_config.rope_theta,
+            rms_norm_eps: basic_config.rms_norm_eps,
+            rope_scaling: basic_config.rope_scaling,
+            original_max_position_embeddings: basic_config.original_max_position_embeddings,
+            use_flash_attn,
+            sliding_window: basic_config.sliding_window,
+            quantization_config: basic_config.quantization_config,
+            lm_head_bias: basic_config.lm_head_bias,
+            attention_bias: basic_config.attention_bias,
+            num_local_experts: basic_config.num_local_experts,
+            router_jitter_noise: basic_config.router_jitter_noise,
+        })
+    }
+}
+
+/// [`NormalLoader`] for a Phi 3.5 MoE model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Phi3_5MoELoader;
+
+impl NormalModelLoader for Phi3_5MoELoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::phi3_5_moe::Model::new(
+            &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(xlora_models::XLoraPhi3::new(
+            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }

@@ -39,6 +39,10 @@ pub struct CompletionRequest {
     pub(crate) min_p: Option<f64>,
     pub(crate) tool_schemas: Option<Vec<String>>,
     pub(crate) tool_choice: Option<ToolChoice>,
+    pub(crate) dry_multiplier: Option<f32>,
+    pub(crate) dry_base: Option<f32>,
+    pub(crate) dry_allowed_length: Option<usize>,
+    pub(crate) dry_sequence_breakers: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -65,6 +69,10 @@ impl CompletionRequest {
         min_p=None,
         tool_schemas=None,
         tool_choice=None,
+        dry_multiplier=None,
+        dry_base=None,
+        dry_allowed_length=None,
+        dry_sequence_breakers=None,
     ))]
     fn new(
         prompt: String,
@@ -87,6 +95,10 @@ impl CompletionRequest {
         min_p: Option<f64>,
         tool_schemas: Option<Vec<String>>,
         tool_choice: Option<ToolChoice>,
+        dry_multiplier: Option<f32>,
+        dry_base: Option<f32>,
+        dry_allowed_length: Option<usize>,
+        dry_sequence_breakers: Option<Vec<String>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -109,6 +121,10 @@ impl CompletionRequest {
             min_p,
             tool_schemas,
             tool_choice,
+            dry_multiplier,
+            dry_allowed_length,
+            dry_base,
+            dry_sequence_breakers,
         })
     }
 }
@@ -146,6 +162,10 @@ pub struct ChatCompletionRequest {
     pub(crate) min_p: Option<f64>,
     pub(crate) tool_schemas: Option<Vec<String>>,
     pub(crate) tool_choice: Option<ToolChoice>,
+    pub(crate) dry_multiplier: Option<f32>,
+    pub(crate) dry_base: Option<f32>,
+    pub(crate) dry_allowed_length: Option<usize>,
+    pub(crate) dry_sequence_breakers: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -172,6 +192,10 @@ impl ChatCompletionRequest {
         min_p=None,
         tool_schemas=None,
         tool_choice=None,
+        dry_multiplier=None,
+        dry_base=None,
+        dry_allowed_length=None,
+        dry_sequence_breakers=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -194,6 +218,10 @@ impl ChatCompletionRequest {
         min_p: Option<f64>,
         tool_schemas: Option<Vec<String>>,
         tool_choice: Option<ToolChoice>,
+        dry_multiplier: Option<f32>,
+        dry_base: Option<f32>,
+        dry_allowed_length: Option<usize>,
+        dry_sequence_breakers: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -264,6 +292,10 @@ impl ChatCompletionRequest {
             min_p,
             tool_choice,
             tool_schemas,
+            dry_multiplier,
+            dry_allowed_length,
+            dry_base,
+            dry_sequence_breakers,
         })
     }
 }

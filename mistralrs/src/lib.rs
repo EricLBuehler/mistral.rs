@@ -36,6 +36,7 @@
 //!         adapters: None,
 //!         tool_choice: None,
 //!         tools: None,
+//!         logits_processors: None,
 //!     });
 //!     mistralrs.get_sender()?.blocking_send(request)?;
 //!
@@ -48,5 +49,5 @@
 //! }
 //! ```
 
-pub use candle_core::{DType, Device, Result};
+pub use candle_core::{DType, Device, Result, Tensor};
 pub use mistralrs_core::*;

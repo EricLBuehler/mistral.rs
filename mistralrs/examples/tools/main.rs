@@ -29,6 +29,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         NormalSpecificConfig {
             use_flash_attn: false,
             prompt_batchsize: None,
+            topology: None,
         },
         None,
         None,
