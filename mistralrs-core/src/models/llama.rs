@@ -426,7 +426,7 @@ impl Llama {
         let mut x = self.wte.forward(input_ids)?;
         let (batch_size, seq_len, hidden_size) = x.dims3()?;
 
-        let num_devices = 1;
+        let num_devices = 4;
         let chunk_size = seq_len / num_devices;
 
         let mut chunks: Vec<Tensor> = Vec::with_capacity(num_devices);
@@ -499,10 +499,9 @@ impl Llama {
                 // Accumulate attention results
                 if block_chunks.len() <= chunk_idx {
                     block_chunks.push(x);
-                } 
-                // else {
-                //     block_chunks[chunk_idx] = block_chunks[chunk_idx].add(&x)?;
-                // }
+                } else {
+                    block_chunks[chunk_idx] = &x;
+                }
             }   
 
             // Concatenate chunks for this block
@@ -548,7 +547,7 @@ impl Llama {
             );
         }
 
-        let num_devices = 1;
+        let num_devices = 4;
         let mut cuda_devices = Vec::with_capacity(num_devices);
         let mapper = normal_loading_metadata
             .mapper
