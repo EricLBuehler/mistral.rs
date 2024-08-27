@@ -276,7 +276,29 @@
 <a href="#276" id="276">276</a>
 <a href="#277" id="277">277</a>
 <a href="#278" id="278">278</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>std::{
     env,
     error::Error,
     pin::Pin,
@@ -296,8 +318,8 @@
     },
 };
 <span class="kw">use </span>mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, StopTokens <span class="kw">as </span>InternalStopTokens,
+    CompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, StopTokens <span class="kw">as </span>InternalStopTokens,
 };
 <span class="kw">use </span>serde::Serialize;
 <span class="kw">use </span>tracing::warn;
@@ -423,7 +445,7 @@
     oairequest: CompletionRequest,
     state: Arc&lt;MistralRs&gt;,
     tx: Sender&lt;Response&gt;,
-) -&gt; (Request, bool) {
+) -&gt; <span class="prelude-ty">Result</span>&lt;(Request, bool)&gt; {
     <span class="kw">let </span>repr = serde_json::to_string(<span class="kw-2">&amp;</span>oairequest).expect(<span class="string">"Serialization of request failed."</span>);
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -438,7 +460,18 @@
     }
 
     <span class="kw">let </span>is_streaming = oairequest.stream.unwrap_or(<span class="bool-val">false</span>);
-    (
+
+    <span class="kw">let </span>dry_params = <span class="kw">if let </span><span class="prelude-val">Some</span>(dry_multiplier) = oairequest.dry_multiplier {
+        <span class="prelude-val">Some</span>(DrySamplingParams::new_with_defaults(
+            dry_multiplier,
+            oairequest.dry_sequence_breakers,
+            oairequest.dry_base,
+            oairequest.dry_allowed_length,
+        )<span class="question-mark">?</span>)
+    } <span class="kw">else </span>{
+        <span class="prelude-val">None
+    </span>};
+    <span class="prelude-val">Ok</span>((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
             messages: RequestMessage::Completion {
@@ -458,6 +491,7 @@
                 stop_toks,
                 logits_bias: oairequest.logit_bias,
                 n_choices: oairequest.n_choices,
+                dry_params,
             },
             response: tx,
             return_logprobs: <span class="bool-val">false</span>,
@@ -474,7 +508,7 @@
             logits_processors: <span class="prelude-val">None</span>,
         }),
         is_streaming,
-    )
+    ))
 }
 
 <span class="attr">#[utoipa::path(
@@ -484,6 +518,7 @@
     request_body = CompletionRequest,
     responses((status = <span class="number">200</span>, description = <span class="string">"Completions"</span>))
 )]
+
 </span><span class="kw">pub async fn </span>completions(
     State(state): State&lt;Arc&lt;MistralRs&gt;&gt;,
     Json(oairequest): Json&lt;CompletionRequest&gt;,
@@ -495,7 +530,14 @@
         );
     }
 
-    <span class="kw">let </span>(request, is_streaming) = parse_request(oairequest, state.clone(), tx);
+    <span class="kw">let </span>(request, is_streaming) = <span class="kw">match </span>parse_request(oairequest, state.clone(), tx) {
+        <span class="prelude-val">Ok</span>(x) =&gt; x,
+        <span class="prelude-val">Err</span>(e) =&gt; {
+            <span class="kw">let </span>e = anyhow::Error::msg(e.to_string());
+            MistralRs::maybe_log_error(state, <span class="kw-2">&amp;*</span>e);
+            <span class="kw">return </span>CompletionResponder::InternalError(e.into());
+        }
+    };
     <span class="kw">let </span>sender = state.get_sender().unwrap();
 
     <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = sender.send(request).<span class="kw">await </span>{

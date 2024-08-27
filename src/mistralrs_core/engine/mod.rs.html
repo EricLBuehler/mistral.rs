@@ -733,6 +733,8 @@
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
 <a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -1382,11 +1384,13 @@
             tokenizer,
             request.sampling_params.frequency_penalty,
             request.sampling_params.presence_penalty,
+            request.sampling_params.dry_params,
             topk,
             topp,
             minp,
             request.logits_processors.unwrap_or_default(),
         );
+        <span class="kw">let </span>sampler = <span class="macro">handle_seq_error!</span>(sampler, request.response);
 
         <span class="kw">if </span>request.sampling_params.n_choices == <span class="number">0 </span>{
             request

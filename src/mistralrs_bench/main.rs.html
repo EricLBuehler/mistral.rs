@@ -542,14 +542,18 @@
 <a href="#542" id="542">542</a>
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
     initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
+    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    TokenSource, Usage,
 };
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Display, num::NonZeroUsize};
@@ -608,6 +612,7 @@
         stop_toks: <span class="prelude-val">None</span>,
         logits_bias: <span class="prelude-val">None</span>,
         n_choices: <span class="number">1</span>,
+        dry_params: <span class="prelude-val">Some</span>(DrySamplingParams::default()),
     };
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);
@@ -771,6 +776,7 @@
         stop_toks: <span class="prelude-val">None</span>,
         logits_bias: <span class="prelude-val">None</span>,
         n_choices: <span class="number">1</span>,
+        dry_params: <span class="prelude-val">Some</span>(DrySamplingParams::default()),
     };
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">10_000</span>);

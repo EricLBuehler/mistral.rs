@@ -198,12 +198,13 @@
 <a href="#198" id="198">198</a>
 <a href="#199" id="199">199</a>
 <a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
-    Constraint, MessageContent, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    Constraint, DrySamplingParams, MessageContent, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
@@ -243,6 +244,7 @@
         stop_toks: <span class="prelude-val">None</span>,
         logits_bias: <span class="prelude-val">None</span>,
         n_choices: <span class="number">1</span>,
+        dry_params: <span class="prelude-val">Some</span>(DrySamplingParams::default()),
     };
     <span class="macro">info!</span>(<span class="string">"Starting interactive loop with sampling params: {sampling_params:?}"</span>);
 

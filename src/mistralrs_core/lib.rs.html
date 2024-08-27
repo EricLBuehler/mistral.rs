@@ -454,6 +454,8 @@
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
 <a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -534,7 +536,9 @@
 <span class="kw">pub use </span>request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
 <span class="kw">pub use </span>response::Response;
 <span class="kw">pub use </span>response::<span class="kw-2">*</span>;
-<span class="kw">pub use </span>sampler::{CustomLogitsProcessor, SamplingParams, StopTokens, TopLogprob};
+<span class="kw">pub use </span>sampler::{
+    CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
+};
 <span class="kw">pub use </span>scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 <span class="kw">use </span>serde::Serialize;
 <span class="kw">use </span>tokio::runtime::Runtime;
