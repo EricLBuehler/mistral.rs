@@ -72,7 +72,6 @@ bytemuck_derive = "1.7.0"
 mistralrs-paged-attn = { version = "0.2.5", path = "../mistralrs-paged-attn", optional = true }
 mistralrs-quant = { version = "0.2.0", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
-schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex = "1.10.6"
 
