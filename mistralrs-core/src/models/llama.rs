@@ -454,7 +454,7 @@ impl Llama {
             }
         }
 
-        let mut cache = self.kv_caches[0].lock();
+        // let mut cache = self.kv_caches[0].lock();
         let mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             metadata
@@ -484,44 +484,50 @@ impl Llama {
                     self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
                 };
 
-                let device_chunk = chunk.device();
-            
-                // x = block.forward(
-                //     &x,
-                //     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                //     seqlen_offsets,
-                //     start_offsets_kernel.clone(),
-                //     block_idx,
-                //     &mut cache,
-                //     metadata
-                //         .as_mut()
-                //         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
-                // )?;
+                for cache_rotation in 0..num_caches {
+                    let cache_idx = (chunk_idx + cache_rotation) % num_caches;
+                    let kv_cache = &self.kv_caches[cache_idx];
+                    let mut cache = kv_cache.lock();
 
-                x = block.forward(
-                    &x,
-                    &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
-                    seqlen_offsets,
-                    start_offsets_kernel.clone().to_device(&device_chunk)?,
-                    block_idx,
-                    // &mut cache_on_chunk_device,
-                    &mut cache,
-                    metadata
-                        .as_mut()
-                        .map(|(kv_cache, metadata)| {
-                            let (tensor1, tensor2) = kv_cache[block_idx].clone();
-                            (
-                                (tensor1.to_device(&device_chunk).unwrap(), tensor2.to_device(&device_chunk).unwrap()),
-                                &mut **metadata
-                            )
-                        }),
-                )?;
-            
-                // Accumulate attention results
-                if block_chunks.len() <= chunk_idx {
-                    block_chunks.push(x);
-                } else {
-                    block_chunks[chunk_idx] = x;
+                    let device_chunk = chunk.device();
+                
+                    // x = block.forward(
+                    //     &x,
+                    //     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                    //     seqlen_offsets,
+                    //     start_offsets_kernel.clone(),
+                    //     block_idx,
+                    //     &mut cache,
+                    //     metadata
+                    //         .as_mut()
+                    //         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                    // )?;
+
+                    x = block.forward(
+                        &x,
+                        &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
+                        seqlen_offsets,
+                        start_offsets_kernel.clone().to_device(&device_chunk)?,
+                        block_idx,
+                        // &mut cache_on_chunk_device,
+                        &mut cache,
+                        metadata
+                            .as_mut()
+                            .map(|(kv_cache, metadata)| {
+                                let (tensor1, tensor2) = kv_cache[block_idx].clone();
+                                (
+                                    (tensor1.to_device(&device_chunk).unwrap(), tensor2.to_device(&device_chunk).unwrap()),
+                                    &mut **metadata
+                                )
+                            }),
+                    )?;
+                
+                    // Accumulate attention results
+                    if block_chunks.len() <= chunk_idx {
+                        block_chunks.push(x);
+                    } else {
+                        block_chunks[chunk_idx] = x;
+                    }
                 }
             }   
 
