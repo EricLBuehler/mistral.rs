@@ -722,15 +722,15 @@
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::pyclass;
 
+<span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>rand::distributions::{Distribution, WeightedIndex};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
-<span class="kw">use </span>std::sync::LazyLock;
 <span class="kw">use </span>tokenizers::Tokenizer;
 
-<span class="kw">static </span>DRY_SEQUENCE_BREAKERS: LazyLock&lt;Vec&lt;String&gt;&gt; =
-    LazyLock::new(|| [<span class="string">"\n"</span>, <span class="string">":"</span>, <span class="string">"\""</span>, <span class="string">"*"</span>].map(String::from).to_vec());
+<span class="kw">static </span>DRY_SEQUENCE_BREAKERS: Lazy&lt;Vec&lt;String&gt;&gt; =
+    Lazy::new(|| [<span class="string">"\n"</span>, <span class="string">":"</span>, <span class="string">"\""</span>, <span class="string">"*"</span>].map(String::from).to_vec());
 
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="doccomment">/// Stop sequences or ids.
