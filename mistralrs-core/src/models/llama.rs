@@ -483,17 +483,38 @@ impl Llama {
                 } else {
                     self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
                 };
+
+                let device_chunk = chunk.device();
             
+                // x = block.forward(
+                //     &x,
+                //     &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                //     seqlen_offsets,
+                //     start_offsets_kernel.clone(),
+                //     block_idx,
+                //     &mut cache,
+                //     metadata
+                //         .as_mut()
+                //         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                // )?;
+
                 x = block.forward(
                     &x,
-                    &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                    &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
                     seqlen_offsets,
-                    start_offsets_kernel.clone(),
+                    start_offsets_kernel.clone().to_device(&device_chunk)?,
                     block_idx,
+                    // &mut cache_on_chunk_device,
                     &mut cache,
                     metadata
                         .as_mut()
-                        .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                        .map(|(kv_cache, metadata)| {
+                            let (tensor1, tensor2) = kv_cache[block_idx].clone();
+                            (
+                                (tensor1.to_device(&device_chunk).unwrap(), tensor2.to_device(&device_chunk).unwrap()),
+                                &mut **metadata
+                            )
+                        }),
                 )?;
             
                 // Accumulate attention results
