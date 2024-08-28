@@ -455,17 +455,6 @@ impl Llama {
         }
 
         // let mut cache = self.kv_caches[0].lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
-            // x.dtype(),
-            chunks[0].dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-
         let mut processed_chunks = Vec::new();
         let mut target_device = &self.cuda_devices[0];
 
@@ -484,12 +473,26 @@ impl Llama {
                     self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
                 };
 
+                let num_caches = self.kv_caches.len();
+
                 for cache_rotation in 0..num_caches {
                     let cache_idx = (chunk_idx + cache_rotation) % num_caches;
                     let kv_cache = &self.kv_caches[cache_idx];
                     let mut cache = kv_cache.lock();
 
                     let device_chunk = chunk.device();
+
+                    let mask = CausalMasker.make_causal_mask_as_attn_bias(
+                        input_ids,
+                        metadata
+                            .as_ref()
+                            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                            .unwrap_or(&*cache as &dyn PastKvLenCache),
+                        // x.dtype(),
+                        chunks[0].dtype(),
+                        self.blocks[0].attn.num_attention_heads,
+                    )?;
+            
                 
                     // x = block.forward(
                     //     &x,
