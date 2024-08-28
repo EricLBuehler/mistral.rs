@@ -10,15 +10,15 @@ use candle_core::{Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use once_cell::sync::Lazy;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 use tokenizers::Tokenizer;
 
-static DRY_SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
-    LazyLock::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
+static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
+    Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
