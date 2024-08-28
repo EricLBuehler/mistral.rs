@@ -507,7 +507,7 @@ impl Llama {
                     // )?;
 
                     x = block.forward(
-                        &x,
+                        &x.clone(),
                         &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
                         seqlen_offsets,
                         start_offsets_kernel.clone().to_device(&device_chunk)?,
