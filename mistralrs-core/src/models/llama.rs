@@ -468,9 +468,9 @@ impl Llama {
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut x = if block_idx == 0 {
-                    self.mapper.map(chunk.clone(), block_idx)?
+                    self.mapper.map(chunk.clone(), block_idx)?.clone();
                 } else {
-                    self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?
+                    self.mapper.map(block_chunks[chunk_idx].clone(), block_idx)?.clone();
                 };
 
                 let num_caches = self.kv_caches.len();
@@ -507,7 +507,7 @@ impl Llama {
                     // )?;
 
                     x = block.forward(
-                        &x.clone(),
+                        &x,
                         &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
                         seqlen_offsets,
                         start_offsets_kernel.clone().to_device(&device_chunk)?,
