@@ -33,6 +33,7 @@ use crate::{
     Pipeline, Topology, TryIntoDType,
 };
 use crate::{
+    models::quantized_gemma2::ModelWeights as QGemma2,
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
@@ -62,6 +63,7 @@ enum Model {
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
+    Gemma2(QGemma2),
     Starcoder2(QStarcoder2),
 }
 
@@ -430,6 +432,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Starcoder2 => {
                     Model::Starcoder2(QStarcoder2::try_from(model_config)?)
                 }
+                GGUFArchitecture::Gemma2 => Model::Gemma2(QGemma2::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::AdapterQuantized { adapter, .. } => match arch {
@@ -471,6 +474,7 @@ impl Loader for GGUFLoader {
             Model::Phi3(ref p) => p.max_seq_len,
             Model::XLoraPhi3(ref p) => p.max_seq_len,
             Model::Starcoder2(ref p) => p.max_seq_len,
+            Model::Gemma2(ref p) => p.max_seq_len,
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
@@ -480,6 +484,7 @@ impl Loader for GGUFLoader {
             Model::Phi3(ref model) => model.cache.lock().len(),
             Model::XLoraPhi3(ref model) => model.cache.lock().len(),
             Model::Starcoder2(ref model) => model.cache.lock().len(),
+            Model::Gemma2(ref model) => model.cache.lock().len(),
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
@@ -575,6 +580,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Phi3(ref model) => &model.cache,
             Model::XLoraPhi3(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
+            Model::Gemma2(ref model) => &model.cache,
         }
     }
 }
@@ -607,6 +613,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Phi3(ref model) => model.device.clone(),
             Model::XLoraPhi3(ref model) => model.device.clone(),
             Model::Starcoder2(ref model) => model.device.clone(),
+            Model::Gemma2(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Arc<Tokenizer> {
@@ -682,6 +689,19 @@ impl Pipeline for GGUFPipeline {
             Model::Phi3(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
+                context_lens,
+                self.get_metadata().cache_engine.as_ref().map(|engine| {
+                    (
+                        engine.get_kv_cache().clone(),
+                        paged_attn_meta.as_mut().unwrap(),
+                    )
+                }),
+            ),
+            Model::Gemma2(ref model) => model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
                 self.get_metadata().cache_engine.as_ref().map(|engine| {
                     (
                         engine.get_kv_cache().clone(),
