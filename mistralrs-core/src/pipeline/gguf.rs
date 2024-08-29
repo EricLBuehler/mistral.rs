@@ -246,6 +246,7 @@ struct ContentConfig {
     num_attn_heads: usize,
     num_kv_heads: usize,
     num_layers: usize,
+    head_dim: usize,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -253,17 +254,30 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
+        let num_attn_heads = metadata[&format!("{arch}.attention.head_count")]
+            .to_u64()
+            .unwrap() as usize;
+        let hidden_size = metadata[&format!("{arch}.embedding_length")]
+            .to_u64()
+            .unwrap() as usize;
+        let key_len = metadata[&format!("{arch}.attention.key_length")]
+            .to_u64()
+            .map(|x| x as usize)
+            .unwrap_or(hidden_size / num_attn_heads);
+        // Trick to get the correct head dim
+        let expected_embed_len = key_len * num_attn_heads;
+        let embed_len_to_expected_ratio = hidden_size as f64 / expected_embed_len as f64;
+        let head_dim = (num_attn_heads as f64 * embed_len_to_expected_ratio) as usize;
         Self {
             hidden_size: metadata[&format!("{arch}.embedding_length")]
                 .to_u64()
                 .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
+            num_attn_heads,
             num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
                 .to_u64()
                 .unwrap() as usize,
             num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+            head_dim,
         }
     }
 }
@@ -280,6 +294,9 @@ impl ModelConfigLike for ContentConfig {
     }
     fn num_layers(&self) -> usize {
         self.num_layers
+    }
+    fn head_dim(&self) -> usize {
+        self.head_dim
     }
 }
 

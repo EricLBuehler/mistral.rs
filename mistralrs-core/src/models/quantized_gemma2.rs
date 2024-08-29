@@ -75,7 +75,7 @@ impl LayerWeights {
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len, n_embd) = x.dims3()?;
+        let (b_sz, seq_len, _n_embd) = x.dims3()?;
         let q = MatMul.qmethod_matmul(x, &*self.attn_q)?;
         let k = MatMul.qmethod_matmul(x, &*self.attn_k)?;
         let v = MatMul.qmethod_matmul(x, &*self.attn_v)?;
@@ -147,9 +147,9 @@ impl LayerWeights {
         };
 
         let y = if mask.is_some() {
-            y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?
+            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
-            y.reshape(&[b_sz, seq_len, n_embd])?
+            y.reshape((b_sz, seq_len, ()))?
         };
         let y = MatMul.qmethod_matmul(&y, &*self.attn_output)?;
         Ok(y)
@@ -271,7 +271,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
-            dbg!(&layer_idx);
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up =
