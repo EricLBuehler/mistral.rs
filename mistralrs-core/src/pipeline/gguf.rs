@@ -251,6 +251,7 @@ struct ContentConfig {
 
 #[allow(clippy::cast_possible_truncation)]
 impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
+    #[allow(clippy::cast_precision_loss)]
     fn from(value: &Content<'a, R>) -> Self {
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();

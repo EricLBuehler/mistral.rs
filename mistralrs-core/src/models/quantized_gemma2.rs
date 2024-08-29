@@ -31,9 +31,9 @@ struct Mlp {
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let lhs = MatMul
-            .qmethod_matmul(&xs, &*self.ffn_gate)?
+            .qmethod_matmul(xs, &*self.ffn_gate)?
             .apply(&self.act_fn)?;
-        let rhs = MatMul.qmethod_matmul(&xs, &*self.ffn_up)?;
+        let rhs = MatMul.qmethod_matmul(xs, &*self.ffn_up)?;
         MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.ffn_down)
     }
 }
@@ -65,6 +65,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn forward_attn(
         &self,
         x: &Tensor,
@@ -266,7 +267,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         }
 
         let rotary =
-            RotaryEmbedding::new(10000., head_dim, context_window, device, false, DType::F32)?;
+            RotaryEmbedding::new(10000., head_dim, context_window, device, true, DType::F32)?;
 
         let mapper = mapper.into_mapper(block_count, device, topology)?;
 
