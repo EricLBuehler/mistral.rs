@@ -5,10 +5,10 @@ use tokio::{
 };
 
 pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow::Error> {
-    let url = if let Ok(url) = url::Url::parse(&url_unparsed) {
+    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
         url
-    } else if File::open(&url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(&url_unparsed)?)
+    } else if File::open(url_unparsed).await.is_ok() {
+        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
         url::Url::parse(&format!("data:image/png;base64,{}", url_unparsed))

@@ -100,7 +100,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
             if image_url.as_str() != "\n" {
                 let url_unparsed = image_url.trim();
 
-                let image = util::parse_image_url(&url_unparsed)
+                let image = util::parse_image_url(url_unparsed)
                     .await
                     .expect("Failed to read image from URL/path");
                 images.push(image);
