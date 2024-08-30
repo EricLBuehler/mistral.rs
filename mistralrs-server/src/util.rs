@@ -74,7 +74,7 @@ mod tests {
         let image = parse_image_url(&url).await.unwrap();
         assert_eq!(image.dimensions(), (32, 32));
 
-        // from base64 encoded image
+        // from base64 encoded image (rust-logo-32x32.png)
         let url = "
         iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAHhElEQVR4AZXVA5Aky9bA8f/JzKrq
         npleX9u2bdu2bdu2bdv29z1e2zZm7k5PT3dXZeZ56I6J3o03sbG/iDLOSQuT6fptF11OREYDj4uR
