@@ -1,10 +1,7 @@
-use base64::{engine::general_purpose, Engine};
 use std::{
     collections::HashMap,
     env,
     error::Error,
-    fs::{self, File},
-    io::Read,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -13,8 +10,11 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens};
-use anyhow::Result;
+use crate::{
+    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    util,
+};
+use anyhow::{Context as _, Result};
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
@@ -259,24 +259,14 @@ async fn parse_request(
             }
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
-                for url in image_urls {
-                    let bytes = if url.contains("http") {
-                        // Read from http
-                        match reqwest::get(url.clone()).await {
-                            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-                            Err(e) => anyhow::bail!(e),
-                        }
-                    } else if let Ok(mut f) = File::open(&url) {
-                        // Read from local file
-                        let metadata = fs::metadata(&url)?;
-                        let mut buffer = vec![0; metadata.len() as usize];
-                        f.read_exact(&mut buffer)?;
-                        buffer
-                    } else {
-                        // Decode with base64
-                        general_purpose::STANDARD.decode(url)?
-                    };
-                    images.push(image::load_from_memory(&bytes)?);
+                for url_unparsed in image_urls {
+                    let image = util::parse_image_url(&url_unparsed)
+                        .await
+                        .with_context(|| {
+                            format!("Failed to parse image resource: {}", url_unparsed)
+                        })?;
+
+                    images.push(image);
                 }
                 RequestMessage::VisionChat { messages, images }
             } else {
