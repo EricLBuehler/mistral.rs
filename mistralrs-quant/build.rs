@@ -48,7 +48,7 @@ fn main() {
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
-        
+
         if target.contains("msvc") {
             // nothing to link to
         } else if target.contains("apple")

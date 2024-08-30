@@ -39,7 +39,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         builder = builder.arg(cuda_nvcc_flags_env);
     }
     println!("cargo:info={builder:?}");
-    
+
     let target = std::env::var("TARGET").unwrap();
     let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // https://github.com/EricLBuehler/mistral.rs/issues/588
