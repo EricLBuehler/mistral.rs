@@ -380,6 +380,9 @@ impl MoeMlp {
         let xs = xs.reshape(((), hidden))?;
         let xs_dev = xs.device();
         let xs = xs.to_device(&Device::Cpu)?;
+
+        // Sparse MoE block accumulates hidden states on CPU, but MLP and gate weights are untouched (maybe on GPU)
+
         let router_logits = self
             .gate
             .forward(&xs.to_device(xs_dev)?)?
