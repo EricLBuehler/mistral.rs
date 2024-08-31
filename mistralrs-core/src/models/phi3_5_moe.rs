@@ -314,7 +314,7 @@ impl MoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        let experts_vb = vb.pp("experts");
+        let experts_vb = vb.pp("experts").set_device(Device::Cpu);
         let mut experts = Vec::with_capacity(num_experts);
         for i in 0..num_experts {
             experts.push(Mlp::new(cfg, experts_vb.pp(i))?);
@@ -410,7 +410,9 @@ impl MoeMlp {
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert.forward(&current_state)?;
+            let exp_out = expert
+                .forward(&current_state.to_device(&Device::Cpu)?)?
+                .to_device(&current_state.device())?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
@@ -451,12 +453,11 @@ impl DecoderLayer {
         )?;
         let mlp = MoeMlp::new(
             cfg,
-            vb.pp("block_sparse_moe").set_device(Device::Cpu), /* mapper
-                                                               .set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq)*/
-            Device::Cpu, /*mapper
-                         .device_for(layer_idx, false)
-                         .cloned()
-                         .unwrap_or(real_device)*/
+            mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device),
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -500,14 +501,9 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let dev = xs.device();
         let xs = self
             .mlp
-            .forward(
-                &xs.apply(&self.post_attention_layernorm)?
-                    .to_device(&Device::Cpu)?,
-            )?
-            .to_device(dev)?;
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
 }
