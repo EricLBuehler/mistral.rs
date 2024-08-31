@@ -61,6 +61,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         "cargo:rustc-link-search=native={}",
         absolute_kernel_dir.display()
     );
+    println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
