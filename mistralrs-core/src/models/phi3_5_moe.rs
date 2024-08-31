@@ -441,6 +441,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        real_device: Device,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
@@ -451,7 +452,10 @@ impl DecoderLayer {
         let mlp = MoeMlp::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
-            mapper.device_for(layer_idx, false).unwrap().clone(),
+            mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device),
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -567,6 +571,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                normal_loading_metadata.real_device.clone(),
             )?;
             layers.push(layer)
         }
