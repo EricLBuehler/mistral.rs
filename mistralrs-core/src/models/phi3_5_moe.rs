@@ -311,10 +311,10 @@ impl MoeMlp {
         let gate = candle_nn::linear_no_bias(
             cfg.hidden_size,
             num_experts,
-            vb.pp("gate").set_device(layer_device),
+            vb.pp("gate").set_device(layer_device).set_device(Device::Cpu),
         )?;
 
-        let experts_vb = vb.pp("experts").set_device(Device::Cpu);
+        let experts_vb = vb.pp("experts");
         let mut experts = Vec::with_capacity(num_experts);
         for i in 0..num_experts {
             experts.push(Mlp::new(cfg, experts_vb.pp(i))?);
@@ -378,7 +378,7 @@ impl MoeMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
         let xs = xs.reshape(((), hidden))?;
-        let router_logits = self.gate.forward(&xs)?;
+        let router_logits = self.gate.forward(&xs.to_device(&Device::Cpu)?)?.to_device(xs.device())?;
         let (routing_weights, selected_experts) =
             self.sparsemixer(&router_logits, self.router_jitter_noise)?;
 
@@ -411,8 +411,7 @@ impl MoeMlp {
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
             let exp_out = expert
-                .forward(&current_state.to_device(&Device::Cpu)?)?
-                .to_device(&current_state.device())?;
+                .forward(&current_state)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
@@ -673,9 +672,9 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             //tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
-                tensors.push((&mut expert.w1, Some(usize::MAX)));
-                tensors.push((&mut expert.w2, Some(usize::MAX)));
-                tensors.push((&mut expert.w3, Some(usize::MAX)));
+                tensors.push((&mut expert.w1, Some(i)));
+                tensors.push((&mut expert.w2, Some(i)));
+                tensors.push((&mut expert.w3, Some(i)));
             }
         }
         (tensors, &*self.mapper)
