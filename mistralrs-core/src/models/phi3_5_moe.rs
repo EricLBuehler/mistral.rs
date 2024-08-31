@@ -306,9 +306,13 @@ struct MoeMlp {
 }
 
 impl MoeMlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, layer_device: Device) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
-        let gate = candle_nn::linear_no_bias(cfg.hidden_size, num_experts, vb.pp("gate"))?;
+        let gate = candle_nn::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            vb.pp("gate").set_device(layer_device),
+        )?;
 
         let experts_vb = vb.pp("experts");
         let mut experts = Vec::with_capacity(num_experts);
@@ -447,6 +451,7 @@ impl DecoderLayer {
         let mlp = MoeMlp::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            mapper.device_for(layer_idx, false).unwrap().clone(),
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
