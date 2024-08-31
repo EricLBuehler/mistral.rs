@@ -39,7 +39,17 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         builder = builder.arg(cuda_nvcc_flags_env);
     }
     println!("cargo:info={builder:?}");
-    builder.build_lib("libpagedattention.a");
+
+    let target = std::env::var("TARGET").unwrap();
+    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    // https://github.com/EricLBuehler/mistral.rs/issues/588
+    let out_file = if target.contains("msvc") {
+        // Windows case
+        build_dir.join("mistralrspagedattention.lib")
+    } else {
+        build_dir.join("libmistralrspagedattention.a")
+    };
+    builder.build_lib(out_file);
 
     let bindings = builder.build_ptx().unwrap();
     bindings.write("src/lib.rs").unwrap();
@@ -51,7 +61,8 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
         "cargo:rustc-link-search=native={}",
         absolute_kernel_dir.display()
     );
-    println!("cargo:rustc-link-lib=pagedattention");
+    println!("cargo:rustc-link-search={}", build_dir.display());
+    println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
     let mut file = OpenOptions::new().write(true).open("src/lib.rs").unwrap();

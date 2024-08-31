@@ -35,13 +35,20 @@ fn main() {
             builder = builder.arg(cuda_nvcc_flags_env);
         }
 
-        let out_file = build_dir.join("libmistralgptq.a");
+        let target = std::env::var("TARGET").unwrap();
+        let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        // https://github.com/EricLBuehler/mistral.rs/issues/588
+        let out_file = if target.contains("msvc") {
+            // Windows case
+            build_dir.join("mistralrsquant.lib")
+        } else {
+            build_dir.join("libmistralrsquant.a")
+        };
         builder.build_lib(out_file);
         println!("cargo:rustc-link-search={}", build_dir.display());
-        println!("cargo:rustc-link-lib=mistralgptq");
+        println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
-        let target = std::env::var("TARGET").unwrap();
         if target.contains("msvc") {
             // nothing to link to
         } else if target.contains("apple")
