@@ -451,11 +451,12 @@ impl DecoderLayer {
         )?;
         let mlp = MoeMlp::new(
             cfg,
-            mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
-            mapper
-                .device_for(layer_idx, false)
-                .cloned()
-                .unwrap_or(real_device),
+            vb.pp("post_attention_layernorm").set_device(Device::Cpu), /* mapper
+                                                                       .set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq)*/
+            Device::Cpu, /*mapper
+                         .device_for(layer_idx, false)
+                         .cloned()
+                         .unwrap_or(real_device)*/
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
@@ -465,7 +466,7 @@ impl DecoderLayer {
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
+            vb.pp("post_attention_layernorm").set_device(Device::Cpu), /*mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false)*/
         )?;
         Ok(Self {
             self_attn,
@@ -499,9 +500,14 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
+        let dev = xs.device();
         let xs = self
             .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+            .forward(
+                &xs.to_device(&Device::Cpu)?
+                    .apply(&self.post_attention_layernorm)?,
+            )?
+            .to_device(dev)?;
         residual + xs
     }
 }
@@ -671,9 +677,9 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             //tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
-                tensors.push((&mut expert.w1, Some(i)));
-                tensors.push((&mut expert.w2, Some(i)));
-                tensors.push((&mut expert.w3, Some(i)));
+                tensors.push((&mut expert.w1, Some(usize::MAX)));
+                tensors.push((&mut expert.w2, Some(usize::MAX)));
+                tensors.push((&mut expert.w3, Some(usize::MAX)));
             }
         }
         (tensors, &*self.mapper)
