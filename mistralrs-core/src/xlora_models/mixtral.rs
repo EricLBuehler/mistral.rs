@@ -409,6 +409,7 @@ impl SparseMoeBlock {
         )?;
         if self.gate.quantized_act_type().is_some() {
             router_logits = router_logits.to_dtype(original_dtype)?;
+            xs = xs.to_dtype(original_dtype)?;
         }
 
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
