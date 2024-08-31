@@ -311,7 +311,7 @@ impl MoeMlp {
         let gate = candle_nn::linear_no_bias(
             cfg.hidden_size,
             num_experts,
-            vb.pp("gate").set_device(layer_device).set_device(Device::Cpu),
+            vb.pp("gate").set_device(layer_device),
         )?;
 
         let experts_vb = vb.pp("experts");
@@ -378,9 +378,15 @@ impl MoeMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
         let xs = xs.reshape(((), hidden))?;
-        let router_logits = self.gate.forward(&xs.to_device(&Device::Cpu)?)?.to_device(xs.device())?;
-        let (routing_weights, selected_experts) =
-            self.sparsemixer(&router_logits, self.router_jitter_noise)?;
+        let router_logits = self.gate.forward(&xs)?;
+        let (routing_weights, selected_experts) = self.sparsemixer(
+            &router_logits.to_device(&Device::Cpu)?,
+            self.router_jitter_noise,
+        )?;
+        let (routing_weights, selected_experts) = (
+            routing_weights.to_device(router_logits.device())?,
+            selected_experts.to_device(router_logits.device())?,
+        );
 
         let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
 
@@ -410,8 +416,7 @@ impl MoeMlp {
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert
-                .forward(&current_state)?;
+            let exp_out = expert.forward(&current_state)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
