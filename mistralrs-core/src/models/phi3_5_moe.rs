@@ -451,8 +451,8 @@ impl DecoderLayer {
         )?;
         let mlp = MoeMlp::new(
             cfg,
-            vb.pp("post_attention_layernorm").set_device(Device::Cpu), /* mapper
-                                                                       .set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq)*/
+            vb.pp("block_sparse_moe").set_device(Device::Cpu), /* mapper
+                                                               .set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq)*/
             Device::Cpu, /*mapper
                          .device_for(layer_idx, false)
                          .cloned()
