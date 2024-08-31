@@ -137,14 +137,10 @@ pub trait IsqModel {
                         device.clone()
                     }
                 } else if let Some(layer_num) = layer_num {
-                    if *layer_num == usize::MAX {
-                        Device::Cpu
-                    } else {
-                        mapper
-                            .device_for(*layer_num, false)
-                            .cloned()
-                            .unwrap_or(device.clone())
-                    }
+                    mapper
+                        .device_for(*layer_num, false)
+                        .cloned()
+                        .unwrap_or(device.clone())
                 } else {
                     device.clone()
                 };

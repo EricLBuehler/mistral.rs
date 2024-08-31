@@ -380,7 +380,10 @@ impl MoeMlp {
         let xs = xs.reshape(((), hidden))?;
         let xs_dev = xs.device();
         let xs = xs.to_device(&Device::Cpu)?;
-        let router_logits = self.gate.forward(&xs.to_device(xs_dev)?)?.to_device(&Device::Cpu)?;
+        let router_logits = self
+            .gate
+            .forward(&xs.to_device(xs_dev)?)?
+            .to_device(&Device::Cpu)?;
         let (routing_weights, selected_experts) = self.sparsemixer(
             &router_logits.to_device(&Device::Cpu)?,
             self.router_jitter_noise,
@@ -414,7 +417,9 @@ impl MoeMlp {
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert.forward(&current_state.to_device(xs_dev)?)?.to_device(&Device::Cpu)?;
+            let exp_out = expert
+                .forward(&current_state.to_device(xs_dev)?)?
+                .to_device(&Device::Cpu)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
@@ -439,6 +444,7 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
@@ -675,7 +681,6 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            //tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
                 tensors.push((&mut expert.w1, Some(i)));
                 tensors.push((&mut expert.w2, Some(i)));
