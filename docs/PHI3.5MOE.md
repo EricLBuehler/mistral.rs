@@ -5,6 +5,7 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
 - Context length of **128k tokens**
 - Trained on **4.9T tokens**
 - 16 experts (16x3.8B parameters) with **6.6B active parameters**
+- Expect inference performance of a 7B model: automatic expert offloading coming soon!
 
 ## About the MoE mechanism
 1) Compute router gating logits
@@ -14,7 +15,7 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
 ```
-./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
 ```
 
 ## HTTP API
