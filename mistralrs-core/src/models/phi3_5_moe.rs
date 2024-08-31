@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, LayerNormConfig, VarBuilder};
+use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::sync::Arc;
 
@@ -463,20 +463,12 @@ impl DecoderLayer {
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
@@ -588,11 +580,7 @@ impl Model {
         }
         let norm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = candle_nn::linear_b(
@@ -684,7 +672,7 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate, Some(i)));
+            //tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
                 tensors.push((&mut expert.w1, Some(i)));
                 tensors.push((&mut expert.w2, Some(i)));
