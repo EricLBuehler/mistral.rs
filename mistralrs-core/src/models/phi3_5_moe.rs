@@ -466,7 +466,7 @@ impl DecoderLayer {
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm").set_device(Device::Cpu), /*mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false)*/
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -504,8 +504,8 @@ impl DecoderLayer {
         let xs = self
             .mlp
             .forward(
-                &xs.to_device(&Device::Cpu)?
-                    .apply(&self.post_attention_layernorm)?,
+                &xs.apply(&self.post_attention_layernorm)?
+                    .to_device(&Device::Cpu)?,
             )?
             .to_device(dev)?;
         residual + xs
