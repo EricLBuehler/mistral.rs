@@ -3,7 +3,7 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, LayerNormConfig, VarBuilder};
+use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::sync::Arc;
 
@@ -299,20 +299,19 @@ impl Mlp {
 }
 
 struct MoeMlp {
-    gate: Arc<dyn QuantMethod>,
+    gate: candle_nn::Linear,
     experts: Vec<Mlp>,
     router_jitter_noise: f64,
     num_experts: usize,
 }
 
 impl MoeMlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, layer_device: Device) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
-        let gate = mistralrs_quant::linear_no_bias(
+        let gate = candle_nn::linear_no_bias(
             cfg.hidden_size,
             num_experts,
-            &cfg.quantization_config,
-            vb.pp("gate"),
+            vb.pp("gate").set_device(layer_device),
         )?;
 
         let experts_vb = vb.pp("experts");
@@ -378,18 +377,20 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
-        let mut xs = xs.reshape(((), hidden))?;
-        let original_dtype = xs.dtype();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
-        if self.gate.quantized_act_type().is_some() {
-            router_logits = router_logits.to_dtype(original_dtype)?;
-            xs = xs.to_dtype(original_dtype)?;
-        }
-        let (routing_weights, selected_experts) =
-            self.sparsemixer(&router_logits, self.router_jitter_noise)?;
+        let xs = xs.reshape(((), hidden))?;
+        let xs_dev = xs.device();
+        let xs = xs.to_device(&Device::Cpu)?;
+
+        // Sparse MoE block accumulates hidden states on CPU, but MLP and gate weights are untouched (maybe on GPU)
+
+        let router_logits = self
+            .gate
+            .forward(&xs.to_device(xs_dev)?)?
+            .to_device(&Device::Cpu)?;
+        let (routing_weights, selected_experts) = self.sparsemixer(
+            &router_logits.to_device(&Device::Cpu)?,
+            self.router_jitter_noise,
+        )?;
 
         let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
 
@@ -419,7 +420,9 @@ impl MoeMlp {
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert.forward(&current_state)?;
+            let exp_out = expert
+                .forward(&current_state.to_device(xs_dev)?)?
+                .to_device(&Device::Cpu)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
@@ -430,7 +433,9 @@ impl MoeMlp {
             )?;
         }
 
-        final_hidden_states.reshape((bs, seq, hidden))
+        final_hidden_states
+            .reshape((bs, seq, hidden))?
+            .to_device(xs_dev)
     }
 }
 
@@ -442,6 +447,7 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
@@ -450,6 +456,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        real_device: Device,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
@@ -460,23 +467,19 @@ impl DecoderLayer {
         let mlp = MoeMlp::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("block_sparse_moe"), loading_isq),
+            mapper
+                .device_for(layer_idx, false)
+                .cloned()
+                .unwrap_or(real_device),
         )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
@@ -583,16 +586,13 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                normal_loading_metadata.real_device.clone(),
             )?;
             layers.push(layer)
         }
         let norm = layer_norm(
             cfg.hidden_size,
-            LayerNormConfig {
-                eps: cfg.rms_norm_eps,
-                remove_mean: true,
-                affine: true,
-            },
+            cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = candle_nn::linear_b(
@@ -684,7 +684,6 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate, Some(i)));
             for expert in &mut layer.mlp.experts {
                 tensors.push((&mut expert.w1, Some(i)));
                 tensors.push((&mut expert.w2, Some(i)));
