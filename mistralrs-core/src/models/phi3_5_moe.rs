@@ -299,7 +299,7 @@ impl Mlp {
 }
 
 struct MoeMlp {
-    gate: Arc<dyn QuantMethod>,
+    gate: candle_nn::Linear,
     experts: Vec<Mlp>,
     router_jitter_noise: f64,
     num_experts: usize,
@@ -308,12 +308,7 @@ struct MoeMlp {
 impl MoeMlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
-        let gate = mistralrs_quant::linear_no_bias(
-            cfg.hidden_size,
-            num_experts,
-            &cfg.quantization_config,
-            vb.pp("gate"),
-        )?;
+        let gate = candle_nn::linear_no_bias(cfg.hidden_size, num_experts, vb.pp("gate"))?;
 
         let experts_vb = vb.pp("experts");
         let mut experts = Vec::with_capacity(num_experts);
@@ -378,16 +373,8 @@ impl MoeMlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq, hidden) = xs.dims3()?;
-        let mut xs = xs.reshape(((), hidden))?;
-        let original_dtype = xs.dtype();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut router_logits = MatMul.qmethod_matmul(&xs, &*self.gate)?;
-        if self.gate.quantized_act_type().is_some() {
-            router_logits = router_logits.to_dtype(original_dtype)?;
-            xs = xs.to_dtype(original_dtype)?;
-        }
+        let xs = xs.reshape(((), hidden))?;
+        let router_logits = self.gate.forward(&xs)?;
         let (routing_weights, selected_experts) =
             self.sparsemixer(&router_logits, self.router_jitter_noise)?;
 
