@@ -296,6 +296,9 @@ impl QuantMethod for GptqLayer {
     }
 
     fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>> {
+        if self.q_weight.device().same_device(dev) {
+            return Ok(self);
+        }
         Ok(Arc::new(Self {
             q_weight: self.q_weight.to_device(dev)?,
             gptq_qzeros: self.gptq_qzeros.to_device(dev)?,

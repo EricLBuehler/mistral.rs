@@ -149,6 +149,9 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>> {
+        if self.0.weight().device().same_device(dev) {
+            return Ok(self);
+        }
         Ok(Arc::new(Self(Linear::new(
             self.0.weight().to_device(dev)?,
             self.0.bias().map(|x| x.to_device(dev).unwrap()),

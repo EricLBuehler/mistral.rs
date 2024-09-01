@@ -595,6 +595,9 @@ impl QuantMethod for HqqLayer {
     }
 
     fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>> {
+        if self.w_q.device().same_device(dev) {
+            return Ok(self);
+        }
         Ok(Arc::new(Self {
             w_q: self.w_q.to_device(dev)?,
             zeros: self.zeros.to_device(dev)?,

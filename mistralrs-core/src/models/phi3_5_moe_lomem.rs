@@ -383,6 +383,7 @@ impl MoeMlp {
             let top_x = nonzero_mask.i((.., 1))?;
 
             if top_x.dim(0)? == 0 {
+                expert.to_device(&Device::Cpu)?;
                 continue;
             }
 
@@ -401,11 +402,7 @@ impl MoeMlp {
             let exp_out = expert
                 .forward(&current_state.to_device(xs_dev)?)?
                 .to_device(&Device::Cpu)?;
-
-            println!("Casting to cpu");
-            expert.to_device(&Device::Cpu)?;
-            println!("Done with cast to cpu");
-
+            
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
             final_hidden_states = final_hidden_states.index_add(

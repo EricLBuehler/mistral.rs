@@ -137,10 +137,23 @@ impl QuantMethod for GgufMatMul {
     fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>> {
         let w = match &self.w {
             QMatMul::QTensor(q) => {
+                if q.device().same_device(dev) {
+                    return Ok(self);
+                }
                 QMatMul::from_qtensor(QTensor::quantize(&q.dequantize(dev)?, q.dtype())?)?
             }
-            QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(dev)?),
-            QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(dev)?),
+            QMatMul::TensorF16(t) => {
+                if t.device().same_device(dev) {
+                    return Ok(self);
+                }
+                QMatMul::TensorF16(t.to_device(dev)?)
+            }
+            QMatMul::Tensor(t) => {
+                if t.device().same_device(dev) {
+                    return Ok(self);
+                }
+                QMatMul::Tensor(t.to_device(dev)?)
+            }
         };
         Ok(Arc::new(Self {
             w,
