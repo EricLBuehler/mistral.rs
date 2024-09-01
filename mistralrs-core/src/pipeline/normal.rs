@@ -1,4 +1,5 @@
 use super::cache_manager::DefaultCacheManager;
+use super::loaders::Phi3_5MoELomemLoader;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -172,6 +173,7 @@ impl NormalLoaderBuilder {
             NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
             NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
             NormalLoaderType::Phi3_5MoE => Box::new(Phi3_5MoELoader),
+            NormalLoaderType::Phi3_5MoELomem => Box::new(Phi3_5MoELomemLoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,

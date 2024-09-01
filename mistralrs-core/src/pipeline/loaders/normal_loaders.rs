@@ -129,6 +129,8 @@ pub enum NormalLoaderType {
     Starcoder2,
     #[serde(rename = "phi3.5moe")]
     Phi3_5MoE,
+    #[serde(rename = "phi3.5moe-lomem")]
+    Phi3_5MoELomem,
 }
 
 impl FromStr for NormalLoaderType {
@@ -145,7 +147,8 @@ impl FromStr for NormalLoaderType {
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
             "phi3.5moe" => Ok(Self::Phi3_5MoE),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`.")),
+            "phi3.5moe-lomem" => Ok(Self::Phi3_5MoELomem),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `phi3.5moe-lomem`.")),
         }
     }
 }
@@ -1123,6 +1126,66 @@ impl NormalModelLoader for Phi3_5MoELoader {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi3_5_moe::Model::new(
+            &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(xlora_models::XLoraPhi3::new(
+            &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            self.is_gptx(),
+            normal_loading_metadata,
+            preload_adapters,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+// ======================== Phi3 loader
+
+/// [`NormalLoader`] for a Phi 3.5 MoE model with low-memory.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Phi3_5MoELomemLoader;
+
+impl NormalModelLoader for Phi3_5MoELomemLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::phi3_5_moe_lomem::Model::new(
             &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
             self.is_gptx(),

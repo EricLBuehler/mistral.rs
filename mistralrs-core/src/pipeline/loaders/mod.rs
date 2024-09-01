@@ -9,7 +9,7 @@ use mistralrs_quant::IsqType;
 pub use normal_loaders::{
     Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
-    Qwen2Loader, Starcoder2Loader,
+    Phi3_5MoELomemLoader, Qwen2Loader, Starcoder2Loader,
 };
 
 use tokio::sync::Mutex;

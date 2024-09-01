@@ -593,4 +593,15 @@ impl QuantMethod for HqqLayer {
         // Use 1 because we quantize on the GPU
         Some(1.try_into().unwrap())
     }
+
+    fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self {
+            w_q: self.w_q.to_device(dev)?,
+            zeros: self.zeros.to_device(dev)?,
+            scales: self.scales.to_device(dev)?,
+            bias: self.bias.as_ref().map(|b| b.to_device(dev).unwrap()),
+            w_shape: self.w_shape.clone(),
+            cfg: self.cfg.clone(),
+        }))
+    }
 }

@@ -171,6 +171,8 @@ pub trait QuantMethod: Send + Sync + Debug {
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
+
+    fn to_device(self: Arc<Self>, dev: &Device) -> Result<Arc<dyn QuantMethod>>;
 }
 
 macro_rules! pack_factor {
