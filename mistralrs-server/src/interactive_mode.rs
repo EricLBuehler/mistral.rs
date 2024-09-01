@@ -1,4 +1,3 @@
-use base64::{engine::general_purpose, Engine};
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
@@ -7,13 +6,14 @@ use mistralrs_core::{
 };
 use once_cell::sync::Lazy;
 use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Write},
     sync::{atomic::Ordering, Arc, Mutex},
     time::Instant,
 };
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
+
+use crate::util;
 
 fn exit_handler() {
     std::process::exit(0);
@@ -98,24 +98,12 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
                 return;
             }
             if image_url.as_str() != "\n" {
-                let url = image_url.trim();
-                let bytes = if url.contains("http") {
-                    // Read from http
-                    match reqwest::get(url).await {
-                        Ok(http_resp) => http_resp.bytes().await.unwrap().to_vec(),
-                        Err(e) => panic!("{e}"),
-                    }
-                } else if let Ok(mut f) = File::open(url) {
-                    // Read from local file
-                    let metadata = fs::metadata(url).unwrap();
-                    let mut buffer = vec![0; metadata.len() as usize];
-                    f.read_exact(&mut buffer).unwrap();
-                    buffer
-                } else {
-                    // Decode with base64
-                    general_purpose::STANDARD.decode(url).unwrap()
-                };
-                images.push(image::load_from_memory(&bytes).unwrap());
+                let url_unparsed = image_url.trim();
+
+                let image = util::parse_image_url(url_unparsed)
+                    .await
+                    .expect("Failed to read image from URL/path");
+                images.push(image);
             }
 
             // Set the handler to terminate all seqs, so allowing cancelling running

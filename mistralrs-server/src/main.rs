@@ -23,6 +23,7 @@ use crate::{chat_completion::__path_chatcompletions, completions::completions};
 use crate::{chat_completion::chatcompletions, openai::ModelObject};
 mod interactive_mode;
 mod openai;
+mod util;
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};

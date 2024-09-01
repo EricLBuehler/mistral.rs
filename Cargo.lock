@@ -841,6 +841,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-url"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c297a1c74b71ae29df00c3e22dd9534821d60eb9af5a0192823fa2acea70c2a"
+
+[[package]]
 name = "defmac"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2240,10 +2246,10 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "axum",
- "base64 0.22.1",
  "candle-core",
  "clap",
  "ctrlc",
+ "data-url",
  "either",
  "futures",
  "image",
@@ -2257,6 +2263,7 @@ dependencies = [
  "tokio",
  "tower-http",
  "tracing",
+ "url",
  "utoipa",
  "utoipa-swagger-ui",
 ]
