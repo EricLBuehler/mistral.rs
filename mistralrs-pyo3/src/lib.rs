@@ -1,15 +1,12 @@
 #![allow(clippy::too_many_arguments)]
 
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
-use base64::{engine::general_purpose, Engine};
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs,
-    io::Read,
     num::NonZeroUsize,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
@@ -33,6 +30,7 @@ use std::fs::File;
 mod anymoe;
 mod requests;
 mod stream;
+mod util;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
 
@@ -726,32 +724,10 @@ impl Runner {
                     if !image_urls.is_empty() {
                         let mut images = Vec::new();
                         for url in image_urls {
-                            let bytes = if url.contains("http") {
-                                // Read from http
-                                match reqwest::blocking::get(url.clone()) {
-                                    Ok(http_resp) => http_resp
-                                        .bytes()
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        .to_vec(),
-                                    Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-                                }
-                            } else if let Ok(mut f) = File::open(&url) {
-                                // Read from local file
-                                let metadata = fs::metadata(&url)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                                let mut buffer = vec![0; metadata.len() as usize];
-                                f.read_exact(&mut buffer)?;
-                                buffer
-                            } else {
-                                // Decode with base64
-                                general_purpose::STANDARD
-                                    .decode(url)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?
-                            };
-                            images.push(
-                                image::load_from_memory(&bytes)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                            );
+                            let url_unparsed = url.trim();
+
+                            let image = util::parse_image_url(url_unparsed)?;
+                            images.push(image);
                         }
                         RequestMessage::VisionChat {
                             messages: messages_vec,
