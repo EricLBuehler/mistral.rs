@@ -5,7 +5,7 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
 - Context length of **128k tokens**
 - Trained on **4.9T tokens**
 - 16 experts (16x3.8B parameters) with **6.6B active parameters**
-- Expect inference performance of a 7B model: automatic expert offloading coming soon!
+- Expect inference performance of a 7B model
 
 ## About the MoE mechanism
 1) Compute router gating logits
@@ -70,4 +70,43 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
+```
+
+## Rust API
+You can find this example [here](../mistralrs/examples/phi3.5_moe/main.rs).
+
+```rust
+fn setup() -> anyhow::Result<Arc<MistralRs>> {
+    // Select a Mistral model
+    let loader = NormalLoaderBuilder::new(
+        NormalSpecificConfig {
+            use_flash_attn: false,
+            prompt_batchsize: None,
+            topology: None,
+        },
+        None,
+        None,
+        Some("microsoft/Phi-3.5-MoE-instruct".to_string()),
+    )
+    .build(NormalLoaderType::Phi3_5MoE)?;
+    // Load, into a Pipeline
+    let pipeline = loader.load_model_from_hf(
+        None,
+        TokenSource::CacheToken,
+        &ModelDType::Auto,
+        &best_device()?,
+        false,
+        DeviceMapMetadata::dummy(),
+        Some(IsqType::Q4K),
+        None, // No PagedAttention.
+    )?;
+    // Create the MistralRs, which is a runner
+    Ok(MistralRsBuilder::new(
+        pipeline,
+        SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
+        },
+    )
+    .build())
+}
 ```
