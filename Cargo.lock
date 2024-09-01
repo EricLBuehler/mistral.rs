@@ -2208,6 +2208,7 @@ name = "mistralrs-pyo3"
 version = "0.2.5"
 dependencies = [
  "accelerate-src",
+ "anyhow",
  "base64 0.22.1",
  "candle-core",
  "data-url",
