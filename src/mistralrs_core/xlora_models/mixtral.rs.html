@@ -1048,6 +1048,9 @@
 <a href="#1048" id="1048">1048</a>
 <a href="#1049" id="1049">1049</a>
 <a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1610,12 +1613,15 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>xs = (xs + residual)<span class="question-mark">?</span>;
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
-        <span class="kw">let </span>xs = <span class="self">self</span>.block_sparse_moe.forward(
-            <span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.post_attention_layernorm)<span class="question-mark">?</span>,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>xs = <span class="self">self
+            </span>.block_sparse_moe
+            .forward(
+                <span class="kw-2">&amp;</span>xs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.post_attention_layernorm)<span class="question-mark">?</span>,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )<span class="question-mark">?
+            </span>.to_dtype(residual.dtype())<span class="question-mark">?</span>;
         residual + xs
     }
 }
