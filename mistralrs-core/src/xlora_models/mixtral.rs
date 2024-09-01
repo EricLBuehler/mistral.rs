@@ -560,12 +560,15 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.block_sparse_moe.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let xs = self
+            .block_sparse_moe
+            .forward(
+                &xs.apply(&self.post_attention_layernorm)?,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
+            .to_dtype(residual.dtype())?;
         residual + xs
     }
 }

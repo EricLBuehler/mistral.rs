@@ -449,7 +449,8 @@ impl DecoderLayer {
         let residual = &xs;
         let xs = xs
             .apply(&self.post_attention_layernorm)?
-            .apply(&self.block_sparse_moe)?;
+            .apply(&self.block_sparse_moe)?
+            .to_dtype(residual.dtype())?;
         residual + xs
     }
 }
