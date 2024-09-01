@@ -73,7 +73,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find this example [here](../mistralrs/examples/phi3.5_moe/main.rs).
+You can find this example [here](../mistralrs/examples/phi3_5_moe/main.rs).
 
 ```rust
 fn setup() -> anyhow::Result<Arc<MistralRs>> {

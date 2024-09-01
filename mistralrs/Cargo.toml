@@ -106,5 +106,5 @@ name = "topology"
 required-features = []
 
 [[example]]
-name = "phi3.5_moe"
+name = "phi3_5_moe"
 required-features = []
