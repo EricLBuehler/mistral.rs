@@ -409,7 +409,6 @@ impl SparseMoeBlock {
         )?;
         if self.gate.quantized_act_type().is_some() {
             router_logits = router_logits.to_dtype(original_dtype)?;
-            xs = xs.to_dtype(original_dtype)?;
         }
 
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
@@ -561,12 +560,15 @@ impl DecoderLayer {
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.block_sparse_moe.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let xs = self
+            .block_sparse_moe
+            .forward(
+                &xs.apply(&self.post_attention_layernorm)?,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
+            .to_dtype(residual.dtype())?;
         residual + xs
     }
 }
