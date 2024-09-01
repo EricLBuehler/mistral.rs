@@ -187,20 +187,7 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
-<a href="#190" id="190">190</a>
-<a href="#191" id="191">191</a>
-<a href="#192" id="192">192</a>
-<a href="#193" id="193">193</a>
-<a href="#194" id="194">194</a>
-<a href="#195" id="195">195</a>
-<a href="#196" id="196">196</a>
-<a href="#197" id="197">197</a>
-<a href="#198" id="198">198</a>
-<a href="#199" id="199">199</a>
-<a href="#200" id="200">200</a>
-<a href="#201" id="201">201</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>base64::{engine::general_purpose, Engine};
-<span class="kw">use </span>either::Either;
+</pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     Constraint, DrySamplingParams, MessageContent, MistralRs, NormalRequest, Request,
@@ -208,13 +195,14 @@
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
-    fs::{<span class="self">self</span>, File},
-    io::{<span class="self">self</span>, Read, Write},
+    io::{<span class="self">self</span>, Write},
     sync::{atomic::Ordering, Arc, Mutex},
     time::Instant,
 };
 <span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
+
+<span class="kw">use </span><span class="kw">crate</span>::util;
 
 <span class="kw">fn </span>exit_handler() {
     std::process::exit(<span class="number">0</span>);
@@ -299,24 +287,12 @@
                 <span class="kw">return</span>;
             }
             <span class="kw">if </span>image_url.as_str() != <span class="string">"\n" </span>{
-                <span class="kw">let </span>url = image_url.trim();
-                <span class="kw">let </span>bytes = <span class="kw">if </span>url.contains(<span class="string">"http"</span>) {
-                    <span class="comment">// Read from http
-                    </span><span class="kw">match </span>reqwest::get(url).<span class="kw">await </span>{
-                        <span class="prelude-val">Ok</span>(http_resp) =&gt; http_resp.bytes().<span class="kw">await</span>.unwrap().to_vec(),
-                        <span class="prelude-val">Err</span>(e) =&gt; <span class="macro">panic!</span>(<span class="string">"{e}"</span>),
-                    }
-                } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>f) = File::open(url) {
-                    <span class="comment">// Read from local file
-                    </span><span class="kw">let </span>metadata = fs::metadata(url).unwrap();
-                    <span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="macro">vec!</span>[<span class="number">0</span>; metadata.len() <span class="kw">as </span>usize];
-                    f.read_exact(<span class="kw-2">&amp;mut </span>buffer).unwrap();
-                    buffer
-                } <span class="kw">else </span>{
-                    <span class="comment">// Decode with base64
-                    </span>general_purpose::STANDARD.decode(url).unwrap()
-                };
-                images.push(image::load_from_memory(<span class="kw-2">&amp;</span>bytes).unwrap());
+                <span class="kw">let </span>url_unparsed = image_url.trim();
+
+                <span class="kw">let </span>image = util::parse_image_url(url_unparsed)
+                    .<span class="kw">await
+                    </span>.expect(<span class="string">"Failed to read image from URL/path"</span>);
+                images.push(image);
             }
 
             <span class="comment">// Set the handler to terminate all seqs, so allowing cancelling running

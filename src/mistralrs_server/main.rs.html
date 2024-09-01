@@ -472,6 +472,7 @@
 <a href="#472" id="472">472</a>
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -497,6 +498,7 @@
 <span class="kw">use crate</span>::{chat_completion::chatcompletions, openai::ModelObject};
 <span class="kw">mod </span>interactive_mode;
 <span class="kw">mod </span>openai;
+<span class="kw">mod </span>util;
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
