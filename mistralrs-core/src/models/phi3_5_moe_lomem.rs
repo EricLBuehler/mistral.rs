@@ -394,13 +394,13 @@ impl MoeMlp {
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
 
-            expert.to_device(&Device::Cpu)?;
+            expert.to_device(xs_dev)?;
 
             let exp_out = expert
                 .forward(&current_state.to_device(xs_dev)?)?
                 .to_device(&Device::Cpu)?;
 
-            expert.to_device(xs_dev)?;
+            expert.to_device(&Device::Cpu)?;
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
