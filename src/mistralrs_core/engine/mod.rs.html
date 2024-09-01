@@ -735,6 +735,13 @@
 <a href="#735" id="735">735</a>
 <a href="#736" id="736">736</a>
 <a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -836,6 +843,9 @@
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
+                <span class="kw">if </span><span class="macro">matches!</span>(request, Request::Terminate) {
+                    <span class="kw">break </span><span class="lifetime">'lp</span>;
+                }
                 <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
             }
             <span class="kw">let </span>run_start = Instant::now();
@@ -1040,6 +1050,9 @@
                     </span>{
                         <span class="comment">// If there is nothing to do, sleep until a request comes in
                         </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
+                            <span class="kw">if </span><span class="macro">matches!</span>(request, Request::Terminate) {
+                                <span class="kw">break </span><span class="lifetime">'lp</span>;
+                            }
                             <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
                         }
                     }
@@ -1182,6 +1195,7 @@
                     <span class="macro">warn!</span>(<span class="string">"ISQ requantization failed: {e:?}"</span>);
                 }
             }
+            Request::Terminate =&gt; <span class="macro">panic!</span>(<span class="string">"This is unreachable in `handle_request`. Termination is handled in the `run` loop."</span>),
         }
     }
 

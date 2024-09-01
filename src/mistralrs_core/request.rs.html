@@ -130,6 +130,10 @@
 <a href="#130" id="130">130</a>
 <a href="#131" id="131">131</a>
 <a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -235,6 +239,9 @@
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec&lt;String&gt;),
+    <span class="comment">// Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
+    // and then Engine will be dropped.
+    </span>Terminate,
 }
 
 <span class="kw">impl </span>Debug <span class="kw">for </span>Request {
@@ -259,6 +266,7 @@
             Request::ReIsq(tp) =&gt; {
                 <span class="macro">write!</span>(f, <span class="string">"Re ISQ Request {tp:?}"</span>,)
             }
+            Request::Terminate =&gt; <span class="macro">write!</span>(f, <span class="string">"Termination Request"</span>),
         }
     }
 }
