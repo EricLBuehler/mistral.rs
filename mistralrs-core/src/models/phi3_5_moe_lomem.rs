@@ -394,13 +394,17 @@ impl MoeMlp {
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
 
+            println!("Casting to gpu");
             expert.to_device(xs_dev)?;
+            println!("Done with cast to gpu");
 
             let exp_out = expert
                 .forward(&current_state.to_device(xs_dev)?)?
                 .to_device(&Device::Cpu)?;
 
+            println!("Casting to cpu");
             expert.to_device(&Device::Cpu)?;
+            println!("Done with cast to cpu");
 
             let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
 
