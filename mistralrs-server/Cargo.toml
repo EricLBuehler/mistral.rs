@@ -34,8 +34,8 @@ clap.workspace = true
 once_cell.workspace=true
 reqwest.workspace = true
 image.workspace = true
-url = "2.5.2"
-data-url = "0.3.1"
+url.workspace = true
+data-url.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]

@@ -2210,6 +2210,7 @@ dependencies = [
  "accelerate-src",
  "base64 0.22.1",
  "candle-core",
+ "data-url",
  "either",
  "futures",
  "image",
@@ -2222,6 +2223,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]
