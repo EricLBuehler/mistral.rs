@@ -103,6 +103,9 @@ pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
+    // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
+    // and then Engine will be dropped.
+    Terminate,
 }
 
 impl Debug for Request {
@@ -127,6 +130,7 @@ impl Debug for Request {
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
             }
+            Request::Terminate => write!(f, "Termination Request"),
         }
     }
 }

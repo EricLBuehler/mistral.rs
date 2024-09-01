@@ -254,6 +254,16 @@ fn set_gemm_reduced_precision_f16() {
 #[cfg(not(feature = "cuda"))]
 fn set_gemm_reduced_precision_f16() {}
 
+impl Drop for MistralRs {
+    fn drop(&mut self) {
+        self.sender
+            .write()
+            .expect("Failed to get sender write in Drop")
+            .blocking_send(Request::Terminate)
+            .expect("Sending failed in Drop");
+    }
+}
+
 impl MistralRs {
     fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
