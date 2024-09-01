@@ -287,7 +287,7 @@ impl MoeMlp {
             vb.pp("gate").set_device(layer_device),
         )?;
 
-        let experts_vb = vb.pp("experts");
+        let experts_vb = vb.pp("experts").set_device(Device::Cpu);
         let mut experts = Vec::with_capacity(num_experts);
         for i in 0..num_experts {
             experts.push(Mlp::new(cfg, experts_vb.pp(i))?);
@@ -663,17 +663,18 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             for expert in &mut layer.mlp.experts {
+                // MLP layers are ISQed on the CPU
                 tensors.push((
                     &mut *Arc::get_mut(&mut expert.w1).unwrap().get_mut().unwrap(),
-                    Some(i),
+                    Some(usize::MAX),
                 ));
                 tensors.push((
                     &mut *Arc::get_mut(&mut expert.w2).unwrap().get_mut().unwrap(),
-                    Some(i),
+                    Some(usize::MAX),
                 ));
                 tensors.push((
                     &mut *Arc::get_mut(&mut expert.w3).unwrap().get_mut().unwrap(),
-                    Some(i),
+                    Some(usize::MAX),
                 ));
             }
         }

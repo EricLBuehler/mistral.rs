@@ -76,6 +76,8 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
 }
 
 pub trait IsqModel {
+    /// Note: returns (layer, optional layer #).
+    /// If the layer # is usize::MAX, the device will be CPU.
     #[allow(clippy::type_complexity)]
     fn get_layers(
         &mut self,
@@ -127,20 +129,28 @@ pub trait IsqModel {
             for (_, layer_num) in &tensors {
                 let device = if let Some(ref layers) = layers {
                     if let Some(layer) = layer_num {
-                        layers
-                            .get(*layer)
-                            .as_ref()
-                            .map(|x| x.1.clone())
-                            .unwrap_or(Some(device.clone()))
-                            .unwrap_or(device.clone())
+                        if *layer == usize::MAX {
+                            Device::Cpu
+                        } else {
+                            layers
+                                .get(*layer)
+                                .as_ref()
+                                .map(|x| x.1.clone())
+                                .unwrap_or(Some(device.clone()))
+                                .unwrap_or(device.clone())
+                        }
                     } else {
                         device.clone()
                     }
                 } else if let Some(layer_num) = layer_num {
-                    mapper
-                        .device_for(*layer_num, false)
-                        .cloned()
-                        .unwrap_or(device.clone())
+                    if *layer_num == usize::MAX {
+                        Device::Cpu
+                    } else {
+                        mapper
+                            .device_for(*layer_num, false)
+                            .cloned()
+                            .unwrap_or(device.clone())
+                    }
                 } else {
                     device.clone()
                 };
