@@ -103,6 +103,7 @@ pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
+    Terminate,
 }
 
 impl Debug for Request {
@@ -127,6 +128,7 @@ impl Debug for Request {
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
             }
+            Request::Terminate => write!(f, "Termination Request"),
         }
     }
 }

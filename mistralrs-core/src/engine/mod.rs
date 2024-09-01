@@ -99,6 +99,9 @@ impl Engine {
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
             while let Ok(request) = self.rx.try_recv() {
+                if matches!(request, Request::Terminate) {
+                    break 'lp;
+                }
                 self.handle_request(request).await;
             }
             let run_start = Instant::now();
@@ -303,6 +306,9 @@ impl Engine {
                     {
                         // If there is nothing to do, sleep until a request comes in
                         if let Some(request) = self.rx.recv().await {
+                            if matches!(request, Request::Terminate) {
+                                break 'lp;
+                            }
                             self.handle_request(request).await;
                         }
                     }
@@ -445,6 +451,7 @@ impl Engine {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
+            Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
         }
     }
 
