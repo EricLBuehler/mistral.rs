@@ -214,7 +214,86 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::error::Error;
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::{pyclass, pymethods};
@@ -429,5 +508,78 @@
     </span>CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub enum </span>ResponseOk {
+    <span class="comment">// Chat
+    </span>Done(ChatCompletionResponse),
+    Chunk(ChatCompletionChunkResponse),
+    <span class="comment">// Completion
+    </span>CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkResponse),
+}
+
+<span class="kw">pub enum </span>ResponseErr {
+    InternalError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
+    ValidationError(Box&lt;<span class="kw">dyn </span>Error + Send + Sync&gt;),
+    ModelError(String, ChatCompletionResponse),
+    CompletionModelError(String, CompletionResponse),
+}
+
+<span class="kw">impl </span>Display <span class="kw">for </span>ResponseErr {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::InternalError(e) | <span class="self">Self</span>::ValidationError(e) =&gt; Display::fmt(e, f),
+            <span class="self">Self</span>::ModelError(e, x) =&gt; f
+                .debug_struct(<span class="string">"ChatModelError"</span>)
+                .field(<span class="string">"msg"</span>, e)
+                .field(<span class="string">"incomplete_response"</span>, x)
+                .finish(),
+            <span class="self">Self</span>::CompletionModelError(e, x) =&gt; f
+                .debug_struct(<span class="string">"CompletionModelError"</span>)
+                .field(<span class="string">"msg"</span>, e)
+                .field(<span class="string">"incomplete_response"</span>, x)
+                .finish(),
+        }
+    }
+}
+
+<span class="kw">impl </span>Debug <span class="kw">for </span>ResponseErr {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::InternalError(e) | <span class="self">Self</span>::ValidationError(e) =&gt; Debug::fmt(e, f),
+            <span class="self">Self</span>::ModelError(e, x) =&gt; f
+                .debug_struct(<span class="string">"ChatModelError"</span>)
+                .field(<span class="string">"msg"</span>, e)
+                .field(<span class="string">"incomplete_response"</span>, x)
+                .finish(),
+            <span class="self">Self</span>::CompletionModelError(e, x) =&gt; f
+                .debug_struct(<span class="string">"CompletionModelError"</span>)
+                .field(<span class="string">"msg"</span>, e)
+                .field(<span class="string">"incomplete_response"</span>, x)
+                .finish(),
+        }
+    }
+}
+
+<span class="kw">impl </span>std::error::Error <span class="kw">for </span>ResponseErr {}
+
+<span class="kw">impl </span>Response {
+    <span class="doccomment">/// Convert the response into a result form.
+    </span><span class="kw">pub fn </span>as_result(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ResponseOk, Box&lt;ResponseErr&gt;&gt; {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Done(x) =&gt; <span class="prelude-val">Ok</span>(ResponseOk::Done(x)),
+            <span class="self">Self</span>::Chunk(x) =&gt; <span class="prelude-val">Ok</span>(ResponseOk::Chunk(x)),
+            <span class="self">Self</span>::CompletionDone(x) =&gt; <span class="prelude-val">Ok</span>(ResponseOk::CompletionDone(x)),
+            <span class="self">Self</span>::CompletionChunk(x) =&gt; <span class="prelude-val">Ok</span>(ResponseOk::CompletionChunk(x)),
+            <span class="self">Self</span>::InternalError(e) =&gt; <span class="prelude-val">Err</span>(Box::new(ResponseErr::InternalError(e))),
+            <span class="self">Self</span>::ValidationError(e) =&gt; <span class="prelude-val">Err</span>(Box::new(ResponseErr::ValidationError(e))),
+            <span class="self">Self</span>::ModelError(e, x) =&gt; <span class="prelude-val">Err</span>(Box::new(ResponseErr::ModelError(e, x))),
+            <span class="self">Self</span>::CompletionModelError(e, x) =&gt; {
+                <span class="prelude-val">Err</span>(Box::new(ResponseErr::CompletionModelError(e, x)))
+            }
+        }
+    }
 }
 </code></pre></div></section></main></body></html>
