@@ -218,7 +218,7 @@ pub enum Response {
     CompletionChunk(CompletionChunkResponse),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResponseOk {
     // Chat
     Done(ChatCompletionResponse),
@@ -274,6 +274,7 @@ impl Debug for ResponseErr {
 impl std::error::Error for ResponseErr {}
 
 impl Response {
+    /// Convert the response into a result form.
     pub fn as_result(self) -> Result<ResponseOk, Box<ResponseErr>> {
         match self {
             Self::Done(x) => Ok(ResponseOk::Done(x)),

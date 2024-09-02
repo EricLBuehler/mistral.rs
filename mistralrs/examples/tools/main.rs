@@ -7,8 +7,8 @@ use tokio::sync::mpsc::channel;
 use mistralrs::{
     DefaultSchedulerMethod, Device, DeviceMapMetadata, Function, MistralRs, MistralRsBuilder,
     ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    Request, RequestMessage, Response, Result, SamplingParams, SchedulerConfig, TokenSource, Tool,
-    ToolChoice, ToolType,
+    Request, RequestMessage, ResponseOk, Result, SamplingParams, SchedulerConfig, TokenSource,
+    Tool, ToolChoice, ToolType,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -111,10 +111,8 @@ fn main() -> anyhow::Result<()> {
     mistralrs.get_sender()?.blocking_send(request)?;
 
     let response = rx.blocking_recv().unwrap();
-    let result = if let Response::Done(resp) = response {
-        resp
-    } else {
-        anyhow::bail!("Got an error!");
+    let ResponseOk::Done(result) = response.as_result().unwrap() else {
+        unreachable!()
     };
     let message = &result.choices[0].message;
 
@@ -154,10 +152,8 @@ fn main() -> anyhow::Result<()> {
             mistralrs.get_sender()?.blocking_send(request)?;
 
             let response = rx.blocking_recv().unwrap();
-            let result = if let Response::Done(resp) = response {
-                resp
-            } else {
-                anyhow::bail!("Got an error!");
+            let ResponseOk::Done(result) = response.as_result().unwrap() else {
+                unreachable!()
             };
             let message = &result.choices[0].message;
             println!("Output of model: {:?}", message.content);

@@ -6,7 +6,7 @@ use tokio::sync::mpsc::channel;
 use mistralrs::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeLoader, Constraint, DefaultSchedulerMethod, Device,
     DeviceMapMetadata, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
+    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, ResponseOk,
     Result, SamplingParams, SchedulerConfig, TokenSource,
 };
 
@@ -97,9 +97,9 @@ fn main() -> anyhow::Result<()> {
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
-    let response = rx.blocking_recv().unwrap();
+    let response = rx.blocking_recv().unwrap().as_result().unwrap();
     match response {
-        Response::Done(c) => println!(
+        ResponseOk::Done(c) => println!(
             "Text: {}, Prompt T/s: {}, Completion T/s: {}",
             c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,
