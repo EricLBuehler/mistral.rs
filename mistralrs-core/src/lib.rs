@@ -23,6 +23,7 @@ mod aici;
 mod cuda;
 mod device_map;
 mod engine;
+mod kbnf;
 mod lora;
 mod model_loader;
 mod ops;
