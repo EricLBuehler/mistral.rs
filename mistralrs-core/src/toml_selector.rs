@@ -30,7 +30,7 @@ pub enum TomlModelSelected {
         model_id: String,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
@@ -56,7 +56,7 @@ pub enum TomlModelSelected {
         tgt_non_granular_index: Option<usize>,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
@@ -78,7 +78,7 @@ pub enum TomlModelSelected {
         order: String,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]

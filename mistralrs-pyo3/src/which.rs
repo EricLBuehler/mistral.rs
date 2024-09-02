@@ -59,13 +59,13 @@ impl From<VisionArchitecture> for VisionLoaderType {
 pub enum Which {
     #[pyo3(constructor = (
         model_id,
-        arch,
+        arch = None,
         tokenizer_json = None,
         topology = None
     ))]
     Plain {
         model_id: String,
-        arch: Architecture,
+        arch: Option<Architecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
     },
@@ -73,7 +73,7 @@ pub enum Which {
     #[pyo3(constructor = (
         xlora_model_id,
         order,
-        arch,
+        arch = None,
         model_id = None,
         tokenizer_json = None,
         tgt_non_granular_index = None,
@@ -82,7 +82,7 @@ pub enum Which {
     XLora {
         xlora_model_id: String,
         order: String,
-        arch: Architecture,
+        arch: Option<Architecture>,
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
@@ -92,7 +92,7 @@ pub enum Which {
     #[pyo3(constructor = (
         adapters_model_id,
         order,
-        arch,
+        arch = None,
         model_id = None,
         tokenizer_json = None,
         topology = None
@@ -100,7 +100,7 @@ pub enum Which {
     Lora {
         adapters_model_id: String,
         order: String,
-        arch: Architecture,
+        arch: Option<Architecture>,
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         topology: Option<String>,

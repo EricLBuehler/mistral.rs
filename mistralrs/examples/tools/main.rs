@@ -6,9 +6,8 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     DefaultSchedulerMethod, Device, DeviceMapMetadata, Function, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    Request, RequestMessage, ResponseOk, Result, SamplingParams, SchedulerConfig, TokenSource,
-    Tool, ToolChoice, ToolType,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, Request, RequestMessage,
+    ResponseOk, Result, SamplingParams, SchedulerConfig, TokenSource, Tool, ToolChoice, ToolType,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -35,7 +34,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("meta-llama/Meta-Llama-3.1-8B-Instruct".to_string()),
     )
-    .build(NormalLoaderType::Llama)?;
+    .build(None)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

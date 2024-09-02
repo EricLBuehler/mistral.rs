@@ -9,8 +9,8 @@ use super::{
     MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
+    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -160,18 +160,21 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
-        let loader: Box<dyn NormalModelLoader> = match loader {
-            NormalLoaderType::Mistral => Box::new(MistralLoader),
-            NormalLoaderType::Gemma => Box::new(GemmaLoader),
-            NormalLoaderType::Llama => Box::new(LlamaLoader),
-            NormalLoaderType::Mixtral => Box::new(MixtralLoader),
-            NormalLoaderType::Phi2 => Box::new(Phi2Loader),
-            NormalLoaderType::Phi3 => Box::new(Phi3Loader),
-            NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
-            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
-            NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
-            NormalLoaderType::Phi3_5MoE => Box::new(Phi3_5MoELoader),
+    /// If the loader type is not specified, loader type is automatically determined from the
+    /// `architectures` array in the config.
+    pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
+        let loader: Box<dyn NormalModelLoader> = match loader_tp {
+            Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
+            Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),
+            Some(NormalLoaderType::Llama) => Box::new(LlamaLoader),
+            Some(NormalLoaderType::Mixtral) => Box::new(MixtralLoader),
+            Some(NormalLoaderType::Phi2) => Box::new(Phi2Loader),
+            Some(NormalLoaderType::Phi3) => Box::new(Phi3Loader),
+            Some(NormalLoaderType::Qwen2) => Box::new(Qwen2Loader),
+            Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
+            Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
+            Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
+            None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,

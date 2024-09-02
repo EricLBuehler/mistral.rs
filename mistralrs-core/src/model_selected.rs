@@ -38,7 +38,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -74,7 +74,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -105,7 +105,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
