@@ -6,8 +6,8 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    ModelDType, NormalRequest, Request, RequestMessage, ResponseOk, SamplingParams,
+    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
 
 fn setup() -> anyhow::Result<Arc<MistralRs>> {
@@ -73,16 +73,16 @@ fn main() -> anyhow::Result<()> {
         logits_processors: None,
     });
     mistralrs.get_sender()?.blocking_send(request)?;
-    let response = rx.blocking_recv().unwrap();
+
+    let response = rx.blocking_recv().unwrap().as_result().unwrap();
     match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content.as_ref().unwrap()),
-        Response::InternalError(e) => println!("Internal error: {:?}", e),
-        Response::ValidationError(e) => println!("Validation error: {:?}", e),
-        Response::ModelError(s, r) => println!("Model error: {:?} {:?}", s, r),
-        Response::Chunk(_) => println!("Chunk"),
-        Response::CompletionModelError(_, _) => println!("Completion model error"),
-        Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
-        _ => unreachable!("Unexpected response"),
+        ResponseOk::Done(c) => println!(
+            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
+            c.choices[0].message.content.as_ref().unwrap(),
+            c.usage.avg_prompt_tok_per_sec,
+            c.usage.avg_compl_tok_per_sec
+        ),
+        _ => unreachable!(),
     }
     Ok(())
 }
