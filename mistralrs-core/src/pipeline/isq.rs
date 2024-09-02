@@ -89,6 +89,7 @@ pub trait IsqModel {
         dtype: Option<IsqType>,
         device: Device,
         topology: Option<&Topology>,
+        silent: bool,
     ) -> candle_core::Result<()> {
         {
             let (tensors, mapper) = self.get_layers();
@@ -187,8 +188,48 @@ pub trait IsqModel {
                     use rayon::iter::{
                         IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
                     };
+                    if silent {
+                        tensors.into_par_iter().zip(devices_and_dtypes).for_each(
+                            |((tensor, _), (device, dtype))| {
+                                *tensor = tensor
+                                    .clone()
+                                    .apply_isq(dtype, device.clone(), &n_quantized)
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            },
+                        );
+                    } else {
+                        tensors
+                            .into_par_iter()
+                            .zip(devices_and_dtypes)
+                            .progress_with(bar)
+                            .for_each(|((tensor, _), (device, dtype))| {
+                                *tensor = tensor
+                                    .clone()
+                                    .apply_isq(dtype, device.clone(), &n_quantized)
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            });
+                    }
+                });
+            }
+
+            #[cfg(feature = "metal")]
+            {
+                use indicatif::ProgressIterator;
+                if silent {
+                    tensors.into_iter().zip(devices_and_dtypes).for_each(
+                        |((tensor, _), (device, dtype))| {
+                            *tensor = tensor
+                                .clone()
+                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .unwrap();
+                            device.synchronize().unwrap();
+                        },
+                    );
+                } else {
                     tensors
-                        .into_par_iter()
+                        .into_iter()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
@@ -198,23 +239,7 @@ pub trait IsqModel {
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
-                });
-            }
-
-            #[cfg(feature = "metal")]
-            {
-                use indicatif::ProgressIterator;
-                tensors
-                    .into_iter()
-                    .zip(devices_and_dtypes)
-                    .progress_with(bar)
-                    .for_each(|((tensor, _), (device, dtype))| {
-                        *tensor = tensor
-                            .clone()
-                            .apply_isq(dtype, device.clone(), &n_quantized)
-                            .unwrap();
-                        device.synchronize().unwrap();
-                    });
+                }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
             info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
