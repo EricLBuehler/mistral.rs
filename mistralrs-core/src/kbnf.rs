@@ -45,16 +45,21 @@ impl KbnfGrammar {
         &mut self,
         tok: u32,
         logits: &Tensor,
+        add_to_trie: bool,
     ) -> candle_core::Result<KbnfGrammarBias> {
         // Try to accept the new token
         match self.engine.try_accept_new_token(tok) {
             Ok(AcceptTokenResult::Ongoing) => {
                 // Token was accepted, no resampling needed
-                self.engine.compute_allowed_token_ids();
+                if add_to_trie {
+                    self.engine.compute_allowed_token_ids();
+                }
                 Ok(KbnfGrammarBias::Accepted)
             }
             Err(AcceptTokenError::Rejected) => {
-                self.engine.compute_allowed_token_ids();
+                if add_to_trie {
+                    self.engine.compute_allowed_token_ids();
+                }
                 let mut bias = vec![0f32; self.vocab_size];
                 match self.engine.mask_logits(&mut bias) {
                     Ok(()) => {
@@ -70,6 +75,27 @@ impl KbnfGrammar {
             }
             Ok(AcceptTokenResult::Finished) | Err(AcceptTokenError::Finished) => {
                 Ok(KbnfGrammarBias::FinishedGeneration)
+            }
+            Err(AcceptTokenError::UnknownTokenID) => candle_core::bail!("Unknown token ID {tok}"),
+        }
+    }
+
+    /// Add a token, also to the trie.
+    ///
+    /// This really should not fail as it should be called with the masked bias from `compute_bias_for`.
+    pub fn add_token(&mut self, tok: u32) -> candle_core::Result<()> {
+        // Try to accept the new token
+        match self.engine.try_accept_new_token(tok) {
+            Ok(AcceptTokenResult::Ongoing) => {
+                // Token was accepted, no resampling needed
+                self.engine.compute_allowed_token_ids();
+                Ok(())
+            }
+            Err(AcceptTokenError::Rejected) => {
+                candle_core::bail!("New token was rejected");
+            }
+            Ok(AcceptTokenResult::Finished) | Err(AcceptTokenError::Finished) => {
+                candle_core::bail!("Generation was finished.");
             }
             Err(AcceptTokenError::UnknownTokenID) => candle_core::bail!("Unknown token ID {tok}"),
         }

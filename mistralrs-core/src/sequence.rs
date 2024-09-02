@@ -13,7 +13,7 @@ use crate::{
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, KbnfGrammar,
 };
 use crate::{
     get_mut_group,
@@ -66,6 +66,7 @@ pub enum SequenceState {
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),
+    Kbnf(KbnfGrammar),
     None,
 }
 

@@ -8,6 +8,7 @@ use crate::{
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer},
+    KbnfGrammarBias,
 };
 
 use super::Pipeline;
@@ -311,64 +312,128 @@ pub async fn sample_sequence(
         )?
     };
 
-    let bias_if_not_allowed = match &mut seq.recognizer {
-        SequenceRecognizer::Regex(ref mut rx) => {
-            get_bias_if_not_allowed!(seq.tok_trie, rx.as_mut(), first_lobprobs_response.token)
-        }
-        SequenceRecognizer::Cfg(ref mut cfg) => {
-            get_bias_if_not_allowed!(seq.tok_trie, cfg.as_mut(), first_lobprobs_response.token)
-        }
-        SequenceRecognizer::None => None,
-    };
-    let second_logprobs_response = match bias_if_not_allowed {
-        Some(token_set) => {
-            let mut acc = vec![-f32::INFINITY; seq.tok_trie.vocab_size()];
-            token_set.apply_to(&mut acc);
-            let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
-
-            let ctx_clone = seq.get_toks().to_vec();
-            let rng_clone = rng.clone();
-            let sampler = seq.sampler();
-            if use_async_pool {
-                tokio_rayon::spawn(move || {
-                    sampler.sample(
-                        new_logits,
-                        &ctx_clone,
-                        return_logprobs,
-                        rng_clone,
-                        sample_speculative,
+    match seq.recognizer {
+        SequenceRecognizer::Cfg(_) | SequenceRecognizer::Regex(_) => {
+            let bias_if_not_allowed = match &mut seq.recognizer {
+                SequenceRecognizer::Regex(ref mut rx) => {
+                    get_bias_if_not_allowed!(
+                        seq.tok_trie,
+                        rx.as_mut(),
+                        first_lobprobs_response.token
                     )
-                })
-                .await?
-            } else {
-                sampler.sample(
-                    new_logits,
-                    &ctx_clone,
-                    return_logprobs,
-                    rng_clone,
-                    sample_speculative,
-                )?
-            }
-        }
-        None => first_lobprobs_response,
-    };
+                }
+                SequenceRecognizer::Cfg(ref mut cfg) => {
+                    get_bias_if_not_allowed!(
+                        seq.tok_trie,
+                        cfg.as_mut(),
+                        first_lobprobs_response.token
+                    )
+                }
+                SequenceRecognizer::None | SequenceRecognizer::Kbnf(_) => None,
+            };
+            let second_logprobs_response = match bias_if_not_allowed {
+                Some(token_set) => {
+                    let mut acc = vec![-f32::INFINITY; seq.tok_trie.vocab_size()];
+                    token_set.apply_to(&mut acc);
+                    let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
-    if add_to_trie {
-        match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                seq.tok_trie
-                    .append_token(rx.as_mut(), second_logprobs_response.token)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    let ctx_clone = seq.get_toks().to_vec();
+                    let rng_clone = rng.clone();
+                    let sampler = seq.sampler();
+                    if use_async_pool {
+                        tokio_rayon::spawn(move || {
+                            sampler.sample(
+                                new_logits,
+                                &ctx_clone,
+                                return_logprobs,
+                                rng_clone,
+                                sample_speculative,
+                            )
+                        })
+                        .await?
+                    } else {
+                        sampler.sample(
+                            new_logits,
+                            &ctx_clone,
+                            return_logprobs,
+                            rng_clone,
+                            sample_speculative,
+                        )?
+                    }
+                }
+                None => first_lobprobs_response,
+            };
+
+            if add_to_trie {
+                match seq.recognizer {
+                    SequenceRecognizer::Regex(ref mut rx) => {
+                        seq.tok_trie
+                            .append_token(rx.as_mut(), second_logprobs_response.token)
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    }
+                    SequenceRecognizer::Cfg(ref mut cfg) => {
+                        seq.tok_trie
+                            .append_token(cfg.as_mut(), second_logprobs_response.token)
+                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    }
+                    SequenceRecognizer::None | SequenceRecognizer::Kbnf(_) => {}
+                }
             }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                seq.tok_trie
-                    .append_token(cfg.as_mut(), second_logprobs_response.token)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+            Ok(second_logprobs_response)
+        }
+
+        SequenceRecognizer::None => Ok(first_lobprobs_response),
+
+        SequenceRecognizer::Kbnf(_) => {
+            let bias = {
+                let SequenceRecognizer::Kbnf(ref mut kbnf) = seq.recognizer else {
+                    unreachable!()
+                };
+                kbnf.compute_bias_for(first_lobprobs_response.token, &logits, add_to_trie)?
+            };
+            match bias {
+                // If the token was accepted, it's added to the kbnf engine
+                KbnfGrammarBias::Accepted => Ok(first_lobprobs_response),
+                KbnfGrammarBias::Resample { new_logits } => {
+                    let ctx_clone = seq.get_toks().to_vec();
+                    let rng_clone = rng.clone();
+                    let sampler = seq.sampler();
+                    let second_sampled = if use_async_pool {
+                        tokio_rayon::spawn(move || {
+                            sampler.sample(
+                                new_logits,
+                                &ctx_clone,
+                                return_logprobs,
+                                rng_clone,
+                                sample_speculative,
+                            )
+                        })
+                        .await?
+                    } else {
+                        sampler.sample(
+                            new_logits,
+                            &ctx_clone,
+                            return_logprobs,
+                            rng_clone,
+                            sample_speculative,
+                        )?
+                    };
+
+                    // Add to kbnf engine
+                    if add_to_trie {
+                        let SequenceRecognizer::Kbnf(ref mut kbnf) = seq.recognizer else {
+                            unreachable!()
+                        };
+                        kbnf.add_token(second_sampled.token)?;
+                    }
+                    Ok(second_sampled)
+                }
+                KbnfGrammarBias::FinishedGeneration => {
+                    todo!()
+                }
             }
-            SequenceRecognizer::None => {}
         }
     }
-    Ok(second_logprobs_response)
 }
 
 #[derive(Clone)]
