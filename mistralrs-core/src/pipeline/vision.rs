@@ -49,6 +49,7 @@ pub struct VisionPipeline {
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
     topology: Option<Topology>,
+    silent: bool,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -261,7 +262,12 @@ impl Loader for VisionLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if in_situ_quant.is_some() || self.config.topology.is_some() {
-            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+            )?;
         }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
@@ -310,6 +316,7 @@ impl Loader for VisionLoader {
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
+            silent,
         })))
     }
 
@@ -338,7 +345,7 @@ impl IsqPipelineMixin for VisionPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(Some(dtype), device, self.topology.as_ref())
+            .quantize(Some(dtype), device, self.topology.as_ref(), self.silent)
             .map_err(anyhow::Error::msg)
     }
 }

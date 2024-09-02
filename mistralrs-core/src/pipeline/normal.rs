@@ -57,6 +57,7 @@ pub struct NormalPipeline {
     model_id: String,
     metadata: Arc<GeneralMetadata>,
     topology: Option<Topology>,
+    silent: bool,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -339,7 +340,12 @@ impl Loader for NormalLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if in_situ_quant.is_some() || self.config.topology.is_some() {
-            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+            )?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -396,6 +402,7 @@ impl Loader for NormalLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
             topology: self.config.topology.clone(),
+            silent,
         })))
     }
 
@@ -424,7 +431,7 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(Some(dtype), device, self.topology.as_ref())
+            .quantize(Some(dtype), device, self.topology.as_ref(), self.silent)
             .map_err(anyhow::Error::msg)
     }
 }
