@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, str::FromStr};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -10,6 +14,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel,
     },
+    utils::log::once_log_info,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
@@ -172,6 +177,23 @@ impl FromStr for NormalLoaderType {
     }
 }
 
+impl Display for NormalLoaderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Gemma => write!(f, "gemma"),
+            Self::Gemma2 => write!(f, "gemma2"),
+            Self::Llama => write!(f, "llama"),
+            Self::Mistral => write!(f, "mistral"),
+            Self::Mixtral => write!(f, "mixtral"),
+            Self::Phi2 => write!(f, "phi2"),
+            Self::Phi3 => write!(f, "phi3"),
+            Self::Phi3_5MoE => write!(f, "phi3.5moe"),
+            Self::Qwen2 => write!(f, "qwen2"),
+            Self::Starcoder2 => write!(f, "starcoder2"),
+        }
+    }
+}
+
 /// Load a model based on the Huggging Face Transformers -CausalLM model class
 pub struct AutoLoader;
 
@@ -190,6 +212,9 @@ impl AutoLoader {
         let name = &auto_cfg.architectures[0];
 
         let tp = NormalLoaderType::from_causal_lm_name(name)?;
+
+        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+
         match tp {
             NormalLoaderType::Mistral => Ok(Box::new(MistralLoader)),
             NormalLoaderType::Gemma => Ok(Box::new(GemmaLoader)),
