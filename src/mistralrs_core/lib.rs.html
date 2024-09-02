@@ -463,9 +463,6 @@
 <a href="#463" id="463">463</a>
 <a href="#464" id="464">464</a>
 <a href="#465" id="465">465</a>
-<a href="#466" id="466">466</a>
-<a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -761,6 +758,7 @@
         <span class="kw">let </span>no_prefix_cache = no_prefix_cache.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>prefix_cache_n = prefix_cache_n.unwrap_or(<span class="number">16</span>);
         <span class="kw">let </span>disable_eos_stop = disable_eos_stop.unwrap_or(<span class="bool-val">false</span>);
+        <span class="kw">let </span>throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         <span class="kw">let </span>reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -770,7 +768,7 @@
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
-            throughput_logging_enabled: throughput_logging_enabled.is_some(),
+            throughput_logging_enabled,
         };
 
         <span class="kw">let </span>(tx, rx) = channel(<span class="number">10_000</span>);
@@ -790,10 +788,8 @@
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    throughput_logging_enabled,
                 );
-                <span class="kw">if </span>throughput_logging_enabled.is_some() {
-                    engine.enable_throughput_logging();
-                }
                 engine.run().<span class="kw">await</span>;
             });
         });
@@ -843,10 +839,8 @@
                         reboot_state.no_prefix_cache,
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
+                        reboot_state.throughput_logging_enabled,
                     );
-                    <span class="kw">if </span>reboot_state.throughput_logging_enabled {
-                        engine.enable_throughput_logging();
-                    }
                     engine.run().<span class="kw">await</span>;
                 });
             });

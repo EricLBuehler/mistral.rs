@@ -737,11 +737,6 @@
 <a href="#737" id="737">737</a>
 <a href="#738" id="738">738</a>
 <a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -806,6 +801,7 @@
         no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
+        throughput_logging_enabled: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
@@ -828,14 +824,8 @@
             ),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
-            throughput_logging_enabled: <span class="bool-val">false</span>,
+            throughput_logging_enabled,
         }
-    }
-
-    <span class="comment">// TODO(EricLBuehler): On v0.3.0 move this into the Engine constructor
-    </span><span class="doccomment">/// Enable throughput logging.
-    </span><span class="kw">pub fn </span>enable_throughput_logging(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="self">self</span>.throughput_logging_enabled = <span class="bool-val">true</span>;
     }
 
     <span class="kw">pub async fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
