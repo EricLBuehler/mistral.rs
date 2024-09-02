@@ -553,6 +553,13 @@
 <a href="#553" id="553">553</a>
 <a href="#554" id="554">554</a>
 <a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -604,6 +611,7 @@
     processor: Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;,
     preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
     topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
+    silent: bool,
 }
 
 <span class="doccomment">/// A loader for a vision (non-quantized) model.
@@ -816,7 +824,12 @@
         <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, <span class="prelude-val">None</span>);
 
         <span class="kw">if </span>in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some() {
-            model.quantize(in_situ_quant, device.clone(), <span class="self">self</span>.config.topology.as_ref())<span class="question-mark">?</span>;
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                <span class="self">self</span>.config.topology.as_ref(),
+                silent,
+            )<span class="question-mark">?</span>;
         }
 
         <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
@@ -865,6 +878,7 @@
             processor,
             preprocessor_config: Arc::new(preprocessor_config),
             topology: <span class="self">self</span>.config.topology.clone(),
+            silent,
         })))
     }
 
@@ -893,7 +907,7 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="self">self</span>.model
-            .quantize(<span class="prelude-val">Some</span>(dtype), device, <span class="self">self</span>.topology.as_ref())
+            .quantize(<span class="prelude-val">Some</span>(dtype), device, <span class="self">self</span>.topology.as_ref(), <span class="self">self</span>.silent)
             .map_err(anyhow::Error::msg)
     }
 }
