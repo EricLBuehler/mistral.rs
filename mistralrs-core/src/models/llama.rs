@@ -488,16 +488,30 @@ impl Llama {
 
                     let device_chunk = chunk.device();
 
+                    // Determine the original device of the cache
+                    let original_cache_device = cache.iter().find_map(|opt| {
+                        opt.as_ref().map(|(k, _)| k.device().clone())
+                    }).unwrap_or_else(|| device_chunk.clone());
+
+                    // Move cache to chunk device
+                    let mut cache_on_chunk_device: Vec<_> = cache.iter().map(|opt| {
+                        opt.as_ref().map(|(k, v)| {
+                            (k.to_device(device_chunk).unwrap(), v.to_device(device_chunk).unwrap())
+                        })
+                    }).collect();
+
                     let mask = CausalMasker.make_causal_mask_as_attn_bias(
                         input_ids,
                         metadata
                             .as_ref()
                             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                            .unwrap_or(&*cache as &dyn PastKvLenCache),
+                            .unwrap_or(&*cache_on_chunk_device as &dyn PastKvLenCache),
                         // x.dtype(),
                         chunks[0].dtype(),
                         self.blocks[0].attn.num_attention_heads,
                     )?;
+
+
             
                 
                     // x = block.forward(
@@ -520,7 +534,7 @@ impl Llama {
                         start_offsets_kernel.clone().to_device(&device_chunk)?,
                         block_idx,
                         // &mut cache_on_chunk_device,
-                        &mut cache,
+                        &mut cache_on_chunk_device,
                         metadata
                             .as_mut()
                             .map(|(kv_cache, metadata)| {
