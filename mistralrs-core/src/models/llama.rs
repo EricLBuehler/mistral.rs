@@ -403,7 +403,7 @@ impl Block {
 
 pub struct Llama {
     wte: Embedding,
-    blocks: Vec<Block>,
+    blocks: Vec<(Block, Device)>,
     ln_f: RmsNorm,
     lm_head: QMatMul,
     // pub kv_cache: crate::pipeline::Cache,
