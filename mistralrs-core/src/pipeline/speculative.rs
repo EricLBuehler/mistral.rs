@@ -472,7 +472,7 @@ impl Pipeline for SpeculativePipeline {
                 #[allow(irrefutable_let_patterns)]
                 let ForwardInputsResult::CausalGeneration { logits } = logits
                 else {
-                    candle_core::bail!( 
+                    candle_core::bail!(
                         "Speculative decoding requires `CausalGeneration` forward results"
                     );
                 };
