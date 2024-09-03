@@ -460,7 +460,7 @@ impl Llama {
 
         let mut block_chunks: Vec<Tensor> = Vec::new();
 
-        for (block_idx, block) in self.blocks.iter().enumerate() {
+        for (block_idx, (block, block_device)) in self.blocks.iter().enumerate() {
             
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
@@ -487,7 +487,7 @@ impl Llama {
                     let mut cache = kv_cache.lock();
 
                     // let device_chunk = &block.device();
-                    let device_chunk = self.mapper.device_for(block_idx, false)?;
+                    let device_chunk = block_device;
 
                     // Determine the original device of the cache
                     let original_cache_device = cache.iter().find_map(|opt| {
@@ -623,7 +623,7 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-        let blocks: Vec<_> =
+        let blocks: Vec<(Block, Device)> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
@@ -652,7 +652,7 @@ impl Llama {
                     if !cuda_devices.iter().any(|d| format!("{:?}", d) == format!("{:?}", device)) {
                         cuda_devices.push(device.clone());
                     }
-                    Block::load(
+                    let block = Block::load(
                         vb.pp(&format!("model.layers.{i}")),
                         cfg,
                         &*mapper,
@@ -661,7 +661,8 @@ impl Llama {
                         rotary_emb,
                         paged_attn,
                     )
-                    .expect("Failed to load block.")
+                    .expect("Failed to load block.");
+                    (block, device.clone())
                 })
                 .collect();
 
