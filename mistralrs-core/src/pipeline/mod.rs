@@ -639,7 +639,7 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                self.clone_in_cache(input_seqs, false)
+                                // self.clone_in_cache(input_seqs, false)
                             }
                             CacheInstruction::Nothing(ref adapter_inst) => {
                                 match adapter_inst {
