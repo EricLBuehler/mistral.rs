@@ -668,6 +668,9 @@
 <a href="#668" id="668">668</a>
 <a href="#669" id="669">669</a>
 <a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -679,8 +682,8 @@
     MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use super</span>::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
+    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -831,18 +834,21 @@
         <span class="self">self</span>.with_adapter(lora_model_id, lora_order, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
     }
 
-    <span class="kw">pub fn </span>build(<span class="self">self</span>, loader: NormalLoaderType) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Loader&gt;&gt; {
-        <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>NormalModelLoader&gt; = <span class="kw">match </span>loader {
-            NormalLoaderType::Mistral =&gt; Box::new(MistralLoader),
-            NormalLoaderType::Gemma =&gt; Box::new(GemmaLoader),
-            NormalLoaderType::Llama =&gt; Box::new(LlamaLoader),
-            NormalLoaderType::Mixtral =&gt; Box::new(MixtralLoader),
-            NormalLoaderType::Phi2 =&gt; Box::new(Phi2Loader),
-            NormalLoaderType::Phi3 =&gt; Box::new(Phi3Loader),
-            NormalLoaderType::Qwen2 =&gt; Box::new(Qwen2Loader),
-            NormalLoaderType::Gemma2 =&gt; Box::new(Gemma2Loader),
-            NormalLoaderType::Starcoder2 =&gt; Box::new(Starcoder2Loader),
-            NormalLoaderType::Phi3_5MoE =&gt; Box::new(Phi3_5MoELoader),
+    <span class="doccomment">/// If the loader type is not specified, loader type is automatically determined from the
+    /// `architectures` array in the config.
+    </span><span class="kw">pub fn </span>build(<span class="self">self</span>, loader_tp: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Loader&gt;&gt; {
+        <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>NormalModelLoader&gt; = <span class="kw">match </span>loader_tp {
+            <span class="prelude-val">Some</span>(NormalLoaderType::Mistral) =&gt; Box::new(MistralLoader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Gemma) =&gt; Box::new(GemmaLoader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Llama) =&gt; Box::new(LlamaLoader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Mixtral) =&gt; Box::new(MixtralLoader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Phi2) =&gt; Box::new(Phi2Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Phi3) =&gt; Box::new(Phi3Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Qwen2) =&gt; Box::new(Qwen2Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Gemma2) =&gt; Box::new(Gemma2Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Starcoder2) =&gt; Box::new(Starcoder2Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::Phi3_5MoE) =&gt; Box::new(Phi3_5MoELoader),
+            <span class="prelude-val">None </span>=&gt; Box::new(AutoLoader),
         };
         <span class="prelude-val">Ok</span>(Box::new(NormalLoader {
             inner: loader,

@@ -374,7 +374,7 @@
 
         <span class="doccomment">/// The architecture of the model.
         </span><span class="attr">#[arg(short, long, value_parser = parse_arch)]
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -410,7 +410,7 @@
 
         <span class="doccomment">/// The architecture of the model.
         </span><span class="attr">#[arg(short, long, value_parser = parse_arch)]
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -441,7 +441,7 @@
 
         <span class="doccomment">/// The architecture of the model.
         </span><span class="attr">#[arg(long, value_parser = parse_arch)]
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

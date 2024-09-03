@@ -664,7 +664,7 @@
         </span>model_id: String,
 
         <span class="doccomment">/// The architecture of the model.
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
@@ -690,7 +690,7 @@
         </span>tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
         <span class="doccomment">/// The architecture of the model.
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
@@ -712,7 +712,7 @@
         </span>order: String,
 
         <span class="doccomment">/// The architecture of the model.
-        </span>arch: NormalLoaderType,
+        </span>arch: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
 
         <span class="doccomment">/// Model data type. Defaults to `auto`.
         </span><span class="attr">#[serde(default = <span class="string">"default_dtype"</span>)]
