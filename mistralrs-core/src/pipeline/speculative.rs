@@ -28,8 +28,8 @@ use crate::{
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -293,10 +293,10 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<Tensor> {
+    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
         unreachable!()
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         _seqs: &mut [&mut Sequence],
         _logits: Vec<Tensor>,
@@ -399,6 +399,13 @@ impl Pipeline for SpeculativePipeline {
                         .unwrap()
                         .unwrap();
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
+                    #[allow(irrefutable_let_patterns)]
+                    let ForwardInputsResult::CausalGeneration { logits } = logits
+                    else {
+                        candle_core::bail!(
+                            "Speculative decoding requires `CausalGeneration` forward results"
+                        );
+                    };
 
                     let sample = sample_sequence(
                         logits.clone(),
@@ -462,6 +469,13 @@ impl Pipeline for SpeculativePipeline {
                     .unwrap();
 
                 let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
+                #[allow(irrefutable_let_patterns)]
+                let ForwardInputsResult::CausalGeneration { logits } = logits
+                else {
+                    candle_core::bail!(
+                        "Speculative decoding requires `CausalGeneration` forward results"
+                    );
+                };
 
                 // Reset the prefill tokens
                 seq.reset_prefill_toks();

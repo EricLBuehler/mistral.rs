@@ -200,6 +200,29 @@ pub enum CacheBackendMetadata<'a> {
     },
 }
 
+#[derive(Clone, Debug)]
+pub enum ForwardInputsResult {
+    CausalGeneration { logits: Tensor },
+}
+
+impl ForwardInputsResult {
+    fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
+        match self {
+            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.i(bs_idx)?,
+            }),
+        }
+    }
+
+    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+        match self {
+            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.to_device(device)?,
+            }),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -211,7 +234,10 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
+    fn forward_inputs(
+        &self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error>;
 
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -301,7 +327,7 @@ pub trait Pipeline:
                     let raw_logits = self.forward_inputs(inputs)?;
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.i(logit_idx)?);
+                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
                 }
 
@@ -323,8 +349,28 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-                    .await?;
+                match &logits[0] {
+                    ForwardInputsResult::CausalGeneration { .. } => {
+                        self.sample_causal_gen(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::CausalGeneration { logits } = r
+                                    else {
+                                        unreachable!("All results must have same type")
+                                    };
+                                    logits
+                                })
+                                .collect::<Vec<_>>(),
+                            prefix_cacher,
+                            disable_eos_stop,
+                            rng,
+                        )
+                        .await?;
+                    }
+                }
                 Ok(())
             }
             CacheBackendMetadata::PagedAttention {
@@ -363,7 +409,7 @@ pub trait Pipeline:
                     let raw_logits = self.forward_inputs(inputs)?;
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.i(logit_idx)?);
+                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
                 }
 
@@ -375,14 +421,34 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-                    .await?;
+                match &logits[0] {
+                    ForwardInputsResult::CausalGeneration { .. } => {
+                        self.sample_causal_gen(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::CausalGeneration { logits } = r
+                                    else {
+                                        unreachable!("All results must have same type")
+                                    };
+                                    logits
+                                })
+                                .collect::<Vec<_>>(),
+                            prefix_cacher,
+                            disable_eos_stop,
+                            rng,
+                        )
+                        .await?;
+                    }
+                }
                 Ok(())
             }
         }
     }
 
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
