@@ -487,7 +487,7 @@ impl Llama {
                     let mut cache = kv_cache.lock();
 
                     // let device_chunk = &block.device();
-                    let device_chunk = self.mapper.device_for(block)?;
+                    let device_chunk = self.mapper.device_for(block_idx, false)?;
 
                     // Determine the original device of the cache
                     let original_cache_device = cache.iter().find_map(|opt| {
