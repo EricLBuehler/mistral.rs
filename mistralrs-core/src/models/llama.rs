@@ -469,11 +469,11 @@ impl Llama {
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut x = if block_idx == 0 {
                     let tensor = chunk.clone();
-                    self.mapper.map(&tensor, block_idx)?;
+                    self.mapper.map(tensor, block_idx)?;
                     tensor
                 } else {
                     let tensor = block_chunks[chunk_idx].clone();
-                    self.mapper.map(&tensor, block_idx)?;
+                    self.mapper.map(tensor, block_idx)?;
                     tensor
                 };
 
