@@ -468,9 +468,13 @@ impl Llama {
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut x = if block_idx == 0 {
-                    self.mapper.map(chunk.clone(), block_idx)?;
+                    let tensor = chunk.clone();
+                    self.mapper.map(&tensor, block_idx)?;
+                    tensor
                 } else {
-                    self.mapper.map(block_chunks[chunk_idx], block_idx)?;
+                    let tensor = block_chunks[chunk_idx].clone();
+                    self.mapper.map(&tensor, block_idx)?;
+                    tensor
                 };
 
                 let num_caches = self.kv_caches.len();
