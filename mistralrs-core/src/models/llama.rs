@@ -466,6 +466,7 @@ impl Llama {
 
         for (block_idx, block) in self.blocks.iter().enumerate() {
             
+            let device_chunk = block.get_device();
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
             println!("block_idx {:?}", block_idx);
@@ -475,11 +476,11 @@ impl Llama {
                 let mut x = if block_idx == 0 {
                     let tensor = chunk.clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
-                    tensor
+                    tensor.to_device(device_chunk)?
                 } else {
                     let tensor = block_chunks[chunk_idx].clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
-                    tensor
+                    tensor.to_device(device_chunk)?
                 };
 
                 let num_caches = self.kv_caches.len();
@@ -490,7 +491,6 @@ impl Llama {
                     println!("cache_idx {:?}", cache_idx);
                     let mut cache = kv_cache.lock();
 
-                    let device_chunk = block.get_device();
 
                     // Determine the original device of the cache
                     let original_cache_device = cache.iter().find_map(|opt| {
