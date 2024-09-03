@@ -544,13 +544,13 @@ impl Llama {
             }   
 
             // Concatenate chunks for this block
-            let block_chunks: Result<Vec<Tensor>> = block_chunks
-                .clone()
-                .into_iter()
-                .map(|chunk| chunk.to_device(&device_chunk))
-                .collect();
+            // let block_chunks: Result<Vec<Tensor>> = block_chunks
+            //     .clone()
+            //     .into_iter()
+            //     .map(|chunk| chunk.to_device(&device_chunk))
+            //     .collect();
         
-            let block_chunks = block_chunks?; // Propagate any errors
+            // let block_chunks = block_chunks?; // Propagate any errors
 
             let mut x = candle_core::Tensor::cat(&block_chunks, 1)?;
 
