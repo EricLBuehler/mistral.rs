@@ -531,9 +531,9 @@ impl Llama {
                 
                     // Accumulate attention results
                     if block_chunks.len() <= chunk_idx {
-                        block_chunks.push(x);
+                        block_chunks.push(x.clone());
                     } else {
-                        block_chunks[chunk_idx] = x;
+                        block_chunks[chunk_idx] = x.clone();
                     }
                 }
             }   
