@@ -483,6 +483,7 @@ impl Llama {
                 for cache_rotation in 0..num_caches {
                     let cache_idx = (chunk_idx + cache_rotation) % num_caches;
                     let kv_cache = &self.kv_caches[cache_idx];
+                    println!("cache_idx {:?}", cache_idx);
                     let mut cache = kv_cache.lock();
 
                     let device_chunk = chunk.device();
@@ -511,6 +512,7 @@ impl Llama {
                     //         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
                     // )?;
 
+                    println!("before block forward");
                     x = block.forward(
                         &x,
                         &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
@@ -530,6 +532,8 @@ impl Llama {
                             }),
                     )?;
                 
+                    println!("after block forward");
+
                     // Accumulate attention results
                     if block_chunks.len() <= chunk_idx {
                         block_chunks.push(x.clone());
