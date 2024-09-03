@@ -505,7 +505,7 @@ impl Llama {
                         metadata
                             .as_ref()
                             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                            .unwrap_or(&*cache_on_chunk_device as &dyn PastKvLenCache),
+                            .unwrap_or(&*cache as &dyn PastKvLenCache),
                         // x.dtype(),
                         chunks[0].dtype(),
                         self.blocks[0].attn.num_attention_heads,
