@@ -366,6 +366,10 @@ impl Block {
         Ok(x)
     }
 
+    fn get_device(&self) -> Device {
+        self.mlp.dtype_device().1
+    }
+
     fn load(
         vb: VarBuilder,
         cfg: &Config,
@@ -486,7 +490,7 @@ impl Llama {
                     println!("cache_idx {:?}", cache_idx);
                     let mut cache = kv_cache.lock();
 
-                    let device_chunk = chunk.device();
+                    let device_chunk = block.get_device();
 
                     // Determine the original device of the cache
                     let original_cache_device = cache.iter().find_map(|opt| {
