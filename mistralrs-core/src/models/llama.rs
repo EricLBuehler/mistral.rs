@@ -476,11 +476,11 @@ impl Llama {
                 let mut x = if block_idx == 0 {
                     let tensor = chunk.clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
-                    tensor.to_device(device_chunk)?
+                    tensor.to_device(&device_chunk)?
                 } else {
                     let tensor = block_chunks[chunk_idx].clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
-                    tensor.to_device(device_chunk)?
+                    tensor.to_device(&device_chunk)?
                 };
 
                 let num_caches = self.kv_caches.len();
