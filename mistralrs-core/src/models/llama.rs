@@ -469,10 +469,10 @@ impl Llama {
             let device_chunk = block.get_device();
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
-            println!("block_idx {:?}", block_idx);
+            // println!("block_idx {:?}", block_idx);
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
-                println!("chunk_idx {:?}", chunk_idx);
+                // println!("chunk_idx {:?}", chunk_idx);
                 let mut x = if block_idx == 0 {
                     let tensor = chunk.clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
@@ -488,7 +488,7 @@ impl Llama {
                 for cache_rotation in 0..num_caches {
                     let cache_idx = (chunk_idx + cache_rotation) % num_caches;
                     let kv_cache = &self.kv_caches[cache_idx];
-                    println!("cache_idx {:?}", cache_idx);
+                    // println!("cache_idx {:?}", cache_idx);
                     let mut cache = kv_cache.lock();
 
 
@@ -530,7 +530,7 @@ impl Llama {
                     //         .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
                     // )?;
 
-                    println!("before block forward");
+                    // println!("before block forward");
                     x = block.forward(
                         &x,
                         &mask.clone().map(|m| m.to_device(&device_chunk).unwrap()),
@@ -550,7 +550,7 @@ impl Llama {
                             }),
                     )?;
                 
-                    println!("after block forward");
+                    // println!("after block forward");
 
                     // Accumulate attention results
                     if block_chunks.len() <= chunk_idx {
@@ -570,7 +570,7 @@ impl Llama {
         
             // let block_chunks = block_chunks?; // Propagate any errors
 
-            println!("concat block chunks");
+            // println!("concat block chunks");
             let mut x = candle_core::Tensor::cat(&block_chunks, 1)?;
 
             // do feedforward after attention has been run for each chunk
@@ -580,7 +580,7 @@ impl Llama {
             x = x.to_device(&target_device)?;
             processed_chunks.push(x.clone()); 
         }
-        println!("concat processed chunks");
+        // println!("concat processed chunks");
         x = candle_core::Tensor::cat(&processed_chunks, 1)?;
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;

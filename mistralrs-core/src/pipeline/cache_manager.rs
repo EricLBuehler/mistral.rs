@@ -207,12 +207,12 @@ fn clone_out_cache(
     seqs: &mut [&mut crate::sequence::Sequence],
     target: SeqCache,
 ) {
-    println!("clone_out_cache");
+    // println!("clone_out_cache");
     for layer in 0..num_hidden_layers {
         let cache = cache.get(layer).unwrap();
         let k_cache = cache.as_ref().unwrap().0.clone();
         let v_cache = cache.as_ref().unwrap().1.clone();
-        println!("after v_cache");
+        // println!("after v_cache");
 
         let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
         debug_assert_eq!(k_caches.len(), seqs.len());
