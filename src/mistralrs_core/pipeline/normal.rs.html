@@ -675,6 +675,16 @@
 <a href="#675" id="675">675</a>
 <a href="#676" id="676">676</a>
 <a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -683,7 +693,7 @@
 };
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use super</span>::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -735,6 +745,7 @@
     metadata: Arc&lt;GeneralMetadata&gt;,
     topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     silent: bool,
+    organization: IsqOrganization,
 }
 
 <span class="doccomment">/// A loader for a "normal" (non-quantized) model.
@@ -771,6 +782,7 @@
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
+    <span class="kw">pub </span>organization: IsqOrganization,
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
@@ -1025,6 +1037,7 @@
                 device.clone(),
                 <span class="self">self</span>.config.topology.as_ref(),
                 silent,
+                <span class="self">self</span>.config.organization,
             )<span class="question-mark">?</span>;
         }
 
@@ -1083,6 +1096,7 @@
             }),
             topology: <span class="self">self</span>.config.topology.clone(),
             silent,
+            organization: <span class="self">self</span>.config.organization,
         })))
     }
 
@@ -1111,7 +1125,13 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="self">self</span>.model
-            .quantize(<span class="prelude-val">Some</span>(dtype), device, <span class="self">self</span>.topology.as_ref(), <span class="self">self</span>.silent)
+            .quantize(
+                <span class="prelude-val">Some</span>(dtype),
+                device,
+                <span class="self">self</span>.topology.as_ref(),
+                <span class="self">self</span>.silent,
+                <span class="self">self</span>.organization,
+            )
             .map_err(anyhow::Error::msg)
     }
 }

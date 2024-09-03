@@ -561,6 +561,13 @@
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
 <a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -574,7 +581,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
@@ -830,6 +837,7 @@
                 device.clone(),
                 <span class="self">self</span>.config.topology.as_ref(),
                 silent,
+                IsqOrganization::Default,
             )<span class="question-mark">?</span>;
         }
 
@@ -908,7 +916,13 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="self">self</span>.model
-            .quantize(<span class="prelude-val">Some</span>(dtype), device, <span class="self">self</span>.topology.as_ref(), <span class="self">self</span>.silent)
+            .quantize(
+                <span class="prelude-val">Some</span>(dtype),
+                device,
+                <span class="self">self</span>.topology.as_ref(),
+                <span class="self">self</span>.silent,
+                IsqOrganization::Default,
+            )
             .map_err(anyhow::Error::msg)
     }
 }

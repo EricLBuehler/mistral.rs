@@ -334,10 +334,14 @@
 <a href="#334" id="334">334</a>
 <a href="#335" id="335">335</a>
 <a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>clap::Subcommand;
 
 <span class="kw">use crate</span>::{
-    pipeline::{NormalLoaderType, VisionLoaderType},
+    pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
     ModelDType,
 };
 
@@ -383,6 +387,10 @@
         <span class="doccomment">/// Path to a topology YAML file.
         </span><span class="attr">#[arg(long)]
         </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+        <span class="doccomment">/// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        </span><span class="attr">#[arg(short, long)]
+        </span>organization: <span class="prelude-ty">Option</span>&lt;IsqOrganization&gt;,
     },
 
     <span class="doccomment">/// Select an X-LoRA architecture

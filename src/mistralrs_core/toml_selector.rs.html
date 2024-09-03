@@ -632,15 +632,24 @@
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
 <a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize};
 
 <span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">use crate</span>::{
-    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="kw">fn </span>default_one() -&gt; usize {
@@ -672,6 +681,9 @@
 
         <span class="doccomment">/// Path to a topology YAML file.
         </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+        <span class="doccomment">/// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        </span>organization: <span class="prelude-ty">Option</span>&lt;IsqOrganization&gt;,
     },
 
     <span class="doccomment">/// Select an X-LoRA architecture
@@ -978,11 +990,13 @@
             arch,
             dtype: <span class="kw">_</span>,
             topology,
+            organization,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+                organization: organization.unwrap_or_default(),
             },
             args.chat_template,
             args.tokenizer_json,
@@ -1002,6 +1016,7 @@
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+                organization: Default::default(),
             },
             args.chat_template,
             args.tokenizer_json,
@@ -1029,6 +1044,7 @@
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+                organization: Default::default(),
             },
             args.chat_template,
             args.tokenizer_json,

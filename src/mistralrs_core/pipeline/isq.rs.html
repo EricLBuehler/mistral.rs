@@ -247,8 +247,53 @@
 <a href="#247" id="247">247</a>
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashSet,
+    str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
@@ -256,6 +301,7 @@
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>indicatif::{ProgressBar, ProgressStyle};
 <span class="kw">use </span>mistralrs_quant::{IsqType, QuantMethod};
+<span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{device_map::DeviceMapper, topology::LayerTopology, Topology};
@@ -324,14 +370,52 @@
     <span class="prelude-val">Ok</span>(tp)
 }
 
+<span class="attr">#[derive(Clone, Debug, Copy, Default, Deserialize)]
+</span><span class="kw">pub enum </span>IsqOrganization {
+    <span class="attr">#[default]
+    #[serde(rename = <span class="string">"default"</span>)]
+    </span>Default,
+    <span class="doccomment">/// Only quantize MoE experts, if applicable. The enables MoQE.
+    /// https://arxiv.org/abs/2310.02410
+    </span><span class="attr">#[serde(rename = <span class="string">"moqe"</span>)]
+    </span>MoeExpertsOnly,
+}
+
+<span class="kw">impl </span>FromStr <span class="kw">for </span>IsqOrganization {
+    <span class="kw">type </span><span class="prelude-val">Err </span>= String;
+    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
+        <span class="kw">match </span>s {
+            <span class="string">"default" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Default),
+            <span class="string">"moqe" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::MoeExpertsOnly),
+            other =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(
+                <span class="string">"Expected ISQ organization `default` or `moqe`, got `{other}`"
+            </span>)),
+        }
+    }
+}
+
 <span class="kw">pub trait </span>IsqModel {
-    <span class="attr">#[allow(clippy::type_complexity)]
+    <span class="doccomment">/// Corresponds to `IsqOrganization::Default`
+    </span><span class="attr">#[allow(clippy::type_complexity)]
     </span><span class="kw">fn </span>get_layers(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
     ) -&gt; (
         Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
         <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
     );
+
+    <span class="doccomment">/// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// https://arxiv.org/abs/2310.02410
+    </span><span class="attr">#[allow(clippy::type_complexity)]
+    </span><span class="kw">fn </span>get_layers_moe_experts_only(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+    ) -&gt; (
+        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) {
+        <span class="self">self</span>.get_layers()
+    }
+
     <span class="doccomment">/// Quantize the model in-situ.
     </span><span class="kw">fn </span>quantize(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -339,9 +423,13 @@
         device: Device,
         topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Topology&gt;,
         silent: bool,
+        organization: IsqOrganization,
     ) -&gt; candle_core::Result&lt;()&gt; {
         {
-            <span class="kw">let </span>(tensors, mapper) = <span class="self">self</span>.get_layers();
+            <span class="kw">let </span>(tensors, mapper) = <span class="kw">match </span>organization {
+                IsqOrganization::Default =&gt; <span class="self">self</span>.get_layers(),
+                IsqOrganization::MoeExpertsOnly =&gt; <span class="self">self</span>.get_layers_moe_experts_only(),
+            };
             <span class="kw">let </span>total_tensors = tensors.len();
             <span class="kw">let </span>n_quantized = AtomicUsize::new(<span class="number">0</span>);
             <span class="kw">if let </span><span class="prelude-val">Some</span>(topology) = topology {
