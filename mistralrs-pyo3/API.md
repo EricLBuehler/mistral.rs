@@ -46,6 +46,8 @@ class Which(Enum):
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        # ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        organization: str | None = None
 
     @dataclass
     class XLora:

@@ -3,10 +3,11 @@ use std::{fs::File, num::NonZeroUsize};
 use serde::Deserialize;
 
 use crate::{
-    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, Topology, VisionLoaderBuilder,
-    VisionLoaderType, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -38,6 +39,9 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        organization: Option<IsqOrganization>,
     },
 
     /// Select an X-LoRA architecture
@@ -344,11 +348,13 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            organization,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: organization.unwrap_or_default(),
             },
             args.chat_template,
             args.tokenizer_json,
@@ -368,6 +374,7 @@ fn loader_from_selected(
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
             },
             args.chat_template,
             args.tokenizer_json,
@@ -395,6 +402,7 @@ fn loader_from_selected(
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
             },
             args.chat_template,
             args.tokenizer_json,

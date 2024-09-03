@@ -108,3 +108,7 @@ required-features = []
 [[example]]
 name = "phi3_5_moe"
 required-features = []
+
+[[example]]
+name = "mixture_of_quant_experts"
+required-features = []

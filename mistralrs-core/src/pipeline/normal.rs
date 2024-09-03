@@ -6,7 +6,7 @@ use super::{
 };
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -58,6 +58,7 @@ pub struct NormalPipeline {
     metadata: Arc<GeneralMetadata>,
     topology: Option<Topology>,
     silent: bool,
+    organization: IsqOrganization,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -94,6 +95,7 @@ pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
+    pub organization: IsqOrganization,
 }
 
 impl NormalLoaderBuilder {
@@ -348,6 +350,7 @@ impl Loader for NormalLoader {
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
+                self.config.organization,
             )?;
         }
 
@@ -406,6 +409,7 @@ impl Loader for NormalLoader {
             }),
             topology: self.config.topology.clone(),
             silent,
+            organization: self.config.organization,
         })))
     }
 
@@ -434,7 +438,13 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(Some(dtype), device, self.topology.as_ref(), self.silent)
+            .quantize(
+                Some(dtype),
+                device,
+                self.topology.as_ref(),
+                self.silent,
+                self.organization,
+            )
             .map_err(anyhow::Error::msg)
     }
 }

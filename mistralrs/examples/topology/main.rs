@@ -59,6 +59,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                         },
                     ),
             ),
+            organization: Default::default(),
         },
         None,
         None,

@@ -34,6 +34,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             prompt_batchsize: None,
             topology: None,
+            organization: Default::default(),
         },
         None,
         None,
