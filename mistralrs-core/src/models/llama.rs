@@ -547,7 +547,7 @@ impl Llama {
             let block_chunks: Result<Vec<Tensor>> = block_chunks
                 .clone()
                 .into_iter()
-                .map(|chunk| chunk.to_device(&target_device))
+                .map(|chunk| chunk.to_device(&device_chunk))
                 .collect();
         
             let block_chunks = block_chunks?; // Propagate any errors
