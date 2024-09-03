@@ -570,6 +570,7 @@ impl Llama {
         
             // let block_chunks = block_chunks?; // Propagate any errors
 
+            println!("concat block chunks");
             let mut x = candle_core::Tensor::cat(&block_chunks, 1)?;
 
             // do feedforward after attention has been run for each chunk
@@ -579,6 +580,7 @@ impl Llama {
             x = x.to_device(&target_device)?;
             processed_chunks.push(x.clone()); 
         }
+        println!("concat processed chunks");
         x = candle_core::Tensor::cat(&processed_chunks, 1)?;
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
