@@ -695,7 +695,7 @@ pub trait Pipeline:
                     println!("get logits");
 
                 match post_op {
-                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    // CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
                         reset_non_granular,
