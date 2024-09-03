@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, str::FromStr};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    str::FromStr,
+};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -10,6 +14,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel,
     },
+    utils::log::once_log_info,
     xlora_models::NonGranularState,
 };
 use anyhow::Result;
@@ -99,7 +104,7 @@ pub trait NormalModelLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
-    fn is_gptx(&self) -> bool;
+    fn is_gptx(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     /// Get total num_hidden_layers for the layers which will be device mapped.
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
@@ -131,6 +136,28 @@ pub enum NormalLoaderType {
     Phi3_5MoE,
 }
 
+// https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
+
+impl NormalLoaderType {
+    pub fn from_causal_lm_name(name: &str) -> Result<Self> {
+        match name {
+            "MistralForCausalLM" => Ok(Self::Mistral),
+            "MixtralForCausalLM" => Ok(Self::Mixtral),
+            "GemmaForCausalLM" => Ok(Self::Gemma),
+            "Gemma2ForCausalLM" => Ok(Self::Gemma2),
+            "PhiForCausalLM" => Ok(Self::Phi2),
+            "Phi3ForCausalLM" => Ok(Self::Phi3),
+            "LlamaForCausalLM" => Ok(Self::Llama),
+            "Qwen2ForCausalLM" => Ok(Self::Qwen2),
+            "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
+            "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
+            other => anyhow::bail!(
+                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+            ),
+        }
+    }
+}
+
 impl FromStr for NormalLoaderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -150,6 +177,108 @@ impl FromStr for NormalLoaderType {
     }
 }
 
+impl Display for NormalLoaderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Gemma => write!(f, "gemma"),
+            Self::Gemma2 => write!(f, "gemma2"),
+            Self::Llama => write!(f, "llama"),
+            Self::Mistral => write!(f, "mistral"),
+            Self::Mixtral => write!(f, "mixtral"),
+            Self::Phi2 => write!(f, "phi2"),
+            Self::Phi3 => write!(f, "phi3"),
+            Self::Phi3_5MoE => write!(f, "phi3.5moe"),
+            Self::Qwen2 => write!(f, "qwen2"),
+            Self::Starcoder2 => write!(f, "starcoder2"),
+        }
+    }
+}
+
+/// Load a model based on the Huggging Face Transformers -CausalLM model class
+pub struct AutoLoader;
+
+#[derive(Deserialize)]
+struct AutoLoaderConfig {
+    architectures: Vec<String>,
+}
+
+impl AutoLoader {
+    fn get_loader(config: &str) -> Result<Box<dyn NormalModelLoader>> {
+        let auto_cfg: AutoLoaderConfig = serde_json::from_str(config)?;
+        if auto_cfg.architectures.len() != 1 {
+            anyhow::bail!("Expected to have one name for `architectures` config field.")
+        }
+
+        let name = &auto_cfg.architectures[0];
+
+        let tp = NormalLoaderType::from_causal_lm_name(name)?;
+
+        once_log_info(format!("Automatic loader type determined to be `{tp}`"));
+
+        match tp {
+            NormalLoaderType::Mistral => Ok(Box::new(MistralLoader)),
+            NormalLoaderType::Gemma => Ok(Box::new(GemmaLoader)),
+            NormalLoaderType::Llama => Ok(Box::new(LlamaLoader)),
+            NormalLoaderType::Mixtral => Ok(Box::new(MixtralLoader)),
+            NormalLoaderType::Phi2 => Ok(Box::new(Phi2Loader)),
+            NormalLoaderType::Phi3 => Ok(Box::new(Phi3Loader)),
+            NormalLoaderType::Qwen2 => Ok(Box::new(Qwen2Loader)),
+            NormalLoaderType::Gemma2 => Ok(Box::new(Gemma2Loader)),
+            NormalLoaderType::Starcoder2 => Ok(Box::new(Starcoder2Loader)),
+            NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
+        }
+    }
+}
+
+impl NormalModelLoader for AutoLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Self::get_loader(config)?.load(
+            config,
+            use_flash_attn,
+            vb,
+            normal_loading_metadata,
+            attention_mechanism,
+        )
+    }
+    fn load_xlora(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        lora_config: &[((String, String), LoraConfig)],
+        xlora_config: Option<XLoraConfig>,
+        xlora_ordering: Ordering,
+        normal_loading_metadata: NormalLoadingMetadata,
+        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Self::get_loader(config)?.load_xlora(
+            config,
+            use_flash_attn,
+            vb,
+            lora_config,
+            xlora_config,
+            xlora_ordering,
+            normal_loading_metadata,
+            preload_adapters,
+        )
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Self::get_loader(config)?.get_total_device_mapping_num_layers(config)
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
+    }
+    fn is_gptx(&self, config: &str) -> Result<bool> {
+        Self::get_loader(config)?.is_gptx(config)
+    }
+}
 // ======================== Mistral loader
 
 #[derive(Deserialize, Debug)]
@@ -205,7 +334,7 @@ impl NormalModelLoader for MistralLoader {
         Ok(Box::new(models::mistral::Model::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -227,13 +356,13 @@ impl NormalModelLoader for MistralLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(MistralBasicConfig::deserialize(
@@ -313,7 +442,7 @@ impl NormalModelLoader for GemmaLoader {
         Ok(Box::new(models::gemma::Model::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -335,13 +464,13 @@ impl NormalModelLoader for GemmaLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(GemmaBasicConfig::deserialize(
@@ -415,7 +544,7 @@ impl NormalModelLoader for LlamaLoader {
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -437,13 +566,13 @@ impl NormalModelLoader for LlamaLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(LlamaBasicConfig::deserialize(
@@ -513,7 +642,7 @@ impl NormalModelLoader for MixtralLoader {
         Ok(Box::new(models::mixtral::Model::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -535,13 +664,13 @@ impl NormalModelLoader for MixtralLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(MixtralBasicConfig::deserialize(
@@ -612,7 +741,7 @@ impl NormalModelLoader for Phi2Loader {
         Ok(Box::new(models::phi2::Model::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -634,13 +763,13 @@ impl NormalModelLoader for Phi2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(Phi2BasicConfig::deserialize(
@@ -717,7 +846,7 @@ impl NormalModelLoader for Phi3Loader {
         Ok(Box::new(models::phi3::Model::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -739,13 +868,13 @@ impl NormalModelLoader for Phi3Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(Phi3BasicConfig::deserialize(
@@ -814,7 +943,7 @@ impl NormalModelLoader for Qwen2Loader {
         Ok(Box::new(models::qwen2::Model::new(
             &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -832,8 +961,8 @@ impl NormalModelLoader for Qwen2Loader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(Qwen2BasicConfig::deserialize(
@@ -917,7 +1046,7 @@ impl NormalModelLoader for Gemma2Loader {
         Ok(Box::new(models::gemma2::Model::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -939,13 +1068,13 @@ impl NormalModelLoader for Gemma2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         // Already will warn about it
@@ -1017,7 +1146,7 @@ impl NormalModelLoader for Starcoder2Loader {
         Ok(Box::new(models::starcoder2::Model::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1039,13 +1168,13 @@ impl NormalModelLoader for Starcoder2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
@@ -1125,7 +1254,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
         Ok(Box::new(models::phi3_5_moe::Model::new(
             &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1147,13 +1276,13 @@ impl NormalModelLoader for Phi3_5MoELoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(),
+            self.is_gptx(config)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
     }
-    fn is_gptx(&self) -> bool {
-        true
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(

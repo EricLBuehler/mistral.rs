@@ -11,9 +11,8 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, Device, DeviceMapMetadata, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request, RequestMessage, ResponseOk, Result, SamplingParams,
-    SchedulerConfig, TokenSource,
+    ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request, RequestMessage, ResponseOk, Result, SamplingParams, SchedulerConfig, TokenSource,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -40,7 +39,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(NormalLoaderType::Mistral)?;
+    .build(None)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,

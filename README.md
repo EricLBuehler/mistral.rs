@@ -367,6 +367,8 @@ Additionally, for models without quantization, the model architecture should be 
 
 > Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
 
+If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
+
 - `mistral`
 - `gemma`
 - `mixtral`

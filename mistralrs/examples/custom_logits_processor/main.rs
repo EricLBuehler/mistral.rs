@@ -6,7 +6,7 @@ use tokio::sync::mpsc::channel;
 
 use mistralrs::{
     Constraint, CustomLogitsProcessor, DefaultSchedulerMethod, Device, DeviceMapMetadata,
-    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalRequest,
+    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, Request, RequestMessage, ResponseOk, Result, SamplingParams,
     SchedulerConfig, Tensor, TokenSource,
 };
@@ -47,7 +47,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(NormalLoaderType::Mistral)?;
+    .build(None)?;
     // Load, into a Pipeline
     let pipeline = loader.load_model_from_hf(
         None,
