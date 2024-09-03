@@ -560,12 +560,13 @@
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
-    VisionModelLoader, XLoraPaths,
+    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
+    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
+    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
 };
 <span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
@@ -954,7 +955,7 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>VisionPipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; candle_core::Result&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -966,7 +967,7 @@
             <span class="kw-2">mut </span>paged_attn_meta,
             flash_meta,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
-        <span class="self">self</span>.model.forward(
+        <span class="kw">let </span>logits = <span class="self">self</span>.model.forward(
             <span class="kw-2">&amp;</span>input_ids,
             pixel_values,
             <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -981,9 +982,10 @@
                 )
             }),
             <span class="kw-2">&amp;</span>flash_meta,
-        )
+        )<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
     }
-    <span class="kw">async fn </span>sample(
+    <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,

@@ -732,6 +732,10 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -739,8 +743,8 @@
     TokenSource, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -1362,7 +1366,10 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>GGUFPipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+    <span class="kw">fn </span>forward_inputs(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
@@ -1376,7 +1383,7 @@
             flash_meta,
             flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">match </span><span class="self">self</span>.model {
+        <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -1388,7 +1395,7 @@
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
-            ),
+            )<span class="question-mark">?</span>,
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -1399,7 +1406,7 @@
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
-            ),
+            )<span class="question-mark">?</span>,
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1412,7 +1419,7 @@
                 context_lens,
                 <span class="kw-2">&amp;</span>flash_meta,
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
-            ),
+            )<span class="question-mark">?</span>,
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -1422,7 +1429,7 @@
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
-            ),
+            )<span class="question-mark">?</span>,
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1435,7 +1442,7 @@
                 context_lens,
                 <span class="kw-2">&amp;</span>flash_meta,
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
-            ),
+            )<span class="question-mark">?</span>,
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -1446,10 +1453,11 @@
                         paged_attn_meta.as_mut().unwrap(),
                     )
                 }),
-            ),
-        }
+            )<span class="question-mark">?</span>,
+        };
+        <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
     }
-    <span class="kw">async fn </span>sample(
+    <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,

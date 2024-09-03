@@ -671,6 +671,10 @@
 <a href="#671" id="671">671</a>
 <a href="#672" id="672">672</a>
 <a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -678,8 +682,8 @@
     TokenSource, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use super</span>::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -1161,7 +1165,10 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>NormalPipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+    <span class="kw">fn </span>forward_inputs(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             input_ids_full,
@@ -1175,7 +1182,7 @@
             flash_meta,
             flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
+        <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -1189,7 +1196,7 @@
                     )
                 }),
                 <span class="kw-2">&amp;</span>flash_meta,
-            ),
+            )<span class="question-mark">?</span>,
             <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1203,10 +1210,11 @@
                 position_ids,
                 <span class="kw-2">&amp;</span>flash_meta,
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
-            ),
-        }
+            )<span class="question-mark">?</span>,
+        };
+        <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
     }
-    <span class="kw">async fn </span>sample(
+    <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,

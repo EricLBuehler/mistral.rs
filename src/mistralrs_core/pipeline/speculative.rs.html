@@ -622,6 +622,20 @@
 <a href="#622" id="622">622</a>
 <a href="#623" id="623">623</a>
 <a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -652,8 +666,8 @@
 <span class="kw">use super</span>::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 <span class="doccomment">/// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -917,10 +931,10 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult&gt; {
         <span class="macro">unreachable!</span>()
     }
-    <span class="kw">async fn </span>sample(
+    <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         _logits: Vec&lt;Tensor&gt;,
@@ -1023,6 +1037,13 @@
                         .unwrap()
                         .unwrap();
                     <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;
+                    <span class="attr">#[allow(irrefutable_let_patterns)]
+                    </span><span class="kw">let </span>ForwardInputsResult::CausalGeneration { logits } = logits
+                    <span class="kw">else </span>{
+                        <span class="macro">candle_core::bail!</span>(
+                            <span class="string">"Speculative decoding requires `CausalGeneration` forward results"
+                        </span>);
+                    };
 
                     <span class="kw">let </span>sample = sample_sequence(
                         logits.clone(),
@@ -1086,6 +1107,13 @@
                     .unwrap();
 
                 <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(Box::new(inputs))<span class="question-mark">?</span>;
+                <span class="attr">#[allow(irrefutable_let_patterns)]
+                </span><span class="kw">let </span>ForwardInputsResult::CausalGeneration { logits } = logits
+                <span class="kw">else </span>{
+                    <span class="macro">candle_core::bail!</span>(
+                        <span class="string">"Speculative decoding requires `CausalGeneration` forward results"
+                    </span>);
+                };
 
                 <span class="comment">// Reset the prefill tokens
                 </span>seq.reset_prefill_toks();

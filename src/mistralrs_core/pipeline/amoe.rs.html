@@ -572,6 +572,9 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -604,8 +607,8 @@
 };
 
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 <span class="kw">pub struct </span>AnyMoeLoader {
@@ -812,11 +815,14 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>AnyMoePipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor, candle_core::Error&gt; {
+    <span class="kw">fn </span>forward_inputs(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs)
     }
 
-    <span class="kw">async fn </span>sample(
+    <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,
@@ -825,7 +831,7 @@
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
-            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .sample_causal_gen(seqs, logits, prefix_cacher, disable_eos_stop, rng)
             .<span class="kw">await
     </span>}
 
