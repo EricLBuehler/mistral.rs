@@ -468,7 +468,7 @@ impl Llama {
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
                 let mut x = if block_idx == 0 {
-                    self.mapper.map(chunk, block_idx)?;
+                    self.mapper.map(chunk.clone(), block_idx)?;
                 } else {
                     self.mapper.map(block_chunks[chunk_idx], block_idx)?;
                 };
