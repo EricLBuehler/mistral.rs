@@ -22,7 +22,7 @@ use chat_template::ChatTemplate;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use inputs_processor::InputProcessorOutput;
-pub use isq::{parse_isq_value, IsqModel};
+pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
     AdapterKind, AutoLoader, Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader,
     LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,

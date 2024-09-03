@@ -692,6 +692,23 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
+    fn get_layers_moe_experts_only(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            for expert in &mut layer.mlp.experts {
+                tensors.push((&mut expert.w1, Some(i)));
+                tensors.push((&mut expert.w2, Some(i)));
+                tensors.push((&mut expert.w3, Some(i)));
+            }
+        }
+        (tensors, &*self.mapper)
+    }
 }
 
 impl NormalModel for Model {

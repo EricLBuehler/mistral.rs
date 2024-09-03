@@ -101,6 +101,7 @@ class Which(Enum):
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        organization: str | None = None
 
     @dataclass
     class XLora:

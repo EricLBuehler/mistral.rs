@@ -61,13 +61,15 @@ pub enum Which {
         model_id,
         arch = None,
         tokenizer_json = None,
-        topology = None
+        topology = None,
+        organization = None
     ))]
     Plain {
         model_id: String,
         arch: Option<Architecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
+        organization: Option<String>,
     },
 
     #[pyo3(constructor = (

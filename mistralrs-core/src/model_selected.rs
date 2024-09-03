@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
 use crate::{
-    pipeline::{NormalLoaderType, VisionLoaderType},
+    pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
     ModelDType,
 };
 
@@ -47,6 +47,10 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        #[arg(short, long)]
+        organization: Option<IsqOrganization>,
     },
 
     /// Select an X-LoRA architecture

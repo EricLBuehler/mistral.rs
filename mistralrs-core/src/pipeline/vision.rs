@@ -11,7 +11,7 @@ use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
+use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
@@ -267,6 +267,7 @@ impl Loader for VisionLoader {
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
+                IsqOrganization::Default,
             )?;
         }
 
@@ -345,7 +346,13 @@ impl IsqPipelineMixin for VisionPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(Some(dtype), device, self.topology.as_ref(), self.silent)
+            .quantize(
+                Some(dtype),
+                device,
+                self.topology.as_ref(),
+                self.silent,
+                IsqOrganization::Default,
+            )
             .map_err(anyhow::Error::msg)
     }
 }
