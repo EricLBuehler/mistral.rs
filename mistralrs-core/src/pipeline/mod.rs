@@ -695,7 +695,17 @@ pub trait Pipeline:
                     println!("get logits");
 
                 match post_op {
-                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    // CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    CacheInstruction::Out => {
+                        let mut caches = Vec::new();
+                    
+                        for cache in &self.caches {
+                            let cloned_cache = cache.clone_out_cache(input_seqs, false);
+                            caches.push(cloned_cache);
+                        }
+                    
+                        caches // Return the collection of cloned caches
+                    },
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
                         reset_non_granular,
