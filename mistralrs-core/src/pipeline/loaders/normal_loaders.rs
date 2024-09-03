@@ -152,7 +152,7 @@ impl NormalLoaderType {
             "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
             other => anyhow::bail!(
-                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`"
+                "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
         }
     }
