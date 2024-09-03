@@ -464,9 +464,10 @@ impl Llama {
             
             // x = self.mapper.map(x, block_idx)?;
             // x = self.mapper.map(&chunks[0], block_idx)?;
-            // println!("x device {:?}", x.device());
+            println!("block_idx {:?}", block_idx);
             // println!("chunk device {:?}", chunks[0].device());
             for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                println!("chunk_idx {:?}", chunk_idx);
                 let mut x = if block_idx == 0 {
                     let tensor = chunk.clone();
                     self.mapper.map(tensor.clone(), block_idx)?;
