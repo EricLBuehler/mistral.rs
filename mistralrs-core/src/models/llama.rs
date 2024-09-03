@@ -500,7 +500,7 @@ impl Llama {
                     // Move cache to chunk device
                     let mut cache_on_chunk_device: Vec<_> = cache.iter().map(|opt| {
                         opt.as_ref().map(|(k, v)| {
-                            (k.to_device(device_chunk).unwrap(), v.to_device(device_chunk).unwrap())
+                            (k.to_device(&device_chunk).unwrap(), v.to_device(&device_chunk).unwrap())
                         })
                     }).collect();
 
