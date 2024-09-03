@@ -692,6 +692,8 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
+                    println!("get logits");
+
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
                     CacheInstruction::Nothing(_) => (),
