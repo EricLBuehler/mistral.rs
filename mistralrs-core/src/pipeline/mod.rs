@@ -639,7 +639,7 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                // self.clone_in_cache(input_seqs, false)
+                                self.clone_in_cache(input_seqs, false)
                             }
                             CacheInstruction::Nothing(ref adapter_inst) => {
                                 match adapter_inst {
@@ -692,11 +692,11 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                    println!("get logits");
+                    // println!("get logits");
 
                 match post_op {
-                    // CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-                    CacheInstruction::Out => (),
+                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    // CacheInstruction::Out => (),
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
                         reset_non_granular,

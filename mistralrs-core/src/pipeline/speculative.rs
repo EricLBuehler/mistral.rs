@@ -229,6 +229,7 @@ impl IsqPipelineMixin for SpeculativePipeline {
 
 impl CacheManagerMixin for SpeculativePipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        println!("in speculative");
         DefaultCacheManager.clone_in_cache(
             &*get_mut_arcmutex!(self.draft),
             seqs,
