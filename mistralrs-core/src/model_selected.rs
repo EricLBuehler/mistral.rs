@@ -1,7 +1,7 @@
 use clap::Subcommand;
 
 use crate::{
-    pipeline::{NormalLoaderType, VisionLoaderType},
+    pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
     ModelDType,
 };
 
@@ -38,7 +38,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -47,6 +47,10 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        #[arg(short, long)]
+        organization: Option<IsqOrganization>,
     },
 
     /// Select an X-LoRA architecture
@@ -74,7 +78,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -105,7 +109,7 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

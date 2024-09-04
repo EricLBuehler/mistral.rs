@@ -5,8 +5,8 @@ use super::{
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -508,7 +508,10 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -522,14 +525,14 @@ impl Pipeline for GGMLPipeline {
             flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
-        match self.model {
+        let logits = match self.model {
             Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
                 None,
-            ),
+            )?,
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -542,10 +545,11 @@ impl Pipeline for GGMLPipeline {
                 context_lens,
                 &flash_meta,
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
-            ),
-        }
+            )?,
+        };
+        Ok(ForwardInputsResult::CausalGeneration { logits })
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,

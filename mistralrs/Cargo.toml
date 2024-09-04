@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.2.5", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.3.0", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
@@ -107,4 +107,8 @@ required-features = []
 
 [[example]]
 name = "phi3_5_moe"
+required-features = []
+
+[[example]]
+name = "mixture_of_quant_experts"
 required-features = []

@@ -20,11 +20,11 @@ use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
     DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request as _Request, RequestMessage, Response, SamplingParams,
-    SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, Tool, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, IsqOrganization, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -75,17 +75,22 @@ fn parse_which(
             tokenizer_json,
             arch,
             topology,
+            organization,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: organization
+                    .as_deref()
+                    .map(IsqOrganization::from_str)
+                    .unwrap_or(Ok(Default::default()))?,
             },
             chat_template,
             tokenizer_json,
             Some(model_id),
         )
-        .build(arch.into())?,
+        .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
             xlora_model_id,
@@ -99,6 +104,7 @@ fn parse_which(
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
             },
             chat_template,
             tokenizer_json,
@@ -113,7 +119,7 @@ fn parse_which(
             no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch.into())?,
+        .build(arch.map(Into::into))?,
         Which::Lora {
             model_id,
             tokenizer_json,
@@ -126,6 +132,7 @@ fn parse_which(
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
             },
             chat_template,
             tokenizer_json,
@@ -138,7 +145,7 @@ fn parse_which(
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
         )
-        .build(arch.into())?,
+        .build(arch.map(Into::into))?,
         Which::GGUF {
             tok_model_id,
             quantized_model_id,

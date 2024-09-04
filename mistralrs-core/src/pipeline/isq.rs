@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
@@ -7,6 +8,7 @@ use std::{
 use candle_core::Device;
 use indicatif::{ProgressBar, ProgressStyle};
 use mistralrs_quant::{IsqType, QuantMethod};
+use serde::Deserialize;
 use tracing::info;
 
 use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
@@ -75,7 +77,32 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     Ok(tp)
 }
 
+#[derive(Clone, Debug, Copy, Default, Deserialize)]
+pub enum IsqOrganization {
+    #[default]
+    #[serde(rename = "default")]
+    Default,
+    /// Only quantize MoE experts, if applicable. The enables MoQE.
+    /// https://arxiv.org/abs/2310.02410
+    #[serde(rename = "moqe")]
+    MoeExpertsOnly,
+}
+
+impl FromStr for IsqOrganization {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "default" => Ok(Self::Default),
+            "moqe" => Ok(Self::MoeExpertsOnly),
+            other => Err(format!(
+                "Expected ISQ organization `default` or `moqe`, got `{other}`"
+            )),
+        }
+    }
+}
+
 pub trait IsqModel {
+    /// Corresponds to `IsqOrganization::Default`
     #[allow(clippy::type_complexity)]
     fn get_layers(
         &mut self,
@@ -83,15 +110,33 @@ pub trait IsqModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     );
+
+    /// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// https://arxiv.org/abs/2310.02410
+    #[allow(clippy::type_complexity)]
+    fn get_layers_moe_experts_only(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        self.get_layers()
+    }
+
     /// Quantize the model in-situ.
     fn quantize(
         &mut self,
         dtype: Option<IsqType>,
         device: Device,
         topology: Option<&Topology>,
+        silent: bool,
+        organization: IsqOrganization,
     ) -> candle_core::Result<()> {
         {
-            let (tensors, mapper) = self.get_layers();
+            let (tensors, mapper) = match organization {
+                IsqOrganization::Default => self.get_layers(),
+                IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
+            };
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
             if let Some(topology) = topology {
@@ -187,8 +232,48 @@ pub trait IsqModel {
                     use rayon::iter::{
                         IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
                     };
+                    if silent {
+                        tensors.into_par_iter().zip(devices_and_dtypes).for_each(
+                            |((tensor, _), (device, dtype))| {
+                                *tensor = tensor
+                                    .clone()
+                                    .apply_isq(dtype, device.clone(), &n_quantized)
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            },
+                        );
+                    } else {
+                        tensors
+                            .into_par_iter()
+                            .zip(devices_and_dtypes)
+                            .progress_with(bar)
+                            .for_each(|((tensor, _), (device, dtype))| {
+                                *tensor = tensor
+                                    .clone()
+                                    .apply_isq(dtype, device.clone(), &n_quantized)
+                                    .unwrap();
+                                device.synchronize().unwrap();
+                            });
+                    }
+                });
+            }
+
+            #[cfg(feature = "metal")]
+            {
+                use indicatif::ProgressIterator;
+                if silent {
+                    tensors.into_iter().zip(devices_and_dtypes).for_each(
+                        |((tensor, _), (device, dtype))| {
+                            *tensor = tensor
+                                .clone()
+                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .unwrap();
+                            device.synchronize().unwrap();
+                        },
+                    );
+                } else {
                     tensors
-                        .into_par_iter()
+                        .into_iter()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
@@ -198,23 +283,7 @@ pub trait IsqModel {
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
-                });
-            }
-
-            #[cfg(feature = "metal")]
-            {
-                use indicatif::ProgressIterator;
-                tensors
-                    .into_iter()
-                    .zip(devices_and_dtypes)
-                    .progress_with(bar)
-                    .for_each(|((tensor, _), (device, dtype))| {
-                        *tensor = tensor
-                            .clone()
-                            .apply_isq(dtype, device.clone(), &n_quantized)
-                            .unwrap();
-                        device.synchronize().unwrap();
-                    });
+                }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
             info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );

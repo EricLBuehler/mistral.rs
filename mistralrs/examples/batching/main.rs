@@ -6,7 +6,7 @@ use tokio::sync::mpsc::channel;
 use mistralrs::{
     initialize_logging, ChatCompletionResponse, Constraint, Device, DeviceMapMetadata,
     GGUFLoaderBuilder, GGUFSpecificConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response,
+    ModelDType, NormalRequest, PagedAttentionConfig, Request, RequestMessage, ResponseOk,
     SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 
@@ -96,7 +96,7 @@ async fn bench_mistralrs(n_requests: usize) -> anyhow::Result<()> {
     let mut max_completion = f32::MIN;
 
     for response in responses {
-        let Response::Done(ChatCompletionResponse {
+        let ResponseOk::Done(ChatCompletionResponse {
             usage:
                 Usage {
                     avg_compl_tok_per_sec,
@@ -104,26 +104,16 @@ async fn bench_mistralrs(n_requests: usize) -> anyhow::Result<()> {
                     ..
                 },
             ..
-        }) = response.as_ref().unwrap()
+        }) = response.unwrap().as_result().unwrap()
         else {
-            match response.as_ref().unwrap() {
-                Response::InternalError(e) => panic!("Internal error: {e}"),
-                Response::ValidationError(e) => panic!("Validation error: {e}"),
-                Response::ModelError(e, c) => panic!(
-                    "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
-                    c.choices[0].message.content.as_ref().unwrap(),
-                    c.usage.avg_prompt_tok_per_sec,
-                    c.usage.avg_compl_tok_per_sec
-                ),
-                _ => unreachable!(),
-            }
+            unreachable!()
         };
         dbg!(avg_compl_tok_per_sec, avg_prompt_tok_per_sec);
-        if *avg_compl_tok_per_sec > max_prompt {
-            max_prompt = *avg_prompt_tok_per_sec;
+        if avg_compl_tok_per_sec > max_prompt {
+            max_prompt = avg_prompt_tok_per_sec;
         }
-        if *avg_compl_tok_per_sec > max_completion {
-            max_completion = *avg_compl_tok_per_sec;
+        if avg_compl_tok_per_sec > max_completion {
+            max_completion = avg_compl_tok_per_sec;
         }
     }
     println!("Individual sequence stats: {max_prompt} max PP T/s, {max_completion} max TG T/s");

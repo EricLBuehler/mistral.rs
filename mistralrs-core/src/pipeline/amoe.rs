@@ -30,8 +30,8 @@ use crate::{
 };
 
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 pub struct AnyMoeLoader {
@@ -238,11 +238,14 @@ impl MetadataMixin for AnyMoePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)
     }
 
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
@@ -251,7 +254,7 @@ impl Pipeline for AnyMoePipeline {
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         get_mut_arcmutex!(self.target)
-            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .sample_causal_gen(seqs, logits, prefix_cacher, disable_eos_stop, rng)
             .await
     }
 

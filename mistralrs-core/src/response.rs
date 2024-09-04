@@ -1,4 +1,7 @@
-use std::error::Error;
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
@@ -213,4 +216,77 @@ pub enum Response {
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),
+}
+
+#[derive(Debug, Clone)]
+pub enum ResponseOk {
+    // Chat
+    Done(ChatCompletionResponse),
+    Chunk(ChatCompletionChunkResponse),
+    // Completion
+    CompletionDone(CompletionResponse),
+    CompletionChunk(CompletionChunkResponse),
+}
+
+pub enum ResponseErr {
+    InternalError(Box<dyn Error + Send + Sync>),
+    ValidationError(Box<dyn Error + Send + Sync>),
+    ModelError(String, ChatCompletionResponse),
+    CompletionModelError(String, CompletionResponse),
+}
+
+impl Display for ResponseErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InternalError(e) | Self::ValidationError(e) => Display::fmt(e, f),
+            Self::ModelError(e, x) => f
+                .debug_struct("ChatModelError")
+                .field("msg", e)
+                .field("incomplete_response", x)
+                .finish(),
+            Self::CompletionModelError(e, x) => f
+                .debug_struct("CompletionModelError")
+                .field("msg", e)
+                .field("incomplete_response", x)
+                .finish(),
+        }
+    }
+}
+
+impl Debug for ResponseErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InternalError(e) | Self::ValidationError(e) => Debug::fmt(e, f),
+            Self::ModelError(e, x) => f
+                .debug_struct("ChatModelError")
+                .field("msg", e)
+                .field("incomplete_response", x)
+                .finish(),
+            Self::CompletionModelError(e, x) => f
+                .debug_struct("CompletionModelError")
+                .field("msg", e)
+                .field("incomplete_response", x)
+                .finish(),
+        }
+    }
+}
+
+impl std::error::Error for ResponseErr {}
+
+impl Response {
+    /// Convert the response into a result form.
+    pub fn as_result(self) -> Result<ResponseOk, Box<ResponseErr>> {
+        match self {
+            Self::Done(x) => Ok(ResponseOk::Done(x)),
+            Self::Chunk(x) => Ok(ResponseOk::Chunk(x)),
+            Self::CompletionDone(x) => Ok(ResponseOk::CompletionDone(x)),
+            Self::CompletionChunk(x) => Ok(ResponseOk::CompletionChunk(x)),
+            Self::InternalError(e) => Err(Box::new(ResponseErr::InternalError(e))),
+            Self::ValidationError(e) => Err(Box::new(ResponseErr::ValidationError(e))),
+            Self::ModelError(e, x) => Err(Box::new(ResponseErr::ModelError(e, x))),
+            Self::CompletionModelError(e, x) => {
+                Err(Box::new(ResponseErr::CompletionModelError(e, x)))
+            }
+        }
+    }
 }

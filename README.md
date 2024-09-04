@@ -210,7 +210,7 @@ Please submit more benchmarks via raising an issue!
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.5)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.0)
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
@@ -366,6 +366,8 @@ Additionally, for models without quantization, the model architecture should be 
 ### Architecture for plain models
 
 > Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+
+If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
 - `mistral`
 - `gemma`

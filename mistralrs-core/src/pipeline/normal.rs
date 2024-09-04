@@ -5,12 +5,12 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
+    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -57,6 +57,8 @@ pub struct NormalPipeline {
     model_id: String,
     metadata: Arc<GeneralMetadata>,
     topology: Option<Topology>,
+    silent: bool,
+    organization: IsqOrganization,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -93,6 +95,7 @@ pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
+    pub organization: IsqOrganization,
 }
 
 impl NormalLoaderBuilder {
@@ -160,18 +163,21 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> anyhow::Result<Box<dyn Loader>> {
-        let loader: Box<dyn NormalModelLoader> = match loader {
-            NormalLoaderType::Mistral => Box::new(MistralLoader),
-            NormalLoaderType::Gemma => Box::new(GemmaLoader),
-            NormalLoaderType::Llama => Box::new(LlamaLoader),
-            NormalLoaderType::Mixtral => Box::new(MixtralLoader),
-            NormalLoaderType::Phi2 => Box::new(Phi2Loader),
-            NormalLoaderType::Phi3 => Box::new(Phi3Loader),
-            NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
-            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
-            NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
-            NormalLoaderType::Phi3_5MoE => Box::new(Phi3_5MoELoader),
+    /// If the loader type is not specified, loader type is automatically determined from the
+    /// `architectures` array in the config.
+    pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
+        let loader: Box<dyn NormalModelLoader> = match loader_tp {
+            Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
+            Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),
+            Some(NormalLoaderType::Llama) => Box::new(LlamaLoader),
+            Some(NormalLoaderType::Mixtral) => Box::new(MixtralLoader),
+            Some(NormalLoaderType::Phi2) => Box::new(Phi2Loader),
+            Some(NormalLoaderType::Phi3) => Box::new(Phi3Loader),
+            Some(NormalLoaderType::Qwen2) => Box::new(Qwen2Loader),
+            Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
+            Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
+            Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
+            None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {
             inner: loader,
@@ -339,7 +345,13 @@ impl Loader for NormalLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if in_situ_quant.is_some() || self.config.topology.is_some() {
-            model.quantize(in_situ_quant, device.clone(), self.config.topology.as_ref())?;
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                self.config.organization,
+            )?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -396,6 +408,8 @@ impl Loader for NormalLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
             topology: self.config.topology.clone(),
+            silent,
+            organization: self.config.organization,
         })))
     }
 
@@ -424,7 +438,13 @@ impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(Some(dtype), device, self.topology.as_ref())
+            .quantize(
+                Some(dtype),
+                device,
+                self.topology.as_ref(),
+                self.silent,
+                self.organization,
+            )
             .map_err(anyhow::Error::msg)
     }
 }
@@ -478,7 +498,10 @@ impl MetadataMixin for NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -492,7 +515,7 @@ impl Pipeline for NormalPipeline {
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
-        match self.model.is_xlora() {
+        let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
                 &seqlen_offsets,
@@ -506,7 +529,7 @@ impl Pipeline for NormalPipeline {
                     )
                 }),
                 &flash_meta,
-            ),
+            )?,
             true => self.model.xlora_forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -520,10 +543,11 @@ impl Pipeline for NormalPipeline {
                 position_ids,
                 &flash_meta,
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
-            ),
-        }
+            )?,
+        };
+        Ok(ForwardInputsResult::CausalGeneration { logits })
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,

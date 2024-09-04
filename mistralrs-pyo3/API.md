@@ -14,6 +14,8 @@ Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF model
 Additionally, for models without quantization, the model architecture should be provided as the `arch` parameter in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
 
 ### Architecture for plain models
+If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
+
 - `Mistral`
 - `Gemma`
 - `Mixtral`
@@ -41,15 +43,17 @@ class Which(Enum):
     @dataclass
     class Plain:
         model_id: str
-        arch: Architecture
+        arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        # ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        organization: str | None = None
 
     @dataclass
     class XLora:
         xlora_model_id: str
         order: str
-        arch: Architecture
+        arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
@@ -59,7 +63,7 @@ class Which(Enum):
     class Lora:
         adapters_model_id: str
         order: str
-        arch: Architecture
+        arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None

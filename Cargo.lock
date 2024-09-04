@@ -389,7 +389,7 @@ checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 [[package]]
 name = "candle-core"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f706ef2#f706ef27666e77c5b5a6cdbd28f47c3205171d39"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=3c8e120#3c8e120e8a6ae88b41ee251ec6255035864858d6"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -416,7 +416,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f706ef2#f706ef27666e77c5b5a6cdbd28f47c3205171d39"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=3c8e120#3c8e120e8a6ae88b41ee251ec6255035864858d6"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -427,7 +427,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f706ef2#f706ef27666e77c5b5a6cdbd28f47c3205171d39"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=3c8e120#3c8e120e8a6ae88b41ee251ec6255035864858d6"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -435,7 +435,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f706ef2#f706ef27666e77c5b5a6cdbd28f47c3205171d39"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=3c8e120#3c8e120e8a6ae88b41ee251ec6255035864858d6"
 dependencies = [
  "metal",
  "once_cell",
@@ -446,7 +446,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f706ef2#f706ef27666e77c5b5a6cdbd28f47c3205171d39"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=3c8e120#3c8e120e8a6ae88b41ee251ec6255035864858d6"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1971,7 +1971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -2193,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2226,7 +2226,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bindgen_cuda 0.1.5",
  "candle-core",
@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "candle-core",
  "image",
@@ -3077,9 +3077,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.6"
+version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba92fb39ec7ad06ca2582c0ca834dfeadcaf06ddfc8e635c80aa7e1c05315fdd"
+checksum = "fadfaed2cd7f389d0161bb73eeb07b7b78f8691047a6f3e73caaeae55310a4a6"
 dependencies = [
  "bytes",
  "rand",

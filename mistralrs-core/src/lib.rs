@@ -70,8 +70,8 @@ pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
     Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
     Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
@@ -295,6 +295,7 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+        let throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -304,7 +305,7 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
-            throughput_logging_enabled: throughput_logging_enabled.is_some(),
+            throughput_logging_enabled,
         };
 
         let (tx, rx) = channel(10_000);
@@ -324,10 +325,8 @@ impl MistralRs {
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    throughput_logging_enabled,
                 );
-                if throughput_logging_enabled.is_some() {
-                    engine.enable_throughput_logging();
-                }
                 engine.run().await;
             });
         });
@@ -377,10 +376,8 @@ impl MistralRs {
                         reboot_state.no_prefix_cache,
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
+                        reboot_state.throughput_logging_enabled,
                     );
-                    if reboot_state.throughput_logging_enabled {
-                        engine.enable_throughput_logging();
-                    }
                     engine.run().await;
                 });
             });

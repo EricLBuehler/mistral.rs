@@ -6,8 +6,8 @@ use tokio::sync::mpsc::channel;
 use mistralrs::{
     AnyMoeConfig, AnyMoeExpertType, AnyMoeLoader, Constraint, DefaultSchedulerMethod, Device,
     DeviceMapMetadata, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
-    Result, SamplingParams, SchedulerConfig, TokenSource,
+    NormalRequest, NormalSpecificConfig, Request, RequestMessage, ResponseOk, Result,
+    SamplingParams, SchedulerConfig, TokenSource,
 };
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
@@ -29,12 +29,13 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             prompt_batchsize: None,
             topology: None,
+            organization: Default::default(),
         },
         None,
         None,
         Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
     )
-    .build(NormalLoaderType::Mistral)?;
+    .build(None)?;
     let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
         target: loader,
         config: AnyMoeConfig {
@@ -97,9 +98,9 @@ fn main() -> anyhow::Result<()> {
     });
     mistralrs.get_sender()?.blocking_send(request)?;
 
-    let response = rx.blocking_recv().unwrap();
+    let response = rx.blocking_recv().unwrap().as_result().unwrap();
     match response {
-        Response::Done(c) => println!(
+        ResponseOk::Done(c) => println!(
             "Text: {}, Prompt T/s: {}, Completion T/s: {}",
             c.choices[0].message.content.as_ref().unwrap(),
             c.usage.avg_prompt_tok_per_sec,

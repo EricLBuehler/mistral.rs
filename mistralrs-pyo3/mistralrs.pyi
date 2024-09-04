@@ -98,15 +98,16 @@ class Which(Enum):
     @dataclass
     class Plain:
         model_id: str
-        arch: Architecture
+        arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        organization: str | None = None
 
     @dataclass
     class XLora:
         xlora_model_id: str
         order: str
-        arch: Architecture
+        arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
@@ -116,7 +117,7 @@ class Which(Enum):
     class Lora:
         adapters_model_id: str
         order: str
-        arch: Architecture
+        arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
