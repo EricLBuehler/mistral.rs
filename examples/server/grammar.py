@@ -53,7 +53,7 @@ EXPR_KBNF = '''
 (* Grammar for Mathematical Expressions *)
 
 (* An expression can be a term or a sum/subtraction of terms *)
-expression   ::= term { ("+" | "-") term } ;
+start   ::= term { ("+" | "-") term } ;
 
 (* A term can be a factor or a product/division of factors *)
 term         ::= factor { ("*" | "/") factor } ;
@@ -61,7 +61,7 @@ term         ::= factor { ("*" | "/") factor } ;
 (* A factor can be a number, a variable, or a parenthesized expression *)
 factor       ::= number 
              | variable 
-             | "(" expression ")" ;
+             | "(" start ")" ;
 
 (* A number is a sequence of digits, possibly with a decimal point *)
 number       ::= digit { digit } [ "." digit { digit } ] ;
