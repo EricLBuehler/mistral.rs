@@ -40,7 +40,7 @@ use crate::{
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -645,29 +645,29 @@ impl Pipeline for GGUFPipeline {
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
+        let paged_attn_meta = paged_attn_meta
+            .as_mut()
+            .with_context(|| "Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let logits = match self.model {
             Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
             )?,
             Model::Phi2(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 context_lens,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
             )?,
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
@@ -685,12 +685,10 @@ impl Pipeline for GGUFPipeline {
             Model::Phi3(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
             )?,
             Model::XLoraPhi3(ref model) => model.forward(
                 &input_ids,
@@ -709,12 +707,10 @@ impl Pipeline for GGUFPipeline {
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
             )?,
         };
         Ok(ForwardInputsResult::CausalGeneration { logits })
