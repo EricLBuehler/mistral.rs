@@ -32,7 +32,7 @@ use crate::{
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -515,6 +515,10 @@ impl Pipeline for NormalPipeline {
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
+        let paged_attn_meta = paged_attn_meta
+            .as_mut()
+            .with_context(|| "Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
@@ -522,12 +526,10 @@ impl Pipeline for NormalPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
+                self.get_metadata()
+                    .cache_engine
+                    .as_ref()
+                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
                 &flash_meta,
             )?,
             true => self.model.xlora_forward(

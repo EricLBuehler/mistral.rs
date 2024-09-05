@@ -24,7 +24,7 @@ use crate::{
     api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -411,6 +411,10 @@ impl Pipeline for VisionPipeline {
             mut paged_attn_meta,
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
+        let paged_attn_meta = paged_attn_meta
+            .as_mut()
+            .with_context(|| "Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
@@ -419,12 +423,10 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             model_specific_args,
-            self.get_metadata().cache_engine.as_ref().map(|engine| {
-                (
-                    engine.get_kv_cache().clone(),
-                    paged_attn_meta.as_mut().unwrap(),
-                )
-            }),
+            self.get_metadata()
+                .cache_engine
+                .as_ref()
+                .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
             &flash_meta,
         )?;
         Ok(ForwardInputsResult::CausalGeneration { logits })
