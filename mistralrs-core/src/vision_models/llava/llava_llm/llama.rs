@@ -425,7 +425,7 @@ impl Llama {
                         ),
                     };
                     Block::load(
-                        vb.pp(&format!("model.layers.{i}")),
+                        vb.pp(format!("model.layers.{i}")),
                         cfg,
                         &*mapper,
                         i,
