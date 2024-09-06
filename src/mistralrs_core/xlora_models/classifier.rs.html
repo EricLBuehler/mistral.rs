@@ -499,7 +499,7 @@
                     <span class="kw">let </span>lin = linear(
                         config.xlora_size,
                         config.xlora_size,
-                        vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"inner.{i}"</span>)),
+                        vb.pp(<span class="macro">format!</span>(<span class="string">"inner.{i}"</span>)),
                     )<span class="question-mark">?</span>;
                     inner.push(Box::new(Linear::new(
                         lin.weight().to_dtype(DType::F32)<span class="question-mark">?</span>,
@@ -509,7 +509,7 @@
                     <span class="kw">let </span>lin = linear_no_bias(
                         config.xlora_size,
                         config.xlora_size,
-                        vb.pp(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"inner.{i}"</span>)),
+                        vb.pp(<span class="macro">format!</span>(<span class="string">"inner.{i}"</span>)),
                     )<span class="question-mark">?</span>;
                     inner.push(Box::new(Linear::new(
                         lin.weight().to_dtype(DType::F32)<span class="question-mark">?</span>,
