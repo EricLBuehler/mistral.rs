@@ -66,6 +66,7 @@ impl Engine {
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
+        let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
         // Prefix caching is always disabled if using PagedAttention for now.
         // TODO
         let no_prefix_cache =
@@ -76,7 +77,7 @@ impl Engine {
             scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
-            no_kv_cache,
+            no_kv_cache: no_kv_cache & !has_no_kv_cache,
             prefix_cacher: PrefixCacheManager::new(
                 device,
                 prefix_cache_n,
@@ -467,7 +468,8 @@ impl Engine {
             RequestMessage::Completion { best_of, .. } => best_of,
             RequestMessage::Chat(_)
             | RequestMessage::CompletionTokens(_)
-            | RequestMessage::VisionChat { .. } => 1,
+            | RequestMessage::VisionChat { .. }
+            | RequestMessage::ImageGeneration { .. } => 1,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -499,6 +501,11 @@ impl Engine {
             None
         };
 
+        let image_generation_format = match &request.messages {
+            RequestMessage::ImageGeneration { format, .. } => Some(format.clone()),
+            _ => None,
+        };
+
         let mut prompt = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
@@ -518,6 +525,15 @@ impl Engine {
                 let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
                     .encode(text, true)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                handle_seq_error!(prompt, request.response)
+                    .get_ids()
+                    .to_vec()
+            }
+            RequestMessage::ImageGeneration { prompt, .. } => {
+                let prompt = get_mut_arcmutex!(self.pipeline)
+                    .tokenizer()
+                    .encode(prompt, true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 handle_seq_error!(prompt, request.response)
                     .get_ids()
@@ -722,6 +738,7 @@ impl Engine {
                 block_size,
                 trie,
                 matcher.clone(),
+                image_generation_format,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

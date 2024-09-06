@@ -7,9 +7,9 @@ use super::{
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
+use crate::diffusion_models::processor::ModelInputs;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -21,8 +21,9 @@ use crate::{
     TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use image::{DynamicImage, RgbImage};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -249,7 +250,7 @@ impl Loader for DiffusionLoader {
                 num_hidden_layers: usize::MAX, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                has_no_kv_cache: false,
+                has_no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
@@ -327,17 +328,32 @@ impl MetadataMixin for DiffusionPipeline {
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
     fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
-        todo!()
+        let ModelInputs { input_ids } = *inputs.downcast().expect("Downcast failed.");
+        let img = self.model.forward(&input_ids)?.to_dtype(DType::U8)?;
+        let (_b, c, h, w) = img.dims4()?;
+        let mut images = Vec::new();
+        for b_img in img.chunk(img.dim(0)?, 0)? {
+            let flattened = b_img.permute((1, 2, 0))?.flatten_all()?;
+            if c != 3 {
+                candle_core::bail!("Expected 3 channels in image output");
+            }
+            images.push(DynamicImage::ImageRgb8(
+                RgbImage::from_raw(w as u32, h as u32, flattened.to_vec1::<u8>()?).ok_or(
+                    candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
+                )?,
+            ));
+        }
+        Ok(ForwardInputsResult::Image { images })
     }
     async fn sample_causal_gen(
         &self,
-        seqs: &mut [&mut Sequence],
-        logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
-        disable_eos_stop: bool,
-        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        _seqs: &mut [&mut Sequence],
+        _logits: Vec<Tensor>,
+        _prefix_cacher: &mut PrefixCacheManager,
+        _disable_eos_stop: bool,
+        _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
+        candle_core::bail!("`sample_causal_gen` is incompatible with `DiffusionPipeline`");
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Diffusion

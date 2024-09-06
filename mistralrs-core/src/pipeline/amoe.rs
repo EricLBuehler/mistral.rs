@@ -573,5 +573,6 @@ fn new_dummy_seq(
         None, // TODO incorrect for PagedAttention
         trie,
         None,
+        None,
     )
 }

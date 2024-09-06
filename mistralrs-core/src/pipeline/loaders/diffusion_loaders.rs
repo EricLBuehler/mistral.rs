@@ -13,7 +13,7 @@ use super::NormalLoadingMetadata;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 
 pub trait DiffusionModel {
-    #[allow(clippy::too_many_arguments)]
+    /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
     fn forward(&self, input_ids: &Tensor) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;

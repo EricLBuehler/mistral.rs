@@ -13,7 +13,8 @@ use crate::{
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 use crate::{
     get_mut_group,
@@ -156,12 +157,25 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
-    prefill_prompt_toks: Option<Vec<u32>>,
+
+    // Image generation
+    image_gen_response_format: Option<ImageGenerationResponseFormat>,
+
+    // Grammars
+    pub(crate) tok_trie: TokTrie,
+
+    // Completion requests
     suffix: Option<String>,
     prefix: Option<String>,
+
+    // Speculative
     is_tmp: bool,
+
+    // Prefix caching
+    prefill_prompt_toks: Option<Vec<u32>>,
+
+    // Adapter dynamic config
     adapters: Option<Vec<String>>,
-    pub(crate) tok_trie: TokTrie,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -250,6 +264,7 @@ impl Sequence {
         //
         tok_trie: TokTrie,
         tools: Option<Arc<ToolCallingMatcher>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -305,6 +320,7 @@ impl Sequence {
             custom_metadata,
             tok_trie,
             tools,
+            image_gen_response_format,
         }
     }
 
@@ -633,6 +649,11 @@ impl Sequence {
         get_mut_group!(self).total_toks += self.len();
     }
 
+    pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
+        get_mut_group!(self).image_choices.push(choice);
+        self.update_time_info();
+    }
+
     pub fn add_choice_to_group(&self, choice: Choice) {
         get_mut_group!(self).choices.push(choice);
         self.update_time_info();
@@ -678,6 +699,10 @@ impl Sequence {
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_deref()
     }
+
+    pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
+        self.image_gen_response_format
+    }
 }
 
 pub struct SequenceGroup {
@@ -689,6 +714,7 @@ pub struct SequenceGroup {
     pub total_time: u128,
     pub total_completion_time: u128,
     choices: Vec<Choice>,
+    image_choices: Vec<ImageChoice>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
@@ -700,6 +726,7 @@ impl SequenceGroup {
     pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
         Self {
             choices: Vec::new(),
+            image_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
@@ -732,6 +759,10 @@ impl SequenceGroup {
             .collect::<Vec<_>>()
     }
 
+    pub fn get_image_choices(&self) -> &[ImageChoice] {
+        &self.image_choices
+    }
+
     pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
         Usage {
@@ -757,6 +788,18 @@ impl SequenceGroup {
     ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
             sender.send(Response::Done(response)).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_image_gen_response(
+        &self,
+        response: ImageGenerationResponse,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        if self.image_choices.len() == self.n_choices {
+            sender.send(Response::ImageGeneration(response)).await?;
         }
 
         Ok(())

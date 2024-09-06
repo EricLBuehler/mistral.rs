@@ -17,12 +17,14 @@ mod vision;
 
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::diffusion_models::response::send_responses;
 use crate::paged_attention::{CacheConfig, CacheEngine};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
@@ -207,6 +209,7 @@ pub enum CacheBackendMetadata<'a> {
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
     CausalGeneration { logits: Tensor },
+    Image { images: Vec<DynamicImage> },
 }
 
 impl ForwardInputsResult {
@@ -214,6 +217,9 @@ impl ForwardInputsResult {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
+            }),
+            Self::Image { images } => Ok(Self::Image {
+                images: vec![images[bs_idx].clone()],
             }),
         }
     }
@@ -223,6 +229,7 @@ impl ForwardInputsResult {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
             }),
+            Self::Image { .. } => Ok(self.clone()),
         }
     }
 }
@@ -363,7 +370,9 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::CausalGeneration { logits } = r
                                     else {
-                                        unreachable!("All results must have same type")
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
                                     };
                                     logits
                                 })
@@ -371,6 +380,28 @@ pub trait Pipeline:
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
                         )
                         .await?;
                     }
@@ -443,6 +474,28 @@ pub trait Pipeline:
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
                         )
                         .await?;
                     }

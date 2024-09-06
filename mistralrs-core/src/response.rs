@@ -201,6 +201,26 @@ pub struct CompletionChunkResponse {
 
 generate_repr!(CompletionChunkResponse);
 
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageChoice {
+    pub url: Option<String>,
+    pub b64_json: Option<String>,
+}
+
+generate_repr!(ImageChoice);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageGenerationResponse {
+    pub created: u128,
+    pub data: Vec<ImageChoice>,
+}
+
+generate_repr!(ImageGenerationResponse);
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
 /// - Chat (no prefix)
@@ -216,6 +236,8 @@ pub enum Response {
     CompletionModelError(String, CompletionResponse),
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),
+    // Image generation
+    ImageGeneration(ImageGenerationResponse),
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +248,8 @@ pub enum ResponseOk {
     // Completion
     CompletionDone(CompletionResponse),
     CompletionChunk(CompletionChunkResponse),
+    // Image generation
+    ImageGeneration(ImageGenerationResponse),
 }
 
 pub enum ResponseErr {
@@ -287,6 +311,7 @@ impl Response {
             Self::CompletionModelError(e, x) => {
                 Err(Box::new(ResponseErr::CompletionModelError(e, x)))
             }
+            Self::ImageGeneration(x) => Ok(ResponseOk::ImageGeneration(x)),
         }
     }
 }

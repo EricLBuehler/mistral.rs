@@ -1,6 +1,7 @@
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     response::Response,
@@ -19,6 +20,13 @@ pub enum Constraint {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+/// Image generation response format
+pub enum ImageGenerationResponseFormat {
+    Url,
+    B64Json,
+}
+
 pub type MessageContent = Either<String, Vec<IndexMap<String, String>>>;
 
 #[derive(Clone, Debug)]
@@ -34,6 +42,10 @@ pub enum RequestMessage {
     VisionChat {
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
+    },
+    ImageGeneration {
+        prompt: String,
+        format: ImageGenerationResponseFormat,
     },
 }
 

@@ -1,5 +1,5 @@
 use either::Either;
-use mistralrs_core::{Tool, ToolChoice};
+use mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -53,6 +53,10 @@ fn default_1usize() -> usize {
 
 fn default_model() -> String {
     "default".to_string()
+}
+
+fn default_response_format() -> ImageGenerationResponseFormat {
+    ImageGenerationResponseFormat::Url
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -198,4 +202,19 @@ pub struct CompletionRequest {
     pub dry_allowed_length: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ImageGenerationRequest {
+    #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[schema(example = "Draw a picture of a majestic, snow-covered mountain.")]
+    pub prompt: String,
+    #[serde(rename = "n")]
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub n_choices: usize,
+    #[serde(default = "default_response_format")]
+    pub response_format: ImageGenerationResponseFormat,
 }

@@ -76,8 +76,10 @@ pub use pipeline::{
     Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
     VisionSpecificConfig,
 };
-pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
-pub use response::Response;
+pub use request::{
+    Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
+    RequestMessage,
+};
 pub use response::*;
 pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
