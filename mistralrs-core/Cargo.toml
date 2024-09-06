@@ -75,6 +75,7 @@ uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex = "1.10.6"
+serde_plain = "1.0.2"
 
 [features]
 pyo3_macros = ["pyo3"]

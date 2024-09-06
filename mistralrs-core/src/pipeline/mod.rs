@@ -1,6 +1,7 @@
 mod amoe;
 mod cache_manager;
 pub mod chat_template;
+mod diffusion;
 mod ggml;
 mod gguf;
 mod inputs_processor;
@@ -13,6 +14,7 @@ mod processing;
 mod sampling;
 mod speculative;
 mod vision;
+
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::paged_attention::{CacheConfig, CacheEngine};
@@ -24,11 +26,12 @@ pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
-    AdapterKind, AutoLoader, Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind,
-    Qwen2Loader, Starcoder2Loader, TokenSource, VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -185,6 +188,7 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision { has_conv2d: bool },
+    Diffusion,
 }
 
 pub enum CacheBackendMetadata<'a> {

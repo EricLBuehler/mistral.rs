@@ -46,6 +46,7 @@ mod paged_attention;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -282,6 +283,7 @@ impl MistralRs {
         let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
             ModelCategory::Text => true,
             ModelCategory::Vision { has_conv2d } => !has_conv2d,
+            ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();

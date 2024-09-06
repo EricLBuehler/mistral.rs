@@ -1,3 +1,4 @@
+mod diffusion_loaders;
 mod normal_loaders;
 mod vision_loaders;
 
@@ -6,16 +7,21 @@ use std::{collections::HashMap, fmt, path::PathBuf, str::FromStr, sync::Arc};
 use anyhow::Result;
 use candle_core::Device;
 use mistralrs_quant::IsqType;
+use tokio::sync::Mutex;
+
 pub use normal_loaders::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
     Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
-use tokio::sync::Mutex;
 pub use vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModel,
     VisionModelLoader,
+};
+
+pub use diffusion_loaders::{
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
 };
 
 use crate::{
