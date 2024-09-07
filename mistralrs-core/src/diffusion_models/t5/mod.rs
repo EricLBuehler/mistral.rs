@@ -599,7 +599,6 @@ impl T5Stack {
 #[derive(Debug, Clone)]
 pub struct T5EncoderModel {
     encoder: T5Stack,
-    device: Device,
 }
 
 impl T5EncoderModel {
@@ -614,17 +613,10 @@ impl T5EncoderModel {
         let shared = embedding(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
-        Ok(Self {
-            encoder,
-            device: vb.device().clone(),
-        })
+        Ok(Self { encoder })
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids, None)
-    }
-
-    pub fn device(&self) -> &Device {
-        &self.device
     }
 }

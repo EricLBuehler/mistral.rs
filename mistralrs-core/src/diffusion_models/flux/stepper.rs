@@ -67,6 +67,7 @@ pub struct FluxStepper {
     flux_model: Flux,
     flux_vae: AutoEncoder,
     is_guidance: bool,
+    device: Device,
 }
 
 fn get_t5_model_and_tokenizr(
@@ -140,8 +141,9 @@ impl FluxStepper {
     ) -> anyhow::Result<Self> {
         let api = Api::new()?;
 
-        let (t5_encoder, t5_tokenizer) = get_t5_model_and_tokenizr(&api, dtype, device)?;
-        let (clip_encoder, clip_tokenizer) = get_clip_model_and_tokenizer(&api, dtype, device)?;
+        let (t5_encoder, t5_tokenizer) = get_t5_model_and_tokenizr(&api, dtype, &Device::Cpu)?;
+        let (clip_encoder, clip_tokenizer) =
+            get_clip_model_and_tokenizer(&api, dtype, &Device::Cpu)?;
 
         Ok(Self {
             cfg,
@@ -152,13 +154,14 @@ impl FluxStepper {
             flux_model: Flux::new(&flux_cfg, flux_vb)?,
             flux_vae: AutoEncoder::new(&flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
+            device: device.clone(),
         })
     }
 }
 
 impl DiffusionModel for FluxStepper {
     fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
-        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), self.device())?;
+        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &Device::Cpu)?;
         if !self.is_guidance {
             if t5_input_ids.dim(1)? > 256 {
                 candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
@@ -168,10 +171,13 @@ impl DiffusionModel for FluxStepper {
             }
         }
 
-        let t5_embed = self.t5.forward(&t5_input_ids)?;
+        let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?;
 
-        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, self.device())?;
-        let clip_embed = self.clip_text.forward(&clip_input_ids)?;
+        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &Device::Cpu)?;
+        let clip_embed = self
+            .clip_text
+            .forward(&clip_input_ids)?
+            .to_device(&self.device)?;
 
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
@@ -219,7 +225,7 @@ impl DiffusionModel for FluxStepper {
     }
 
     fn device(&self) -> &Device {
-        self.t5.device()
+        &self.device
     }
 
     fn max_seq_len(&self) -> usize {
