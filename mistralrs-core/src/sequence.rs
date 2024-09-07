@@ -157,6 +157,7 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
+    prompt: String,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -241,6 +242,7 @@ impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
+        prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -279,6 +281,7 @@ impl Sequence {
             .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
         Self {
             tokens,
+            prompt,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -423,6 +426,10 @@ impl Sequence {
             return toks;
         }
         &self.tokens
+    }
+
+    pub fn get_initial_prompt(&self) -> &str {
+        &self.prompt
     }
 
     /// This will also set prompt_len

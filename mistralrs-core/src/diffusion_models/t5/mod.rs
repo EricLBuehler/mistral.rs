@@ -126,37 +126,6 @@ impl Default for Config {
     }
 }
 
-impl Config {
-    // https://huggingface.co/facebook/musicgen-small/blob/495da4ad086b3416a27c6187f9239f9fd96f3962/config.json#L184
-    pub fn musicgen_small() -> Self {
-        Self {
-            d_ff: 3072,
-            d_kv: 64,
-            d_model: 768,
-            dropout_rate: 0.1,
-            eos_token_id: 1,
-            feed_forward_proj: ActivationWithOptionalGating {
-                gated: false,
-                activation: Activation::Relu,
-            },
-            tie_word_embeddings: true,
-            initializer_factor: 1.0,
-            is_decoder: false,
-            is_encoder_decoder: true,
-            layer_norm_epsilon: 1e-6,
-            num_decoder_layers: Some(12),
-            num_heads: 12,
-            num_layers: 12,
-            pad_token_id: 0,
-            decoder_start_token_id: Some(0),
-            relative_attention_max_distance: 128,
-            relative_attention_num_buckets: 32,
-            use_cache: true,
-            vocab_size: 32128,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct T5LayerNorm {
     weight: Tensor,

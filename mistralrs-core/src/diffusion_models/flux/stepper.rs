@@ -170,7 +170,7 @@ impl DiffusionModel for FluxStepper {
 
         let t5_embed = self.t5.forward(&t5_input_ids)?;
 
-        let clip_input_ids = get_tokenization(&self.t5_tok, prompts, self.device())?;
+        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, self.device())?;
         let clip_embed = self.clip_text.forward(&clip_input_ids)?;
 
         let img = flux::sampling::get_noise(

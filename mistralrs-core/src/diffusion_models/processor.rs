@@ -30,7 +30,7 @@ impl InputsProcessor for DiffusionProcessor {
         input_seqs: &mut [&mut Sequence],
         _is_prompt: bool,
         _is_xlora: bool,
-        device: &Device,
+        _device: &Device,
         _no_kv_cache: bool,
         _last_n_context_len: Option<(usize, usize)>,
         _other_config: Option<Arc<dyn Any>>,
@@ -43,7 +43,12 @@ impl InputsProcessor for DiffusionProcessor {
             ))));
         } else {
             || {
-                let inputs = ModelInputs { prompts: todo!() };
+                let inputs = ModelInputs {
+                    prompts: input_seqs
+                        .into_iter()
+                        .map(|seq| seq.get_initial_prompt().to_string())
+                        .collect::<Vec<_>>(),
+                };
                 Ok(InputProcessorOutput {
                     inputs: Box::new(inputs),
                     seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),

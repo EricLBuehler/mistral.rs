@@ -13,7 +13,7 @@ use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::{DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType};
+use crate::{DeviceMapMetadata, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -40,10 +40,6 @@ pub struct DiffusionLoader {
     model_id: String,
     config: DiffusionSpecificConfig,
     kind: ModelKind,
-    chat_template: Option<String>,
-    tokenizer_json: Option<String>,
-    xlora_model_id: Option<String>,
-    xlora_order: Option<Ordering>,
 }
 
 #[derive(Default)]
@@ -52,8 +48,6 @@ pub struct DiffusionLoaderBuilder {
     model_id: Option<String>,
     config: DiffusionSpecificConfig,
     kind: ModelKind,
-    chat_template: Option<String>,
-    tokenizer_json: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -63,16 +57,9 @@ pub struct DiffusionSpecificConfig {
 }
 
 impl DiffusionLoaderBuilder {
-    pub fn new(
-        config: DiffusionSpecificConfig,
-        chat_template: Option<String>,
-        tokenizer_json: Option<String>,
-        model_id: Option<String>,
-    ) -> Self {
+    pub fn new(config: DiffusionSpecificConfig, model_id: Option<String>) -> Self {
         Self {
             config,
-            chat_template,
-            tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
         }
@@ -87,10 +74,6 @@ impl DiffusionLoaderBuilder {
             model_id: self.model_id.unwrap(),
             config: self.config,
             kind: self.kind,
-            chat_template: self.chat_template,
-            tokenizer_json: self.tokenizer_json,
-            xlora_model_id: None,
-            xlora_order: None,
         })
     }
 }
@@ -121,8 +104,9 @@ impl Loader for DiffusionLoader {
             ));
             let model_id = std::path::Path::new(&self.model_id);
             let filenames = self.inner.get_model_paths(&api, &model_id)?;
+            let config_filenames = self.inner.get_config_filenames(&api, &model_id)?;
             Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
-                config_filenames: vec![],
+                config_filenames,
                 filenames,
             })))
         };

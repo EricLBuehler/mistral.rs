@@ -541,7 +541,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 /// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
 /// has no information other than the input tokens (and maybe images).
 fn new_dummy_seq(
-    tokens: Vec<u32>,
+    (tokens, prompt): (Vec<u32>, String),
     dummy_sender: tokio::sync::mpsc::Sender<Response>,
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
@@ -549,6 +549,7 @@ fn new_dummy_seq(
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
+        prompt,
         0,
         0,
         1,

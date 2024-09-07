@@ -507,7 +507,7 @@ impl Engine {
             _ => None,
         };
 
-        let mut prompt = match request.messages {
+        let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
                 images: _,
@@ -534,33 +534,34 @@ impl Engine {
                     return;
                 };
                 let prompt = tokenizer
-                    .encode(text, true)
+                    .encode(text.clone(), true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
-                handle_seq_error!(prompt, request.response)
-                    .get_ids()
-                    .to_vec()
+                (
+                    handle_seq_error!(prompt, request.response)
+                        .get_ids()
+                        .to_vec(),
+                    text,
+                )
             }
-            RequestMessage::ImageGeneration { prompt, .. } => {
+            RequestMessage::ImageGeneration { prompt, .. } => (vec![], prompt),
+            RequestMessage::CompletionTokens(it) => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
                         .response
                         .send(Response::ValidationError(
-                            "Completion requests require the pipeline to have a tokenizer".into(),
+                            "Completion requests w/ raw tokens require the pipeline to have a tokenizer".into(),
                         ))
                         .await
                         .expect("Expected receiver.");
                     return;
                 };
                 let prompt = tokenizer
-                    .encode(prompt, true)
+                    .decode(&it, false)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
-                handle_seq_error!(prompt, request.response)
-                    .get_ids()
-                    .to_vec()
+                (it, handle_seq_error!(prompt, request.response))
             }
-            RequestMessage::CompletionTokens(it) => it,
         };
-        if prompt.is_empty() {
+        if prompt_tokens.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -571,7 +572,7 @@ impl Engine {
             return;
         }
 
-        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
+        if prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
                 request
                     .response
@@ -580,7 +581,7 @@ impl Engine {
                     )).await.expect("Expected receiver.");
                 return;
             } else {
-                let prompt_len = prompt.len();
+                let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
@@ -592,12 +593,12 @@ impl Engine {
                 } else {
                     10
                 };
-                prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
+                prompt_tokens = prompt_tokens[(currently_over + sampling_max)..].to_vec();
+                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
         let prefill_cache = handle_seq_error!(
-            self.prefix_cacher.search_for_matching_cache(&prompt),
+            self.prefix_cacher.search_for_matching_cache(&prompt_tokens),
             request.response
         );
 
@@ -745,7 +746,8 @@ impl Engine {
                 .as_ref()
                 .map(|x| (**x).clone());
             let seq = Sequence::new_waiting(
-                prompt.clone(),
+                prompt_tokens.clone(),
+                prompt_text.clone(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
@@ -762,15 +764,7 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    get_mut_arcmutex!(self.pipeline)
-                        .tokenizer()
-                        .and_then(|tokenizer| {
-                            Some(
-                                tokenizer
-                                    .decode(&prompt, false)
-                                    .expect("cannot decode completion tokens"),
-                            )
-                        })
+                    Some(prompt_text.clone())
                 } else {
                     None
                 },

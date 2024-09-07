@@ -30,13 +30,14 @@ pub enum MessagesAction {
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
 pub trait Processor {
+    /// Get the tokens and the untokenized prompt
     fn process(
         &self,
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         tools: Vec<Tool>,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<(Vec<u32>, String)> {
         let prompt = apply_chat_template(
             pipeline,
             messages,
@@ -49,9 +50,9 @@ pub trait Processor {
             .with_context(|| {
                 "Default `Processor::process` requires the model to have a tokenizer."
             })?
-            .encode(prompt, true)
+            .encode(prompt.clone(), true)
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];

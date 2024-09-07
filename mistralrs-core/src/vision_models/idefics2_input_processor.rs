@@ -56,7 +56,7 @@ impl Processor for Idefics2Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         tools: Vec<Tool>,
-    ) -> anyhow::Result<Vec<u32>> {
+    ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
@@ -95,9 +95,9 @@ impl Processor for Idefics2Processor {
             anyhow::bail!("Idefics2InputProcesser requires a specified tokenizer.",);
         };
         let encoding = tokenizer
-            .encode(prompt, true)
+            .encode(prompt.clone(), true)
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
 
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
