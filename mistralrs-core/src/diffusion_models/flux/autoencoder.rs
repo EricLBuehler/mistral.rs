@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
 use serde::Deserialize;

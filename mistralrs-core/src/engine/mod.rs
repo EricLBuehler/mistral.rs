@@ -503,7 +503,7 @@ impl Engine {
         };
 
         let image_generation_format = match &request.messages {
-            RequestMessage::ImageGeneration { format, .. } => Some(format.clone()),
+            RequestMessage::ImageGeneration { format, .. } => Some(*format),
             _ => None,
         };
 

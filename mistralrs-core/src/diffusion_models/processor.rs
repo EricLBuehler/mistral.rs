@@ -45,7 +45,7 @@ impl InputsProcessor for DiffusionProcessor {
             || {
                 let inputs = ModelInputs {
                     prompts: input_seqs
-                        .into_iter()
+                        .iter_mut()
                         .map(|seq| seq.get_initial_prompt().to_string())
                         .collect::<Vec<_>>(),
                 };

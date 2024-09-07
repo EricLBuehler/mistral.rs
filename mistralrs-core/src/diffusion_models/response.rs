@@ -20,7 +20,7 @@ pub async fn send_responses(
         );
     }
 
-    for (seq, image) in input_seqs.into_iter().zip(images) {
+    for (seq, image) in input_seqs.iter_mut().zip(images) {
         let choice = match seq
             .image_gen_response_format()
             .unwrap_or(ImageGenerationResponseFormat::Url)

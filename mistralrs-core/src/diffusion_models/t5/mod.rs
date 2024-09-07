@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 // T5 Text Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
@@ -563,7 +565,7 @@ struct T5Stack {
 impl T5Stack {
     fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
         let block = (0..cfg.num_layers)
-            .map(|i| T5Block::load(i == 0, decoder, vb.pp(&format!("block.{i}")), cfg))
+            .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let final_layer_norm = T5LayerNorm::load(
             cfg.d_model,

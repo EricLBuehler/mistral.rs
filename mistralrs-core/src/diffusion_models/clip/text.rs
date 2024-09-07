@@ -1,10 +1,4 @@
-//! Contrastive Language-Image Pre-Training
-//!
-//! Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
-//! pairs of images with related texts.
-//!
-//! https://github.com/openai/CLIP
-//! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;

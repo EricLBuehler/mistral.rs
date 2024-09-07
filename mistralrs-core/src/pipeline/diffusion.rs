@@ -21,8 +21,8 @@ use image::{DynamicImage, RgbImage};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
+use std::io;
 use std::sync::Arc;
-use std::{io, usize};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -103,8 +103,8 @@ impl Loader for DiffusionLoader {
                 revision.clone(),
             ));
             let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, &model_id)?;
-            let config_filenames = self.inner.get_config_filenames(&api, &model_id)?;
+            let filenames = self.inner.get_model_paths(&api, model_id)?;
+            let config_filenames = self.inner.get_config_filenames(&api, model_id)?;
             Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
                 config_filenames,
                 filenames,
@@ -132,7 +132,7 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths = &(&*paths as &dyn Any)
+        let paths = &(paths as &dyn Any)
             .downcast_ref::<DiffusionModelPaths>()
             .expect("Path downcast failed.")
             .0;
@@ -161,7 +161,7 @@ impl Loader for DiffusionLoader {
         let configs = paths
             .config_filenames
             .iter()
-            .map(|x| std::fs::read_to_string(x))
+            .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
         let mapper = mapper.into_mapper(usize::MAX, device, None)?;
@@ -303,6 +303,7 @@ impl Pipeline for DiffusionPipeline {
             if c != 3 {
                 candle_core::bail!("Expected 3 channels in image output");
             }
+            #[allow(clippy::cast_possible_truncation)]
             images.push(DynamicImage::ImageRgb8(
                 RgbImage::from_raw(w as u32, h as u32, flattened.to_vec1::<u8>()?).ok_or(
                     candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),

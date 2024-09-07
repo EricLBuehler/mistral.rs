@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{Device, Result, Tensor};
 
 pub fn get_noise(

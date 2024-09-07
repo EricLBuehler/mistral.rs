@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{cmp::Ordering, fs::File};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
@@ -106,7 +106,7 @@ fn get_clip_model_and_tokenizer(
     ));
 
     let model_file = repo.get("model.safetensors")?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
@@ -151,8 +151,8 @@ impl FluxStepper {
             t5: t5_encoder,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
-            flux_model: Flux::new(&flux_cfg, flux_vb)?,
-            flux_vae: AutoEncoder::new(&flux_ae_cfg, flux_ae_vb)?,
+            flux_model: Flux::new(flux_cfg, flux_vb)?,
+            flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
             device: device.clone(),
         })
@@ -163,11 +163,15 @@ impl DiffusionModel for FluxStepper {
     fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
         let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &Device::Cpu)?;
         if !self.is_guidance {
-            if t5_input_ids.dim(1)? > 256 {
-                candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
-            } else if t5_input_ids.dim(1)? < 256 {
-                t5_input_ids =
-                    t5_input_ids.pad_with_zeros(D::Minus1, 0, 256 - t5_input_ids.dim(1)?)?;
+            match t5_input_ids.dim(1)?.cmp(&256) {
+                Ordering::Greater => {
+                    candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
+                }
+                Ordering::Less => {
+                    t5_input_ids =
+                        t5_input_ids.pad_with_zeros(D::Minus1, 0, 256 - t5_input_ids.dim(1)?)?;
+                }
+                Ordering::Equal => (),
             }
         }
 

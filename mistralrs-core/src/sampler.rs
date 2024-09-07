@@ -212,7 +212,7 @@ impl Sampler {
             temperature
         };
         let dry_params = if let Some(ref tokenizer) = tokenizer {
-            dry_params.map(|params| DrySamplingParamsInner::from(params, &tokenizer))
+            dry_params.map(|params| DrySamplingParamsInner::from(params, tokenizer))
         } else {
             None
         };
