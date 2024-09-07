@@ -32,7 +32,7 @@ use crate::{
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -515,10 +515,21 @@ impl Pipeline for NormalPipeline {
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
-        let paged_attn_meta = paged_attn_meta
-            .as_mut()
-            .with_context(|| "Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let paged_attn_meta = match (
+            self.get_metadata().cache_engine.as_ref(),
+            &mut paged_attn_meta,
+        ) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+            (Some(_), None) => {
+                // This can happen if Rust-side user code is wrong
+                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            }
+            (None, Some(_)) => {
+                // This should never happen but we handle it anyway
+                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Plesae raise an issue.")
+            }
+            (None, None) => None,
+        };
         let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
@@ -526,10 +537,7 @@ impl Pipeline for NormalPipeline {
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
-                self.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
+                paged_attn_meta,
                 &flash_meta,
             )?,
             true => self.model.xlora_forward(
