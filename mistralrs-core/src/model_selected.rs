@@ -2,7 +2,7 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
-    ModelDType,
+    DiffusionLoaderType, ModelDType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -336,5 +336,20 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+    },
+
+    /// Select a diffusion plain model, without quantization or adapters
+    DiffusionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_vision_arch)]
+        arch: DiffusionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 }
