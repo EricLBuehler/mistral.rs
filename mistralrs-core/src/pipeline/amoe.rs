@@ -18,7 +18,6 @@ use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
-    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
@@ -207,7 +206,7 @@ impl IsqPipelineMixin for AnyMoePipeline {
 }
 
 impl PreProcessingMixin for AnyMoePipeline {
-    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
+    fn get_chat_template(&self) -> Option<Arc<crate::ChatTemplate>> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
@@ -231,7 +230,7 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
-    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
+    fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
 }
@@ -440,7 +439,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
-                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -548,7 +546,6 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
-    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -571,7 +568,7 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
-        trie,
+        None,
         None,
         None,
     )

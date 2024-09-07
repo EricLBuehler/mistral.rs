@@ -53,7 +53,7 @@ generate_repr!(Delta);
 pub struct ResponseLogprob {
     pub token: String,
     pub logprob: f32,
-    pub bytes: Vec<u8>,
+    pub bytes: Option<Vec<u8>>,
     pub top_logprobs: Vec<TopLogprob>,
 }
 

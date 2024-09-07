@@ -91,8 +91,10 @@ impl Processor for Idefics2Processor {
             self.fake_image_token,
         );
 
-        let encoding = pipeline
-            .tokenizer()
+        let Some(tokenizer) = &pipeline.tokenizer() else {
+            anyhow::bail!("Idefics2InputProcesser requires a specified tokenizer.",);
+        };
+        let encoding = tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow::Error::msg(e.to_string()))?;
         Ok(encoding.get_ids().to_vec())
@@ -117,7 +119,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
     }
     fn process_inputs(
         &self,
-        _: Arc<Tokenizer>,
+        _: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

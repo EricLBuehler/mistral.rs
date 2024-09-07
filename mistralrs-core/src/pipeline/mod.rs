@@ -63,7 +63,8 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    pub tok_trie: Arc<TokTrie>,
+    /// Only None if it doesnt make sense for the model
+    pub tok_trie: Option<Arc<TokTrie>>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
@@ -97,7 +98,8 @@ pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
         Arc::new(BasicProcessor)
     }
-    fn get_chat_template(&self) -> Arc<ChatTemplate>;
+    /// Only None if it doesnt make sense for the model
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
 }
 
@@ -126,7 +128,8 @@ pub trait AdapterActivationMixin {
 
 pub trait MetadataMixin {
     fn device(&self) -> Device;
-    fn tokenizer(&self) -> Arc<Tokenizer>;
+    /// Only None if it doesnt make sense for the model
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;

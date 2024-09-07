@@ -162,7 +162,7 @@ pub struct Sequence {
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
 
     // Grammars
-    pub(crate) tok_trie: TokTrie,
+    pub(crate) tok_trie: Option<TokTrie>,
 
     // Completion requests
     suffix: Option<String>,
@@ -262,7 +262,7 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tok_trie: TokTrie,
+        tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
     ) -> Self {

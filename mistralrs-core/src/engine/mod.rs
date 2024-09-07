@@ -474,7 +474,8 @@ impl Engine {
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
-                .has_chat_template()
+                .as_ref()
+                .is_some_and(|ch_t| ch_t.has_chat_template())
         {
             request
                     .response
@@ -522,8 +523,17 @@ impl Engine {
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
-                let prompt = get_mut_arcmutex!(self.pipeline)
-                    .tokenizer()
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "Completion requests require the pipeline to have a tokenizer".into(),
+                        ))
+                        .await
+                        .expect("Expected receiver.");
+                    return;
+                };
+                let prompt = tokenizer
                     .encode(text, true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 handle_seq_error!(prompt, request.response)
@@ -531,8 +541,17 @@ impl Engine {
                     .to_vec()
             }
             RequestMessage::ImageGeneration { prompt, .. } => {
-                let prompt = get_mut_arcmutex!(self.pipeline)
-                    .tokenizer()
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "Completion requests require the pipeline to have a tokenizer".into(),
+                        ))
+                        .await
+                        .expect("Expected receiver.");
+                    return;
+                };
+                let prompt = tokenizer
                     .encode(prompt, true)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
                 handle_seq_error!(prompt, request.response)
@@ -602,14 +621,16 @@ impl Engine {
                 };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
-                    if tok_trie.has_extensions(tok_trie.token(*id)) {
-                        request
-                            .response
-                            .send(Response::ValidationError(
-                                format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
-                            ))
-                            .await .expect("Expected receiver.");
-                        return;
+                    if let Some(tok_trie) = tok_trie.as_ref() {
+                        if tok_trie.has_extensions(tok_trie.token(*id)) {
+                            request
+                                .response
+                                .send(Response::ValidationError(
+                                    format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
+                                ))
+                                .await .expect("Expected receiver.");
+                            return;
+                        }
                     }
                 }
 
@@ -627,13 +648,26 @@ impl Engine {
                 };
 
                 for stop_txt in s {
+                    let Some(tokenizer) = &tokenizer else {
+                        request
+                            .response
+                            .send(Response::ValidationError(
+                                "Completion requests require the pipeline to have a tokenizer"
+                                    .into(),
+                            ))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    };
                     let encoded = tokenizer.encode(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
 
                     if toks.len() == 1 {
-                        if tok_trie.has_extensions(tok_trie.token(toks[0])) {
+                        if tok_trie.as_ref().is_some_and(|tok_trie| {
+                            tok_trie.has_extensions(tok_trie.token(toks[0]))
+                        }) {
                             stop_strings.push(stop_txt.clone());
                         } else {
                             stop_toks.push(toks[0]);
@@ -705,7 +739,11 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
-            let trie = (*get_mut_arcmutex!(self.pipeline).get_metadata().tok_trie).clone();
+            let trie = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .tok_trie
+                .as_ref()
+                .map(|x| (**x).clone());
             let seq = Sequence::new_waiting(
                 prompt.clone(),
                 self.id,
@@ -724,12 +762,15 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(
-                        get_mut_arcmutex!(self.pipeline)
-                            .tokenizer()
-                            .decode(&prompt, false)
-                            .expect("cannot decode completion tokens"),
-                    )
+                    get_mut_arcmutex!(self.pipeline)
+                        .tokenizer()
+                        .and_then(|tokenizer| {
+                            Some(
+                                tokenizer
+                                    .decode(&prompt, false)
+                                    .expect("cannot decode completion tokens"),
+                            )
+                        })
                 } else {
                     None
                 },

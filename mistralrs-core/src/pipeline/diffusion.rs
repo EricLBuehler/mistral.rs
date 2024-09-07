@@ -1,25 +1,19 @@
 use super::cache_manager::DefaultCacheManager;
+use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader,
-    FluxLoader, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, TokenSource, XLoraPaths,
+    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManager, CacheManagerMixin,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::diffusion_models::processor::ModelInputs;
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
-use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
+use crate::paged_attention::AttentionImplementation;
+use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
-use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::{
-    get_paths, normal_model_loader, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
-};
+use crate::{DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -27,18 +21,14 @@ use image::{DynamicImage, RgbImage};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
-use std::{fs, usize};
+use std::{io, usize};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
-    tokenizer: Arc<Tokenizer>,
-    chat_template: Arc<ChatTemplate>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: Cache,
@@ -118,15 +108,24 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
-            &token_source,
-            revision,
-            self,
-            None,
-            None,
-            silent
-        );
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
+            let api = ApiBuilder::new()
+                .with_progress(!silent)
+                .with_token(get_token(&token_source)?)
+                .build()?;
+            let revision = revision.unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                self.model_id.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+            let model_id = std::path::Path::new(&self.model_id);
+            let filenames = self.inner.get_model_paths(&api, &model_id)?;
+            Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
+                config_filenames: vec![],
+                filenames,
+            })))
+        };
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -149,7 +148,10 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let paths = &(&*paths as &dyn Any)
+            .downcast_ref::<DiffusionModelPaths>()
+            .expect("Path downcast failed.")
+            .0;
 
         // Otherwise, the device mapper will print it
         if mapper.is_dummy() {
@@ -172,17 +174,13 @@ impl Loader for DiffusionLoader {
             paged_attn_config = None;
         }
 
-        info!(
-            "Model config: {:?}",
-            self.inner
-                .get_config_repr(&config, self.config.use_flash_attn)?
-        );
+        let configs = paths
+            .config_filenames
+            .iter()
+            .map(|x| std::fs::read_to_string(x))
+            .collect::<io::Result<Vec<_>>>()?;
 
-        let mapper = mapper.into_mapper(
-            self.inner.get_total_device_mapping_num_layers(&config)?,
-            device,
-            None,
-        )?;
+        let mapper = mapper.into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let attention_mechanism = if paged_attn_config.is_some() {
@@ -192,69 +190,53 @@ impl Loader for DiffusionLoader {
         };
 
         let model = match self.kind {
-            ModelKind::Normal => normal_model_loader!(
-                paths,
-                Some(dtype),
-                &device,
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                false,
-                device.clone(),
-                attention_mechanism
-            ),
+            ModelKind::Normal => {
+                let vbs = paths
+                    .filenames
+                    .iter()
+                    .map(|path| {
+                        from_mmaped_safetensors(
+                            vec![path.clone()],
+                            Vec::new(),
+                            Some(dtype),
+                            device,
+                            silent,
+                            |_| true,
+                        )
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+
+                self.inner.load(
+                    configs,
+                    self.config.use_flash_attn,
+                    vbs,
+                    crate::pipeline::NormalLoadingMetadata {
+                        mapper,
+                        loading_isq: false,
+                        real_device: device.clone(),
+                    },
+                    attention_mechanism,
+                )?
+            }
             _ => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
-
-        let gen_conf: Option<GenerationConfig> = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
-
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::Adapter { .. }),
-                "PagedAttention does not support adapter models."
-            );
-            let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attn_config.mem_cpu,
-                paged_attn_config.block_size,
-                dtype,
-                model.config(),
-                device,
-            )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
-            (Some(cache_config), Some(cache_engine))
-        } else {
-            (None, None)
-        };
-
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
-        let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(DiffusionPipeline {
             model,
-            tokenizer: tokenizer.into(),
-            chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: None,
                 is_xlora: false,
                 num_hidden_layers: usize::MAX, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
-                eos_tok: eos,
+                eos_tok: vec![],
                 kind: self.kind.clone(),
                 has_no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
                 activation_dtype: dtype,
-                sliding_window,
-                cache_config,
-                cache_engine,
+                sliding_window: None,
+                cache_config: None,
+                cache_engine: None,
                 prompt_batchsize: None,
             }),
             dummy_cache: Cache::new(0, false),
@@ -271,8 +253,8 @@ impl Loader for DiffusionLoader {
 }
 
 impl PreProcessingMixin for DiffusionPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        None
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
@@ -320,16 +302,16 @@ impl MetadataMixin for DiffusionPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        None
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
     fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
-        let ModelInputs { input_ids } = *inputs.downcast().expect("Downcast failed.");
-        let img = self.model.forward(&input_ids)?.to_dtype(DType::U8)?;
+        let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
+        let img = self.model.forward(prompts)?.to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {

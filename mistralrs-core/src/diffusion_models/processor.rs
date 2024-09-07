@@ -1,7 +1,7 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::Device;
 use tokenizers::Tokenizer;
 
 use crate::{
@@ -16,7 +16,7 @@ pub struct DiffusionProcessor;
 
 #[derive(Clone)]
 pub struct ModelInputs {
-    pub(crate) input_ids: Tensor,
+    pub(crate) prompts: Vec<String>,
 }
 
 impl InputsProcessor for DiffusionProcessor {
@@ -26,7 +26,7 @@ impl InputsProcessor for DiffusionProcessor {
 
     fn process_inputs(
         &self,
-        _tokenizer: Arc<Tokenizer>,
+        _tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         _is_prompt: bool,
         _is_xlora: bool,
@@ -43,14 +43,7 @@ impl InputsProcessor for DiffusionProcessor {
             ))));
         } else {
             || {
-                let mut tokenized = Vec::new();
-                for seq in &mut *input_seqs {
-                    tokenized.push(Tensor::new(seq.get_toks(), device)?)
-                }
-
-                let inputs = ModelInputs {
-                    input_ids: Tensor::stack(&tokenized, 0)?,
-                };
+                let inputs = ModelInputs { prompts: todo!() };
                 Ok(InputProcessorOutput {
                     inputs: Box::new(inputs),
                     seq_indices: (0..input_seqs.len()).collect::<Vec<_>>(),

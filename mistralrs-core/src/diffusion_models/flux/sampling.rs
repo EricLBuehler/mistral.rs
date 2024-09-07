@@ -92,6 +92,37 @@ pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn denoise_inner(
+    model: &super::model::Flux,
+    img: &Tensor,
+    img_ids: &Tensor,
+    txt: &Tensor,
+    txt_ids: &Tensor,
+    vec_: &Tensor,
+    timesteps: &[f64],
+    guidance: Option<f64>,
+) -> Result<Tensor> {
+    let b_sz = img.dim(0)?;
+    let dev = img.device();
+    let guidance = if let Some(guidance) = guidance {
+        Some(Tensor::full(guidance as f32, b_sz, dev)?)
+    } else {
+        None
+    };
+    let mut img = img.clone();
+    for window in timesteps.windows(2) {
+        let (t_curr, t_prev) = match window {
+            [a, b] => (a, b),
+            _ => continue,
+        };
+        let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
+        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, guidance.as_ref())?;
+        img = (img + pred * (t_prev - t_curr))?
+    }
+    Ok(img)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn denoise(
     model: &super::model::Flux,
     img: &Tensor,
@@ -102,18 +133,27 @@ pub fn denoise(
     timesteps: &[f64],
     guidance: f64,
 ) -> Result<Tensor> {
-    let b_sz = img.dim(0)?;
-    let dev = img.device();
-    let guidance = Tensor::full(guidance as f32, b_sz, dev)?;
-    let mut img = img.clone();
-    for window in timesteps.windows(2) {
-        let (t_curr, t_prev) = match window {
-            [a, b] => (a, b),
-            _ => continue,
-        };
-        let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
-        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, Some(&guidance))?;
-        img = (img + pred * (t_prev - t_curr))?
-    }
-    Ok(img)
+    denoise_inner(
+        model,
+        img,
+        img_ids,
+        txt,
+        txt_ids,
+        vec_,
+        timesteps,
+        Some(guidance),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_no_guidance(
+    model: &super::model::Flux,
+    img: &Tensor,
+    img_ids: &Tensor,
+    txt: &Tensor,
+    txt_ids: &Tensor,
+    vec_: &Tensor,
+    timesteps: &[f64],
+) -> Result<Tensor> {
+    denoise_inner(model, img, img_ids, txt, txt_ids, vec_, timesteps, None)
 }

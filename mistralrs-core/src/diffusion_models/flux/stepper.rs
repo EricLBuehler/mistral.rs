@@ -5,28 +5,57 @@ use candle_nn::{Module, VarBuilder};
 use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 
-use crate::diffusion_models::{
-    clip::text::{Activation, ClipConfig, ClipTextTransformer},
-    flux,
-    t5::{self, T5EncoderModel},
+use crate::{
+    diffusion_models::{
+        clip::text::{ClipConfig, ClipTextTransformer},
+        flux,
+        t5::{self, T5EncoderModel},
+    },
+    pipeline::DiffusionModel,
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
-    base_shift: f64,
-    max_shift: f64,
+    pub base_shift: f64,
+    pub max_shift: f64,
+    pub guidance_scale: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperConfig {
-    height: usize,
-    width: usize,
-    num_steps: usize,
-    shift: Option<FluxStepperShift>,
-    guidance_scale: f64,
-    is_guidance: bool,
+    pub height: usize,
+    pub width: usize,
+    pub num_steps: usize,
+    pub guidance_config: Option<FluxStepperShift>,
+    pub is_guidance: bool,
+}
+
+impl FluxStepperConfig {
+    pub fn default_for_guidance(has_guidance: bool) -> Self {
+        if has_guidance {
+            Self {
+                height: 1380,
+                width: 768,
+                num_steps: 50,
+                guidance_config: Some(FluxStepperShift {
+                    base_shift: 0.5,
+                    max_shift: 1.15,
+                    guidance_scale: 4.0,
+                }),
+                is_guidance: true,
+            }
+        } else {
+            Self {
+                height: 1380,
+                width: 768,
+                num_steps: 4,
+                guidance_config: None,
+                is_guidance: true,
+            }
+        }
+    }
 }
 
 pub struct FluxStepper {
@@ -125,10 +154,12 @@ impl FluxStepper {
             is_guidance: cfg.is_guidance,
         })
     }
+}
 
-    pub fn forward(&self, prompts: Vec<String>, device: &Device) -> Result<Tensor> {
-        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), device)?;
-        if self.is_guidance {
+impl DiffusionModel for FluxStepper {
+    fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
+        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), self.device())?;
+        if !self.is_guidance {
             if t5_input_ids.dim(1)? > 256 {
                 candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
             } else if t5_input_ids.dim(1)? < 256 {
@@ -139,29 +170,45 @@ impl FluxStepper {
 
         let t5_embed = self.t5.forward(&t5_input_ids)?;
 
-        let clip_input_ids = get_tokenization(&self.t5_tok, prompts, device)?;
+        let clip_input_ids = get_tokenization(&self.t5_tok, prompts, self.device())?;
         let clip_embed = self.clip_text.forward(&clip_input_ids)?;
 
-        let img =
-            flux::sampling::get_noise(t5_embed.dim(0)?, self.cfg.height, self.cfg.width, device)?;
+        let img = flux::sampling::get_noise(
+            t5_embed.dim(0)?,
+            self.cfg.height,
+            self.cfg.width,
+            self.device(),
+        )?;
         let state = flux::sampling::State::new(&t5_embed, &clip_embed, &img)?;
         let timesteps = flux::sampling::get_schedule(
             self.cfg.num_steps,
             self.cfg
-                .shift
+                .guidance_config
                 .map(|s| (state.img.dims()[1], s.base_shift, s.max_shift)),
         );
 
-        let img = flux::sampling::denoise(
-            &self.flux_model,
-            &state.img,
-            &state.img_ids,
-            &state.txt,
-            &state.txt_ids,
-            &state.vec,
-            &timesteps,
-            self.cfg.guidance_scale,
-        )?;
+        let img = if let Some(guidance_cfg) = &self.cfg.guidance_config {
+            flux::sampling::denoise(
+                &self.flux_model,
+                &state.img,
+                &state.img_ids,
+                &state.txt,
+                &state.txt_ids,
+                &state.vec,
+                &timesteps,
+                guidance_cfg.guidance_scale,
+            )?
+        } else {
+            flux::sampling::denoise_no_guidance(
+                &self.flux_model,
+                &state.img,
+                &state.img_ids,
+                &state.txt,
+                &state.txt_ids,
+                &state.vec,
+                &timesteps,
+            )?
+        };
         let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
 
         let img = self.flux_vae.decode(&latent_img)?;
@@ -169,5 +216,17 @@ impl FluxStepper {
         let normalized_img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(DType::U8)?;
 
         Ok(normalized_img)
+    }
+
+    fn device(&self) -> &Device {
+        self.t5.device()
+    }
+
+    fn max_seq_len(&self) -> usize {
+        if self.is_guidance {
+            usize::MAX
+        } else {
+            256
+        }
     }
 }

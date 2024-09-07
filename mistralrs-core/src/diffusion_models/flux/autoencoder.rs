@@ -1,50 +1,17 @@
 use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
+use serde::Deserialize;
 
-// https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/modules/autoencoder.py#L9
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub resolution: usize,
     pub in_channels: usize,
-    pub ch: usize,
-    pub out_ch: usize,
-    pub ch_mult: Vec<usize>,
-    pub num_res_blocks: usize,
-    pub z_channels: usize,
-    pub scale_factor: f64,
+    pub out_channels: usize,
+    pub block_out_channels: Vec<usize>,
+    pub layers_per_block: usize,
+    pub latent_channels: usize,
+    pub scaling_factor: f64,
     pub shift_factor: f64,
-}
-
-impl Config {
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L47
-    pub fn dev() -> Self {
-        Self {
-            resolution: 256,
-            in_channels: 3,
-            ch: 128,
-            out_ch: 3,
-            ch_mult: vec![1, 2, 4, 4],
-            num_res_blocks: 2,
-            z_channels: 16,
-            scale_factor: 0.3611,
-            shift_factor: 0.1159,
-        }
-    }
-
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L79
-    pub fn schnell() -> Self {
-        Self {
-            resolution: 256,
-            in_channels: 3,
-            ch: 128,
-            out_ch: 3,
-            ch_mult: vec![1, 2, 4, 4],
-            num_res_blocks: 2,
-            z_channels: 16,
-            scale_factor: 0.3611,
-            shift_factor: 0.1159,
-        }
-    }
+    pub norm_num_groups: usize,
 }
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
@@ -64,12 +31,12 @@ struct AttnBlock {
 }
 
 impl AttnBlock {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(in_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let q = conv2d(in_c, in_c, 1, Default::default(), vb.pp("q"))?;
         let k = conv2d(in_c, in_c, 1, Default::default(), vb.pp("k"))?;
         let v = conv2d(in_c, in_c, 1, Default::default(), vb.pp("v"))?;
         let proj_out = conv2d(in_c, in_c, 1, Default::default(), vb.pp("proj_out"))?;
-        let norm = group_norm(32, in_c, 1e-6, vb.pp("norm"))?;
+        let norm = group_norm(cfg.norm_num_groups, in_c, 1e-6, vb.pp("norm"))?;
         Ok(Self {
             q,
             k,
@@ -107,14 +74,14 @@ struct ResnetBlock {
 }
 
 impl ResnetBlock {
-    fn new(in_c: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(in_c: usize, out_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
-        let norm1 = group_norm(32, in_c, 1e-6, vb.pp("norm1"))?;
+        let norm1 = group_norm(cfg.norm_num_groups, in_c, 1e-6, vb.pp("norm1"))?;
         let conv1 = conv2d(in_c, out_c, 3, conv_cfg, vb.pp("conv1"))?;
-        let norm2 = group_norm(32, out_c, 1e-6, vb.pp("norm2"))?;
+        let norm2 = group_norm(cfg.norm_num_groups, out_c, 1e-6, vb.pp("norm2"))?;
         let conv2 = conv2d(out_c, out_c, 3, conv_cfg, vb.pp("conv2"))?;
         let nin_shortcut = if in_c == out_c {
             None
@@ -223,28 +190,24 @@ impl Encoder {
             padding: 1,
             ..Default::default()
         };
-        let mut block_in = cfg.ch;
+        let base_ch = cfg.block_out_channels[0];
+        let mut block_in = base_ch;
         let conv_in = conv2d(cfg.in_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
 
-        let mut down = Vec::with_capacity(cfg.ch_mult.len());
+        let mut down = Vec::with_capacity(cfg.block_out_channels.len());
         let vb_d = vb.pp("down");
-        for (i_level, ch_mult) in cfg.ch_mult.iter().enumerate() {
-            let mut block = Vec::with_capacity(cfg.num_res_blocks);
+        for (i_level, out_channels) in cfg.block_out_channels.iter().enumerate() {
+            let mut block = Vec::with_capacity(cfg.layers_per_block);
             let vb_d = vb_d.pp(i_level);
             let vb_b = vb_d.pp("block");
-            let in_ch_mult = if i_level == 0 {
-                1
-            } else {
-                cfg.ch_mult[i_level - 1]
-            };
-            block_in = cfg.ch * in_ch_mult;
-            let block_out = cfg.ch * ch_mult;
-            for i_block in 0..cfg.num_res_blocks {
-                let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block))?;
+            block_in = if i_level == 0 { base_ch } else { *out_channels };
+            let block_out = *out_channels;
+            for i_block in 0..cfg.layers_per_block {
+                let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block), cfg)?;
                 block.push(b);
                 block_in = block_out;
             }
-            let downsample = if i_level != cfg.ch_mult.len() - 1 {
+            let downsample = if i_level != cfg.block_out_channels.len() - 1 {
                 Some(Downsample::new(block_in, vb_d.pp("downsample"))?)
             } else {
                 None
@@ -253,11 +216,17 @@ impl Encoder {
             down.push(block)
         }
 
-        let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"))?;
-        let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"))?;
-        let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"))?;
-        let conv_out = conv2d(block_in, 2 * cfg.z_channels, 3, conv_cfg, vb.pp("conv_out"))?;
-        let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
+        let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"), cfg)?;
+        let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"), cfg)?;
+        let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"), cfg)?;
+        let conv_out = conv2d(
+            block_in,
+            2 * cfg.latent_channels,
+            3,
+            conv_cfg,
+            vb.pp("conv_out"),
+        )?;
+        let norm_out = group_norm(cfg.norm_num_groups, block_in, 1e-6, vb.pp("norm_out"))?;
         Ok(Self {
             conv_in,
             mid_block_1,
@@ -313,21 +282,22 @@ impl Decoder {
             padding: 1,
             ..Default::default()
         };
-        let mut block_in = cfg.ch * cfg.ch_mult.last().unwrap_or(&1);
-        let conv_in = conv2d(cfg.z_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
-        let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"))?;
-        let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"))?;
-        let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"))?;
+        let base_ch = cfg.block_out_channels[0];
+        let mut block_in = cfg.block_out_channels.last().copied().unwrap_or(base_ch);
+        let conv_in = conv2d(cfg.latent_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
+        let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"), cfg)?;
+        let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"), cfg)?;
+        let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"), cfg)?;
 
-        let mut up = Vec::with_capacity(cfg.ch_mult.len());
+        let mut up = Vec::with_capacity(cfg.block_out_channels.len());
         let vb_u = vb.pp("up");
-        for (i_level, ch_mult) in cfg.ch_mult.iter().enumerate().rev() {
-            let block_out = cfg.ch * ch_mult;
+        for (i_level, out_channels) in cfg.block_out_channels.iter().enumerate().rev() {
+            let block_out = *out_channels;
             let vb_u = vb_u.pp(i_level);
             let vb_b = vb_u.pp("block");
-            let mut block = Vec::with_capacity(cfg.num_res_blocks + 1);
-            for i_block in 0..=cfg.num_res_blocks {
-                let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block))?;
+            let mut block = Vec::with_capacity(cfg.layers_per_block + 1);
+            for i_block in 0..=cfg.layers_per_block {
+                let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block), cfg)?;
                 block.push(b);
                 block_in = block_out;
             }
@@ -341,8 +311,8 @@ impl Decoder {
         }
         up.reverse();
 
-        let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
-        let conv_out = conv2d(block_in, cfg.out_ch, 3, conv_cfg, vb.pp("conv_out"))?;
+        let norm_out = group_norm(cfg.norm_num_groups, block_in, 1e-6, vb.pp("norm_out"))?;
+        let conv_out = conv2d(block_in, cfg.out_channels, 3, conv_cfg, vb.pp("conv_out"))?;
         Ok(Self {
             conv_in,
             mid_block_1,
@@ -418,7 +388,7 @@ impl AutoEncoder {
             encoder,
             decoder,
             reg,
-            scale_factor: cfg.scale_factor,
+            scale_factor: cfg.scaling_factor,
             shift_factor: cfg.shift_factor,
         })
     }

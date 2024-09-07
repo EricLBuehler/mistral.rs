@@ -2,7 +2,7 @@ mod diffusion_loaders;
 mod normal_loaders;
 mod vision_loaders;
 
-use std::{collections::HashMap, fmt, path::PathBuf, str::FromStr, sync::Arc};
+use std::{any::Any, collections::HashMap, fmt, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -21,7 +21,8 @@ pub use vision_loaders::{
 };
 
 pub use diffusion_loaders::{
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
+    DiffusionModelPathsInner, FluxLoader,
 };
 
 use crate::{
@@ -33,7 +34,7 @@ use super::Pipeline;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths {
+pub trait ModelPaths: Any {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 

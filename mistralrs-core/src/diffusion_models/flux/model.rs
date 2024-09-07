@@ -1,59 +1,21 @@
 use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+use serde::Deserialize;
 
-// https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/model.py#L12
-#[derive(Debug, Clone)]
+const MLP_RATIO: f64 = 4.;
+const HIDDEN_SIZE: usize = 3072;
+const AXES_DIM: &[usize] = &[16, 56, 56];
+const THETA: usize = 10000;
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub in_channels: usize,
-    pub vec_in_dim: usize,
-    pub context_in_dim: usize,
-    pub hidden_size: usize,
-    pub mlp_ratio: f64,
-    pub num_heads: usize,
-    pub depth: usize,
-    pub depth_single_blocks: usize,
-    pub axes_dim: Vec<usize>,
-    pub theta: usize,
-    pub qkv_bias: bool,
-    pub guidance_embed: bool,
-}
-
-impl Config {
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L32
-    pub fn dev() -> Self {
-        Self {
-            in_channels: 64,
-            vec_in_dim: 768,
-            context_in_dim: 4096,
-            hidden_size: 3072,
-            mlp_ratio: 4.0,
-            num_heads: 24,
-            depth: 19,
-            depth_single_blocks: 38,
-            axes_dim: vec![16, 56, 56],
-            theta: 10_000,
-            qkv_bias: true,
-            guidance_embed: true,
-        }
-    }
-
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L64
-    pub fn schnell() -> Self {
-        Self {
-            in_channels: 64,
-            vec_in_dim: 768,
-            context_in_dim: 4096,
-            hidden_size: 3072,
-            mlp_ratio: 4.0,
-            num_heads: 24,
-            depth: 19,
-            depth_single_blocks: 38,
-            axes_dim: vec![16, 56, 56],
-            theta: 10_000,
-            qkv_bias: true,
-            guidance_embed: false,
-        }
-    }
+    pub pooled_projection_dim: usize,
+    pub joint_attention_dim: usize,
+    pub num_attention_heads: usize,
+    pub num_layers: usize,
+    pub num_single_layers: usize,
+    pub guidance_embeds: bool,
 }
 
 fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
@@ -296,12 +258,12 @@ pub struct SelfAttention {
     qkv: Linear,
     norm: QkNorm,
     proj: Linear,
-    num_heads: usize,
+    num_attention_heads: usize,
 }
 
 impl SelfAttention {
-    fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
-        let head_dim = dim / num_heads;
+    fn new(dim: usize, num_attention_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
+        let head_dim = dim / num_attention_heads;
         let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
         let proj = candle_nn::linear(dim, dim, vb.pp("proj"))?;
@@ -309,14 +271,14 @@ impl SelfAttention {
             qkv,
             norm,
             proj,
-            num_heads,
+            num_attention_heads,
         })
     }
 
     fn qkv(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         let qkv = xs.apply(&self.qkv)?;
         let (b, l, _khd) = qkv.dims3()?;
-        let qkv = qkv.reshape((b, l, 3, self.num_heads, ()))?;
+        let qkv = qkv.reshape((b, l, 3, self.num_attention_heads, ()))?;
         let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
         let k = qkv.i((.., .., 1))?.transpose(1, 2)?;
         let v = qkv.i((.., .., 2))?.transpose(1, 2)?;
@@ -368,16 +330,16 @@ pub struct DoubleStreamBlock {
 
 impl DoubleStreamBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let h_sz = cfg.hidden_size;
-        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
+        let h_sz = HIDDEN_SIZE;
+        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
         let img_norm1 = layer_norm(h_sz, vb.pp("img_norm1"))?;
-        let img_attn = SelfAttention::new(h_sz, cfg.num_heads, cfg.qkv_bias, vb.pp("img_attn"))?;
+        let img_attn = SelfAttention::new(h_sz, cfg.num_attention_heads, true, vb.pp("img_attn"))?;
         let img_norm2 = layer_norm(h_sz, vb.pp("img_norm2"))?;
         let img_mlp = Mlp::new(h_sz, mlp_sz, vb.pp("img_mlp"))?;
         let txt_mod = Modulation2::new(h_sz, vb.pp("txt_mod"))?;
         let txt_norm1 = layer_norm(h_sz, vb.pp("txt_norm1"))?;
-        let txt_attn = SelfAttention::new(h_sz, cfg.num_heads, cfg.qkv_bias, vb.pp("txt_attn"))?;
+        let txt_attn = SelfAttention::new(h_sz, cfg.num_attention_heads, true, vb.pp("txt_attn"))?;
         let txt_norm2 = layer_norm(h_sz, vb.pp("txt_norm2"))?;
         let txt_mlp = Mlp::new(h_sz, mlp_sz, vb.pp("txt_mlp"))?;
         Ok(Self {
@@ -448,14 +410,14 @@ pub struct SingleStreamBlock {
     modulation: Modulation1,
     h_sz: usize,
     mlp_sz: usize,
-    num_heads: usize,
+    num_attention_heads: usize,
 }
 
 impl SingleStreamBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let h_sz = cfg.hidden_size;
-        let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
-        let head_dim = h_sz / cfg.num_heads;
+        let h_sz = HIDDEN_SIZE;
+        let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
+        let head_dim = h_sz / cfg.num_attention_heads;
         let linear1 = candle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
         let linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
@@ -469,7 +431,7 @@ impl SingleStreamBlock {
             modulation,
             h_sz,
             mlp_sz,
-            num_heads: cfg.num_heads,
+            num_attention_heads: cfg.num_attention_heads,
         })
     }
 
@@ -479,7 +441,7 @@ impl SingleStreamBlock {
         let x_mod = x_mod.apply(&self.linear1)?;
         let qkv = x_mod.narrow(D::Minus1, 0, 3 * self.h_sz)?;
         let (b, l, _khd) = qkv.dims3()?;
-        let qkv = qkv.reshape((b, l, 3, self.num_heads, ()))?;
+        let qkv = qkv.reshape((b, l, 3, self.num_attention_heads, ()))?;
         let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
         let k = qkv.i((.., .., 1))?.transpose(1, 2)?;
         let v = qkv.i((.., .., 2))?.transpose(1, 2)?;
@@ -537,32 +499,32 @@ pub struct Flux {
 
 impl Flux {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let img_in = candle_nn::linear(cfg.in_channels, cfg.hidden_size, vb.pp("img_in"))?;
-        let txt_in = candle_nn::linear(cfg.context_in_dim, cfg.hidden_size, vb.pp("txt_in"))?;
-        let mut double_blocks = Vec::with_capacity(cfg.depth);
+        let img_in = candle_nn::linear(cfg.in_channels, HIDDEN_SIZE, vb.pp("img_in"))?;
+        let txt_in = candle_nn::linear(cfg.joint_attention_dim, HIDDEN_SIZE, vb.pp("txt_in"))?;
+        let mut double_blocks = Vec::with_capacity(cfg.num_layers);
         let vb_d = vb.pp("double_blocks");
-        for idx in 0..cfg.depth {
+        for idx in 0..cfg.num_layers {
             let db = DoubleStreamBlock::new(cfg, vb_d.pp(idx))?;
             double_blocks.push(db)
         }
-        let mut single_blocks = Vec::with_capacity(cfg.depth_single_blocks);
+        let mut single_blocks = Vec::with_capacity(cfg.num_single_layers);
         let vb_s = vb.pp("single_blocks");
-        for idx in 0..cfg.depth_single_blocks {
+        for idx in 0..cfg.num_single_layers {
             let sb = SingleStreamBlock::new(cfg, vb_s.pp(idx))?;
             single_blocks.push(sb)
         }
-        let time_in = MlpEmbedder::new(256, cfg.hidden_size, vb.pp("time_in"))?;
-        let vector_in = MlpEmbedder::new(cfg.vec_in_dim, cfg.hidden_size, vb.pp("vector_in"))?;
-        let guidance_in = if cfg.guidance_embed {
-            let mlp = MlpEmbedder::new(256, cfg.hidden_size, vb.pp("guidance_in"))?;
+        let time_in = MlpEmbedder::new(256, HIDDEN_SIZE, vb.pp("time_in"))?;
+        let vector_in =
+            MlpEmbedder::new(cfg.pooled_projection_dim, HIDDEN_SIZE, vb.pp("vector_in"))?;
+        let guidance_in = if cfg.guidance_embeds {
+            let mlp = MlpEmbedder::new(256, HIDDEN_SIZE, vb.pp("guidance_in"))?;
             Some(mlp)
         } else {
             None
         };
-        let final_layer =
-            LastLayer::new(cfg.hidden_size, 1, cfg.in_channels, vb.pp("final_layer"))?;
-        let pe_dim = cfg.hidden_size / cfg.num_heads;
-        let pe_embedder = EmbedNd::new(pe_dim, cfg.theta, cfg.axes_dim.to_vec());
+        let final_layer = LastLayer::new(HIDDEN_SIZE, 1, cfg.in_channels, vb.pp("final_layer"))?;
+        let pe_dim = HIDDEN_SIZE / cfg.num_attention_heads;
+        let pe_embedder = EmbedNd::new(pe_dim, THETA, AXES_DIM.to_vec());
         Ok(Self {
             img_in,
             txt_in,

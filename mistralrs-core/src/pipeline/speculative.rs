@@ -180,8 +180,22 @@ impl SpeculativePipeline {
         draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: SpeculativeConfig,
     ) -> Result<Self> {
-        if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
-            != get_mut_arcmutex!(draft).tokenizer().get_vocab(true)
+        if get_mut_arcmutex!(target)
+            .tokenizer()
+            .as_ref()
+            .ok_or(candle_core::Error::Msg(
+                "`SpeculativePipeline::new` requires the target pipeline to have a token trie"
+                    .to_string(),
+            ))?
+            .get_vocab(true)
+            != get_mut_arcmutex!(draft)
+                .tokenizer()
+                .as_ref()
+                .ok_or(candle_core::Error::Msg(
+                    "`SpeculativePipeline::new` requires the draft pipeline to have a token trie"
+                        .to_string(),
+                ))?
+                .get_vocab(true)
         {
             candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
@@ -213,7 +227,7 @@ impl SpeculativePipeline {
 }
 
 impl PreProcessingMixin for SpeculativePipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
@@ -271,7 +285,7 @@ impl MetadataMixin for SpeculativePipeline {
     fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
     }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn name(&self) -> String {
@@ -569,6 +583,10 @@ impl Pipeline for SpeculativePipeline {
                             get_mut_arcmutex!(self.target)
                                 .get_metadata()
                                 .tok_trie
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
+                                ))?
                                 .append_token(rx.as_mut(), accepted.token)
                                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                         }
@@ -576,6 +594,10 @@ impl Pipeline for SpeculativePipeline {
                             get_mut_arcmutex!(self.target)
                                 .get_metadata()
                                 .tok_trie
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
+                                ))?
                                 .append_token(cfg.as_mut(), accepted.token)
                                 .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
                         }
