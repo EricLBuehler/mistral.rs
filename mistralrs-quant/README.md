@@ -5,6 +5,9 @@ Quantization techniques for mistral.rs. This implements a common trait for all q
 Currently supported:
 - GGUF: `GgufMatMul`
 - Gptq: `GptqLayer`
+- Hqq: `HqqLayer`
+- Unquantized (used for ISQ): `UnquantLinear`
 
 Some kernels are copied or based on implementations in:
 - https://github.com/vllm-project/vllm
+- https://github.com/mobiusml/hqq
