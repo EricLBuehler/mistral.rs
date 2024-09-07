@@ -1,6 +1,6 @@
 use std::fs::File;
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
@@ -23,10 +23,10 @@ pub struct FluxStepperShift {
 pub struct FluxStepperConfig {
     height: usize,
     width: usize,
-    num_samples: usize,
     num_steps: usize,
     shift: Option<FluxStepperShift>,
     guidance_scale: f64,
+    is_guidance: bool,
 }
 
 pub struct FluxStepper {
@@ -37,6 +37,7 @@ pub struct FluxStepper {
     clip_text: ClipTextTransformer,
     flux_model: Flux,
     flux_vae: AutoEncoder,
+    is_guidance: bool,
 }
 
 fn get_t5_model_and_tokenizr(
@@ -121,17 +122,28 @@ impl FluxStepper {
             clip_text: clip_encoder,
             flux_model: Flux::new(&flux_cfg, flux_vb)?,
             flux_vae: AutoEncoder::new(&flux_ae_cfg, flux_ae_vb)?,
+            is_guidance: cfg.is_guidance,
         })
     }
 
     pub fn forward(&self, prompts: Vec<String>, device: &Device) -> Result<Tensor> {
-        let t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), device)?;
+        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), device)?;
+        if self.is_guidance {
+            if t5_input_ids.dim(1)? > 256 {
+                candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
+            } else if t5_input_ids.dim(1)? < 256 {
+                t5_input_ids =
+                    t5_input_ids.pad_with_zeros(D::Minus1, 0, 256 - t5_input_ids.dim(1)?)?;
+            }
+        }
+
         let t5_embed = self.t5.forward(&t5_input_ids)?;
 
         let clip_input_ids = get_tokenization(&self.t5_tok, prompts, device)?;
         let clip_embed = self.clip_text.forward(&clip_input_ids)?;
 
-        let img = flux::sampling::get_noise(1, self.cfg.height, self.cfg.width, device)?;
+        let img =
+            flux::sampling::get_noise(t5_embed.dim(0)?, self.cfg.height, self.cfg.width, device)?;
         let state = flux::sampling::State::new(&t5_embed, &clip_embed, &img)?;
         let timesteps = flux::sampling::get_schedule(
             self.cfg.num_steps,
