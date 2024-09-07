@@ -656,7 +656,7 @@ impl Pipeline for GGUFPipeline {
             }
             (None, Some(_)) => {
                 // This should never happen but we handle it anyway
-                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Plesae raise an issue.")
+                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
             }
             (None, None) => None,
         };
