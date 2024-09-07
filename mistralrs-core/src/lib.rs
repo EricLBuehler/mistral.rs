@@ -256,11 +256,15 @@ fn set_gemm_reduced_precision_f16() {}
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
-        self.sender
-            .write()
-            .expect("Failed to get sender write in Drop")
-            .blocking_send(Request::Terminate)
-            .expect("Sending failed in Drop");
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            self.sender
+                .write()
+                .expect("Failed to get sender write in Drop")
+                .send(Request::Terminate)
+                .await
+                .expect("Sending failed in Drop");
+        });
     }
 }
 
