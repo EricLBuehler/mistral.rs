@@ -103,7 +103,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         }
         let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "LLaVAInputProcesser requires a specified tokenizer.",
+                "LLaVAInputProcessor requires a specified tokenizer.",
             ))));
         };
 

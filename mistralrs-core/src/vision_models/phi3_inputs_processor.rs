@@ -97,7 +97,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         }
         let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Phi3InputProcesser requires a specified tokenizer.",
+                "Phi3InputProcessor requires a specified tokenizer.",
             ))));
         };
 

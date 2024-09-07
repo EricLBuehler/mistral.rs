@@ -139,7 +139,7 @@ impl DiffusionModelLoader for FluxLoader {
         let flux_name = api_dir_list!(api, model_id)
             .filter(|x| regex.is_match(x))
             .nth(0)
-            .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, plese raise an issue.")?;
+            .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;
         let flux_file = api_get_file!(api, &flux_name, model_id);
         let ae_file = api_get_file!(api, "ae.safetensors", model_id);
 

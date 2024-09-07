@@ -92,7 +92,7 @@ impl Processor for Idefics2Processor {
         );
 
         let Some(tokenizer) = &pipeline.tokenizer() else {
-            anyhow::bail!("Idefics2InputProcesser requires a specified tokenizer.",);
+            anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
         };
         let encoding = tokenizer
             .encode(prompt.clone(), true)
