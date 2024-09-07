@@ -570,6 +570,14 @@
 <a href="#570" id="570">570</a>
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -596,7 +604,7 @@
     api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-<span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -983,10 +991,21 @@
             <span class="kw-2">mut </span>paged_attn_meta,
             flash_meta,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-            .as_mut()
-            .with_context(|| <span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(
+            <span class="self">self</span>.get_metadata().cache_engine.as_ref(),
+            <span class="kw-2">&amp;mut </span>paged_attn_meta,
+        ) {
+            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine.get_kv_cache().clone(), meta)),
+            (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
+                <span class="comment">// This can happen if Rust-side user code is wrong
+                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
+            }
+            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; {
+                <span class="comment">// This should never happen but we handle it anyway
+                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue."</span>)
+            }
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
+        };
         <span class="kw">let </span>logits = <span class="self">self</span>.model.forward(
             <span class="kw-2">&amp;</span>input_ids,
             pixel_values,
@@ -995,10 +1014,7 @@
             context_lens,
             position_ids,
             model_specific_args,
-            <span class="self">self</span>.get_metadata()
-                .cache_engine
-                .as_ref()
-                .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
+            paged_attn_meta,
             <span class="kw-2">&amp;</span>flash_meta,
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })

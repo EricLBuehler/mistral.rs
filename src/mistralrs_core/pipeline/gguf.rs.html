@@ -726,12 +726,6 @@
 <a href="#726" id="726">726</a>
 <a href="#727" id="727">727</a>
 <a href="#728" id="728">728</a>
-<a href="#729" id="729">729</a>
-<a href="#730" id="730">730</a>
-<a href="#731" id="731">731</a>
-<a href="#732" id="732">732</a>
-<a href="#733" id="733">733</a>
-<a href="#734" id="734">734</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -774,7 +768,7 @@
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
-<span class="kw">use </span>anyhow::{bail, Context, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -1379,30 +1373,32 @@
             flash_meta,
             flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-            .as_mut()
-            .with_context(|| <span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(
+            <span class="self">self</span>.get_metadata().cache_engine.as_ref(),
+            <span class="kw-2">&amp;mut </span>paged_attn_meta,
+        ) {
+            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine.get_kv_cache().clone(), meta)),
+            (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
+                <span class="comment">// This can happen if Rust-side user code is wrong
+                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
+            }
+            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; {
+                <span class="comment">// This should never happen but we handle it anyway
+                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue."</span>)
+            }
+            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
+        };
         <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
-                <span class="self">self</span>.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
+                paged_attn_meta,
             )<span class="question-mark">?</span>,
-            Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.forward(
-                <span class="kw-2">&amp;</span>input_ids,
-                <span class="kw-2">&amp;</span>seqlen_offsets,
-                context_lens,
-                <span class="self">self</span>.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
-            )<span class="question-mark">?</span>,
+            Model::Phi2(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, context_lens, paged_attn_meta)<span class="question-mark">?
+            </span>}
             Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1416,14 +1412,9 @@
                 <span class="kw-2">&amp;</span>flash_meta,
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             )<span class="question-mark">?</span>,
-            Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.forward(
-                <span class="kw-2">&amp;</span>input_ids,
-                <span class="kw-2">&amp;</span>seqlen_offsets,
-                <span class="self">self</span>.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
-            )<span class="question-mark">?</span>,
+            Model::Phi3(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, paged_attn_meta)<span class="question-mark">?
+            </span>}
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
@@ -1441,10 +1432,7 @@
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
-                <span class="self">self</span>.get_metadata()
-                    .cache_engine
-                    .as_ref()
-                    .map(|engine| (engine.get_kv_cache().clone(), paged_attn_meta)),
+                paged_attn_meta,
             )<span class="question-mark">?</span>,
         };
         <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
