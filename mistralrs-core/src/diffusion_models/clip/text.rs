@@ -9,9 +9,11 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 pub enum Activation {
+    #[serde(rename = "quick_gelu")]
     QuickGelu,
 }
 
@@ -23,7 +25,7 @@ impl Module for Activation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ClipTextConfig {
     pub vocab_size: usize,
     pub embed_dim: usize,
@@ -35,6 +37,11 @@ pub struct ClipTextConfig {
     pub num_attention_heads: usize,
     #[allow(dead_code)]
     pub projection_dim: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClipConfig {
+    pub text_config: ClipTextConfig,
 }
 
 impl ClipTextConfig {
