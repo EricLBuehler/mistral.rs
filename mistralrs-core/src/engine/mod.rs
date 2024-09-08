@@ -106,7 +106,7 @@ impl Engine {
             if matches!(
                 ENGINE_INSTRUCTIONS
                     .lock()
-                    .expect("`ENGINE_INSTRUCTIONS` was posioned")
+                    .expect("`ENGINE_INSTRUCTIONS` was poisioned")
                     .get(&self.id),
                 Some(Some(EngineInstruction::Terminate))
             ) {

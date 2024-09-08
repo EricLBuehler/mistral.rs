@@ -263,7 +263,7 @@ impl Drop for MistralRs {
     fn drop(&mut self) {
         ENGINE_INSTRUCTIONS
             .lock()
-            .expect("`ENGINE_INSTRUCTIONS` was posioned")
+            .expect("`ENGINE_INSTRUCTIONS` was poisioned")
             .insert(self.engine_id, Some(EngineInstruction::Terminate));
     }
 }
