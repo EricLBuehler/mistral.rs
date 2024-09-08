@@ -463,11 +463,18 @@
 <a href="#463" id="463">463</a>
 <a href="#464" id="464">464</a>
 <a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
-<span class="kw">pub use </span>engine::TERMINATE_ALL_NEXT_STEP;
+<span class="kw">pub use </span>engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 <span class="kw">pub use </span>lora::Ordering;
 <span class="kw">use </span>pipeline::ModelCategory;
 <span class="kw">pub use </span>pipeline::Pipeline;
@@ -478,7 +485,10 @@
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{<span class="self">self</span>, AtomicBool, AtomicUsize},
+        Arc, Mutex, RwLock,
+    },
     thread::{<span class="self">self</span>, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -561,6 +571,7 @@
 
 <span class="doccomment">/// `true` if `MISTRALRS_DEBUG=1`
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>DEBUG: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
+<span class="kw">static </span>ENGINE_ID: AtomicUsize = AtomicUsize::new(<span class="number">0</span>);
 
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -574,6 +585,7 @@
     next_request_id: Mutex&lt;RefCell&lt;usize&gt;&gt;,
     reboot_state: RebootState,
     engine_handler: RwLock&lt;JoinHandle&lt;()&gt;&gt;,
+    engine_id: usize,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -721,11 +733,10 @@
 
 <span class="kw">impl </span>Drop <span class="kw">for </span>MistralRs {
     <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-        <span class="self">self</span>.sender
-            .write()
-            .expect(<span class="string">"Failed to get sender write in Drop"</span>)
-            .blocking_send(Request::Terminate)
-            .expect(<span class="string">"Sending failed in Drop"</span>);
+        ENGINE_INSTRUCTIONS
+            .lock()
+            .expect(<span class="string">"`ENGINE_INSTRUCTIONS` was poisioned"</span>)
+            .insert(<span class="self">self</span>.engine_id, <span class="prelude-val">Some</span>(EngineInstruction::Terminate));
     }
 }
 
@@ -794,7 +805,10 @@
             });
         });
 
+        <span class="kw">let </span>engine_id = ENGINE_ID.fetch_add(<span class="number">1</span>, atomic::Ordering::SeqCst);
+
         Arc::new(<span class="self">Self </span>{
+            engine_id,
             sender,
             log,
             id,

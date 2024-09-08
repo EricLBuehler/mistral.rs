@@ -737,7 +737,29 @@
 <a href="#737" id="737">737</a>
 <a href="#738" id="738">738</a>
 <a href="#739" id="739">739</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>once_cell::sync::Lazy;
+<span class="kw">use </span>std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -773,9 +795,17 @@
     Constraint, StopTokens,
 };
 
+<span class="kw">pub enum </span>EngineInstruction {
+    Terminate,
+}
+
 <span class="kw">const </span>SEED: u64 = <span class="number">0</span>;
 <span class="doccomment">/// Terminate all sequences on the next scheduling step. Be sure to reset this.
 </span><span class="kw">pub static </span>TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
+
+<span class="doccomment">/// Engine instructions, per Engine (MistralRs) ID.
+</span><span class="kw">pub static </span>ENGINE_INSTRUCTIONS: Lazy&lt;std::sync::Mutex&lt;HashMap&lt;usize, <span class="prelude-ty">Option</span>&lt;EngineInstruction&gt;&gt;&gt;&gt; =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 <span class="kw">pub struct </span>Engine {
     rx: Receiver&lt;Request&gt;,
@@ -832,6 +862,16 @@
         <span class="kw">let </span>rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
+            <span class="kw">if </span><span class="macro">matches!</span>(
+                ENGINE_INSTRUCTIONS
+                    .lock()
+                    .expect(<span class="string">"`ENGINE_INSTRUCTIONS` was poisioned"</span>)
+                    .get(<span class="kw-2">&amp;</span><span class="self">self</span>.id),
+                <span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(EngineInstruction::Terminate))
+            ) {
+                <span class="kw">break </span><span class="lifetime">'lp</span>;
+            }
+
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
                 <span class="kw">if </span><span class="macro">matches!</span>(request, Request::Terminate) {
                     <span class="kw">break </span><span class="lifetime">'lp</span>;
