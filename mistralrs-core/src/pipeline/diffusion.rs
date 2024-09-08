@@ -133,8 +133,10 @@ impl Loader for DiffusionLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         dbg!(&paths);
-        let paths = &(paths as &dyn Any)
-            .downcast_ref::<Box<DiffusionModelPaths>>()
+        let paths = &paths
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DiffusionModelPaths>()
             .expect("Path downcast failed.")
             .0;
 

@@ -3,7 +3,6 @@ mod normal_loaders;
 mod vision_loaders;
 
 use std::{
-    any::Any,
     collections::HashMap,
     fmt::{self, Debug},
     path::PathBuf,
@@ -12,6 +11,7 @@ use std::{
 };
 
 use anyhow::Result;
+use as_any::AsAny;
 use candle_core::Device;
 use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
@@ -41,7 +41,7 @@ use super::Pipeline;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths: Any + Debug {
+pub trait ModelPaths: AsAny + Debug {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
