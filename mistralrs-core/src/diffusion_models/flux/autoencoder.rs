@@ -202,7 +202,11 @@ impl Encoder {
             let mut block = Vec::with_capacity(cfg.layers_per_block);
             let vb_d = vb_d.pp(i_level);
             let vb_b = vb_d.pp("block");
-            block_in = if i_level == 0 { base_ch } else { *out_channels };
+            block_in = if i_level == 0 {
+                base_ch
+            } else {
+                cfg.block_out_channels[i_level - 1]
+            };
             let block_out = *out_channels;
             for i_block in 0..cfg.layers_per_block {
                 let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block), cfg)?;
