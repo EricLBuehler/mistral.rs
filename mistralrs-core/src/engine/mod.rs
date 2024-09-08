@@ -1,4 +1,6 @@
+use once_cell::sync::Lazy;
 use std::{
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -34,9 +36,17 @@ use crate::{
     Constraint, StopTokens,
 };
 
+pub enum EngineInstruction {
+    Terminate,
+}
+
 const SEED: u64 = 0;
 /// Terminate all sequences on the next scheduling step. Be sure to reset this.
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
+
+/// Engine instructions, per Engine (MistralRs) ID.
+pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<EngineInstruction>>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub struct Engine {
     rx: Receiver<Request>,
@@ -93,6 +103,16 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
+            if matches!(
+                ENGINE_INSTRUCTIONS
+                    .lock()
+                    .expect("`ENGINE_INSTRUCTIONS` was poisioned")
+                    .get(&self.id),
+                Some(Some(EngineInstruction::Terminate))
+            ) {
+                break 'lp;
+            }
+
             while let Ok(request) = self.rx.try_recv() {
                 if matches!(request, Request::Terminate) {
                     break 'lp;
