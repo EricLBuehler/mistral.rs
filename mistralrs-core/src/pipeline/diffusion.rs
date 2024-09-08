@@ -4,9 +4,9 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManager, CacheManagerMixin,
     DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, TokenSource,
+    PreProcessingMixin, Processor, TokenSource,
 };
-use crate::diffusion_models::processor::ModelInputs;
+use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManager;
@@ -240,6 +240,9 @@ impl Loader for DiffusionLoader {
 }
 
 impl PreProcessingMixin for DiffusionPipeline {
+    fn get_processor(&self) -> Arc<dyn Processor> {
+        Arc::new(DiffusionProcessor)
+    }
     fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         None
     }

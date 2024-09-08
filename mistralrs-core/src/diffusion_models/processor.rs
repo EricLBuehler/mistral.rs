@@ -2,24 +2,52 @@ use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
 use candle_core::Device;
+use indexmap::IndexMap;
 use tokenizers::Tokenizer;
 
 use crate::{
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, InputProcessorOutput, InputsProcessor,
-        InputsProcessorType,
+        InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
+    MessageContent, Pipeline,
 };
 
 pub struct DiffusionProcessor;
+
+impl Processor for DiffusionProcessor {
+    fn process(
+        &self,
+        _pipeline: &dyn Pipeline,
+        _messages: Vec<IndexMap<String, MessageContent>>,
+        _add_generation_prompt: bool,
+        _tools: Vec<crate::Tool>,
+    ) -> Result<(Vec<u32>, String)> {
+        anyhow::bail!(
+            "DiffusionProcessor::process should not be used. It does not expect chat messages."
+        )
+    }
+    fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
+        Arc::new(DiffusionInputsProcessor)
+    }
+    fn get_special_tokens(&self) -> &[&'static str] {
+        &[]
+    }
+    fn template_action(&self) -> MessagesAction {
+        // Just a default
+        MessagesAction::FlattenOnlyText
+    }
+}
+
+pub struct DiffusionInputsProcessor;
 
 #[derive(Clone)]
 pub struct ModelInputs {
     pub(crate) prompts: Vec<String>,
 }
 
-impl InputsProcessor for DiffusionProcessor {
+impl InputsProcessor for DiffusionInputsProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Text
     }
