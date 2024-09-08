@@ -23,7 +23,7 @@ impl Module for Activation {
 pub struct ClipTextConfig {
     pub vocab_size: usize,
     pub projection_dim: usize,
-    pub activation: Activation,
+    pub hidden_act: Activation,
     pub intermediate_size: usize,
     pub max_position_embeddings: usize,
     pub num_hidden_layers: usize,
@@ -169,7 +169,7 @@ impl ClipMlp {
         Ok(ClipMlp {
             fc1,
             fc2,
-            activation: c.activation,
+            activation: c.hidden_act,
         })
     }
 }

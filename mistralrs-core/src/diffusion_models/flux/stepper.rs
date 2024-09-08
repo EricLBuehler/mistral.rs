@@ -4,6 +4,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
+use tracing::info;
 
 use crate::{
     diffusion_models::{
@@ -141,7 +142,9 @@ impl FluxStepper {
     ) -> anyhow::Result<Self> {
         let api = Api::new()?;
 
+        info!("Loading T5 XXL model and tokenizer.");
         let (t5_encoder, t5_tokenizer) = get_t5_model_and_tokenizr(&api, dtype, &Device::Cpu)?;
+        info!("Loading CLIP model and tokenizer.");
         let (clip_encoder, clip_tokenizer) =
             get_clip_model_and_tokenizer(&api, dtype, &Device::Cpu)?;
 
