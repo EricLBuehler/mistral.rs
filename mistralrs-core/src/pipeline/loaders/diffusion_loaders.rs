@@ -75,13 +75,13 @@ impl FromStr for DiffusionLoaderType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DiffusionModelPathsInner {
     pub config_filenames: Vec<PathBuf>,
     pub filenames: Vec<PathBuf>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DiffusionModelPaths(pub DiffusionModelPathsInner);
 
 impl ModelPaths for DiffusionModelPaths {

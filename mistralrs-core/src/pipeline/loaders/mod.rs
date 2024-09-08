@@ -2,7 +2,14 @@ mod diffusion_loaders;
 mod normal_loaders;
 mod vision_loaders;
 
-use std::{any::Any, collections::HashMap, fmt, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::{self, Debug},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 
 use anyhow::Result;
 use candle_core::Device;
@@ -34,7 +41,7 @@ use super::Pipeline;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths: Any {
+pub trait ModelPaths: Any + Debug {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
@@ -79,9 +86,9 @@ pub trait ModelPaths: Any {
     fn get_processor_config(&self) -> &Option<PathBuf>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// All local paths and metadata necessary to load a model.
-pub struct LocalModelPaths<P> {
+pub struct LocalModelPaths<P: Debug> {
     pub tokenizer_filename: P,
     pub config_filename: P,
     pub template_filename: Option<P>,
@@ -97,7 +104,7 @@ pub struct LocalModelPaths<P> {
     pub processor_config: Option<P>,
 }
 
-impl<P> LocalModelPaths<P> {
+impl<P: Debug> LocalModelPaths<P> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         tokenizer_filename: P,
