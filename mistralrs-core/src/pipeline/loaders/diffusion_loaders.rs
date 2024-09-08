@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
-    fs::File,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -164,8 +163,8 @@ impl DiffusionModelLoader for FluxLoader {
         let (vae_cfg, vae_vb) = (configs.remove(1), vbs.remove(1));
         let (flux_cfg, flux_vb) = (configs.remove(0), vbs.remove(0));
 
-        let vae_cfg: flux::autoencoder::Config = serde_json::from_reader(File::open(vae_cfg)?)?;
-        let flux_cfg: flux::model::Config = serde_json::from_reader(File::open(flux_cfg)?)?;
+        let vae_cfg: flux::autoencoder::Config = serde_json::from_str(&vae_cfg)?;
+        let flux_cfg: flux::model::Config = serde_json::from_str(&flux_cfg)?;
 
         let flux_dtype = flux_vb.dtype();
         if flux_dtype != vae_vb.dtype() {
