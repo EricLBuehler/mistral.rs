@@ -216,7 +216,7 @@ impl Loader for DiffusionLoader {
                 max_seq_len,
                 tok_trie: None,
                 is_xlora: false,
-                num_hidden_layers: usize::MAX, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
+                num_hidden_layers: 0, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 eos_tok: vec![],
                 kind: self.kind.clone(),
                 has_no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
