@@ -32,7 +32,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
         },
         None,
         None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
+        Some("microsoft/Phi-3.5-mini-instruct".to_string()),
     )
     .build(None)?;
     // Load, into a Pipeline
