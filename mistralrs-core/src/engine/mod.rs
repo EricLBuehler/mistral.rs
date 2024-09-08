@@ -543,7 +543,7 @@ impl Engine {
                     text,
                 )
             }
-            RequestMessage::ImageGeneration { prompt, .. } => (vec![], prompt),
+            RequestMessage::ImageGeneration { prompt, .. } => (vec![u32::MAX], prompt),
             RequestMessage::CompletionTokens(it) => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request
