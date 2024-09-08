@@ -13,6 +13,10 @@ fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
     x.parse()
 }
 
+fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
+    x.parse()
+}
+
 fn parse_model_dtype(x: &str) -> Result<ModelDType, String> {
     x.parse()
 }
@@ -345,7 +349,7 @@ pub enum ModelSelected {
         model_id: String,
 
         /// The architecture of the model.
-        #[arg(short, long, value_parser = parse_vision_arch)]
+        #[arg(short, long, value_parser = parse_diffusion_arch)]
         arch: DiffusionLoaderType,
 
         /// Model data type. Defaults to `auto`.
