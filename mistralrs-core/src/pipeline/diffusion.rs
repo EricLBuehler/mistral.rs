@@ -305,7 +305,7 @@ impl Pipeline for DiffusionPipeline {
         let (_b, c, h, w) = img.dims4()?;
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {
-            let flattened = b_img.permute((1, 2, 0))?.flatten_all()?;
+            let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
             if c != 3 {
                 candle_core::bail!("Expected 3 channels in image output");
             }
