@@ -203,6 +203,7 @@ impl Loader for DiffusionLoader {
                         real_device: device.clone(),
                     },
                     attention_mechanism,
+                    silent,
                 )?
             }
             _ => unreachable!(),

@@ -51,6 +51,7 @@ pub trait DiffusionModelLoader {
         vbs: Vec<VarBuilder>,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        silent: bool,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>>;
 }
 
@@ -159,6 +160,7 @@ impl DiffusionModelLoader for FluxLoader {
         mut vbs: Vec<VarBuilder>,
         normal_loading_metadata: NormalLoadingMetadata,
         _attention_mechanism: AttentionImplementation,
+        silent: bool,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>> {
         let (vae_cfg, vae_vb) = (configs.remove(1), vbs.remove(1));
         let (flux_cfg, flux_vb) = (configs.remove(0), vbs.remove(0));
@@ -176,12 +178,11 @@ impl DiffusionModelLoader for FluxLoader {
 
         Ok(Box::new(FluxStepper::new(
             FluxStepperConfig::default_for_guidance(flux_cfg.guidance_embeds),
-            flux_vb,
-            &flux_cfg,
-            vae_vb,
-            &vae_cfg,
+            (flux_vb, &flux_cfg),
+            (vae_vb, &vae_cfg),
             flux_dtype,
             &normal_loading_metadata.real_device,
+            silent,
         )?))
     }
 }

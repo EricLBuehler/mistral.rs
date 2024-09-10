@@ -84,6 +84,7 @@ fn get_t5_model_and_tokenizr(
     api: &Api,
     dtype: DType,
     device: &Device,
+    silent: bool,
 ) -> anyhow::Result<(T5EncoderModel, Tokenizer)> {
     let repo = api.repo(hf_hub::Repo::with_revision(
         "EricB/t5-v1_1-xxl".to_string(),
@@ -99,7 +100,7 @@ fn get_t5_model_and_tokenizr(
         vec![],
         Some(dtype),
         device,
-        false,
+        silent,
         |_| true,
     )?;
     let config_filename = repo.get("config.json")?;
@@ -119,13 +120,21 @@ fn get_clip_model_and_tokenizer(
     api: &Api,
     dtype: DType,
     device: &Device,
+    silent: bool,
 ) -> anyhow::Result<(ClipTextTransformer, Tokenizer)> {
     let repo = api.repo(hf_hub::Repo::model(
         "openai/clip-vit-large-patch14".to_string(),
     ));
 
     let model_file = repo.get("model.safetensors")?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
+    let vb = from_mmaped_safetensors(
+        vec![model_file],
+        vec![],
+        Some(dtype),
+        device,
+        silent,
+        |_| true,
+    )?;
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
@@ -151,20 +160,20 @@ fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> R
 impl FluxStepper {
     pub fn new(
         cfg: FluxStepperConfig,
-        flux_vb: VarBuilder,
-        flux_cfg: &flux::model::Config,
-        flux_ae_vb: VarBuilder,
-        flux_ae_cfg: &flux::autoencoder::Config,
+        (flux_vb, flux_cfg): (VarBuilder, &flux::model::Config),
+        (flux_ae_vb, flux_ae_cfg): (VarBuilder, &flux::autoencoder::Config),
         dtype: DType,
         device: &Device,
+        silent: bool,
     ) -> anyhow::Result<Self> {
         let api = Api::new()?;
 
         info!("Loading T5 XXL model and tokenizer.");
-        let (t5_encoder, t5_tokenizer) = get_t5_model_and_tokenizr(&api, dtype, &Device::Cpu)?;
+        let (t5_encoder, t5_tokenizer) =
+            get_t5_model_and_tokenizr(&api, dtype, &Device::Cpu, silent)?;
         info!("Loading CLIP model and tokenizer.");
         let (clip_encoder, clip_tokenizer) =
-            get_clip_model_and_tokenizer(&api, dtype, &Device::Cpu)?;
+            get_clip_model_and_tokenizer(&api, dtype, &Device::Cpu, silent)?;
 
         Ok(Self {
             cfg,
