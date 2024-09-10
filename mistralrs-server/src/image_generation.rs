@@ -9,23 +9,12 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams,
+    Constraint, ImageGenerationResponse, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams
 };
 use serde::Serialize;
 
-#[derive(Debug)]
-struct ModelErrorMessage(String);
-impl std::fmt::Display for ModelErrorMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-impl std::error::Error for ModelErrorMessage {}
-
 pub enum CompletionResponder {
-    Json(CompletionResponse),
-    ModelError(String, CompletionResponse),
+    Json(ImageGenerationResponse),
     InternalError(Box<dyn Error>),
     ValidationError(Box<dyn Error>),
 }
@@ -50,23 +39,6 @@ impl JsonError {
 }
 impl ErrorToResponse for JsonError {}
 
-#[derive(Serialize)]
-struct JsonModelError {
-    message: String,
-    partial_response: CompletionResponse,
-}
-
-impl JsonModelError {
-    fn new(message: String, partial_response: CompletionResponse) -> Self {
-        Self {
-            message,
-            partial_response,
-        }
-    }
-}
-
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for CompletionResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
@@ -77,8 +49,6 @@ impl IntoResponse for CompletionResponder {
             CompletionResponder::ValidationError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
-            CompletionResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
@@ -154,20 +124,16 @@ pub async fn image_generation(
             MistralRs::maybe_log_error(state, &*e);
             CompletionResponder::InternalError(e)
         }
-        Response::CompletionModelError(msg, response) => {
-            MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
-            MistralRs::maybe_log_response(state, &response);
-            CompletionResponder::ModelError(msg, response)
-        }
         Response::ValidationError(e) => CompletionResponder::ValidationError(e),
-        Response::CompletionDone(response) => {
+        Response::ImageGeneration(response) => {
             MistralRs::maybe_log_response(state, &response);
             CompletionResponder::Json(response)
         }
+        Response::CompletionModelError(_, _) => unreachable!(),
+        Response::CompletionDone(_) => unreachable!(),
         Response::CompletionChunk(_) => unreachable!(),
         Response::Chunk(_) => unreachable!(),
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
-        Response::ImageGeneration(_) => unreachable!(),
     }
 }

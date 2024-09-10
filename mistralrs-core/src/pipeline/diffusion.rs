@@ -1,9 +1,8 @@
-use super::cache_manager::DefaultCacheManager;
 use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManager, CacheManagerMixin,
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
+    DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -259,9 +258,9 @@ impl IsqPipelineMixin for DiffusionPipeline {
 }
 
 impl CacheManagerMixin for DiffusionPipeline {
-    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) { }
-    fn clone_out_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) { }
-    fn set_none_cache(&self, _reset_non_granular: bool, _modify_draft_cache: bool) { }
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
+    fn clone_out_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
+    fn set_none_cache(&self, _reset_non_granular: bool, _modify_draft_cache: bool) {}
     fn cache(&self) -> &Cache {
         &self.dummy_cache
     }
