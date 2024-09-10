@@ -69,6 +69,7 @@ pub struct FluxStepper {
     flux_vae: AutoEncoder,
     is_guidance: bool,
     device: Device,
+    dtype: DType,
 }
 
 fn get_t5_model_and_tokenizr(
@@ -158,6 +159,7 @@ impl FluxStepper {
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
             device: device.clone(),
+            dtype,
         })
     }
 }
@@ -193,7 +195,8 @@ impl DiffusionModel for FluxStepper {
             self.cfg.height,
             self.cfg.width,
             self.device(),
-        )?;
+        )?
+        .to_dtype(self.dtype)?;
         let state = flux::sampling::State::new(&t5_embed, &clip_embed, &img)?;
         let timesteps = flux::sampling::get_schedule(
             self.cfg.num_steps,
