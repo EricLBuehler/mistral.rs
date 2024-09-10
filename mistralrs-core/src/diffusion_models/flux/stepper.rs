@@ -2,7 +2,7 @@ use std::{cmp::Ordering, fs::File};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
-use hf_hub::api::sync::Api;
+use hf_hub::api::sync::{Api, ApiError};
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -13,9 +13,17 @@ use crate::{
         t5::{self, T5EncoderModel},
     },
     pipeline::DiffusionModel,
+    utils::varbuilder_utils::from_mmaped_safetensors,
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
+
+const T5_XXL_SAFETENSOR_FILES: &[&str] = &[
+    "t5_xxl-shard-0.safetensors",
+    "t5_xxl-shard-1.safetensors",
+    "t5_xxl-shard-2.safetensors",
+    "t5_xxl-shard-3.safetensors",
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
@@ -78,13 +86,22 @@ fn get_t5_model_and_tokenizr(
     device: &Device,
 ) -> anyhow::Result<(T5EncoderModel, Tokenizer)> {
     let repo = api.repo(hf_hub::Repo::with_revision(
-        "google/t5-v1_1-xxl".to_string(),
+        "EricB/t5-v1_1-xxl".to_string(),
         hf_hub::RepoType::Model,
-        "refs/pr/2".to_string(),
+        "main".to_string(),
     ));
 
-    let model_file = repo.get("model.safetensors")?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
+    let vb = from_mmaped_safetensors(
+        T5_XXL_SAFETENSOR_FILES
+            .iter()
+            .map(|f| repo.get(f))
+            .collect::<std::result::Result<Vec<_>, ApiError>>()?,
+        vec![],
+        Some(dtype),
+        device,
+        false,
+        |_| true,
+    )?;
     let config_filename = repo.get("config.json")?;
     let config = std::fs::read_to_string(config_filename)?;
     let config: t5::Config = serde_json::from_str(&config)?;
