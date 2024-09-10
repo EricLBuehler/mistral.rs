@@ -259,18 +259,9 @@ impl IsqPipelineMixin for DiffusionPipeline {
 }
 
 impl CacheManagerMixin for DiffusionPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
-    }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
-    }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
-        if reset_non_granular {
-            self.reset_non_granular_state()
-        }
-    }
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) { }
+    fn clone_out_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) { }
+    fn set_none_cache(&self, _reset_non_granular: bool, _modify_draft_cache: bool) { }
     fn cache(&self) -> &Cache {
         &self.dummy_cache
     }
