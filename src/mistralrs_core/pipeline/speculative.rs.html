@@ -1208,14 +1208,14 @@
                                 .get_metadata()
                                 .tok_trie
                                 .append_token(rx.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+                                .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                         }
                         SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
                             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
                                 .get_metadata()
                                 .tok_trie
                                 .append_token(cfg.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+                                .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                         }
                         SequenceRecognizer::None =&gt; {}
                     }

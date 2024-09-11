@@ -455,7 +455,7 @@
     <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
         dtype
             .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.mappings.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
-            .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
+            .map_err(candle_core::Error::msg)
     }
 }
 
@@ -503,7 +503,7 @@
     <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
         dtype
             .try_into_dtype(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device])
-            .map_err(|e| candle_core::Error::Msg(<span class="macro">format!</span>(<span class="string">"{e:?}"</span>)))
+            .map_err(candle_core::Error::msg)
     }
 }
 </code></pre></div></section></main></body></html>

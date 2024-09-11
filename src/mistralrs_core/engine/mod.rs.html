@@ -1297,7 +1297,7 @@
                 <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                     .tokenizer()
                     .encode(text, <span class="bool-val">true</span>)
-                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                    .map_err(anyhow::Error::msg);
                 <span class="macro">handle_seq_error!</span>(prompt, request.response)
                     .get_ids()
                     .to_vec()

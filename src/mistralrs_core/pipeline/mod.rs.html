@@ -988,7 +988,7 @@
                     <span class="kw">let </span>InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+                    } = inputs.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                     <span class="kw">if </span>i == <span class="number">0 </span>{
                         <span class="kw">match </span>pre_op {
                             CacheInstruction::In(<span class="kw-2">ref </span>adapter_inst) =&gt; {
@@ -1122,7 +1122,7 @@
                     <span class="kw">let </span>InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))<span class="question-mark">?</span>;
+                    } = inputs.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
 
                     <span class="kw">let </span>raw_logits = <span class="self">self</span>.forward_inputs(inputs)<span class="question-mark">?</span>;
 
