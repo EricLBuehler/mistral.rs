@@ -201,7 +201,7 @@ impl DeviceMapper for LayerDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
-            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
+            .map_err(candle_core::Error::msg)
     }
 }
 
@@ -249,6 +249,6 @@ impl DeviceMapper for DummyDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&[&self.nm_device])
-            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
+            .map_err(candle_core::Error::msg)
     }
 }
