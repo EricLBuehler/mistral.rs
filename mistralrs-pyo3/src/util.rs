@@ -41,6 +41,12 @@ impl From<anyhow::Error> for PyApiErr {
     }
 }
 
+impl From<&candle_core::Error> for PyApiErr {
+    fn from(value: &candle_core::Error) -> Self {
+        Self::from(value.to_string())
+    }
+}
+
 impl From<serde_json::Error> for PyApiErr {
     fn from(value: serde_json::Error) -> Self {
         Self::from(value.to_string())
