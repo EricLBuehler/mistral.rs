@@ -538,7 +538,7 @@ impl Engine {
                 let prompt = get_mut_arcmutex!(self.pipeline)
                     .tokenizer()
                     .encode(text, true)
-                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                    .map_err(anyhow::Error::msg);
                 handle_seq_error!(prompt, request.response)
                     .get_ids()
                     .to_vec()
