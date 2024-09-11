@@ -103,12 +103,14 @@ impl DeviceMapMetadata {
         {
             combined.extend(vec![device.clone(); n_device_layers]);
         } else {
+            let original_seed = device.get_current_seed()?;
             for DeviceLayerMapMetadata { ordinal, layers } in self.device_layers.as_ref().unwrap() {
                 let dev = match device {
                     Device::Cpu => Device::Cpu,
                     Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
                     Device::Metal(_) => Device::new_metal(*ordinal)?,
                 };
+                dev.set_seed(original_seed)?;
                 combined.extend(vec![dev; *layers]);
             }
         }

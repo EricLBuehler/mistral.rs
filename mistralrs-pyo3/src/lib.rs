@@ -530,7 +530,7 @@ impl Runner {
                 None,
                 TokenSource::from_str(token_source).map_err(PyApiErr::from)?,
                 &ModelDType::Auto,
-                &device,
+                device,
                 true, // Silent for jupyter
                 mapper,
                 isq,
