@@ -2232,6 +2232,7 @@ name = "mistralrs-quant"
 version = "0.3.0"
 dependencies = [
  "bindgen_cuda 0.1.5",
+ "byteorder",
  "candle-core",
  "candle-nn",
  "half",

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -135,8 +136,20 @@ impl TryFrom<IsqType> for GgmlDType {
     }
 }
 
+pub trait QuantizedSerde {
+    fn supported(&self) -> bool {
+        false
+    }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+    }
+    fn deserialize(&self, _data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantizedSerde>> {
+        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+    }
+}
+
 /// Quantized method for a quantized matmul.
-pub trait QuantMethod: Send + Sync + Debug {
+pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;

@@ -19,7 +19,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     utils::{get_cuda_device, get_cuda_slice},
-    IsqType, QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
 use super::ffi::{
@@ -295,3 +295,5 @@ impl QuantMethod for GptqLayer {
         None
     }
 }
+
+impl QuantizedSerde for GptqLayer {}

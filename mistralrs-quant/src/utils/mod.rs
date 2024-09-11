@@ -3,7 +3,10 @@ mod ffi;
 pub(crate) mod isq;
 mod ops;
 
+mod serde;
+
 pub use ops::{BitWiseOp, LeftshiftOp};
+pub(crate) use serde::{deserialize_tensor, serialize_tensor};
 
 #[cfg(feature = "cuda")]
 use candle_core::{

@@ -1,4 +1,4 @@
-use crate::{IsqType, QuantMethod, QuantMethodConfig};
+use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 use candle_core::{DType, Device, Result, Tensor};
 use std::{
     num::NonZeroUsize,
@@ -64,3 +64,5 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 }
+
+impl QuantizedSerde for GptqLayer {}

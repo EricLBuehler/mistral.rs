@@ -1,15 +1,22 @@
 use std::{
+    borrow::Cow,
+    io::{Cursor, Read},
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{
-    quantized::{GgmlDType, QMatMul, QTensor},
+    quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
 use candle_nn::Module;
 
-use crate::{generate_isq, IsqType, QuantMethod, QuantMethodConfig};
+use crate::{
+    generate_isq,
+    utils::{deserialize_tensor, serialize_tensor},
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
+};
 
 #[derive(Debug)]
 pub struct GgufMatMul {
@@ -132,5 +139,155 @@ impl QuantMethod for GgufMatMul {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
+    }
+}
+
+// Serialization structure:
+//
+// -----------------------
+// Tensor data length in bytes, u32, little endian
+// -----------------------
+// Whether bias data is included, u8 boolean
+// -----------------------
+// Quantized dtype, u32, little endian
+// -----------------------
+// Num shape dims, u32, little endian
+// -----------------------
+// ...
+// Array (in original order): quantized weight shape dims, u32, little endian
+// ...
+// -----------------------
+// ...
+// Array: quantized weight data, u8s
+// ...
+// -----------------------
+// [OPTIONAL] Bias data length, u32, little endian
+// -----------------------
+// [OPTIONAL] Bias dtype, u32, little endian
+// -----------------------
+// [OPTIONAL] Bias Num shape dims, u32, little endian
+// -----------------------
+// ...
+// [OPTIONAL] Array (in original order): Bias shape dims, u32, little endian
+// ...
+// -----------------------
+// ...
+// [OPTIONAL] Array: Bias tensor data, u8s
+// ...
+// -----------------------
+
+impl QuantizedSerde for GgufMatMul {
+    fn supported(&self) -> bool {
+        true
+    }
+
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        let mut buffer = match &self.w {
+            QMatMul::QTensor(qw) => {
+                let w = qw.data()?.to_vec();
+                let w_shape = qw.shape().dims();
+                let dtype: u32 = match qw.dtype() {
+                    GgmlDType::F32 => 0,
+                    GgmlDType::F16 => 1,
+                    GgmlDType::Q4_0 => 2,
+                    GgmlDType::Q4_1 => 3,
+                    GgmlDType::Q5_0 => 6,
+                    GgmlDType::Q5_1 => 7,
+                    GgmlDType::Q8_0 => 8,
+                    GgmlDType::Q8_1 => 9,
+                    GgmlDType::Q2K => 10,
+                    GgmlDType::Q3K => 11,
+                    GgmlDType::Q4K => 12,
+                    GgmlDType::Q5K => 13,
+                    GgmlDType::Q6K => 14,
+                    GgmlDType::Q8K => 15,
+                    // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+                    GgmlDType::BF16 => 30,
+                };
+
+                let mut buffer = Vec::new();
+
+                // Length
+                buffer.extend(&(w.len() as u32).to_le_bytes());
+
+                // Has bias
+                buffer.push(self.b.is_some() as u8);
+
+                // Dtype (u32)
+                buffer.extend(&dtype.to_le_bytes());
+
+                // Shape
+                buffer.extend((w_shape.len() as u32).to_le_bytes());
+                for dim in w_shape {
+                    buffer.extend((*dim as u32).to_le_bytes());
+                }
+
+                // Quantized W Vec<u8> (just append it)
+                buffer.extend(&w);
+
+                buffer
+            }
+            QMatMul::TensorF16(_) | QMatMul::Tensor(_) => {
+                candle_core::bail!("Cannot serialize non-quantized")
+            }
+        };
+
+        if let Some(b) = self.b.as_ref() {
+            serialize_tensor(&mut buffer, b)?;
+        }
+
+        todo!()
+    }
+
+    fn deserialize(&self, data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantizedSerde>> {
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let data_len = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let dtype = buffer.read_u32::<LittleEndian>()?;
+        let dtype = match dtype {
+            0 => GgmlDType::F32,
+            1 => GgmlDType::F16,
+            2 => GgmlDType::Q4_0,
+            3 => GgmlDType::Q4_1,
+            6 => GgmlDType::Q5_0,
+            7 => GgmlDType::Q5_1,
+            8 => GgmlDType::Q8_0,
+            9 => GgmlDType::Q8_1,
+            10 => GgmlDType::Q2K,
+            11 => GgmlDType::Q3K,
+            12 => GgmlDType::Q4K,
+            13 => GgmlDType::Q5K,
+            14 => GgmlDType::Q6K,
+            15 => GgmlDType::Q8K,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            30 => GgmlDType::BF16,
+            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
+        };
+
+        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let mut dims = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims {
+            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
+        }
+
+        let mut tensor_data = vec![0; data_len];
+        buffer.read_exact(&mut tensor_data)?;
+
+        // If we have bias
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
+        Ok(Arc::new(Self {
+            w: QMatMul::QTensor(w.into()),
+            b,
+        }))
     }
 }

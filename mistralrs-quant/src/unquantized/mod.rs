@@ -9,7 +9,7 @@ use candle_nn::{Linear, Module};
 use crate::{
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig,
+    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
 #[derive(Debug)]
@@ -148,3 +148,5 @@ impl QuantMethod for UnquantLinear {
         }
     }
 }
+
+impl QuantizedSerde for UnquantLinear {}

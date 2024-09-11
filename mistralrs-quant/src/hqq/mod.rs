@@ -15,7 +15,7 @@ use std::{
 
 use crate::{
     utils::{BitWiseOp, LeftshiftOp},
-    IsqType, QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
 #[cfg(feature = "cuda")]
@@ -594,3 +594,5 @@ impl QuantMethod for HqqLayer {
         Some(1.try_into().unwrap())
     }
 }
+
+impl QuantizedSerde for HqqLayer {}
