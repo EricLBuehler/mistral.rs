@@ -473,6 +473,14 @@
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -520,6 +528,10 @@
     <span class="doccomment">/// IP to serve on. Defaults to "0.0.0.0"
     </span><span class="attr">#[arg(long)]
     </span>serve_ip: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="doccomment">/// Integer seed to ensure reproducible random number generation.
+    </span><span class="attr">#[arg(short, long)]
+    </span>seed: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 
     <span class="doccomment">/// Port to serve on.
     </span><span class="attr">#[arg(short, long)]
@@ -769,6 +781,10 @@
     </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(seed) = args.seed {
+        device.set_seed(seed)<span class="question-mark">?</span>;
+    }
 
     <span class="macro">info!</span>(
         <span class="string">"avx: {}, neon: {}, simd128: {}, f16c: {}"</span>,
