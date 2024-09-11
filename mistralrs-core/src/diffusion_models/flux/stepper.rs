@@ -98,7 +98,7 @@ fn get_t5_model_and_tokenizr(
         Some(dtype),
         device,
         silent,
-        |_| true,
+        |key| key.starts_with("encoder.") || key == "shared.weight",
     )?;
     let config_filename = repo.get("config.json")?;
     let config = std::fs::read_to_string(config_filename)?;
@@ -201,7 +201,7 @@ impl DiffusionModel for FluxStepper {
                 }
             }
         }
-        
+
         println!("T5 ids\n{t5_input_ids}");
         let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?;
         println!("T5\n{t5_embed}");

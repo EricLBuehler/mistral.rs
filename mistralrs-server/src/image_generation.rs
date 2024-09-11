@@ -9,7 +9,8 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    Constraint, ImageGenerationResponse, MistralRs, NormalRequest, Request, RequestMessage, Response, SamplingParams
+    Constraint, ImageGenerationResponse, MistralRs, NormalRequest, Request, RequestMessage,
+    Response, SamplingParams,
 };
 use serde::Serialize;
 
