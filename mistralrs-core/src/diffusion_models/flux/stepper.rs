@@ -61,7 +61,7 @@ impl FluxStepperConfig {
                 width: 768,
                 num_steps: 4,
                 guidance_config: None,
-                is_guidance: true,
+                is_guidance: false,
             }
         }
     }
@@ -87,16 +87,13 @@ fn get_t5_model_and_tokenizr(
     silent: bool,
 ) -> anyhow::Result<(T5EncoderModel, Tokenizer)> {
     let repo = api.repo(hf_hub::Repo::with_revision(
-        "EricB/t5-v1_1-xxl".to_string(),
+        "google/t5-v1_1-xxl".to_string(),
         hf_hub::RepoType::Model,
-        "main".to_string(),
+        "refs/pr/2".to_string(),
     ));
 
     let vb = from_mmaped_safetensors(
-        T5_XXL_SAFETENSOR_FILES
-            .iter()
-            .map(|f| repo.get(f))
-            .collect::<std::result::Result<Vec<_>, ApiError>>()?,
+        vec![repo.get("model.safetensors")?],
         vec![],
         Some(dtype),
         device,
@@ -198,23 +195,23 @@ impl DiffusionModel for FluxStepper {
                 Ordering::Greater => {
                     candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
                 }
-                Ordering::Less => {
+                Ordering::Less | Ordering::Equal => {
                     t5_input_ids =
                         t5_input_ids.pad_with_zeros(D::Minus1, 0, 256 - t5_input_ids.dim(1)?)?;
                 }
-                Ordering::Equal => (),
             }
         }
-
+        
+        println!("T5 ids\n{t5_input_ids}");
         let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?;
-        dbg!(&t5_embed);
+        println!("T5\n{t5_embed}");
 
         let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &Device::Cpu)?;
         let clip_embed = self
             .clip_text
             .forward(&clip_input_ids)?
             .to_device(&self.device)?;
-        dbg!(&clip_embed);
+        println!("CLIP\n{clip_embed}");
 
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
@@ -230,7 +227,10 @@ impl DiffusionModel for FluxStepper {
                 .guidance_config
                 .map(|s| (state.img.dims()[1], s.base_shift, s.max_shift)),
         );
+        println!("{state:?}");
+        println!("{timesteps:?}");
 
+        dbg!(&self.cfg.guidance_config);
         let img = if let Some(guidance_cfg) = &self.cfg.guidance_config {
             flux::sampling::denoise(
                 &self.flux_model,
@@ -254,8 +254,10 @@ impl DiffusionModel for FluxStepper {
             )?
         };
         let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
+        println!("latent img\n{img}");
 
         let img = self.flux_vae.decode(&latent_img)?;
+        println!("img\n{img}");
 
         let normalized_img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(DType::U8)?;
 
