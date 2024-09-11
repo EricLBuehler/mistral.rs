@@ -270,7 +270,7 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In(ref adapter_inst) => {
@@ -404,7 +404,7 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    } = inputs.map_err(candle_core::Error::msg)?;
 
                     let raw_logits = self.forward_inputs(inputs)?;
 
