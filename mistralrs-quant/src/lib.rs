@@ -9,6 +9,7 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+mod exl2;
 mod gguf;
 mod gptq;
 mod hqq;
@@ -47,6 +48,16 @@ pub struct QuantizedConfig {
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
+    Exl2 {
+        bits: i32,
+        q_weight: Tensor,
+        q_scale: Tensor,
+        q_scale_max: Tensor,
+        q_groups: Tensor,
+        q_perm: Tensor,
+        q_invperm: Tensor,
+        bias: Option<Tensor>,
+    },
     Gptq {
         bits: i32,
         use_exllama: bool,
