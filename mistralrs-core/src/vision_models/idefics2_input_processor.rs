@@ -94,7 +94,7 @@ impl Processor for Idefics2Processor {
         let encoding = pipeline
             .tokenizer()
             .encode(prompt, true)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+            .map_err(anyhow::Error::msg)?;
         Ok(encoding.get_ids().to_vec())
     }
 
