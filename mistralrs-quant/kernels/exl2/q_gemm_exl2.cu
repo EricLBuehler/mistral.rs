@@ -61,3 +61,43 @@ extern "C" void gemm_half_q_half_cuda_part_exl2(
         b->cuda_q_perm, b->rows_8, b->rows_6, b->rows_5, b->rows_4, b->rows_3,
         b->rows_2, clear);
 }
+
+extern "C" uintptr_t exl2_make_q_matrix(
+    const int device,
+    const int height,
+    const int width,
+    const int groups,
+    uint32_t q_weight, 
+    uint16_t q_perm,
+    uint16_t q_invperm,
+    uint32_t q_scale,
+    half q_scale_max,
+    uint16_t q_groups,
+    uint16_t q_group_map                        
+) {
+  QMatrix* m = new QMatrix
+  (
+      device, 
+      height, 
+      width, 
+      groups, 
+      (uint32_t*)q_weight.data_ptr(),
+      (uint16_t*)q_perm.data_ptr(), 
+      (uint16_t*)q_invperm.data_ptr(),
+      (uint32_t*)q_scale.data_ptr(), 
+      (half*)q_scale_max.data_ptr(),
+      (uint16_t*)q_groups.data_ptr(), 
+      (uint16_t*)q_group_map.data_ptr()
+  );
+  return reinterpret_cast<uintptr_t>(m);
+}
+
+extern "C" void exl2_reconstruct_q_matrix(uintptr_t q_matrix) {
+    QMatrix* m = reinterpret_cast<QMatrix*>(q_matrix);
+    m->reconstruct();
+}
+
+extern "C" void exl2_destroy_q_matrix(uintptr_t q_matrix) {
+    QMatrix* m = reinterpret_cast<QMatrix*>(q_matrix);
+    delete m;
+}
