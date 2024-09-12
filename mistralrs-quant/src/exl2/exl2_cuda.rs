@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
@@ -8,11 +7,11 @@ use candle_core::{
     cuda::{
         cudarc::{
             cublas::{result::hgemm, sys::cublasOperation_t},
-            driver::{CudaSlice, DevicePtr},
+            driver::DevicePtr,
         },
-        CudaStorageSlice, WrapErr,
+        WrapErr,
     },
-    from_storage_no_op, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+    DType, Device, Result, Shape, Tensor, D,
 };
 use half::f16;
 
@@ -35,61 +34,113 @@ const BLOCK_M_SIZE_MAX: i32 = 8;
 pub struct Exl2Layer {
     q_weight: Tensor,
     q_scale: Tensor,
-    q_scale_max: Tensor,
     q_groups: Tensor,
-    q_perm: Tensor,
     q_invperm: Tensor,
-    q_group_map: Tensor,
     bias: Option<Tensor>,
     bits: i32,
-    exllama_state: i32,
+    exllama_state: Arc<Mutex<ExllamaState>>,
+}
+
+#[derive(Debug)]
+struct ExllamaState {
+    initialized: bool,
+    q_scale_max: Tensor,
+    q_perm: Tensor,
+    q_invperm_short: Tensor,
+    q_group_map: Tensor,
     q_matrix: *mut std::ffi::c_void,
 }
 
+unsafe impl Send for ExllamaState {}
+unsafe impl Sync for ExllamaState {}
+
 impl Exl2Layer {
-    fn exl2_gemm(&self, a: Tensor) -> Result<Tensor> {
-        let dev = get_cuda_device(&a)?;
-        let a_ptr = get_cuda_slice::<f16>(&a)?;
+    fn new(
+        q_weight: Tensor,
+        q_scale: Tensor,
+        q_scale_max: Tensor,
+        q_groups: Tensor,
+        q_perm: Tensor,
+        q_group_map: Tensor,
+        q_invperm: Tensor,
+        bias: Option<Tensor>,
+        bits: i32,
+    ) -> Result<Self> {
+        let exllama_state = Arc::new(Mutex::new(ExllamaState {
+            initialized: false,
+            q_scale_max,
+            q_perm,
+            q_group_map,
+            q_invperm_short: Tensor::zeros(q_invperm.shape(), DType::I16, q_invperm.device())?,
+            q_matrix: std::ptr::null_mut(),
+        }));
 
-        if self.exllama_state == 0 {
+        Ok(Self {
+            q_weight,
+            q_scale,
+            q_groups,
+            q_invperm,
+            bias,
+            bits,
+            exllama_state,
+        })
+    }
 
-            self.q_scale_max = (self.q_scale_max / 256.0)?;
-            self.q_invperm = self.q_invperm.to_dtype(DType::I16)?;
-            self.q_perm = self.q_invperm.arg_sort_last_dim(false)?.to_dtype(DType::I16)?; 
-            self.q_group_map = make_group_map(&self.q_groups, self.q_weight.dim(0)?)?;
+    pub fn post_init(&self) -> Result<()> {
+        self.initialize_exllama()
+    }
 
-            // QMatrix entries
-            let dev_ord = dev.ordinal() as i32;
-            let b_width = self.q_weight.dims()[1] as i32;
-            let b_height = self.q_perm.dims()[0] as i32;
-            let b_groups = self.q_scale.dims()[0] as i32;
-            let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
-            let b_q_perm = get_cuda_slice::<i16>(&self.q_perm)? as *const u16;
-            let b_q_invperm = get_cuda_slice::<i16>(&self.q_invperm)? as *const u16;
-            let b_q_scale = get_cuda_slice::<f32>(&self.q_scale)? as *const u32;
-            let b_q_scale_max = get_cuda_slice::<f16>(&self.q_scale_max)?;
-            let b_q_groups = get_cuda_slice::<i32>(&self.q_groups)? as *const u16;
-            let b_q_group_map = get_cuda_slice::<i16>(&self.q_group_map)? as *const u16;
-
-            self.q_matrix = unsafe {
-                exl2_create_q_matrix(
-                    dev_ord,
-                    b_height,
-                    b_width,
-                    b_groups,
-                    b_q_weight,
-                    b_q_perm,
-                    b_q_invperm,
-                    b_q_scale,
-                    b_q_scale_max,
-                    b_q_groups,
-                    b_q_group_map,
-                )
-            };
-            self.exllama_state = 1;
+    fn initialize_exllama(&self) -> Result<()> {
+        let mut state = self.exllama_state.lock().unwrap();
+        if state.initialized {
+            return Ok(());
         }
 
+        let dev = get_cuda_device(&self.q_weight)?;
 
+        state.q_scale_max = (state.q_scale_max.clone() / 256.0)?;   
+        state.q_invperm_short = self.q_invperm.to_dtype(DType::I16)?;
+        state.q_perm = state.q_invperm_short.arg_sort_last_dim(false)?.to_dtype(DType::I16)?;
+        state.q_group_map = make_group_map(&self.q_groups, self.q_weight.dim(0)?)?;
+
+        let dev_ord = dev.ordinal() as i32;
+        let b_width = self.q_weight.dims()[1] as i32;
+        let b_height = state.q_perm.dims()[0] as i32;
+        let b_groups = self.q_scale.dims()[0] as i32;
+        let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
+        let b_q_perm = get_cuda_slice::<i16>(&state.q_perm)? as *const u16;
+        let b_q_invperm = get_cuda_slice::<i16>(&self.q_invperm)? as *const u16;
+        let b_q_scale = get_cuda_slice::<f32>(&self.q_scale)? as *const u32;
+        let b_q_scale_max = get_cuda_slice::<f16>(&state.q_scale_max)?;
+        let b_q_groups = get_cuda_slice::<i32>(&self.q_groups)? as *const u16;
+        let b_q_group_map = get_cuda_slice::<i16>(&state.q_group_map)? as *const u16;
+
+        state.q_matrix = unsafe {
+            exl2_create_q_matrix(
+                dev_ord,
+                b_height,
+                b_width,
+                b_groups,
+                b_q_weight,
+                b_q_perm,
+                b_q_invperm,
+                b_q_scale,
+                b_q_scale_max,
+                b_q_groups,
+                b_q_group_map,
+            )
+        };
+
+        state.initialized = true;
+        Ok(())
+    }
+
+
+    fn exl2_gemm(&self, a: Tensor) -> Result<Tensor> {
+        self.initialize_exllama()?;
+        
+        let dev = get_cuda_device(&a)?;
+        let a_ptr = get_cuda_slice::<f16>(&a)?;
 
         let qm_width = self.q_weight.dim(1)?;                  
         let c_shape = Shape::from_dims(&[a.dims()[0], qm_width]);
@@ -103,21 +154,17 @@ impl Exl2Layer {
         let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
         let c_ptr = *c.device_ptr() as *mut f16;
 
-        // Create temp_dq as a Tensor, using a zero-sized tensor when not needed 
-        // (TODO: review if this is the best solution here)
-        let temp_dq = if c_shape.dims()[0] > MAX_Q_GEMM_ROWS as usize {
-            Tensor::zeros(&[a.dims()[1], qm_width], DType::F16, a.device())?
+        let temp_dq = if m > MAX_Q_GEMM_ROWS {
+            Tensor::zeros(&[k as usize, n as usize], DType::F16, a.device())?
         } else {
             Tensor::zeros(&[0, 0], DType::F16, a.device())?
         };
-        
-        
         let temp_dq_ptr = get_cuda_slice::<f16>(&temp_dq)?;
 
         if m > MAX_Q_GEMM_ROWS {
             // Reconstruct FP16 matrix, then cuBLAS
             unsafe {
-                exl2_reconstruct_q_matrix(self.q_matrix);
+                exl2_reconstruct_q_matrix(self.exllama_state.lock().unwrap().q_matrix);
             }
             
             let alpha = f16::from_f32(1.0);
@@ -193,19 +240,23 @@ impl QuantMethod for Exl2Layer {
                 bias,
                 bits,
             } => {
+                let exllama_state = Arc::new(Mutex::new(ExllamaState {
+                    initialized: false,
+                    q_scale_max,
+                    q_perm,
+                    q_group_map,
+                    q_invperm_short: Tensor::zeros(q_invperm.shape(), DType::I16, q_invperm.device())?,
+                    q_matrix: std::ptr::null_mut(),
+                }));
 
                 Ok(Self {
                     q_weight,
                     q_scale,
-                    q_scale_max,
                     q_groups,
-                    q_perm,
                     q_invperm,
-                    q_group_map,
                     bias,
                     bits,
-                    exllama_state: 0,
-                    q_matrix: std::ptr::null_mut(),
+                    exllama_state,
                 })
             }
             QuantMethodConfig::Gptq { .. }
@@ -221,11 +272,11 @@ impl QuantMethod for Exl2Layer {
         let out_shape = Shape::from_dims(
             &[
                 &x.dims()[..x.dims().len() - 1],
-                &[self.q_weight.dim(candle_core::D::Minus1)?],
+                &[self.q_weight.dim(D::Minus1)?],
             ]
             .concat(),
         );
-        let reshaped_x = x.reshape(((), x.dim(candle_core::D::Minus1)?))?;
+        let reshaped_x = x.reshape(((), x.dim(D::Minus1)?))?;
         let mut output = self.exl2_gemm(reshaped_x)?;
         if let Some(bias) = &self.bias {
             output = output.broadcast_add(bias)?;
@@ -266,9 +317,12 @@ impl QuantMethod for Exl2Layer {
 
 impl Drop for Exl2Layer {
     fn drop(&mut self) {
-        if !self.q_matrix.is_null() {
-            unsafe {
-                exl2_destroy_q_matrix(self.q_matrix);
+        if let Ok(mut state) = self.exllama_state.lock() {
+            if !state.q_matrix.is_null() {
+                unsafe {
+                    exl2_destroy_q_matrix(state.q_matrix);
+                }
+                state.q_matrix = std::ptr::null_mut();
             }
         }
     }
