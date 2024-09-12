@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashSet,
     path::PathBuf,
     str::FromStr,
@@ -281,7 +282,7 @@ pub trait IsqModel {
                         .map(|(i, (layer, _))| {
                             Ok((
                                 i.to_string(),
-                                Tensor::new(layer.serialize()?.to_vec(), &Device::Cpu)?,
+                                Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
                             ))
                         })
                         .collect::<candle_core::Result<Vec<_>>>()?;
