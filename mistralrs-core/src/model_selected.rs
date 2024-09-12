@@ -54,9 +54,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         organization: Option<IsqOrganization>,
 
-        /// ISQ artifact path.
+        /// ISQ artifact path to write to.
         #[arg(short, long)]
         isq_artifact: Option<PathBuf>,
+
+        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long = "load-isq")]
+        load_isq_artifact: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -94,9 +98,13 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path.
+        /// ISQ artifact path to write to.
         #[arg(short, long)]
         isq_artifact: Option<PathBuf>,
+
+        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long = "load-isq")]
+        load_isq_artifact: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -129,9 +137,13 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path.
+        /// ISQ artifact path to write to.
         #[arg(short, long)]
         isq_artifact: Option<PathBuf>,
+
+        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long = "load-isq")]
+        load_isq_artifact: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -351,8 +363,12 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path.
+        /// ISQ artifact path to write to.
         #[arg(short, long)]
         isq_artifact: Option<PathBuf>,
+
+        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long = "load-isq")]
+        load_isq_artifact: Option<PathBuf>,
     },
 }

@@ -86,6 +86,7 @@ fn parse_which(
             topology,
             organization,
             isq_artifact,
+            load_isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -96,6 +97,7 @@ fn parse_which(
                     .map(IsqOrganization::from_str)
                     .unwrap_or(Ok(Default::default()))?,
                 isq_artifact,
+                load_isq_artifact,
             },
             chat_template,
             tokenizer_json,
@@ -111,6 +113,7 @@ fn parse_which(
             arch,
             topology,
             isq_artifact,
+            load_isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -118,6 +121,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 isq_artifact,
+                load_isq_artifact,
             },
             chat_template,
             tokenizer_json,
@@ -141,6 +145,7 @@ fn parse_which(
             arch,
             topology,
             isq_artifact,
+            load_isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -148,6 +153,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 isq_artifact,
+                load_isq_artifact,
             },
             chat_template,
             tokenizer_json,
@@ -317,12 +323,14 @@ fn parse_which(
             arch,
             topology,
             isq_artifact,
+            load_isq_artifact,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 isq_artifact,
+                load_isq_artifact,
             },
             chat_template,
             tokenizer_json,

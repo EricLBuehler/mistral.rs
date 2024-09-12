@@ -81,6 +81,7 @@ pub struct VisionSpecificConfig {
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub isq_artifact: Option<PathBuf>,
+    pub load_isq_artifact: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {

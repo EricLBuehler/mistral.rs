@@ -97,6 +97,7 @@ pub struct NormalSpecificConfig {
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
     pub isq_artifact: Option<PathBuf>,
+    pub load_isq_artifact: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -272,7 +273,7 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let mut loading_isq = in_situ_quant.is_some();
+        let mut loading_isq = in_situ_quant.is_some() || self.config.load_isq_artifact.is_some();
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -345,7 +346,9 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if in_situ_quant.is_some() || self.config.topology.is_some() {
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.load_isq_artifact.is_none()
+        {
             model.quantize(
                 in_situ_quant,
                 device.clone(),
@@ -353,6 +356,13 @@ impl Loader for NormalLoader {
                 silent,
                 self.config.organization,
                 self.config.isq_artifact.as_ref(),
+            )?;
+        } else if let Some(load_isq_artifact) = self.config.load_isq_artifact.as_ref() {
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                load_isq_artifact,
             )?;
         }
 

@@ -61,6 +61,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             ),
             organization: Default::default(),
             isq_artifact: None,
+            load_isq_artifact: None,
         },
         None,
         None,

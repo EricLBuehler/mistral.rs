@@ -66,6 +66,7 @@ pub enum Which {
         topology = None,
         organization = None,
         isq_artifact = None,
+        load_isq_artifact = None,
     ))]
     Plain {
         model_id: String,
@@ -74,6 +75,7 @@ pub enum Which {
         topology: Option<String>,
         organization: Option<String>,
         isq_artifact: Option<PathBuf>,
+        load_isq_artifact: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -85,6 +87,7 @@ pub enum Which {
         tgt_non_granular_index = None,
         topology = None,
         isq_artifact = None,
+        load_isq_artifact = None,
     ))]
     XLora {
         xlora_model_id: String,
@@ -95,6 +98,7 @@ pub enum Which {
         tgt_non_granular_index: Option<usize>,
         topology: Option<String>,
         isq_artifact: Option<PathBuf>,
+        load_isq_artifact: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -105,6 +109,7 @@ pub enum Which {
         tokenizer_json = None,
         topology = None,
         isq_artifact = None,
+        load_isq_artifact = None,
     ))]
     Lora {
         adapters_model_id: String,
@@ -114,6 +119,7 @@ pub enum Which {
         tokenizer_json: Option<String>,
         topology: Option<String>,
         isq_artifact: Option<PathBuf>,
+        load_isq_artifact: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -234,6 +240,7 @@ pub enum Which {
         tokenizer_json = None,
         topology = None,
         isq_artifact = None,
+        load_isq_artifact = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -241,5 +248,6 @@ pub enum Which {
         tokenizer_json: Option<String>,
         topology: Option<String>,
         isq_artifact: Option<PathBuf>,
+        load_isq_artifact: Option<PathBuf>,
     },
 }
