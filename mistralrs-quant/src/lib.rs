@@ -136,6 +136,20 @@ impl TryFrom<IsqType> for GgmlDType {
     }
 }
 
+pub enum QuantizedSerdeType {
+    Gguf = 0,
+}
+
+impl TryFrom<usize> for QuantizedSerdeType {
+    type Error = candle_core::Error;
+    fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Gguf),
+            other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
+        }
+    }
+}
+
 pub trait QuantizedSerde {
     fn supported(&self) -> bool {
         false
@@ -143,7 +157,10 @@ pub trait QuantizedSerde {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
-    fn deserialize(&self, _data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantizedSerde>> {
+    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
         candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
     }
 }
