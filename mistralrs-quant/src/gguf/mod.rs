@@ -236,7 +236,7 @@ impl QuantizedSerde for GgufMatMul {
             serialize_tensor(&mut buffer, b)?;
         }
 
-        todo!()
+        Ok(Cow::from(buffer))
     }
 
     fn deserialize(&self, data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantizedSerde>> {

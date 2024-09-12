@@ -102,6 +102,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
+        isq_artifact: str | None = None
 
     @dataclass
     class XLora:
@@ -112,6 +113,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        isq_artifact: str | None = None
 
     @dataclass
     class Lora:
@@ -121,6 +123,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        isq_artifact: str | None = None
 
     @dataclass
     class GGUF:
@@ -185,6 +188,7 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        isq_artifact: str | None = None
 
 class Runner:
     def __init__(

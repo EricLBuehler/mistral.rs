@@ -80,6 +80,7 @@ pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
+    pub isq_artifact: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -268,6 +269,7 @@ impl Loader for VisionLoader {
                 self.config.topology.as_ref(),
                 silent,
                 IsqOrganization::Default,
+                self.config.isq_artifact.as_ref(),
             )?;
         }
 
@@ -352,6 +354,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 IsqOrganization::Default,
+                None,
             )
             .map_err(anyhow::Error::msg)
     }

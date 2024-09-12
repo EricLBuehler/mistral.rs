@@ -1,13 +1,17 @@
 use std::{
     collections::HashSet,
+    path::PathBuf,
     str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
 
-use candle_core::Device;
-use indicatif::{ProgressBar, ProgressStyle};
+use candle_core::{Device, Tensor};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{IsqType, QuantMethod};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use serde::Deserialize;
 use tracing::info;
 
@@ -131,12 +135,14 @@ pub trait IsqModel {
         topology: Option<&Topology>,
         silent: bool,
         organization: IsqOrganization,
+        write_artifacts: Option<&PathBuf>,
     ) -> candle_core::Result<()> {
         {
-            let (tensors, mapper) = match organization {
+            let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
                 IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
             };
+
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
             if let Some(topology) = topology {
@@ -229,13 +235,11 @@ pub trait IsqModel {
 
                 pool.install(|| {
                     use indicatif::ParallelProgressIterator;
-                    use rayon::iter::{
-                        IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
-                    };
+                    use rayon::iter::{IndexedParallelIterator, ParallelIterator};
                     if silent {
-                        tensors.into_par_iter().zip(devices_and_dtypes).for_each(
+                        tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
                             |((tensor, _), (device, dtype))| {
-                                *tensor = tensor
+                                **tensor = tensor
                                     .clone()
                                     .apply_isq(dtype, device.clone(), &n_quantized)
                                     .unwrap();
@@ -244,11 +248,11 @@ pub trait IsqModel {
                         );
                     } else {
                         tensors
-                            .into_par_iter()
+                            .par_iter_mut()
                             .zip(devices_and_dtypes)
                             .progress_with(bar)
                             .for_each(|((tensor, _), (device, dtype))| {
-                                *tensor = tensor
+                                **tensor = tensor
                                     .clone()
                                     .apply_isq(dtype, device.clone(), &n_quantized)
                                     .unwrap();
@@ -256,6 +260,34 @@ pub trait IsqModel {
                             });
                     }
                 });
+
+                if let Some(serialized) = write_artifacts {
+                    info!("Serializing {total_tensors} ISQ tensors.");
+
+                    let bar = ProgressBar::new(total_tensors as u64);
+                    bar.set_style(
+                        ProgressStyle::default_bar()
+                            .template(
+                                "[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})",
+                            )
+                            .unwrap()
+                            .progress_chars("#>-"),
+                    );
+
+                    let quantized_values = tensors
+                        .par_iter()
+                        .enumerate()
+                        .progress_with(bar)
+                        .map(|(i, (layer, _))| {
+                            Ok((
+                                i.to_string(),
+                                Tensor::new(layer.serialize()?.to_vec(), &Device::Cpu)?,
+                            ))
+                        })
+                        .collect::<candle_core::Result<Vec<_>>>()?;
+
+                    safetensors::serialize_to_file(quantized_values, &None, serialized)?;
+                }
             }
 
             #[cfg(feature = "metal")]

@@ -16,6 +16,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             prompt_batchsize: None,
             topology: None,
+            isq_artifact: None,
         },
         Some("chat_templates/vicuna.json".to_string()),
         None,

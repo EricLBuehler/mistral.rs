@@ -122,12 +122,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             dtype: _,
             topology,
             organization,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
+                isq_artifact,
             },
             args.chat_template,
             tokenizer_json,
@@ -143,12 +145,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                isq_artifact,
             },
             args.chat_template,
             tokenizer_json,
@@ -172,12 +176,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                isq_artifact,
             },
             args.chat_template,
             tokenizer_json,
@@ -356,11 +362,13 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                isq_artifact,
             },
             args.chat_template,
             tokenizer_json,

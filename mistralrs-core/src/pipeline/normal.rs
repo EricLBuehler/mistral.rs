@@ -96,6 +96,7 @@ pub struct NormalSpecificConfig {
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
+    pub isq_artifact: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -351,6 +352,7 @@ impl Loader for NormalLoader {
                 self.config.topology.as_ref(),
                 silent,
                 self.config.organization,
+                self.config.isq_artifact.as_ref(),
             )?;
         }
 
@@ -444,6 +446,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 self.organization,
+                None,
             )
             .map_err(anyhow::Error::msg)
     }

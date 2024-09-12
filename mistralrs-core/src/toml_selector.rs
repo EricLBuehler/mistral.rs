@@ -1,4 +1,4 @@
-use std::{fs::File, num::NonZeroUsize};
+use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -42,6 +42,9 @@ pub enum TomlModelSelected {
 
         /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         organization: Option<IsqOrganization>,
+
+        /// ISQ artifact path.
+        isq_artifact: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -68,6 +71,9 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// ISQ artifact path.
+        isq_artifact: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -90,6 +96,9 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// ISQ artifact path.
+        isq_artifact: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -257,6 +266,9 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// ISQ artifact path.
+        isq_artifact: Option<PathBuf>,
     },
 }
 
@@ -349,12 +361,14 @@ fn loader_from_selected(
             dtype: _,
             topology,
             organization,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
+                isq_artifact,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -369,12 +383,14 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                isq_artifact,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -397,12 +413,14 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                isq_artifact,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -577,11 +595,13 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            isq_artifact,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                isq_artifact,
             },
             args.chat_template,
             args.tokenizer_json,

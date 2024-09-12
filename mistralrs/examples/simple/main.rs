@@ -29,6 +29,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             prompt_batchsize: None,
             topology: None,
             organization: Default::default(),
+            isq_artifact: None,
         },
         None,
         None,
