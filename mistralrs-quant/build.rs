@@ -8,7 +8,7 @@ fn main() {
         println!("cargo:rerun-if-changed=build.rs");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let lib_files = vec![
-            "kernels/exl2/q_gemm_exl2.cu",
+            //"kernels/exl2/q_gemm_exl2.cu",
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",

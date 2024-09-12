@@ -1,15 +1,37 @@
-use candle_core::{DType, Device, Result, Shape, Tensor};
-use candle_core::cudarc::{
-    cublas::{result::hgemm, sys::cublasOperation_t},
-    driver::{CudaSlice, DevicePtr},
+use std::{
+    collections::HashMap,
+    num::NonZeroUsize,
+    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
-use std::sync::Arc;
+
+use candle_core::{
+    cuda::{
+        cudarc::{
+            cublas::{result::hgemm, sys::cublasOperation_t},
+            driver::{CudaSlice, DevicePtr},
+        },
+        CudaStorageSlice, WrapErr,
+    },
+    from_storage_no_op, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+};
+use half::f16;
+
+use crate::{
+    utils::{get_cuda_device, get_cuda_slice},
+    IsqType, QuantMethod, QuantMethodConfig,
+};
+
+use super::ffi::{
+    exl2_reconstruct_q_matrix, 
+    exl2_create_q_matrix, 
+    exl2_destroy_q_matrix
+};
 
 const MAX_Q_GEMM_ROWS: i32 = 32;
 const BLOCK_M_SIZE_MAX: i32 = 8;
 
 
-
+#[derive(Debug)]
 pub struct Exl2Layer {
     q_weight: Tensor,
     q_scale: Tensor,
@@ -23,6 +45,139 @@ pub struct Exl2Layer {
     exllama_state: i32,
     q_matrix: *mut std::ffi::c_void,
 }
+
+impl Exl2Layer {
+    fn exl2_gemm(&self, a: Tensor) -> Result<Tensor> {
+        let dev = get_cuda_device(&a)?;
+        let a_ptr = get_cuda_slice::<f16>(&a)?;
+
+        if self.exllama_state == 0 {
+
+            self.q_scale_max = (self.q_scale_max / 256.0)?;
+            self.q_invperm = self.q_invperm.to_dtype(DType::I16)?;
+            self.q_perm = self.q_invperm.arg_sort_last_dim(false)?.to_dtype(DType::I16)?; 
+            self.q_group_map = make_group_map(&self.q_groups, self.q_weight.dim(0)?)?;
+
+            // QMatrix entries
+            let dev_ord = dev.ordinal() as i32;
+            let b_width = self.q_weight.dims()[1] as i32;
+            let b_height = self.q_perm.dims()[0] as i32;
+            let b_groups = self.q_scale.dims()[0] as i32;
+            let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
+            let b_q_perm = get_cuda_slice::<i16>(&self.q_perm)? as *const u16;
+            let b_q_invperm = get_cuda_slice::<i16>(&self.q_invperm)? as *const u16;
+            let b_q_scale = get_cuda_slice::<f32>(&self.q_scale)? as *const u32;
+            let b_q_scale_max = get_cuda_slice::<f16>(&self.q_scale_max)?;
+            let b_q_groups = get_cuda_slice::<i32>(&self.q_groups)? as *const u16;
+            let b_q_group_map = get_cuda_slice::<i16>(&self.q_group_map)? as *const u16;
+
+            self.q_matrix = unsafe {
+                exl2_create_q_matrix(
+                    dev_ord,
+                    b_height,
+                    b_width,
+                    b_groups,
+                    b_q_weight,
+                    b_q_perm,
+                    b_q_invperm,
+                    b_q_scale,
+                    b_q_scale_max,
+                    b_q_groups,
+                    b_q_group_map,
+                )
+            };
+            self.exllama_state = 1;
+        }
+
+
+
+        let qm_width = self.q_weight.dim(1)?;                  
+        let c_shape = Shape::from_dims(&[a.dims()[0], qm_width]);
+
+        let (m, n, k) = (
+            c_shape.dims()[0] as i32,
+            c_shape.dims()[1] as i32,
+            a.dims()[1] as i32,
+        );
+
+        let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
+        let c_ptr = *c.device_ptr() as *mut f16;
+
+        // Create temp_dq as a Tensor, using a zero-sized tensor when not needed 
+        // (TODO: review if this is the best solution here)
+        let temp_dq = if c_shape.dims()[0] > MAX_Q_GEMM_ROWS as usize {
+            Tensor::zeros(&[a.dims()[1], qm_width], DType::F16, a.device())?
+        } else {
+            Tensor::zeros(&[0, 0], DType::F16, a.device())?
+        };
+        
+        
+        let temp_dq_ptr = get_cuda_slice::<f16>(&temp_dq)?;
+
+        if m > MAX_Q_GEMM_ROWS {
+            // Reconstruct FP16 matrix, then cuBLAS
+            unsafe {
+                exl2_reconstruct_q_matrix(self.q_matrix);
+            }
+            
+            let alpha = f16::from_f32(1.0);
+            let beta = f16::from_f32(0.0);
+            let cublas_handle = match a.device() {
+                Device::Cuda(dev) => dev.cublas_handle(),
+                _ => unreachable!(), // invariant enforced earlier
+            };
+
+            unsafe {
+                hgemm(
+                    *cublas_handle.handle(),
+                    cublasOperation_t::CUBLAS_OP_N,
+                    cublasOperation_t::CUBLAS_OP_N,
+                    n,
+                    m,
+                    k,
+                    &alpha,
+                    temp_dq_ptr as *const _,
+                    n,
+                    a_ptr as *const _,
+                    k,
+                    &beta,
+                    c_ptr,
+                    n,
+                )
+                .w()?
+            };
+
+        } else {
+            todo!()
+        }
+        todo!()
+    }
+}
+
+
+
+fn make_group_map(q_groups: &Tensor, num_qrows: usize) -> Result<Tensor> {
+    let gr = q_groups.to_vec1::<i16>()?;
+    let mut group_map = Vec::new();
+    let num_groups = gr.len() / 2;
+
+    for i in 0..num_groups {
+        let bits = gr[i * 2] as usize;
+        let qrows = if i < num_groups - 1 {
+            gr[i * 2 + 3] as usize - gr[i * 2 + 1] as usize
+        } else {
+            num_qrows - gr[i * 2 + 1] as usize
+        };
+        let rows = qrows * 32 / bits;
+        for j in 0..rows {
+            group_map.push(i as i16);
+            group_map.push((rows - j) as i16);
+        }
+    }
+
+    Tensor::from_vec(group_map.clone(), (group_map.len(),), q_groups.device())
+}
+
 
 impl QuantMethod for Exl2Layer {
     fn new(method: QuantMethodConfig) -> Result<Self> {
@@ -53,7 +208,12 @@ impl QuantMethod for Exl2Layer {
                     q_matrix: std::ptr::null_mut(),
                 })
             }
-            _ => candle_core::bail!("Expected Exl2 config"),
+            QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Gguf { .. }
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Hqq { .. } => {
+                unreachable!()
+            }
         }
     }
 
@@ -66,115 +226,43 @@ impl QuantMethod for Exl2Layer {
             .concat(),
         );
         let reshaped_x = x.reshape(((), x.dim(candle_core::D::Minus1)?))?;
-
-        if self.exllama_state == 0 {
-            let dev = get_cuda_device(&x)?;
-            self.prepare_weights(dev.id())?;
-        }
-
         let mut output = self.exl2_gemm(reshaped_x)?;
         if let Some(bias) = &self.bias {
             output = output.broadcast_add(bias)?;
         }
         output.reshape(out_shape)
     }
-
-    // Implement other required methods...
-}
-
-impl Exl2Layer {
-    fn prepare_weights(&mut self, device_id: i32) -> Result<()> {
-        self.q_scale_max = &self.q_scale_max / 256.0;
-        self.q_invperm = self.q_invperm.to_dtype(DType::U16)?;
-
-        let q_perm = self.q_invperm.argsort()?.to_dtype(DType::U16)?; 
-        let q_group_map = make_group_map(&q_groups, q_weight.dim(0)?)?;
-
-        self.q_matrix = unsafe {
-            exl2_create_q_matrix(
-                device_id,
-
-                self.q_perm.dims(0)? as i32,
-                self.q_weight.dim(1)? as i32,
-                self.q_scale.dim(0)? as i32,
-
-                self.q_weight.as_ptr()?,
-                self.q_perm.as_ptr()?,
-                self.q_invperm.as_ptr()?,
-                self.q_scale.as_ptr()?,
-                self.q_scale_max.as_ptr()?,
-                self.q_groups.as_ptr()?,
-                self.q_group_map.as_ptr()?,
-            )
-        };
-        self.exllama_state = 1;
-        Ok(())
+    
+    fn quantized_act_type(&self) -> Option<DType> {
+        Some(DType::F16)
     }
 
-    fn exl2_gemm(&self, a: Tensor) -> Result<Tensor> {
+    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("EXL2 quantization does not support adding weight delta.")
+    }
 
-        let dev = get_cuda_device(&a)?;
-        let qm_width = self.q_weight.dims()[1]?;                  
-        let c_shape = Shape::from_dims(&[a.dims()[0], qm_width]);
+    fn dtype_and_device(&self) -> (DType, Device) {
+        todo!()
+    }
 
-        let (m, n, k) = (
-            c_shape.dims()[0] as i32,
-            c_shape.dims()[1] as i32,
-            a.dims()[1] as i32,
-        );
+    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
+        None
+    }
 
-        let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
-        let c_ptr = *c.device_ptr() as *mut f16;
+    fn apply_isq(
+        self: Arc<Self>,
+        _dtype: Option<IsqType>,
+        _device: Device,
+        _n_quantized: &AtomicUsize,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("EXL2 quantization does not support ISQ.")
+    }
 
-        // Create temp_dq as a Tensor, using a zero-sized tensor when not needed 
-        // (TODO: review if this is the best solution here)
-        let temp_dq = if c_shape.dims()[0] > MAX_Q_GEMM_ROWS as usize {
-            Tensor::zeros(&[a.dims()[1], qm_width], DType::F16, &dev)?
-        } else {
-            Tensor::zeros(&[0, 0], DType::F16, &dev)?
-        };
-        
-        let a_ptr = get_cuda_slice::<f16>(a)?;
-        let temp_dq_ptr = temp_dq.device_ptr() as *const f16;
-
-        if m > MAX_Q_GEMM_ROWS {
-            // Reconstruct FP16 matrix, then cuBLAS
-            unsafe {
-                super::ffi::exl2_reconstruct_q_matrix(self.q_matrix);
-            }
-            
-            let alpha = f16::from_f32(1.0);
-            let beta = if clear { f16::from_f32(0.0) } else { f16::from_f32(1.0) };
-
-            unsafe {
-                hgemm(
-                    *cublas_handle.handle(),
-                    cublasOperation_t::CUBLAS_OP_N,
-                    cublasOperation_t::CUBLAS_OP_N,
-                    n,
-                    m,
-                    k,
-                    &alpha,
-                    temp_dq_ptr as *const _,
-                    n,
-                    a_ptr as *const _,
-                    k,
-                    &beta,
-                    c_ptr,
-                    n,
-                )
-                .w()?
-            };
-            
-
-
-
-        } else {
-            // Quantized matmul
-        }
-
+    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
+        None
     }
 }
+
 
 impl Drop for Exl2Layer {
     fn drop(&mut self) {
@@ -185,29 +273,3 @@ impl Drop for Exl2Layer {
         }
     }
 }
-
-fn make_group_map(q_groups: &Tensor, num_qrows: usize) -> Result<Tensor> {
-    let gr = q_groups.to_vec1::<u16>()?;
-    let mut group_map = Vec::new();
-    let num_groups = gr.len() / 2;
-
-    let mut row = 0;
-    for i in 0..num_groups {
-        let bits = gr[i * 2] as usize;
-        let rows = if i < num_groups - 1 {
-            let qrows = gr[i * 2 + 3] as usize - gr[i * 2 + 1] as usize;
-            qrows * 32 / bits
-        } else {
-            num_qrows - gr[i * 2 + 1] as usize
-        };
-        
-        for _ in 0..rows {
-            group_map.push(i as u16);
-            group_map.push(rows as u16);
-        }
-        row += rows;
-    }
-
-    Tensor::from_vec(group_map, (group_map.len(),), q_groups.device())
-}
-

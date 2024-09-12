@@ -494,7 +494,8 @@ impl QuantMethod for HqqLayer {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { .. }
+            QuantMethodConfig::Exl2 { .. }
+            | QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Gptq { .. } => {
                 unreachable!()

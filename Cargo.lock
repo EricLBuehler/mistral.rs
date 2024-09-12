@@ -387,11 +387,11 @@ checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
 [[package]]
 name = "candle-core"
 version = "0.6.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
 dependencies = [
  "accelerate-src",
  "byteorder",
- "candle-kernels",
+ "candle-kernels 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "candle-metal-kernels",
  "cudarc",
  "gemm",
@@ -412,14 +412,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "candle-core"
+version = "0.6.1"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+dependencies = [
+ "byteorder",
+ "candle-kernels 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=7f5a470)",
+ "cudarc",
+ "gemm",
+ "half",
+ "memmap2",
+ "num-traits",
+ "num_cpus",
+ "rand",
+ "rand_distr",
+ "rayon",
+ "safetensors",
+ "thiserror",
+ "yoke",
+ "zip",
+]
+
+[[package]]
 name = "candle-flash-attn"
 version = "0.6.1"
 source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=7f5a470)",
  "half",
+]
+
+[[package]]
+name = "candle-kernels"
+version = "0.6.1"
+source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
+dependencies = [
+ "bindgen_cuda 0.1.5",
 ]
 
 [[package]]
@@ -433,7 +463,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
 dependencies = [
  "metal",
  "once_cell",
@@ -444,10 +474,10 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
 dependencies = [
  "accelerate-src",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "candle-metal-kernels",
  "half",
  "intel-mkl-src",
@@ -2097,7 +2127,7 @@ name = "mistralrs"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "either",
  "futures",
  "image",
@@ -2115,7 +2145,7 @@ name = "mistralrs-bench"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "clap",
  "cli-table",
  "mistralrs-core",
@@ -2138,7 +2168,7 @@ dependencies = [
  "buildstructor",
  "bytemuck",
  "bytemuck_derive",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "candle-flash-attn",
  "candle-nn",
  "cfgrammar",
@@ -2199,7 +2229,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "half",
 ]
 
@@ -2210,7 +2240,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "base64 0.22.1",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "data-url",
  "either",
  "futures",
@@ -2232,7 +2262,7 @@ name = "mistralrs-quant"
 version = "0.3.0"
 dependencies = [
  "bindgen_cuda 0.1.5",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "candle-nn",
  "half",
  "lazy_static",
@@ -2249,7 +2279,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "axum",
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "clap",
  "ctrlc",
  "data-url",
@@ -2275,7 +2305,7 @@ dependencies = [
 name = "mistralrs-vision"
 version = "0.3.0"
 dependencies = [
- "candle-core",
+ "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
  "image",
 ]
 

@@ -55,7 +55,7 @@ impl GptqLayer {
                 "Expected `a` to be contiguous, got strides {:?}",
                 a.layout().stride()
             )
-        }
+        }   
         let a_ptr = get_cuda_slice::<f16>(&a)?;
         let b_q_weight = get_cuda_slice::<i32>(&self.q_weight)? as *const u32;
         let b_gptq_qzeros = get_cuda_slice::<i32>(&self.gptq_qzeros)? as *const u32;
@@ -236,8 +236,8 @@ impl QuantMethod for GptqLayer {
                     use_exllama,
                     bias,
                 })
-            }
-            QuantMethodConfig::Gguf { .. }
+            } QuantMethodConfig::Exl2 { .. }
+            | QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. } => {
                 unreachable!()

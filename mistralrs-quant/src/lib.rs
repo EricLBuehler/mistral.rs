@@ -56,6 +56,7 @@ pub enum QuantMethodConfig {
         q_groups: Tensor,
         q_perm: Tensor,
         q_invperm: Tensor,
+        q_group_map: Tensor,
         bias: Option<Tensor>,
     },
     Gptq {
