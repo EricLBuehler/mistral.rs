@@ -410,6 +410,8 @@ pub trait IsqModel {
                 .progress_chars("#>-"),
         );
 
+        let t_start = Instant::now();
+
         if silent {
             (0..tensors.len())
                 .into_par_iter()
@@ -445,6 +447,9 @@ pub trait IsqModel {
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
         }
+
+        let delta = Instant::now().duration_since(t_start).as_secs_f32();
+        info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
 
         Ok(())
     }
