@@ -296,4 +296,8 @@ impl QuantMethod for GptqLayer {
     }
 }
 
-impl QuantizedSerde for GptqLayer {}
+impl QuantizedSerde for GptqLayer {
+    fn name(&self) -> &'static str {
+        "gptq"
+    }
+}

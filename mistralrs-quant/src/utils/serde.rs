@@ -3,6 +3,22 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use half::{bf16, f16};
 
+// -----------------------
+// Tensor data length, u32, little endian
+// -----------------------
+// Tensor dtype, u32, little endian
+// -----------------------
+// Num shape dims, u32, little endian
+// -----------------------
+// ...
+// Array (in original order): shape dims, u32, little endian
+// ...
+// -----------------------
+// ...
+// Array: tensor data, u8s
+// ...
+// -----------------------
+
 pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<()> {
     let tensor = tensor.flatten_all()?;
     let bias = match tensor.dtype() {

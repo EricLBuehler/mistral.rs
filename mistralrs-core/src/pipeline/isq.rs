@@ -9,7 +9,9 @@ use std::{
 
 use candle_core::{Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use mistralrs_quant::{GgufMatMul, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType};
+use mistralrs_quant::{
+    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
+};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
     IntoParallelRefMutIterator, ParallelIterator,
@@ -283,6 +285,7 @@ pub trait IsqModel {
                         tensors
                             .par_iter()
                             .enumerate()
+                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
                             .map(|(i, (layer, _))| {
                                 Ok((
                                     i.to_string(),
@@ -295,6 +298,7 @@ pub trait IsqModel {
                             .par_iter()
                             .enumerate()
                             .progress_with(bar)
+                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
                             .map(|(i, (layer, _))| {
                                 Ok((
                                     i.to_string(),
@@ -417,14 +421,23 @@ pub trait IsqModel {
                 .into_par_iter()
                 .zip(tensors)
                 .map(|(i, (tensor, _))| {
-                    let artifact = artifact_isqs[&i].data();
-                    let isq_type = artifact[0];
-                    let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-                        QuantizedSerdeType::Gguf => {
-                            GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
-                        }
-                    };
-                    *tensor = deserialized;
+                    if let Some(artifact) = artifact_isqs.get(&i) {
+                        let artifact = artifact.data();
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 0 of the tensor.
+                        let isq_type = artifact[0];
+                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
+                            QuantizedSerdeType::Gguf => {
+                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Unquant => {
+                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Hqq => {
+                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                        };
+                        *tensor = deserialized;
+                    }
                     Ok(())
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
@@ -434,15 +447,23 @@ pub trait IsqModel {
                 .zip(tensors)
                 .progress_with(bar)
                 .map(|(i, (tensor, _))| {
-                    let artifact = artifact_isqs[&i].data();
-                    // NOTE(EricLBuehler): isq type is ALWAYS byte 0 of the tensor.
-                    let isq_type = artifact[0];
-                    let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-                        QuantizedSerdeType::Gguf => {
-                            GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
-                        }
-                    };
-                    *tensor = deserialized;
+                    if let Some(artifact) = artifact_isqs.get(&i) {
+                        let artifact = artifact.data();
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 0 of the tensor.
+                        let isq_type = artifact[0];
+                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
+                            QuantizedSerdeType::Gguf => {
+                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Unquant => {
+                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Hqq => {
+                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                        };
+                        *tensor = deserialized;
+                    }
                     Ok(())
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;

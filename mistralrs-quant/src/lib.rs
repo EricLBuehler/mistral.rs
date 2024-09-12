@@ -138,6 +138,8 @@ impl TryFrom<IsqType> for GgmlDType {
 
 pub enum QuantizedSerdeType {
     Gguf = 0,
+    Unquant = 1,
+    Hqq = 2,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -145,13 +147,16 @@ impl TryFrom<usize> for QuantizedSerdeType {
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Gguf),
+            1 => Ok(Self::Unquant),
+            2 => Ok(Self::Hqq),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }
 }
 
 pub trait QuantizedSerde {
-    fn supported(&self) -> bool {
+    fn name(&self) -> &'static str;
+    fn isq_serde_supported(&self) -> bool {
         false
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
