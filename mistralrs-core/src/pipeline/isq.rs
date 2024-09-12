@@ -267,7 +267,7 @@ pub trait IsqModel {
 
                 if let Some(serialized) = write_artifacts {
                     info!(
-                        "Serializing {total_tensors} ISQ tensors to {}.",
+                        "Serializing {total_tensors} ISQ tensors to `{}`.",
                         serialized.display()
                     );
 

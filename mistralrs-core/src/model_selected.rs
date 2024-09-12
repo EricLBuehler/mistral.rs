@@ -59,7 +59,7 @@ pub enum ModelSelected {
         isq_artifact: Option<PathBuf>,
 
         /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
-        #[arg(short, long = "load-isq")]
+        #[arg(short, long)]
         load_isq_artifact: Option<PathBuf>,
     },
 
@@ -103,7 +103,7 @@ pub enum ModelSelected {
         isq_artifact: Option<PathBuf>,
 
         /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
-        #[arg(short, long = "load-isq")]
+        #[arg(short, long)]
         load_isq_artifact: Option<PathBuf>,
     },
 
@@ -142,7 +142,7 @@ pub enum ModelSelected {
         isq_artifact: Option<PathBuf>,
 
         /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
-        #[arg(short, long = "load-isq")]
+        #[arg(short, long)]
         load_isq_artifact: Option<PathBuf>,
     },
 
@@ -368,7 +368,7 @@ pub enum ModelSelected {
         isq_artifact: Option<PathBuf>,
 
         /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
-        #[arg(short, long = "load-isq")]
+        #[arg(short, long)]
         load_isq_artifact: Option<PathBuf>,
     },
 }
