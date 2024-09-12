@@ -5,14 +5,14 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use byteorder::ReadBytesExt;
+use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 use crate::{
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, ISQ_SERDE_VERSION},
     GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -156,6 +156,8 @@ impl QuantMethod for UnquantLinear {
 // Serialization structure:
 //
 // -----------------------
+// ISQ serde version, u32, little endian
+// -----------------------
 // ISQ type (1 for unquantized), u8, little endian
 // -----------------------
 // Whether bias data is included, u8 boolean
@@ -174,6 +176,8 @@ impl QuantizedSerde for UnquantLinear {
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
+
+        buffer.extend(&ISQ_SERDE_VERSION.to_le_bytes());
 
         // ISQ type for unquant is 1
         buffer.push(QuantizedSerdeType::Unquant as u8);
@@ -197,6 +201,11 @@ impl QuantizedSerde for UnquantLinear {
         Self: Sized,
     {
         let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Unquant as usize {

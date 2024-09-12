@@ -3,6 +3,28 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use half::{bf16, f16};
 
+const ISQ_SERDE_VERSION_MAJOR: u32 = 0;
+const ISQ_SERDE_VERSION_MINOR: u32 = 1;
+const ISQ_SERDE_VERSION_PATCH: u32 = 0;
+
+/// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
+pub(crate) const ISQ_SERDE_VERSION: u32 = (ISQ_SERDE_VERSION_MAJOR << 8 * 2)
+    | (ISQ_SERDE_VERSION_MINOR << 8 * 1)
+    | (ISQ_SERDE_VERSION_PATCH << 8 * 0);
+
+/// Check if major version matches: is backwards compatible
+pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
+    let major = version >> 8 * 2;
+    let _minor = version >> 8 * 1;
+    let _patch = version >> 8 * 0;
+
+    if major != ISQ_SERDE_VERSION_MAJOR {
+        candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({ISQ_SERDE_VERSION_MAJOR})");
+    }
+
+    Ok(())
+}
+
 // -----------------------
 // Tensor data length, u32, little endian
 // -----------------------

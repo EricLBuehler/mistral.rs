@@ -14,7 +14,7 @@ use candle_nn::Module;
 
 use crate::{
     generate_isq,
-    utils::{deserialize_tensor, serialize_tensor},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, ISQ_SERDE_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -145,6 +145,8 @@ impl QuantMethod for GgufMatMul {
 // Serialization structure:
 //
 // -----------------------
+// ISQ serde version, u32, little endian
+// -----------------------
 // ISQ type (0 for GGUF), u8, little endian
 // -----------------------
 // Tensor data length in bytes, u32, little endian
@@ -199,6 +201,8 @@ impl QuantizedSerde for GgufMatMul {
 
                 let mut buffer = Vec::new();
 
+                buffer.extend(&ISQ_SERDE_VERSION.to_le_bytes());
+
                 // ISQ type for GGUF is 0
                 buffer.push(QuantizedSerdeType::Gguf as u8);
 
@@ -236,6 +240,11 @@ impl QuantizedSerde for GgufMatMul {
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>> {
         let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Gguf as usize {

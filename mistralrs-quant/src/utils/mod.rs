@@ -6,7 +6,9 @@ mod ops;
 mod serde;
 
 pub use ops::{BitWiseOp, LeftshiftOp};
-pub(crate) use serde::{deserialize_tensor, serialize_tensor};
+pub(crate) use serde::{
+    deserialize_tensor, serialize_tensor, version_is_compatible, ISQ_SERDE_VERSION,
+};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
