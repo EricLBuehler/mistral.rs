@@ -12,6 +12,8 @@ The uniquely powerful quantized file format.
 # ToC
 - [Motivation](#motivation)
 - [Support](#support)
+- [Loading a UQFF model](#loading-a-uqff-model)
+- [Creating a UQFF model](#creating-a-uqff-model)
 - [Memory layout (*for developers*)](UQFF/LAYOUT.md)
 
 ## Motivation
@@ -48,15 +50,15 @@ The following quantization formats are supported in UQFF. One can, of course, be
 
 To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
 
-- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors`
-- `../UQFF/phi3.5-mini-isq-q4k.safetensors`
+- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff`
+- `../UQFF/phi3.5-mini-isq-q4k.uqff`
 
 > Note: when loading an UQFF model, it will take precedence over any ISQ setting.
 
 ### Running with the CLI
 
 ```
-cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --load-isq-artifact EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors
+cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --from-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff
 ```
 
 ### Using with the Rust API
@@ -71,7 +73,7 @@ NormalSpecificConfig {
     organization: Default::default(),
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors".to_string()),
++   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff".to_string()),
 }
 ```
 
@@ -82,7 +84,7 @@ VisionSpecificConfig {
     topology: None,
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.safetensors".to_string()),
++   from_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.uqff".to_string()),
 }
 ```
 
@@ -91,6 +93,58 @@ Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
     model_id="microsoft/Phi-3.5-mini-instruct",
-+   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors"
++   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff"
+),
+```
+
+
+## Creating a UQFF model
+
+To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
+
+- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff`
+- `../UQFF/phi3.5-mini-isq-q4k.uqff`
+
+> Note: when loading an UQFF model, it will take precedence over any ISQ setting.
+
+### Running with the CLI
+
+```
+cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff
+```
+
+### Using with the Rust API
+
+Modify the Normal or Vision config as follows:
+
+```diff
+NormalSpecificConfig {
+    use_flash_attn: false,
+    prompt_batchsize: None,
+    topology: None,
+    organization: Default::default(),
+    from_uqff: None,
+-   write_uqff: None,
++   write_uqff: Some("phi3.5-mini-isq-q4k.uqff".to_string()),
+}
+```
+
+```diff
+VisionSpecificConfig {
+    use_flash_attn: false,
+    prompt_batchsize: None,
+    topology: None,
+    from_uqff: None,
+-   write_uqff: None,
++   write_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.uqff".to_string()),
+}
+```
+
+### Using the Python API
+Modify the `Which` instantiation as follows:
+```diff
+Which.Plain(
+    model_id="microsoft/Phi-3.5-mini-instruct",
++   write_uqff="phi3.5-mini-isq-q4k.uqff"
 ),
 ```
