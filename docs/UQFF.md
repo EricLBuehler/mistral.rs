@@ -14,6 +14,7 @@ The uniquely powerful quantized file format.
 - [Support](#support)
 - [Loading a UQFF model](#loading-a-uqff-model)
 - [Creating a UQFF model](#creating-a-uqff-model)
+- [List of models](#list-of-models)
 - [Memory layout (*for developers*)](UQFF/LAYOUT.md)
 
 ## Motivation
@@ -100,20 +101,23 @@ Which.Plain(
 
 ## Creating a UQFF model
 
-To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
+Creating a UQFF model requires you to generate the UQFF file.
+- This means specifying a local path to a file ending in `.uqff`, where your new UQFF model will be created.
+- The quantization of a UQFF model is determined from the ISQ or model topology (see the [topology docs](TOPOLOGY.md) for more details on how ISQ and the topology mix).
 
-- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff`
-- `../UQFF/phi3.5-mini-isq-q4k.uqff`
+After creating the UQFF file, you can upload the model to Hugging Face. To do this:
+1) [Create a new model](https://huggingface.co/docs/transformers/v4.17.0/en/create_a_model).
+2) Upload the UQFF file into the web interface: [guide here](https://huggingface.co/docs/hub/en/models-uploading#using-the-web-interface).
+3) Locally, generate the model card file with [this Python script](../scripts/generate_uqff_card.py)..
+4) In the web interface, press the `Create Model Card` button and paste the generated model card.
 
-> Note: when loading an UQFF model, it will take precedence over any ISQ setting.
-
-### Running with the CLI
+### Creating with the CLI
 
 ```
-cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff
+cargo run --features cuda -- --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-isq-q4k.uqff
 ```
 
-### Using with the Rust API
+### Creating with the Rust API
 
 Modify the Normal or Vision config as follows:
 
@@ -140,7 +144,7 @@ VisionSpecificConfig {
 }
 ```
 
-### Using the Python API
+### Creating with the Python API
 Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
@@ -148,3 +152,11 @@ Which.Plain(
 +   write_uqff="phi3.5-mini-isq-q4k.uqff"
 ),
 ```
+
+## List of models
+
+Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/EricLBuehler/mistral.rs/issues/new) and we will include it here!
+
+| Name | Base model | UQFF model |
+| -- | -- | -- |
+| Phi 3.5 Mini Instruct | microsoft/Phi-3.5-mini-instruct | EricB/Phi-3.5-mini-instruct-UQFF |
