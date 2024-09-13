@@ -8,15 +8,15 @@ const ISQ_SERDE_VERSION_MINOR: u32 = 1;
 const ISQ_SERDE_VERSION_PATCH: u32 = 0;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
-pub(crate) const ISQ_SERDE_VERSION: u32 = (ISQ_SERDE_VERSION_MAJOR << 8 * 2)
-    | (ISQ_SERDE_VERSION_MINOR << 8 * 1)
-    | (ISQ_SERDE_VERSION_PATCH << 8 * 0);
+pub(crate) const ISQ_SERDE_VERSION: u32 = (ISQ_SERDE_VERSION_MAJOR << (8 * 2))
+    | (ISQ_SERDE_VERSION_MINOR << 8)
+    | ISQ_SERDE_VERSION_PATCH;
 
 /// Check if major version matches: is backwards compatible
 pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
-    let major = version >> 8 * 2;
-    let _minor = version >> 8 * 1;
-    let _patch = version >> 8 * 0;
+    let major = version >> (8 * 2);
+    let _minor = version >> 8;
+    let _patch = version;
 
     if major != ISQ_SERDE_VERSION_MAJOR {
         candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({ISQ_SERDE_VERSION_MAJOR})");
