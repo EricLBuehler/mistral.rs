@@ -28,9 +28,9 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_isq_artifact_paths, get_mut_arcmutex, get_paths,
+    lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -43,7 +43,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -73,6 +73,8 @@ pub struct NormalLoader {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
 }
 
 #[derive(Default)]
@@ -192,6 +194,8 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
         }))
     }
 }
@@ -212,12 +216,17 @@ impl Loader for NormalLoader {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
             silent
         );
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -357,12 +366,13 @@ impl Loader for NormalLoader {
                 self.config.organization,
                 self.config.isq_artifact.as_ref(),
             )?;
-        } else if let Some(load_isq_artifact) = self.config.load_isq_artifact.as_ref() {
+        } else if let Some(mut load_isq_artifact) = self.config.load_isq_artifact.clone() {
+            load_isq_artifact = get_isq_artifact_paths!(load_isq_artifact, self, silent);
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                load_isq_artifact,
+                &load_isq_artifact,
             )?;
         }
 

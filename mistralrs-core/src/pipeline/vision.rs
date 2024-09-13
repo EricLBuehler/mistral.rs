@@ -21,8 +21,9 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_isq_artifact_paths, get_paths, vision_normal_model_loader,
+    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -35,7 +36,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -62,6 +63,8 @@ pub struct VisionLoader {
     tokenizer_json: Option<String>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
 }
 
 #[derive(Default)]
@@ -116,6 +119,8 @@ impl VisionLoaderBuilder {
             tokenizer_json: self.tokenizer_json,
             xlora_model_id: None,
             xlora_order: None,
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
         })
     }
 }
@@ -136,12 +141,17 @@ impl Loader for VisionLoader {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
             silent
         );
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -263,7 +273,9 @@ impl Loader for VisionLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if in_situ_quant.is_some() || self.config.topology.is_some() {
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.load_isq_artifact.is_none()
+        {
             model.quantize(
                 in_situ_quant,
                 device.clone(),
@@ -271,6 +283,14 @@ impl Loader for VisionLoader {
                 silent,
                 IsqOrganization::Default,
                 self.config.isq_artifact.as_ref(),
+            )?;
+        } else if let Some(mut load_isq_artifact) = self.config.load_isq_artifact.clone() {
+            load_isq_artifact = get_isq_artifact_paths!(load_isq_artifact, self, silent);
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                &load_isq_artifact,
             )?;
         }
 

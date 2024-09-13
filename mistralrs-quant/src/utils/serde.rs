@@ -8,9 +8,8 @@ const ISQ_SERDE_VERSION_MINOR: u32 = 1;
 const ISQ_SERDE_VERSION_PATCH: u32 = 0;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
-pub(crate) const ISQ_SERDE_VERSION: u32 = (ISQ_SERDE_VERSION_MAJOR << (8 * 2))
-    | (ISQ_SERDE_VERSION_MINOR << 8)
-    | ISQ_SERDE_VERSION_PATCH;
+pub(crate) const ISQ_SERDE_VERSION: u32 =
+    (ISQ_SERDE_VERSION_MAJOR << (8 * 2)) | (ISQ_SERDE_VERSION_MINOR << 8) | ISQ_SERDE_VERSION_PATCH;
 
 /// Check if major version matches: is backwards compatible
 pub(crate) fn version_is_compatible(version: u32) -> Result<()> {

@@ -169,6 +169,52 @@ macro_rules! get_paths {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! get_isq_artifact_paths {
+    ($load_isq_artifact:expr, $this:expr, $silent:expr) => {{
+        if !$load_isq_artifact.exists() {
+            // Assume it's a HF model id
+            let path = $load_isq_artifact.to_string_lossy().to_string();
+            let parts = path.rsplitn(2, '/').collect::<Vec<_>>();
+
+            if parts.len() != 2 {
+                anyhow::bail!("ISQ artifact load path `{path}` not found locally must have format `<HF MODEL ID>/<FILENAME>`");
+            }
+
+            let file = parts[0];
+            let model_id = parts[1];
+
+            let api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token(
+                    &$this
+                        .token_source
+                        .read()
+                        .expect("Failed to read token source")
+                        .clone()
+                        .unwrap_or(TokenSource::None),
+                )?)
+                .build()?;
+            let revision = $this
+                .revision
+                .read()
+                .expect("Failed to read revision")
+                .clone()
+                .unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                model_id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+
+            api_get_file!(api, file, Path::new(model_id))
+        } else {
+            $load_isq_artifact
+        }
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! get_paths_gguf {
     ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filenames:expr, $silent:expr) => {{
         let api = ApiBuilder::new()
