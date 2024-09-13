@@ -20,6 +20,7 @@ Note that:
 - Any layers which are not covered will have no topology mapping. They will inherit any other ISQ (e.g. with `--isq`/`in_situ_quant`) set.
 - Unless the layer is not covered by the topology, the topology value will override any other ISQ (e.g. with `--isq`/`in_situ_quant`).
 - The topology device mapping will override any other device mapping.
+- When using UQFF, only the device mapping is relevant.
 
 
 ```yml

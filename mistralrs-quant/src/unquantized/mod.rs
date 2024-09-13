@@ -12,7 +12,7 @@ use candle_nn::{Linear, Module};
 use crate::{
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, ISQ_SERDE_VERSION},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
     GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -156,7 +156,7 @@ impl QuantMethod for UnquantLinear {
 // Serialization structure:
 //
 // -----------------------
-// ISQ serde version, u32, little endian
+// HQFF version, u32, little endian
 // -----------------------
 // ISQ type (1 for unquantized), u8, little endian
 // -----------------------
@@ -177,7 +177,7 @@ impl QuantizedSerde for UnquantLinear {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        buffer.extend(&ISQ_SERDE_VERSION.to_le_bytes());
+        buffer.extend(&HQFF_VERSION.to_le_bytes());
 
         // ISQ type for unquant is 1
         buffer.push(QuantizedSerdeType::Unquant as u8);

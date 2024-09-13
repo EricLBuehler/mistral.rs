@@ -19,7 +19,7 @@ use std::{
 use crate::{
     utils::{
         deserialize_tensor, serialize_tensor, version_is_compatible, BitWiseOp, LeftshiftOp,
-        ISQ_SERDE_VERSION,
+        HQFF_VERSION,
     },
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
@@ -629,7 +629,7 @@ impl QuantMethod for HqqLayer {
 // Serialization structure:
 //
 // -----------------------
-// ISQ serde version, u32, little endian
+// HQFF version, u32, little endian
 // -----------------------
 // ISQ type (2 for hqq), u8, little endian
 // -----------------------
@@ -672,7 +672,7 @@ impl QuantizedSerde for HqqLayer {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        buffer.extend(&ISQ_SERDE_VERSION.to_le_bytes());
+        buffer.extend(&HQFF_VERSION.to_le_bytes());
 
         // ISQ type for unquant is 2
         buffer.push(QuantizedSerdeType::Hqq as u8);
