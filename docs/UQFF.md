@@ -5,7 +5,7 @@ The uniquely powerful quantized file format.
 </h3>
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
-2) **Reliable** 🔒: Compatability ensured with *embedded* and *checked* semantic versioning information from day 1.
+2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
 3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
 3) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
