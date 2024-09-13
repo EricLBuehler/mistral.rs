@@ -424,7 +424,7 @@ fn nonzero_cuda(
                 ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
             candle_core::DType::I16 => {
-                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
             candle_core::DType::BF16 => {
                 ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)

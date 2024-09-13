@@ -57,6 +57,7 @@ COUNT_NONZERO_OP(uint8_t, u8)
 COUNT_NONZERO_OP(uint32_t, u32)
 COUNT_NONZERO_OP(int64_t, i64)
 COUNT_NONZERO_OP(int32_t, i32)
+COUNT_NONZERO_OP(int16_t, i16)
 
 __global__ void transform_indices(const uint32_t *temp_indices,
                                   const uint32_t num_nonzero,

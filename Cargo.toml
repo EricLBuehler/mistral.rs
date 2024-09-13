@@ -4,12 +4,13 @@ members = [
     "mistralrs-core",
     "mistralrs-pyo3",
     "mistralrs",
-    "mistralrs-bench",
+    #"mistralrs-bench",
     "mistralrs-vision",
     "mistralrs-quant",
 ]
 exclude = [
     "mistralrs-paged_attn",
+    "mistralrs-bench",
 ]
 resolver = "2"
 

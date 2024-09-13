@@ -36,6 +36,7 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
         builder = builder.arg("--compiler-options");
+        //builder = builder.arg("-fPIC -fPIE");
         builder = builder.arg(cuda_nvcc_flags_env);
     }
     println!("cargo:info={builder:?}");
