@@ -271,6 +271,13 @@ pub trait IsqModel {
                         serialized.display()
                     );
 
+                    if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                        candle_core::bail!(
+                            "UQFF output path extension must be {:?}",
+                            serialized.extension().as_ref().unwrap()
+                        );
+                    }
+
                     let bar = ProgressBar::new(total_tensors as u64);
                     bar.set_style(
                         ProgressStyle::default_bar()

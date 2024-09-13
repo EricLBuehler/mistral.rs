@@ -54,13 +54,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         organization: Option<IsqOrganization>,
 
-        /// ISQ artifact path to write to.
+        /// UQFF path to write to.
         #[arg(short, long)]
-        isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
 
-        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
-        load_isq_artifact: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -98,13 +98,13 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path to write to.
+        /// UQFF path to write to.
         #[arg(short, long)]
-        isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
 
-        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
-        load_isq_artifact: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -137,13 +137,13 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path to write to.
+        /// UQFF path to write to.
         #[arg(short, long)]
-        isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
 
-        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
-        load_isq_artifact: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -363,12 +363,12 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
-        /// ISQ artifact path to write to.
+        /// UQFF path to write to.
         #[arg(short, long)]
-        isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
 
-        /// ISQ artifact path to load from. If provided, this takes precedence over applying ISQ.
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
-        load_isq_artifact: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 }

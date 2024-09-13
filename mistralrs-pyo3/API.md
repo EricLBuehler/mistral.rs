@@ -41,7 +41,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
-        isq_artifact: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class XLora:
@@ -52,7 +52,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
-        isq_artifact: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class Lora:
@@ -62,7 +62,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        isq_artifact: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class GGUF:
@@ -127,7 +127,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
-        isq_artifact: str | None = None
+        write_uqff: str | None = None
 ```
 
 

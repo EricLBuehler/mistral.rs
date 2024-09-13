@@ -65,8 +65,8 @@ pub enum Which {
         tokenizer_json = None,
         topology = None,
         organization = None,
-        isq_artifact = None,
-        load_isq_artifact = None,
+        write_uqff = None,
+        from_uqff = None,
     ))]
     Plain {
         model_id: String,
@@ -74,8 +74,8 @@ pub enum Which {
         tokenizer_json: Option<String>,
         topology: Option<String>,
         organization: Option<String>,
-        isq_artifact: Option<PathBuf>,
-        load_isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -86,8 +86,8 @@ pub enum Which {
         tokenizer_json = None,
         tgt_non_granular_index = None,
         topology = None,
-        isq_artifact = None,
-        load_isq_artifact = None,
+        write_uqff = None,
+        from_uqff = None,
     ))]
     XLora {
         xlora_model_id: String,
@@ -97,8 +97,8 @@ pub enum Which {
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
         topology: Option<String>,
-        isq_artifact: Option<PathBuf>,
-        load_isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -108,8 +108,8 @@ pub enum Which {
         model_id = None,
         tokenizer_json = None,
         topology = None,
-        isq_artifact = None,
-        load_isq_artifact = None,
+        write_uqff = None,
+        from_uqff = None,
     ))]
     Lora {
         adapters_model_id: String,
@@ -118,8 +118,8 @@ pub enum Which {
         model_id: Option<String>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
-        isq_artifact: Option<PathBuf>,
-        load_isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -239,15 +239,15 @@ pub enum Which {
         arch,
         tokenizer_json = None,
         topology = None,
-        isq_artifact = None,
-        load_isq_artifact = None,
+        write_uqff = None,
+        from_uqff = None,
     ))]
     VisionPlain {
         model_id: String,
         arch: VisionArchitecture,
         tokenizer_json: Option<String>,
         topology: Option<String>,
-        isq_artifact: Option<PathBuf>,
-        load_isq_artifact: Option<PathBuf>,
+        write_uqff: Option<PathBuf>,
+        from_uqff: Option<PathBuf>,
     },
 }

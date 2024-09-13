@@ -169,11 +169,11 @@ macro_rules! get_paths {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! get_isq_artifact_paths {
-    ($load_isq_artifact:expr, $this:expr, $silent:expr) => {{
-        if !$load_isq_artifact.exists() {
+macro_rules! get_write_uqff_paths {
+    ($from_uqff:expr, $this:expr, $silent:expr) => {{
+        if !$from_uqff.exists() {
             // Assume it's a HF model id
-            let path = $load_isq_artifact.to_string_lossy().to_string();
+            let path = $from_uqff.to_string_lossy().to_string();
             let parts = path.rsplitn(2, '/').collect::<Vec<_>>();
 
             if parts.len() != 2 {
@@ -208,7 +208,7 @@ macro_rules! get_isq_artifact_paths {
 
             api_get_file!(api, file, Path::new(model_id))
         } else {
-            $load_isq_artifact
+            $from_uqff
         }
     }};
 }

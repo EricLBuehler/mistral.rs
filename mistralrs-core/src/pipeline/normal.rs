@@ -28,7 +28,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_isq_artifact_paths, get_mut_arcmutex, get_paths,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_write_uqff_paths,
     lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
@@ -98,8 +98,8 @@ pub struct NormalSpecificConfig {
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
-    pub isq_artifact: Option<PathBuf>,
-    pub load_isq_artifact: Option<PathBuf>,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -282,7 +282,7 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let mut loading_isq = in_situ_quant.is_some() || self.config.load_isq_artifact.is_some();
+        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -356,7 +356,7 @@ impl Loader for NormalLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
-            && self.config.load_isq_artifact.is_none()
+            && self.config.from_uqff.is_none()
         {
             model.quantize(
                 in_situ_quant,
@@ -364,15 +364,15 @@ impl Loader for NormalLoader {
                 self.config.topology.as_ref(),
                 silent,
                 self.config.organization,
-                self.config.isq_artifact.as_ref(),
+                self.config.write_uqff.as_ref(),
             )?;
-        } else if let Some(mut load_isq_artifact) = self.config.load_isq_artifact.clone() {
-            load_isq_artifact = get_isq_artifact_paths!(load_isq_artifact, self, silent);
+        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
+            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                &load_isq_artifact,
+                &from_uqff,
             )?;
         }
 

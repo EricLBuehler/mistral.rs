@@ -69,9 +69,9 @@ NormalSpecificConfig {
     prompt_batchsize: None,
     topology: None,
     organization: Default::default(),
-    isq_artifact: None,
--   load_isq_artifact: None,
-+   load_isq_artifact: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors".to_string()),
+    write_uqff: None,
+-   from_uqff: None,
++   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors".to_string()),
 }
 ```
 
@@ -80,9 +80,9 @@ VisionSpecificConfig {
     use_flash_attn: false,
     prompt_batchsize: None,
     topology: None,
-    isq_artifact: None,
--   load_isq_artifact: None,
-+   load_isq_artifact: Some("../UQFF/phi3.5-mini-isq-q4k.safetensors".to_string()),
+    write_uqff: None,
+-   from_uqff: None,
++   from_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.safetensors".to_string()),
 }
 ```
 
@@ -91,6 +91,6 @@ Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
     model_id="microsoft/Phi-3.5-mini-instruct",
-+   load_isq_artifact="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors"
++   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.safetensors"
 ),
 ```

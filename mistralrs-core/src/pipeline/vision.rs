@@ -21,7 +21,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_isq_artifact_paths, get_paths, vision_normal_model_loader,
+    api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
     AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
@@ -83,8 +83,8 @@ pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
-    pub isq_artifact: Option<PathBuf>,
-    pub load_isq_artifact: Option<PathBuf>,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -274,7 +274,7 @@ impl Loader for VisionLoader {
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
-            && self.config.load_isq_artifact.is_none()
+            && self.config.from_uqff.is_none()
         {
             model.quantize(
                 in_situ_quant,
@@ -282,15 +282,15 @@ impl Loader for VisionLoader {
                 self.config.topology.as_ref(),
                 silent,
                 IsqOrganization::Default,
-                self.config.isq_artifact.as_ref(),
+                self.config.write_uqff.as_ref(),
             )?;
-        } else if let Some(mut load_isq_artifact) = self.config.load_isq_artifact.clone() {
-            load_isq_artifact = get_isq_artifact_paths!(load_isq_artifact, self, silent);
+        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
+            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                &load_isq_artifact,
+                &from_uqff,
             )?;
         }
 
