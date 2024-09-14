@@ -254,6 +254,8 @@ pub enum QuantizationKind {
     Gguf,
     /// GPTQ
     Gptq,
+    /// EXL2
+    Exl2,
 }
 
 #[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]

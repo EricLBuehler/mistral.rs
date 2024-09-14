@@ -28,7 +28,7 @@ impl QuantMethod for GgufMatMul {
                 b,
             }),
             QuantMethodConfig::Exl2 { .. }
-            |QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. } => unreachable!(),
         }

@@ -256,7 +256,7 @@ impl CustomOp1 for Leftshift {
             }
             DType::I16 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::I16, "leftshift"));
-            }   
+            }
             DType::BF16 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::BF16, "leftshift"));
             }

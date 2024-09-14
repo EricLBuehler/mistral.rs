@@ -3,3 +3,5 @@
 .vscode
 *.a
 .DS_Store
+architecture.md
+.gitignore

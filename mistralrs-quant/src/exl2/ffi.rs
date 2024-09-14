@@ -8,9 +8,9 @@ type QMatrixPtr = *mut c_void;
 extern "C" {
     pub fn exl2_create_q_matrix(
         device: i32,
-        height: i32,                 // q_perm.size(0);
-        width: i32,                  // q_weight.size(1);
-        groups: i32,                 // q_scale.size(0);
+        height: i32, // q_perm.size(0);
+        width: i32,  // q_weight.size(1);
+        groups: i32, // q_scale.size(0);
         q_weight: *const u32,
         q_perm: *const u16,
         q_invperm: *const u16,
@@ -24,12 +24,5 @@ extern "C" {
 
     pub fn exl2_reconstruct_q_matrix(q_matrix: QMatrixPtr);
 
-    pub fn exl2_gemm_cuda(
-        a: *const f16,
-        b: *const c_void,
-        c: *mut f16,
-        m: i32,
-        n: i32,
-        k: i32,
-    );
+    pub fn exl2_gemm_cuda(a: *const f16, b: *const c_void, c: *mut f16, m: i32, n: i32, k: i32);
 }

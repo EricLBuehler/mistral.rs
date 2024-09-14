@@ -1,6 +1,7 @@
 mod amoe;
 mod cache_manager;
 pub mod chat_template;
+mod exl2;
 mod ggml;
 mod gguf;
 mod inputs_processor;
@@ -13,6 +14,7 @@ mod processing;
 mod sampling;
 mod speculative;
 mod vision;
+
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::paged_attention::{CacheConfig, CacheEngine};

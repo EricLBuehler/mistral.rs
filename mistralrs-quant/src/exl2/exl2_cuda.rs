@@ -20,15 +20,10 @@ use crate::{
     IsqType, QuantMethod, QuantMethodConfig,
 };
 
-use super::ffi::{
-    exl2_reconstruct_q_matrix, 
-    exl2_create_q_matrix, 
-    exl2_destroy_q_matrix
-};
+use super::ffi::{exl2_create_q_matrix, exl2_destroy_q_matrix, exl2_reconstruct_q_matrix};
 
 const MAX_Q_GEMM_ROWS: i32 = 32;
 const BLOCK_M_SIZE_MAX: i32 = 8;
-
 
 #[derive(Debug)]
 pub struct Exl2Layer {
@@ -98,9 +93,12 @@ impl Exl2Layer {
 
         let dev = get_cuda_device(&self.q_weight)?;
 
-        state.q_scale_max = (state.q_scale_max.clone() / 256.0)?;   
+        state.q_scale_max = (state.q_scale_max.clone() / 256.0)?;
         state.q_invperm_short = self.q_invperm.to_dtype(DType::I16)?;
-        state.q_perm = state.q_invperm_short.arg_sort_last_dim(false)?.to_dtype(DType::I16)?;
+        state.q_perm = state
+            .q_invperm_short
+            .arg_sort_last_dim(false)?
+            .to_dtype(DType::I16)?;
         state.q_group_map = make_group_map(&self.q_groups, self.q_weight.dim(0)?)?;
 
         let dev_ord = dev.ordinal() as i32;
@@ -135,14 +133,13 @@ impl Exl2Layer {
         Ok(())
     }
 
-
     fn exl2_gemm(&self, a: Tensor) -> Result<Tensor> {
         self.initialize_exllama()?;
-        
+
         let dev = get_cuda_device(&a)?;
         let a_ptr = get_cuda_slice::<f16>(&a)?;
 
-        let qm_width = self.q_weight.dim(1)?;                  
+        let qm_width = self.q_weight.dim(1)?;
         let c_shape = Shape::from_dims(&[a.dims()[0], qm_width]);
 
         let (m, n, k) = (
@@ -166,7 +163,7 @@ impl Exl2Layer {
             unsafe {
                 exl2_reconstruct_q_matrix(self.exllama_state.lock().unwrap().q_matrix);
             }
-            
+
             let alpha = f16::from_f32(1.0);
             let beta = f16::from_f32(0.0);
             let cublas_handle = match a.device() {
@@ -193,15 +190,12 @@ impl Exl2Layer {
                 )
                 .w()?
             };
-
         } else {
             todo!()
         }
         todo!()
     }
 }
-
-
 
 fn make_group_map(q_groups: &Tensor, num_qrows: usize) -> Result<Tensor> {
     let gr = q_groups.to_vec1::<i16>()?;
@@ -225,7 +219,6 @@ fn make_group_map(q_groups: &Tensor, num_qrows: usize) -> Result<Tensor> {
     Tensor::from_vec(group_map.clone(), (group_map.len(),), q_groups.device())
 }
 
-
 impl QuantMethod for Exl2Layer {
     fn new(method: QuantMethodConfig) -> Result<Self> {
         match method {
@@ -245,7 +238,11 @@ impl QuantMethod for Exl2Layer {
                     q_scale_max,
                     q_perm,
                     q_group_map,
-                    q_invperm_short: Tensor::zeros(q_invperm.shape(), DType::I16, q_invperm.device())?,
+                    q_invperm_short: Tensor::zeros(
+                        q_invperm.shape(),
+                        DType::I16,
+                        q_invperm.device(),
+                    )?,
                     q_matrix: std::ptr::null_mut(),
                 }));
 
@@ -283,7 +280,7 @@ impl QuantMethod for Exl2Layer {
         }
         output.reshape(out_shape)
     }
-    
+
     fn quantized_act_type(&self) -> Option<DType> {
         Some(DType::F16)
     }
@@ -313,7 +310,6 @@ impl QuantMethod for Exl2Layer {
         None
     }
 }
-
 
 impl Drop for Exl2Layer {
     fn drop(&mut self) {

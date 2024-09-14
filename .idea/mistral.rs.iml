@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-paged-attn/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-pyo3/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-quant/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-server/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-vision/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs-vision/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/mistralrs/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
