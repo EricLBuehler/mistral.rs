@@ -66,7 +66,8 @@ try:
             output += f"{",".join(quants)} (see topology for this file)|"
         else:
             output += f"{quants.strip().upper()}|"
-        output += f"`./mistralrs-server plain -m {model_id} --from-uqff {display_model_id}/{file}`|\n"
+        # This interactive mode only will work for text models...
+        output += f"`./mistralrs-server -i plain -m {model_id} --from-uqff {display_model_id}/{file}`|\n"
         n += 1
         print()
 except KeyboardInterrupt:

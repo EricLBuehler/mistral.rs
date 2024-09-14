@@ -23,7 +23,11 @@ UQFF builds on our ISQ feature by allowing serialization and deserialization for
 
 While ISQ is a powerful feature enabling easy quantization of models, the key limitation has been the time required for requantization. While the process is relatively fast with parallelization and other techniques, multiple runs can make the experience slow. 
 
-UQFF allows everyone to experience the power and flexibility of ISQ. All in one file format.
+**Comparting UQFF to GGUF:**
+
+In contrast to GGUF, which only supports the GGUF quantizations, UQFF is designed with flexibiliuty in mind. At its code, it extends the power and flexibility of ISQ. The ability to support multiple quantization types (more to come!) in one simple, easy-to-use file is a critical feature.
+
+Additionally, users will no longer need to wait for GGUF support to begin using post-training quantized models. As we add new models and quantization schemes to mistral.rs, the feature set of UQFF will grow.
 
 ## Support
 
@@ -51,15 +55,15 @@ The following quantization formats are supported in UQFF. One can, of course, be
 
 To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
 
-- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff`
-- `../UQFF/phi3.5-mini-isq-q4k.uqff`
+- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff`
+- `../UQFF/phi3.5-mini-instruct-q4k.uqff`
 
 > Note: when loading an UQFF model, it will take precedence over any ISQ setting.
 
 ### Running with the CLI
 
 ```
-cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --from-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff
+cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --from-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff
 ```
 
 ### Using with the Rust API
@@ -74,7 +78,7 @@ NormalSpecificConfig {
     organization: Default::default(),
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff".to_string()),
++   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff".to_string()),
 }
 ```
 
@@ -85,7 +89,7 @@ VisionSpecificConfig {
     topology: None,
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.uqff".to_string()),
++   from_uqff: Some("../UQFF/phi3.5-mini-instruct-q4k.uqff".to_string()),
 }
 ```
 
@@ -94,7 +98,7 @@ Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
     model_id="microsoft/Phi-3.5-mini-instruct",
-+   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-isq-q4k.uqff"
++   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff"
 ),
 ```
 
@@ -114,7 +118,7 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 ### Creating with the CLI
 
 ```
-cargo run --features cuda -- --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-isq-q4k.uqff
+cargo run --features cuda -- --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
 ```
 
 ### Creating with the Rust API
@@ -129,7 +133,7 @@ NormalSpecificConfig {
     organization: Default::default(),
     from_uqff: None,
 -   write_uqff: None,
-+   write_uqff: Some("phi3.5-mini-isq-q4k.uqff".to_string()),
++   write_uqff: Some("phi3.5-mini-instruct-q4k.uqff".to_string()),
 }
 ```
 
@@ -140,7 +144,7 @@ VisionSpecificConfig {
     topology: None,
     from_uqff: None,
 -   write_uqff: None,
-+   write_uqff: Some("../UQFF/phi3.5-mini-isq-q4k.uqff".to_string()),
++   write_uqff: Some("../UQFF/phi3.5-mini-instruct-q4k.uqff".to_string()),
 }
 ```
 
@@ -149,7 +153,7 @@ Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
     model_id="microsoft/Phi-3.5-mini-instruct",
-+   write_uqff="phi3.5-mini-isq-q4k.uqff"
++   write_uqff="phi3.5-mini-instruct-q4k.uqff"
 ),
 ```
 
