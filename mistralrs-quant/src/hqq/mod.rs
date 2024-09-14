@@ -674,7 +674,7 @@ impl QuantizedSerde for HqqLayer {
 
         buffer.extend(&HQFF_VERSION.to_le_bytes());
 
-        // ISQ type for unquant is 2
+        // ISQ type for hqq is 2
         buffer.push(QuantizedSerdeType::Hqq as u8);
 
         // Has bias
@@ -721,10 +721,10 @@ impl QuantizedSerde for HqqLayer {
         }
 
         let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Unquant as usize {
+        if isq_type != QuantizedSerdeType::Hqq as usize {
             candle_core::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Unquant as usize
+                QuantizedSerdeType::Hqq as usize
             );
         }
 

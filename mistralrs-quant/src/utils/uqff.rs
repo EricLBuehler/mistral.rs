@@ -41,7 +41,9 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
 // -----------------------
 
 pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<()> {
+    let b_shape = tensor.dims();
     let tensor = tensor.flatten_all()?;
+
     let bias = match tensor.dtype() {
         DType::U8 => data_to_bytes::<u8>(tensor.to_vec1()?),
         DType::U32 => data_to_bytes::<u32>(tensor.to_vec1()?),
@@ -67,7 +69,6 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
     buffer.extend(&dtype.to_le_bytes());
 
     // Shape
-    let b_shape = tensor.dims();
     buffer.extend((b_shape.len() as u32).to_le_bytes());
     for dim in b_shape {
         buffer.extend((*dim as u32).to_le_bytes());

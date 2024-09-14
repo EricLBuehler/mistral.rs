@@ -288,34 +288,47 @@ pub trait IsqModel {
                             .progress_chars("#>-"),
                     );
 
-                    let quantized_values = if silent {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()?
-                    } else {
-                        tensors
-                            .par_iter()
-                            .enumerate()
-                            .progress_with(bar)
-                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                            .map(|(i, (layer, _))| {
-                                Ok((
-                                    i.to_string(),
-                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
-                                ))
-                            })
-                            .collect::<candle_core::Result<Vec<_>>>()?
-                    };
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(2)
+                        .build()
+                        .map_err(candle_core::Error::msg)?;
 
-                    safetensors::serialize_to_file(quantized_values, &None, serialized)?;
+                    let quantized_values = pool.install(|| {
+                        if silent {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        Tensor::new(
+                                            Cow::into_owned(layer.serialize()?),
+                                            &Device::Cpu,
+                                        )?,
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        } else {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .progress_with(bar)
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        Tensor::new(
+                                            Cow::into_owned(layer.serialize()?),
+                                            &Device::Cpu,
+                                        )?,
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        }
+                    });
+
+                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
                 }
             }
 
@@ -430,8 +443,8 @@ pub trait IsqModel {
                 .map(|(i, (tensor, _))| {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
-                        // NOTE(EricLBuehler): isq type is ALWAYS byte 0 of the tensor.
-                        let isq_type = artifact[0];
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                        let isq_type = artifact[4];
                         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
                             QuantizedSerdeType::Gguf => {
                                 GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
@@ -456,8 +469,8 @@ pub trait IsqModel {
                 .map(|(i, (tensor, _))| {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
-                        // NOTE(EricLBuehler): isq type is ALWAYS byte 0 of the tensor.
-                        let isq_type = artifact[0];
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                        let isq_type = artifact[4];
                         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
                             QuantizedSerdeType::Gguf => {
                                 GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
