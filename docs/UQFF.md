@@ -111,7 +111,9 @@ Creating a UQFF model requires you to generate the UQFF file.
 
 After creating the UQFF file, you can upload the model to Hugging Face. To do this:
 1) [Create a new model](https://huggingface.co/docs/transformers/v4.17.0/en/create_a_model).
-2) Upload the UQFF file into the web interface: [guide here](https://huggingface.co/docs/hub/en/models-uploading#using-the-web-interface).
+2) Upload the UQFF file:
+    - With the web interface: [guide here](https://huggingface.co/docs/hub/en/models-uploading#using-the-web-interface).
+    - With Git: [steps here](#upload-with-git-lfs)
 3) Locally, generate the model card file with [this Python script](../scripts/generate_uqff_card.py)..
 4) In the web interface, press the `Create Model Card` button and paste the generated model card.
 
@@ -156,6 +158,15 @@ Which.Plain(
 +   write_uqff="phi3.5-mini-instruct-q4k.uqff"
 ),
 ```
+
+### Upload with Git
+To upload a UQFF model using Git, you will most likely need to set up Git LFS:
+
+1) Install [git-lfs](https://github.com/git-lfs/git-lfs?tab=readme-ov-file#installing)
+2) Run `git lfs install`
+3) (If the files are larger than **5GB**) Run `huggingface-cli lfs-enable-largefiles .` (you will need to `pip install huggingface_hub`)
+
+After this, you can use Git to track, commit, and push files.
 
 ## List of models
 
