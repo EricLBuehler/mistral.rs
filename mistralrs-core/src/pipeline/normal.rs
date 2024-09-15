@@ -99,6 +99,7 @@ pub struct NormalSpecificConfig {
 }
 
 impl NormalLoaderBuilder {
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
@@ -113,6 +114,12 @@ impl NormalLoaderBuilder {
             kind: ModelKind::Normal,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(
