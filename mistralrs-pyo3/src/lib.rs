@@ -99,6 +99,7 @@ fn parse_which(
             tokenizer_json,
             Some(model_id),
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
@@ -119,6 +120,7 @@ fn parse_which(
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -147,6 +149,7 @@ fn parse_which(
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -170,6 +173,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
@@ -189,6 +193,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -216,6 +221,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -243,6 +249,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGML {
             tok_model_id,
@@ -266,6 +273,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -297,6 +305,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
