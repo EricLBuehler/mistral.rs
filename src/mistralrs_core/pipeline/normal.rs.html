@@ -695,6 +695,13 @@
 <a href="#695" id="695">695</a>
 <a href="#696" id="696">696</a>
 <a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -796,7 +803,8 @@
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
-    <span class="kw">pub fn </span>new(
+    <span class="doccomment">/// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
+    </span><span class="kw">pub fn </span>new(
         config: NormalSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -811,6 +819,12 @@
             ..Default::default()
         }
     }
+
+    <span class="comment">// TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    </span><span class="kw">pub fn </span>with_no_kv_cache(<span class="kw-2">mut </span><span class="self">self</span>, no_kv_cache: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.no_kv_cache = no_kv_cache;
+        <span class="self">self
+    </span>}
 
     <span class="kw">fn </span>with_adapter(
         <span class="kw-2">mut </span><span class="self">self</span>,

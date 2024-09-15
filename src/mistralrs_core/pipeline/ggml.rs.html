@@ -566,6 +566,13 @@
 <a href="#566" id="566">566</a>
 <a href="#567" id="567">567</a>
 <a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -668,7 +675,8 @@
 }
 
 <span class="kw">impl </span>GGMLLoaderBuilder {
-    <span class="kw">pub fn </span>new(
+    <span class="doccomment">/// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
+    </span><span class="kw">pub fn </span>new(
         config: GGMLSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -691,6 +699,12 @@
             ..Default::default()
         }
     }
+
+    <span class="comment">// TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    </span><span class="kw">pub fn </span>with_no_kv_cache(<span class="kw-2">mut </span><span class="self">self</span>, no_kv_cache: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.no_kv_cache = no_kv_cache;
+        <span class="self">self
+    </span>}
 
     <span class="kw">fn </span>with_adapter(
         <span class="kw-2">mut </span><span class="self">self</span>,

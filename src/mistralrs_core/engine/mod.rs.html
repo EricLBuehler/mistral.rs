@@ -757,6 +757,9 @@
 <a href="#757" id="757">757</a>
 <a href="#758" id="758">758</a>
 <a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -835,10 +838,13 @@
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
+        <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().has_no_kv_cache;
+        <span class="macro">assert_eq!</span>(has_no_kv_cache, no_kv_cache);
         <span class="comment">// Prefix caching is always disabled if using PagedAttention for now.
         // TODO
-        </span><span class="kw">let </span>no_prefix_cache =
-            <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. }) || no_prefix_cache;
+        </span><span class="kw">let </span>no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
+            || no_prefix_cache
+            || has_no_kv_cache;
         <span class="self">Self </span>{
             rx,
             pipeline,
