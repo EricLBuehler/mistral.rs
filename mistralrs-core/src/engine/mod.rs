@@ -103,6 +103,8 @@ impl Engine {
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
+            tokio::time::sleep(std::time::Duration::from_micros(500)).await;
+
             if matches!(
                 ENGINE_INSTRUCTIONS
                     .lock()
