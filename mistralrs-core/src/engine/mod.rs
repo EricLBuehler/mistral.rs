@@ -436,10 +436,12 @@ impl Engine {
                                         seq.prompt_timestamp = Some(now);
                                     }
                                 }
-                            } else {
-                                tokio::task::yield_now().await;
                             }
                         }
+                    }
+
+                    if self.scheduler.waiting_len() == 0 {
+                        tokio::task::yield_now().await;
                     }
 
                     self.scheduler.free_finished_sequence_groups();
