@@ -578,6 +578,30 @@
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
 <a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -601,8 +625,9 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
-    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
+    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
@@ -615,7 +640,7 @@
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
-<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::sync::{Arc, RwLock};
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::{info, warn};
@@ -642,6 +667,8 @@
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
+    token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
+    revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -660,6 +687,8 @@
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
+    <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="kw">impl </span>VisionLoaderBuilder {
@@ -694,6 +723,8 @@
             tokenizer_json: <span class="self">self</span>.tokenizer_json,
             xlora_model_id: <span class="prelude-val">None</span>,
             xlora_order: <span class="prelude-val">None</span>,
+            token_source: RwLock::new(<span class="prelude-val">None</span>),
+            revision: RwLock::new(<span class="prelude-val">None</span>),
         })
     }
 }
@@ -714,12 +745,17 @@
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
             LocalModelPaths,
             <span class="kw-2">&amp;</span>token_source,
-            revision,
+            revision.clone(),
             <span class="self">self</span>,
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
             silent
         );
+        <span class="kw-2">*</span><span class="self">self
+            </span>.token_source
+            .write()
+            .expect(<span class="string">"Failed to write to token source"</span>) = <span class="prelude-val">Some</span>(token_source);
+        <span class="kw-2">*</span><span class="self">self</span>.revision.write().expect(<span class="string">"Failed to write to revision"</span>) = revision;
         <span class="self">self</span>.load_model_from_path(
             <span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>,
             dtype,
@@ -841,13 +877,24 @@
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
         <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, <span class="prelude-val">None</span>);
 
-        <span class="kw">if </span>in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some() {
+        <span class="kw">if </span>(in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some())
+            &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()
+        {
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 <span class="self">self</span>.config.topology.as_ref(),
                 silent,
                 IsqOrganization::Default,
+                <span class="self">self</span>.config.write_uqff.as_ref(),
+            )<span class="question-mark">?</span>;
+        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>from_uqff) = <span class="self">self</span>.config.from_uqff.clone() {
+            from_uqff = <span class="macro">get_write_uqff_paths!</span>(from_uqff, <span class="self">self</span>, silent);
+            model.load_from_artifacts(
+                device.clone(),
+                <span class="self">self</span>.config.topology.as_ref(),
+                silent,
+                <span class="kw-2">&amp;</span>from_uqff,
             )<span class="question-mark">?</span>;
         }
 
@@ -932,6 +979,7 @@
                 <span class="self">self</span>.topology.as_ref(),
                 <span class="self">self</span>.silent,
                 IsqOrganization::Default,
+                <span class="prelude-val">None</span>,
             )
             .map_err(anyhow::Error::msg)
     }

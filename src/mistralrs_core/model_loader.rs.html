@@ -378,6 +378,22 @@
 <a href="#378" id="378">378</a>
 <a href="#379" id="379">379</a>
 <a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
@@ -502,12 +518,16 @@
             dtype: <span class="kw">_</span>,
             topology,
             organization,
+            write_uqff,
+            from_uqff,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: organization.unwrap_or_default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
@@ -524,12 +544,16 @@
             arch,
             dtype: <span class="kw">_</span>,
             topology,
+            write_uqff,
+            from_uqff,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
@@ -554,12 +578,16 @@
             arch,
             dtype: <span class="kw">_</span>,
             topology,
+            write_uqff,
+            from_uqff,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
@@ -744,11 +772,15 @@
             arch,
             dtype: <span class="kw">_</span>,
             topology,
+            write_uqff,
+            from_uqff,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
