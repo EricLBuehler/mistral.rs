@@ -28,6 +28,8 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             use_flash_attn: false,
             prompt_batchsize: None,
             topology: None,
+            write_uqff: None,
+            from_uqff: None,
         },
         None,
         None,

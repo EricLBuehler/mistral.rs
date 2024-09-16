@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 use crate::{
@@ -51,6 +53,14 @@ pub enum ModelSelected {
         /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         #[arg(short, long)]
         organization: Option<IsqOrganization>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -87,6 +97,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -118,6 +136,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -336,5 +362,13 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 }

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -135,8 +136,42 @@ impl TryFrom<IsqType> for GgmlDType {
     }
 }
 
+pub enum QuantizedSerdeType {
+    Gguf = 0,
+    Unquant = 1,
+    Hqq = 2,
+}
+
+impl TryFrom<usize> for QuantizedSerdeType {
+    type Error = candle_core::Error;
+    fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Gguf),
+            1 => Ok(Self::Unquant),
+            2 => Ok(Self::Hqq),
+            other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
+        }
+    }
+}
+
+pub trait QuantizedSerde {
+    fn name(&self) -> &'static str;
+    fn isq_serde_supported(&self) -> bool {
+        false
+    }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+    }
+    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+    }
+}
+
 /// Quantized method for a quantized matmul.
-pub trait QuantMethod: Send + Sync + Debug {
+pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized;

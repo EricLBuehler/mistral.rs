@@ -19,7 +19,7 @@ use lazy_static::lazy_static;
 
 use crate::{
     utils::{get_cuda_device, get_cuda_slice},
-    IsqType, QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
 use super::ffi::{
@@ -293,5 +293,11 @@ impl QuantMethod for GptqLayer {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
+    }
+}
+
+impl QuantizedSerde for GptqLayer {
+    fn name(&self) -> &'static str {
+        "gptq"
     }
 }

@@ -60,6 +60,8 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
                     ),
             ),
             organization: Default::default(),
+            write_uqff: None,
+            from_uqff: None,
         },
         None,
         None,

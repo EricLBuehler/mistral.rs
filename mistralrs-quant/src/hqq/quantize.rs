@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use crate::hqq::optimize::OptResults;
 
@@ -12,7 +12,7 @@ impl HqqLayer {
             candle_core::bail!("`group_size` should be divisible by the tensor number of elements, which are {}, got a group size of {group_size}.", input.elem_count());
         }
 
-        let mut w = input.clone();
+        let mut w = input.clone().to_dtype(DType::F32)?;
 
         // Reshape for grouping
         w = if cfg.channel_wise {

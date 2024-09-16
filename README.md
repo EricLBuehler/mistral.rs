@@ -91,6 +91,7 @@ Mistal.rs supports several model categories:
 - Python API.
 - Grammar support with Regex and Yacc.
 - Use a simple [model topology](docs/TOPOLOGY.md) to configure ISQ and device mapping for *per-layer* with a single [YAML file](topologies/isq_and_device.yml) (examples [here](topologies))
+- [UQFF](docs/UQFF.md): The uniquely powerful quantized file format. [Check out the docs](docs/UQFF.md)!
 
 **Powerful**:
 - Fast LoRA support with weight merging.
