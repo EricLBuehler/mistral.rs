@@ -85,6 +85,8 @@ fn parse_which(
             arch,
             topology,
             organization,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -94,6 +96,8 @@ fn parse_which(
                     .as_deref()
                     .map(IsqOrganization::from_str)
                     .unwrap_or(Ok(Default::default()))?,
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
@@ -109,12 +113,16 @@ fn parse_which(
             tgt_non_granular_index,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
@@ -138,12 +146,16 @@ fn parse_which(
             order,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
@@ -319,11 +331,15 @@ fn parse_which(
             tokenizer_json,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,

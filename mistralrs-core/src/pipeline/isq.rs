@@ -1,13 +1,21 @@
 use std::{
-    collections::HashSet,
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    path::PathBuf,
     str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
     time::Instant,
 };
 
-use candle_core::Device;
-use indicatif::{ProgressBar, ProgressStyle};
-use mistralrs_quant::{IsqType, QuantMethod};
+use candle_core::{Device, Tensor};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use mistralrs_quant::{
+    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
+};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IntoParallelRefMutIterator, ParallelIterator,
+};
 use serde::Deserialize;
 use tracing::info;
 
@@ -131,12 +139,14 @@ pub trait IsqModel {
         topology: Option<&Topology>,
         silent: bool,
         organization: IsqOrganization,
+        write_artifacts: Option<&PathBuf>,
     ) -> candle_core::Result<()> {
         {
-            let (tensors, mapper) = match organization {
+            let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
                 IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
             };
+
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
             if let Some(topology) = topology {
@@ -229,13 +239,11 @@ pub trait IsqModel {
 
                 pool.install(|| {
                     use indicatif::ParallelProgressIterator;
-                    use rayon::iter::{
-                        IndexedParallelIterator, IntoParallelIterator, ParallelIterator,
-                    };
+                    use rayon::iter::{IndexedParallelIterator, ParallelIterator};
                     if silent {
-                        tensors.into_par_iter().zip(devices_and_dtypes).for_each(
+                        tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
                             |((tensor, _), (device, dtype))| {
-                                *tensor = tensor
+                                **tensor = tensor
                                     .clone()
                                     .apply_isq(dtype, device.clone(), &n_quantized)
                                     .unwrap();
@@ -244,11 +252,11 @@ pub trait IsqModel {
                         );
                     } else {
                         tensors
-                            .into_par_iter()
+                            .par_iter_mut()
                             .zip(devices_and_dtypes)
                             .progress_with(bar)
                             .for_each(|((tensor, _), (device, dtype))| {
-                                *tensor = tensor
+                                **tensor = tensor
                                     .clone()
                                     .apply_isq(dtype, device.clone(), &n_quantized)
                                     .unwrap();
@@ -256,6 +264,72 @@ pub trait IsqModel {
                             });
                     }
                 });
+
+                if let Some(serialized) = write_artifacts {
+                    info!(
+                        "Serializing {total_tensors} ISQ tensors to `{}`.",
+                        serialized.display()
+                    );
+
+                    if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                        candle_core::bail!(
+                            "UQFF output path extension must be {:?}",
+                            serialized.extension().as_ref().unwrap()
+                        );
+                    }
+
+                    let bar = ProgressBar::new(total_tensors as u64);
+                    bar.set_style(
+                        ProgressStyle::default_bar()
+                            .template(
+                                "[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})",
+                            )
+                            .unwrap()
+                            .progress_chars("#>-"),
+                    );
+
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(2)
+                        .build()
+                        .map_err(candle_core::Error::msg)?;
+
+                    let quantized_values = pool.install(|| {
+                        if silent {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        Tensor::new(
+                                            Cow::into_owned(layer.serialize()?),
+                                            &Device::Cpu,
+                                        )?,
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        } else {
+                            tensors
+                                .par_iter()
+                                .enumerate()
+                                .progress_with(bar)
+                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                                .map(|(i, (layer, _))| {
+                                    Ok((
+                                        i.to_string(),
+                                        Tensor::new(
+                                            Cow::into_owned(layer.serialize()?),
+                                            &Device::Cpu,
+                                        )?,
+                                    ))
+                                })
+                                .collect::<candle_core::Result<Vec<_>>>()
+                        }
+                    });
+
+                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+                }
             }
 
             #[cfg(feature = "metal")]
@@ -288,6 +362,136 @@ pub trait IsqModel {
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
             info!("Applied in-situ quantization into {dtype:?} to {n_quantized:?} tensors out of {total_tensors} total tensors. Took {delta:.2}s", );
         }
+        Ok(())
+    }
+
+    fn load_from_artifacts(
+        &mut self,
+        device: Device,
+        topology: Option<&Topology>,
+        silent: bool,
+        artifacts: &PathBuf,
+    ) -> candle_core::Result<()> {
+        let (tensors, mapper) = self.get_layers();
+        let total_tensors = tensors.len();
+
+        let layers = topology.map(|x| {
+            x.0.iter()
+                .filter_map(|topo| topo.as_ref().map(|x| (x.isq, x.device.clone())))
+                .collect::<Vec<_>>()
+        });
+
+        let mut devices = Vec::new();
+        for (_, layer_num) in &tensors {
+            let device = if let Some(ref layers) = layers {
+                if let Some(layer) = layer_num {
+                    layers
+                        .get(*layer)
+                        .as_ref()
+                        .map(|x| x.1.clone())
+                        .unwrap_or(Some(device.clone()))
+                        .unwrap_or(device.clone())
+                } else {
+                    device.clone()
+                }
+            } else if let Some(layer_num) = layer_num {
+                mapper
+                    .device_for(*layer_num, false)
+                    .cloned()
+                    .unwrap_or(device.clone())
+            } else {
+                device.clone()
+            };
+            devices.push(device);
+        }
+
+        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+
+        let artifact_isqs = artifacts
+            .tensors()
+            .into_iter()
+            .map(|(name, tensor)| {
+                (
+                    name.parse::<usize>()
+                        .expect("Name should be parseable as usize"),
+                    tensor,
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        if artifact_isqs.len() != total_tensors {
+            candle_core::bail!(
+                "Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})",
+                artifact_isqs.len(),
+            );
+        }
+
+        let bar = ProgressBar::new(total_tensors as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+
+        let t_start = Instant::now();
+
+        if silent {
+            (0..tensors.len())
+                .into_par_iter()
+                .zip(tensors)
+                .map(|(i, (tensor, _))| {
+                    if let Some(artifact) = artifact_isqs.get(&i) {
+                        let artifact = artifact.data();
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                        let isq_type = artifact[4];
+                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
+                            QuantizedSerdeType::Gguf => {
+                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Unquant => {
+                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Hqq => {
+                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                        };
+                        *tensor = deserialized;
+                    }
+                    Ok(())
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+        } else {
+            (0..tensors.len())
+                .into_par_iter()
+                .zip(tensors)
+                .progress_with(bar)
+                .map(|(i, (tensor, _))| {
+                    if let Some(artifact) = artifact_isqs.get(&i) {
+                        let artifact = artifact.data();
+                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                        let isq_type = artifact[4];
+                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
+                            QuantizedSerdeType::Gguf => {
+                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Unquant => {
+                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Hqq => {
+                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                        };
+                        *tensor = deserialized;
+                    }
+                    Ok(())
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+        }
+
+        let delta = Instant::now().duration_since(t_start).as_secs_f32();
+        info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
+
         Ok(())
     }
 }
