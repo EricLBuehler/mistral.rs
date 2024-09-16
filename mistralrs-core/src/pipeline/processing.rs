@@ -51,7 +51,7 @@ pub trait Processor {
                 "Default `Processor::process` requires the model to have a tokenizer."
             })?
             .encode(prompt.clone(), true)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+            .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;

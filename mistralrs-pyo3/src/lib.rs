@@ -15,7 +15,7 @@ use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
 use util::{PyApiErr, PyApiResult};
 
-use candle_core::Device;
+use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
@@ -35,19 +35,28 @@ mod util;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
 
-static DEVICE: OnceLock<Device> = OnceLock::new();
+static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
 #[cfg(not(feature = "metal"))]
-fn get_device() -> Device {
-    DEVICE
-        .get_or_init(|| Device::cuda_if_available(0).expect("Failed to create device"))
-        .clone()
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = Device::cuda_if_available(0)?;
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
 }
+
 #[cfg(feature = "metal")]
-fn get_device() -> Device {
-    DEVICE
-        .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
-        .clone()
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = Device::new_metal(0)?;
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
 }
 
 #[pyclass]
@@ -90,6 +99,7 @@ fn parse_which(
             tokenizer_json,
             Some(model_id),
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
@@ -110,6 +120,7 @@ fn parse_which(
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -138,6 +149,7 @@ fn parse_which(
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -161,6 +173,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
@@ -180,6 +193,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -207,6 +221,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -234,6 +249,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGML {
             tok_model_id,
@@ -257,6 +273,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -288,6 +305,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -336,6 +354,7 @@ impl Runner {
         pa_blk_size = None,
         no_paged_attn = false,
         prompt_batchsize = None,
+        seed = None,
     ))]
     fn new(
         which: Which,
@@ -355,6 +374,7 @@ impl Runner {
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
         prompt_batchsize: Option<usize>,
+        seed: Option<u64>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -429,7 +449,7 @@ impl Runner {
             loader
         };
 
-        let device = get_device();
+        let device = get_device(seed).as_ref().map_err(PyApiErr::from)?;
         let isq = if let Some(isq) = in_situ_quant {
             Some(parse_isq_value(&isq).map_err(PyApiErr::from)?)
         } else {
@@ -519,7 +539,7 @@ impl Runner {
                 None,
                 TokenSource::from_str(token_source).map_err(PyApiErr::from)?,
                 &ModelDType::Auto,
-                &device,
+                device,
                 true, // Silent for jupyter
                 mapper,
                 isq,

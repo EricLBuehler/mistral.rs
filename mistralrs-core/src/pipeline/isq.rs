@@ -225,7 +225,7 @@ pub trait IsqModel {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(minimum_max_threads)
                     .build()
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    .map_err(candle_core::Error::msg)?;
 
                 pool.install(|| {
                     use indicatif::ParallelProgressIterator;

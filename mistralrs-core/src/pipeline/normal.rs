@@ -99,6 +99,7 @@ pub struct NormalSpecificConfig {
 }
 
 impl NormalLoaderBuilder {
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
@@ -113,6 +114,12 @@ impl NormalLoaderBuilder {
             kind: ModelKind::Normal,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(
@@ -602,16 +609,16 @@ impl AnyMoePipelineMixin for NormalPipeline {
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -651,9 +658,9 @@ impl AnyMoePipelineMixin for NormalPipeline {
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),

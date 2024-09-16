@@ -268,6 +268,10 @@ struct Args {
     #[clap(subcommand)]
     model: ModelSelected,
 
+    /// Integer seed to ensure reproducible random number generation.
+    #[arg(short, long)]
+    seed: Option<u64>,
+
     /// Number of prompt tokens to run.
     #[arg(long, short = 'p', default_value_t = 512)]
     n_prompt: usize,
@@ -350,6 +354,10 @@ fn main() -> anyhow::Result<()> {
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
+
+    if let Some(seed) = args.seed {
+        device.set_seed(seed)?;
+    }
 
     let token_source = TokenSource::CacheToken;
     info!(

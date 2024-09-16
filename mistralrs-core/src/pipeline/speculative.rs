@@ -588,7 +588,7 @@ impl Pipeline for SpeculativePipeline {
                                     "`SpeculativePipeline::step` requires a token trie".to_string(),
                                 ))?
                                 .append_token(rx.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                                .map_err(candle_core::Error::msg)?;
                         }
                         SequenceRecognizer::Cfg(ref mut cfg) => {
                             get_mut_arcmutex!(self.target)
@@ -599,7 +599,7 @@ impl Pipeline for SpeculativePipeline {
                                     "`SpeculativePipeline::step` requires a token trie".to_string(),
                                 ))?
                                 .append_token(cfg.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                                .map_err(candle_core::Error::msg)?;
                         }
                         SequenceRecognizer::None => {}
                     }
