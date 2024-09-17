@@ -492,6 +492,48 @@ impl T5LayerCrossAttention {
     }
 }
 
+trait TensorInfExtend {
+    fn is_inf(&self) -> Result<Self> where Self: Sized;
+    fn any(&self) -> Result<bool>;
+}
+
+impl TensorInfExtend for Tensor {
+    fn is_inf(&self) -> Result<Self> {
+        self.broadcast_eq(&Tensor::new(f64::INFINITY, self.device())?.to_dtype(self.dtype())?)
+    }
+
+    fn any(&self) -> Result<bool> {
+        let sum = self.sum_all()?;
+        match self.dtype() {
+            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
+            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
+            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
+            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
+            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
+            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
+            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
+            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
+        }
+    }
+}
+
+fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
+    let mut max = match xs.dtype() {
+        DType::U8 => u8::MAX as f64 - 1000.,
+        DType::U32 => u32::MAX as f64 - 1000.,
+        DType::I32 => i32::MAX as f64 - 1000.,
+        DType::I64 => i64::MAX as f64 - 1000.,
+        DType::F16 => half::f16::MAX.to_f64_const() - 1000.,
+        DType::BF16 => half::bf16::MAX.to_f64_const() - 1000.,
+        DType::F32 => f32::MAX as f64 - 1000.,
+        DType::F64 => f64::MAX - 1000.,
+    };
+    if xs.is_inf()?.any()? {
+        max = max - 1000.;
+    }
+    xs.clamp(-max, max)
+}
+
 #[derive(Debug, Clone)]
 struct T5Block {
     self_attn: T5LayerSelfAttention,
@@ -544,13 +586,22 @@ impl T5Block {
             false => None,
         };
         let (mut xs, position_bias) = self.self_attn.forward(xs, position_bias, mask.as_ref())?;
-        // TODO: clamp for f16?
+        // Clamp for f16
+        if xs.dtype() == DType::F16 {
+            xs = clamp_for_f16(&xs)?;
+        }
         if let Some(cross_attn) = &self.cross_attn {
             (xs, _) = cross_attn.forward(&xs, None, encoder_hidden_states.unwrap())?;
-            // TODO: clamp for f16?
+            // Clamp for f16
+            if xs.dtype() == DType::F16 {
+                xs = clamp_for_f16(&xs)?;
+            }
         }
-        let xs = self.ff.forward(&xs)?;
-        // TODO: clamp for f16?
+        let mut xs = self.ff.forward(&xs)?;
+        // Clamp for f16
+        if xs.dtype() == DType::F16 {
+            xs = clamp_for_f16(&xs)?;
+        }
         Ok((xs, position_bias))
     }
 }
