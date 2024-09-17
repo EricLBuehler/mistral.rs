@@ -125,7 +125,6 @@ impl Engine {
                 }
 
                 else => {
-
                     let scheduled = self.scheduler.schedule();
 
                     match scheduled {
@@ -443,6 +442,8 @@ impl Engine {
                         }
                     }
 
+                    // if there are no more pending requests in the scheduler, yield the current task
+                    // this will mark the task as `Pending` for one runtime tick, the loop will resume on the next tick
                     if self.scheduler.waiting_len() == 0 {
                         tokio::task::yield_now().await;
                     }
