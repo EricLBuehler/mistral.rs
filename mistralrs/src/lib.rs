@@ -50,7 +50,7 @@
 //! ```
 
 pub mod messages;
-pub use messages::{RequestLike, TextMessageRole, TextMessages};
+pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages};
 
 pub mod text_model;
 pub use text_model::{PagedAttentionMetaBuilder, TextModel, TextModelBuilder};

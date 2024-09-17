@@ -1,5 +1,7 @@
 use anyhow::Result;
-use mistralrs::{IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModel};
+use mistralrs::{
+    IsqType, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages, TextModel,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,6 +28,24 @@ async fn main() -> Result<()> {
     dbg!(
         response.usage.avg_prompt_tok_per_sec,
         response.usage.avg_compl_tok_per_sec
+    );
+
+    let request = RequestBuilder::new().return_logprobs(true).add_message(
+        TextMessageRole::User,
+        "Please write a mathematical equation where a few numbers are added.",
+    );
+
+    let response = model.send_chat_request(request).await?;
+
+    println!(
+        "{:?}",
+        &response.choices[0]
+            .logprobs
+            .as_ref()
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap()[0..3]
     );
 
     Ok(())
