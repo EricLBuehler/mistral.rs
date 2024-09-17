@@ -24,6 +24,7 @@ either.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 rand = "0.8.5"
+buildstructor.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]

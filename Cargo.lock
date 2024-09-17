@@ -2091,6 +2091,7 @@ name = "mistralrs"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "buildstructor",
  "candle-core",
  "either",
  "futures",

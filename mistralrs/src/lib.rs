@@ -49,5 +49,11 @@
 //! }
 //! ```
 
+pub mod messages;
+pub use messages::{RequestLike, TextMessageRole, TextMessages};
+
+pub mod text_model;
+pub use text_model::{PagedAttentionMetaBuilder, TextModel, TextModelBuilder};
+
 pub use candle_core::{DType, Device, Result, Tensor};
 pub use mistralrs_core::*;
