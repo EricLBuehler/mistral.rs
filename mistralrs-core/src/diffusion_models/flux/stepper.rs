@@ -21,8 +21,6 @@ use super::{autoencoder::AutoEncoder, model::Flux};
 const T5_XXL_SAFETENSOR_FILES: &[&str] = &[
     "t5_xxl-shard-0.safetensors",
     "t5_xxl-shard-1.safetensors",
-    "t5_xxl-shard-2.safetensors",
-    "t5_xxl-shard-3.safetensors",
 ];
 
 #[derive(Clone, Copy, Debug)]
