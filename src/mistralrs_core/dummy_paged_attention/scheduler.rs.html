@@ -360,6 +360,9 @@
 <a href="#360" id="360">360</a>
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! The Scheduler uses a BlockEngine to schedule and automatically batch sequences. The
 //! primary method `schedule` returns the batched sequences as inputs, as well as the
 //! operations to be executed on the cache by the CacheEngine.
@@ -707,7 +710,10 @@
         }
     }
     <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.waiting.len()
+        <span class="self">self</span>.waiting.len() + <span class="self">self</span>.swapped_out.len()
+    }
+    <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.running.len()
     }
     <span class="kw">fn </span>block_tables(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>BlockTables&gt; {
         <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.block_engine.block_tables)

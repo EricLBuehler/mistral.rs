@@ -57,6 +57,7 @@
 <a href="#57" id="57">57</a>
 <a href="#58" id="58">58</a>
 <a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>default_scheduler;
 
 <span class="kw">pub use </span>default_scheduler::{DefaultScheduler, DefaultSchedulerMethod, DefaultSchedulerOutput};
@@ -107,6 +108,7 @@
 <span class="kw">pub trait </span>Scheduler {
     <span class="kw">fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; SchedulerOutput&lt;<span class="lifetime">'_</span>&gt;;
     <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
+    <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>add_seq(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: Sequence);
     <span class="doccomment">/// This may do nothing. It depends on the implementation
     </span><span class="kw">fn </span>free_finished_sequence_groups(<span class="kw-2">&amp;mut </span><span class="self">self</span>);

@@ -327,6 +327,9 @@
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
 <a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
@@ -636,6 +639,9 @@
     }
     <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.waiting.len()
+    }
+    <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.running.len()
     }
     <span class="kw">fn </span>add_seq(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: Sequence) {
         <span class="kw">if </span>seq.is_running() {
