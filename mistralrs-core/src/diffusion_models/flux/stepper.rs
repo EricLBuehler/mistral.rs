@@ -97,7 +97,7 @@ fn get_t5_model(
     silent: bool,
 ) -> candle_core::Result<T5EncoderModel> {
     let repo = api.repo(hf_hub::Repo::with_revision(
-        "EricB/t5-v1_1-xxl".to_string(),
+        "EricB/t5-v1_1-xxl-enc-only".to_string(),
         hf_hub::RepoType::Model,
         "main".to_string(),
     ));
