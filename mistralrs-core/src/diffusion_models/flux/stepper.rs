@@ -123,7 +123,6 @@ fn get_t5_model(
 
 fn get_clip_model_and_tokenizer(
     api: &Api,
-    dtype: DType,
     device: &Device,
     silent: bool,
 ) -> anyhow::Result<(ClipTextTransformer, Tokenizer)> {
@@ -132,14 +131,7 @@ fn get_clip_model_and_tokenizer(
     ));
 
     let model_file = repo.get("model.safetensors")?;
-    let vb = from_mmaped_safetensors(
-        vec![model_file],
-        vec![],
-        Some(dtype),
-        device,
-        silent,
-        |_| true,
-    )?;
+    let vb = from_mmaped_safetensors(vec![model_file], vec![], None, device, silent, |_| true)?;
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
@@ -176,8 +168,7 @@ impl FluxStepper {
         info!("Loading T5 XXL tokenizer.");
         let t5_tokenizer = get_t5_tokenizer(&api)?;
         info!("Loading CLIP model and tokenizer.");
-        let (clip_encoder, clip_tokenizer) =
-            get_clip_model_and_tokenizer(&api, dtype, device, silent)?;
+        let (clip_encoder, clip_tokenizer) = get_clip_model_and_tokenizer(&api, device, silent)?;
 
         Ok(Self {
             cfg,
@@ -218,7 +209,10 @@ impl DiffusionModel for FluxStepper {
         println!("T5\n{t5_embed}");
 
         let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
-        let clip_embed = self.clip_text.forward(&clip_input_ids)?;
+        let clip_embed = self
+            .clip_text
+            .forward(&clip_input_ids)?
+            .to_dtype(self.dtype)?;
         println!("CLIP\n{clip_embed}");
 
         let img = flux::sampling::get_noise(
