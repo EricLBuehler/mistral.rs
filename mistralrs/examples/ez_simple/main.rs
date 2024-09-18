@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let response = model.send_chat_request(request).await?;
 
     println!(
-        "{:?}",
+        "Logprobs: {:?}",
         &response.choices[0]
             .logprobs
             .as_ref()

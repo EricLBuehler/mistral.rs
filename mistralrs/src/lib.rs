@@ -2,49 +2,38 @@
 //!
 //! ## Example
 //! ```no_run
-//! use std::sync::Arc;
-//! use tokio::sync::mpsc::channel;
-//!
+//! use anyhow::Result;
 //! use mistralrs::{
-//!     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-//!     NormalLoaderType, NormalRequest, Request, RequestMessage, Response,
-//!     SamplingParams, SchedulerConfig, DefaultSchedulerMethod, TokenSource,
+//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModel,
 //! };
 //!
-//! fn setup() -> anyhow::Result<Arc<MistralRs>> {
-//!     // See the examples for how to load your model.
-//!     todo!()
-//! }
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let model = TextModel::builder("microsoft/Phi-3.5-mini-instruct".to_string())
+//!         .with_isq(IsqType::Q8_0)
+//!         .with_logging()
+//!         .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+//!         .build()
+//!         .await?;
 //!
-//! fn main() -> anyhow::Result<()> {
-//!     let mistralrs = setup()?;
+//!     let messages = TextMessages::new()
+//!         .add_message(
+//!             TextMessageRole::System,
+//!             "You are an AI agent with a specialty in programming.",
+//!         )
+//!         .add_message(
+//!             TextMessageRole::User,
+//!             "Hello! How are you? Please write generic binary search function in Rust.",
+//!         );
 //!
-//!     let (tx, mut rx) = channel(10_000);
-//!     let request = Request::Normal(NormalRequest {
-//!         messages: RequestMessage::Completion {
-//!             text: "Hello! My name is ".to_string(),
-//!             echo_prompt: false,
-//!             best_of: 1,
-//!         },
-//!         sampling_params: SamplingParams::default(),
-//!         response: tx,
-//!         return_logprobs: false,
-//!         is_streaming: false,
-//!         id: 0,
-//!         constraint: Constraint::None,
-//!         suffix: None,
-//!         adapters: None,
-//!         tool_choice: None,
-//!         tools: None,
-//!         logits_processors: None,
-//!     });
-//!     mistralrs.get_sender()?.blocking_send(request)?;
+//!     let response = model.send_chat_request(messages).await?;
 //!
-//!     let response = rx.blocking_recv().unwrap();
-//!     match response {
-//!         Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
-//!         _ => unreachable!(),
-//!     }
+//!     println!("{}", response.choices[0].message.content.as_ref().unwrap());
+//!     dbg!(
+//!         response.usage.avg_prompt_tok_per_sec,
+//!         response.usage.avg_compl_tok_per_sec
+//!     );
+//!
 //!     Ok(())
 //! }
 //! ```
