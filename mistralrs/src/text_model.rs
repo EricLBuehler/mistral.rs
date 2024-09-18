@@ -116,81 +116,99 @@ impl TextModelBuilder {
         }
     }
 
+    /// Set the prompt batchsize to use for inference.
     pub fn with_prompt_batchsize(mut self, prompt_batchsize: NonZeroUsize) -> Self {
         self.prompt_batchsize = Some(prompt_batchsize);
         self
     }
 
+    /// Set the model topology for use during loading.
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
     }
 
+    /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, https://arxiv.org/abs/2310.02410)
     pub fn with_mixture_qexperts_isq(mut self) -> Self {
         self.organization = IsqOrganization::MoeExpertsOnly;
         self
     }
 
+    /// Literal Jinja chat template OR Path (ending in `.json`) to one.
     pub fn with_chat_template(mut self, chat_template: String) -> Self {
         self.chat_template = Some(chat_template);
         self
     }
 
+    /// Path to a discrete `tokenizer.json` file.
     pub fn with_tokenizer_json(mut self, tokenizer_json: String) -> Self {
         self.tokenizer_json = Some(tokenizer_json);
         self
     }
 
+    /// Manually set the model loader type. Otherwise, it will attempt to automatically
+    /// determine the loader type.
     pub fn with_loader_type(mut self, loader_type: NormalLoaderType) -> Self {
         self.loader_type = Some(loader_type);
         self
     }
 
+    /// Load the model in a certain dtype.
     pub fn with_dtype(mut self, dtype: ModelDType) -> Self {
         self.dtype = dtype;
         self
     }
 
+    /// Force usage of the CPU device. Do not use PagedAttention with this.
     pub fn with_force_cpu(mut self) -> Self {
         self.force_cpu = true;
         self
     }
 
+    /// Source of the Hugging Face token.
     pub fn with_token_source(mut self, token_source: TokenSource) -> Self {
         self.token_source = token_source;
         self
     }
 
+    /// Set the revision to use for a Hugging Face remote model.
     pub fn with_hf_revision(mut self, revision: String) -> Self {
         self.hf_revision = Some(revision);
         self
     }
 
+    /// Use ISQ of a certain type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
         self
     }
 
+    /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
+    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
     pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
         self.paged_attn_cfg = Some(paged_attn_cfg);
         self
     }
 
+    /// Set the maximum number of sequences which can be run at once.
     pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
         self.max_num_seqs = max_num_seqs;
         self
     }
 
+    /// Disable KV cache. Trade performance for memory usage.
     pub fn with_no_kv_cache(mut self) -> Self {
         self.no_kv_cache = true;
         self
     }
 
+    /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
     pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
         self.prefix_cache_n = n_seqs;
         self
     }
 
+    /// Enable logging.
     pub fn with_logging(mut self) -> Self {
         self.with_logging = true;
         self
@@ -275,6 +293,7 @@ impl TextModel {
         TextModelBuilder::new(model_id)
     }
 
+    /// Generate with the model.
     pub async fn send_chat_request<R: RequestLike>(
         &self,
         mut request: R,

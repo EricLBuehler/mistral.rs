@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
         response.usage.avg_compl_tok_per_sec
     );
 
+    // Next example: Return some logprobs with the `RequestBuilder`, which enables higher configurability.
     let request = RequestBuilder::new().return_logprobs(true).add_message(
         TextMessageRole::User,
         "Please write a mathematical equation where a few numbers are added.",
