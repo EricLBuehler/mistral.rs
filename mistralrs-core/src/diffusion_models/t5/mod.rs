@@ -493,7 +493,9 @@ impl T5LayerCrossAttention {
 }
 
 trait TensorInfExtend {
-    fn is_inf(&self) -> Result<Self> where Self: Sized;
+    fn is_inf(&self) -> Result<Self>
+    where
+        Self: Sized;
     fn any(&self) -> Result<bool>;
 }
 
