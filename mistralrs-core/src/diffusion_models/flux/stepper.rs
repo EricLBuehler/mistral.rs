@@ -87,18 +87,21 @@ fn get_t5_model_and_tokenizr(
     silent: bool,
 ) -> anyhow::Result<(T5EncoderModel, Tokenizer)> {
     let repo = api.repo(hf_hub::Repo::with_revision(
-        "google/t5-v1_1-xxl".to_string(),
+        "EricB/t5-v1_1-xxl".to_string(),
         hf_hub::RepoType::Model,
-        "refs/pr/2".to_string(),
+        "main".to_string(),
     ));
 
     let vb = from_mmaped_safetensors(
-        vec![repo.get("model.safetensors")?],
+        T5_XXL_SAFETENSOR_FILES
+            .iter()
+            .map(|f| repo.get(f))
+            .collect::<std::result::Result<Vec<_>, ApiError>>()?,
         vec![],
         Some(dtype),
         device,
         silent,
-        |key| key.starts_with("encoder.") || key == "shared.weight",
+        |_| true,
     )?;
     let config_filename = repo.get("config.json")?;
     let config = std::fs::read_to_string(config_filename)?;
