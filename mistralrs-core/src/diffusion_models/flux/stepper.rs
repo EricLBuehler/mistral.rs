@@ -192,7 +192,7 @@ impl FluxStepper {
 
 impl DiffusionModel for FluxStepper {
     fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
-        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &self.device)?.to_dtype(self.dtype)?;
+        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &Device::Cpu)?;
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
                 Ordering::Greater => {
@@ -206,14 +206,14 @@ impl DiffusionModel for FluxStepper {
         }
 
         println!("T5 ids\n{t5_input_ids}");
-        let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?;
+        let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?.to_dtype(self.dtype)?;
         println!("T5\n{t5_embed}");
 
-        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?.to_dtype(self.dtype)?;
+        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &Device::Cpu)?.to_dtype(self.dtype)?;
         let clip_embed = self
             .clip_text
             .forward(&clip_input_ids)?
-            .to_device(&self.device)?;
+            .to_device(&self.device)?.to_dtype(self.dtype)?;
         println!("CLIP\n{clip_embed}");
 
         let img = flux::sampling::get_noise(
