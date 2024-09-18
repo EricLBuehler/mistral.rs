@@ -70,7 +70,6 @@ impl FluxStepperConfig {
 pub struct FluxStepper {
     cfg: FluxStepperConfig,
     t5_tok: Tokenizer,
-    t5: T5EncoderModel,
     clip_tok: Tokenizer,
     clip_text: ClipTextTransformer,
     flux_model: Flux,
@@ -78,14 +77,25 @@ pub struct FluxStepper {
     is_guidance: bool,
     device: Device,
     dtype: DType,
+    api: Api,
+    silent: bool,
 }
 
-fn get_t5_model_and_tokenizr(
+fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
+    let tokenizer_filename = api
+        .model("EricB/t5_tokenizer".to_string())
+        .get("t5-v1_1-xxl.tokenizer.json")?;
+    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
+
+    Ok(tokenizer)
+}
+
+fn get_t5_model(
     api: &Api,
     dtype: DType,
     device: &Device,
     silent: bool,
-) -> anyhow::Result<(T5EncoderModel, Tokenizer)> {
+) -> candle_core::Result<T5EncoderModel> {
     let repo = api.repo(hf_hub::Repo::with_revision(
         "EricB/t5-v1_1-xxl".to_string(),
         hf_hub::RepoType::Model,
@@ -96,24 +106,19 @@ fn get_t5_model_and_tokenizr(
         T5_XXL_SAFETENSOR_FILES
             .iter()
             .map(|f| repo.get(f))
-            .collect::<std::result::Result<Vec<_>, ApiError>>()?,
+            .collect::<std::result::Result<Vec<_>, ApiError>>()
+            .map_err(candle_core::Error::msg)?,
         vec![],
         Some(dtype),
         device,
         silent,
         |_| true,
     )?;
-    let config_filename = repo.get("config.json")?;
+    let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
     let config = std::fs::read_to_string(config_filename)?;
-    let config: t5::Config = serde_json::from_str(&config)?;
-    let model = t5::T5EncoderModel::load(vb, &config)?;
+    let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
 
-    let tokenizer_filename = api
-        .model("EricB/t5_tokenizer".to_string())
-        .get("t5-v1_1-xxl.tokenizer.json")?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
-
-    Ok((model, tokenizer))
+    t5::T5EncoderModel::load(vb, &config)
 }
 
 fn get_clip_model_and_tokenizer(
@@ -168,17 +173,15 @@ impl FluxStepper {
     ) -> anyhow::Result<Self> {
         let api = Api::new()?;
 
-        info!("Loading T5 XXL model and tokenizer.");
-        let (t5_encoder, t5_tokenizer) =
-            get_t5_model_and_tokenizr(&api, DType::F16, &Device::Cpu, silent)?;
+        info!("Loading T5 XXL tokenizer.");
+        let t5_tokenizer = get_t5_tokenizer(&api)?;
         info!("Loading CLIP model and tokenizer.");
         let (clip_encoder, clip_tokenizer) =
-            get_clip_model_and_tokenizer(&api, DType::F16, &Device::Cpu, silent)?;
+            get_clip_model_and_tokenizer(&api, dtype, device, silent)?;
 
         Ok(Self {
             cfg,
             t5_tok: t5_tokenizer,
-            t5: t5_encoder,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
             flux_model: Flux::new(flux_cfg, flux_vb)?,
@@ -186,13 +189,15 @@ impl FluxStepper {
             is_guidance: cfg.is_guidance,
             device: device.clone(),
             dtype,
+            api,
+            silent,
         })
     }
 }
 
 impl DiffusionModel for FluxStepper {
     fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
-        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &Device::Cpu)?;
+        let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &self.device)?;
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
                 Ordering::Greater => {
@@ -205,15 +210,15 @@ impl DiffusionModel for FluxStepper {
             }
         }
 
+        info!("Hotloading T5 XXL model.");
+        let t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
+
         println!("T5 ids\n{t5_input_ids}");
-        let t5_embed = self.t5.forward(&t5_input_ids)?.to_device(&self.device)?.to_dtype(self.dtype)?;
+        let t5_embed = t5_encoder.forward(&t5_input_ids)?;
         println!("T5\n{t5_embed}");
 
-        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &Device::Cpu)?;
-        let clip_embed = self
-            .clip_text
-            .forward(&clip_input_ids)?
-            .to_device(&self.device)?.to_dtype(self.dtype)?;
+        let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
+        let clip_embed = self.clip_text.forward(&clip_input_ids)?;
         println!("CLIP\n{clip_embed}");
 
         let img = flux::sampling::get_noise(

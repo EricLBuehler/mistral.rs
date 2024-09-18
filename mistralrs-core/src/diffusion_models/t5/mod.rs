@@ -531,7 +531,7 @@ fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::F64 => f64::MAX - 1000.,
     };
     if xs.is_inf()?.any()? {
-        max = max - 1000.;
+        max -= 1000.;
     }
     xs.clamp(-max, max)
 }
