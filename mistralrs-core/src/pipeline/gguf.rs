@@ -115,6 +115,8 @@ impl GGUFLoaderBuilder {
     /// Create a loader builder for a GGUF model. `tok_model_id` is the model ID where you can find a
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
+    ///
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         chat_template: Option<String>,
         tok_model_id: Option<String>,
@@ -135,6 +137,12 @@ impl GGUFLoaderBuilder {
             config,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(

@@ -28,9 +28,9 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_write_uqff_paths,
+    lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -43,7 +43,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -73,6 +73,8 @@ pub struct NormalLoader {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
 }
 
 #[derive(Default)]
@@ -96,9 +98,12 @@ pub struct NormalSpecificConfig {
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
@@ -113,6 +118,12 @@ impl NormalLoaderBuilder {
             kind: ModelKind::Normal,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(
@@ -190,6 +201,8 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
         }))
     }
 }
@@ -210,12 +223,17 @@ impl Loader for NormalLoader {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
             silent
         );
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -271,7 +289,7 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let mut loading_isq = in_situ_quant.is_some();
+        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -344,13 +362,24 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if in_situ_quant.is_some() || self.config.topology.is_some() {
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.from_uqff.is_none()
+        {
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
                 self.config.organization,
+                self.config.write_uqff.as_ref(),
+            )?;
+        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
+            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                &from_uqff,
             )?;
         }
 
@@ -444,6 +473,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 self.organization,
+                None,
             )
             .map_err(anyhow::Error::msg)
     }

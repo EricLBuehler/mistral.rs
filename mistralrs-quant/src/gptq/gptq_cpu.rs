@@ -1,4 +1,4 @@
-use crate::{IsqType, QuantMethod, QuantMethodConfig};
+use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 use candle_core::{DType, Device, Result, Tensor};
 use std::{
     num::NonZeroUsize,
@@ -63,5 +63,11 @@ impl QuantMethod for GptqLayer {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
+    }
+}
+
+impl QuantizedSerde for GptqLayer {
+    fn name(&self) -> &'static str {
+        "gptq"
     }
 }

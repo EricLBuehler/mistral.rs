@@ -126,17 +126,22 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             dtype: _,
             topology,
             organization,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
             Some(model_id),
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .build(arch)?,
         ModelSelected::XLora {
             model_id,
@@ -147,17 +152,22 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -176,17 +186,22 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -281,6 +296,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -311,6 +327,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -338,6 +355,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .build(),
         ModelSelected::XLoraGGML {
             tok_model_id,
@@ -361,6 +379,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -392,6 +411,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -406,11 +426,15 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             tokenizer_json,

@@ -85,6 +85,8 @@ fn parse_which(
             arch,
             topology,
             organization,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -94,11 +96,14 @@ fn parse_which(
                     .as_deref()
                     .map(IsqOrganization::from_str)
                     .unwrap_or(Ok(Default::default()))?,
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
             Some(model_id),
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
@@ -108,17 +113,22 @@ fn parse_which(
             tgt_non_granular_index,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -136,17 +146,22 @@ fn parse_which(
             order,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -170,6 +185,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
@@ -189,6 +205,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -216,6 +233,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
             },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -243,6 +261,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGML {
             tok_model_id,
@@ -266,6 +285,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -297,6 +317,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -310,11 +331,15 @@ fn parse_which(
             tokenizer_json,
             arch,
             topology,
+            write_uqff,
+            from_uqff,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
             },
             chat_template,
             tokenizer_json,

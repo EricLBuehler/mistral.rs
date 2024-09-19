@@ -34,20 +34,14 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `LLaVa`
 
 ```py
-class Which(Enum):
-    """
-    Which model to select. See the docs for the `Which` enum in API.md for more details.
-    Usage:
-    >>> Which.Plain(...)
-    """
-    @dataclass
+@dataclass
     class Plain:
         model_id: str
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        # ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         organization: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class XLora:
@@ -58,6 +52,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class Lora:
@@ -67,6 +62,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class GGUF:
@@ -131,6 +127,7 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 ```
 
 

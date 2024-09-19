@@ -3,7 +3,10 @@ mod ffi;
 pub(crate) mod isq;
 mod ops;
 
+mod uqff;
+
 pub use ops::{BitWiseOp, LeftshiftOp};
+pub(crate) use uqff::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
