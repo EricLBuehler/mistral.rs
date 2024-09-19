@@ -151,17 +151,17 @@ impl Exl2Layer {
         let c = unsafe { dev.alloc::<f16>(c_shape.elem_count()).w()? };
         let c_ptr = *c.device_ptr() as *mut f16;
 
-        let temp_dq = if m > MAX_Q_GEMM_ROWS {
-            Tensor::zeros(&[k as usize, n as usize], DType::F16, a.device())?
-        } else {
-            Tensor::zeros(&[0, 0], DType::F16, a.device())?
-        };
-        let temp_dq_ptr = get_cuda_slice::<f16>(&temp_dq)?;
-
         if m > MAX_Q_GEMM_ROWS {
+            let temp_dq = if m > MAX_Q_GEMM_ROWS {
+                Tensor::zeros(&[k as usize, n as usize], DType::F16, a.device())?
+            } else {
+                Tensor::zeros(&[0, 0], DType::F16, a.device())?
+            };
+            let temp_dq_ptr = get_cuda_slice::<f16>(&temp_dq)? as *mut f16;
+
             // Reconstruct FP16 matrix, then cuBLAS
             unsafe {
-                exl2_reconstruct_q_matrix(self.exllama_state.lock().unwrap().q_matrix);
+                exl2_reconstruct_q_matrix(self.exllama_state.lock().unwrap().q_matrix, temp_dq_ptr);
             }
 
             let alpha = f16::from_f32(1.0);

@@ -22,7 +22,7 @@ extern "C" {
 
     pub fn exl2_destroy_q_matrix(q_matrix: QMatrixPtr);
 
-    pub fn exl2_reconstruct_q_matrix(q_matrix: QMatrixPtr);
+    pub fn exl2_reconstruct_q_matrix(q_matrix: QMatrixPtr, out: *mut f16);
 
     pub fn exl2_gemm_cuda(a: *const f16, b: *const c_void, c: *mut f16, m: i32, n: i32, k: i32);
 }

@@ -67,13 +67,13 @@ extern "C" uintptr_t exl2_make_q_matrix(
     const int height,
     const int width,
     const int groups,
-    uint32_t q_weight, 
-    uint16_t q_perm,
-    uint16_t q_invperm,
-    uint32_t q_scale,
-    half q_scale_max,
-    uint16_t q_groups,
-    uint16_t q_group_map                        
+    uint32_t* q_weight, 
+    uint16_t* q_perm,
+    uint16_t* q_invperm,
+    uint32_t* q_scale,
+    half* q_scale_max,
+    uint16_t* q_groups,
+    uint16_t* q_group_map                        
 ) {
   QMatrix* m = new QMatrix
   (
@@ -81,20 +81,20 @@ extern "C" uintptr_t exl2_make_q_matrix(
       height, 
       width, 
       groups, 
-      (uint32_t*)q_weight.data_ptr(),
-      (uint16_t*)q_perm.data_ptr(), 
-      (uint16_t*)q_invperm.data_ptr(),
-      (uint32_t*)q_scale.data_ptr(), 
-      (half*)q_scale_max.data_ptr(),
-      (uint16_t*)q_groups.data_ptr(), 
-      (uint16_t*)q_group_map.data_ptr()
+      q_weight,
+      q_perm, 
+      q_invperm,
+      q_scale, 
+      q_scale_max,
+      q_groups, 
+      q_group_map
   );
   return reinterpret_cast<uintptr_t>(m);
 }
 
-extern "C" void exl2_reconstruct_q_matrix(uintptr_t q_matrix) {
+extern "C" void exl2_reconstruct_q_matrix(uintptr_t q_matrix, half* out) {
     QMatrix* m = reinterpret_cast<QMatrix*>(q_matrix);
-    m->reconstruct();
+    m->reconstruct(out);
 }
 
 extern "C" void exl2_destroy_q_matrix(uintptr_t q_matrix) {
