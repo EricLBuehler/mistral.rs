@@ -197,10 +197,11 @@ impl DiffusionModel for FluxStepper {
             }
         }
 
-        info!("Hotloading T5 XXL model.");
-        let t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
-
-        let t5_embed = t5_encoder.forward(&t5_input_ids)?;
+        let t5_embed = {
+            info!("Hotloading T5 XXL model.");
+            let t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
+            t5_encoder.forward(&t5_input_ids)?
+        };
 
         let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
         let clip_embed = self
