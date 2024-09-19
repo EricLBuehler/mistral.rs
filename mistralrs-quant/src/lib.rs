@@ -25,22 +25,24 @@ pub use unquantized::UnquantLinear;
 use candle_nn::{Linear, VarBuilder};
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum QuantMethodType {
-    #[default]
     #[serde(rename = "gptq")]
     Gptq,
+    #[serde(rename = "exl2")]
+    Exl2,
 }
 
 impl Display for QuantMethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Gptq => write!(f, "GPTQ"),
+            Self::Exl2 => write!(f, "EXL2"),
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct QuantizedConfig {
     pub bits: usize,
     pub quant_method: QuantMethodType,
@@ -235,6 +237,7 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Exl2 => todo!(),
         }
     } else {
         let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
@@ -254,6 +257,7 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Exl2 => todo!(),
         }
     } else {
         let layer = candle_nn::linear(in_dim, out_dim, vb)?;

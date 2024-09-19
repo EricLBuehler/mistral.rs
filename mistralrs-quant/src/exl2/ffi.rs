@@ -6,7 +6,7 @@ type QMatrixPtr = *mut c_void;
 
 #[allow(dead_code)]
 extern "C" {
-    pub fn exl2_create_q_matrix(
+    pub fn exl2_make_q_matrix(
         device: i32,
         height: i32, // q_perm.size(0);
         width: i32,  // q_weight.size(1);

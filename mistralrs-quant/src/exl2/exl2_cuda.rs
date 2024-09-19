@@ -20,10 +20,9 @@ use crate::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
-use super::ffi::{exl2_create_q_matrix, exl2_destroy_q_matrix, exl2_reconstruct_q_matrix};
+use super::ffi::{exl2_destroy_q_matrix, exl2_make_q_matrix, exl2_reconstruct_q_matrix};
 
 const MAX_Q_GEMM_ROWS: i32 = 32;
-const BLOCK_M_SIZE_MAX: i32 = 8;
 
 #[derive(Debug)]
 pub struct Exl2Layer {
@@ -70,7 +69,7 @@ impl Exl2Layer {
             q_matrix: std::ptr::null_mut(),
         }));
 
-        Ok(Self {
+        let this = Self {
             q_weight,
             q_scale,
             q_groups,
@@ -78,11 +77,9 @@ impl Exl2Layer {
             bias,
             bits,
             exllama_state,
-        })
-    }
-
-    pub fn post_init(&self) -> Result<()> {
-        self.initialize_exllama()
+        };
+        this.initialize_exllama()?;
+        Ok(this)
     }
 
     fn initialize_exllama(&self) -> Result<()> {
@@ -114,7 +111,7 @@ impl Exl2Layer {
         let b_q_group_map = get_cuda_slice::<i16>(&state.q_group_map)? as *const u16;
 
         state.q_matrix = unsafe {
-            exl2_create_q_matrix(
+            exl2_make_q_matrix(
                 dev_ord,
                 b_height,
                 b_width,
@@ -232,30 +229,17 @@ impl QuantMethod for Exl2Layer {
                 q_group_map,
                 bias,
                 bits,
-            } => {
-                let exllama_state = Arc::new(Mutex::new(ExllamaState {
-                    initialized: false,
-                    q_scale_max,
-                    q_perm,
-                    q_group_map,
-                    q_invperm_short: Tensor::zeros(
-                        q_invperm.shape(),
-                        DType::I16,
-                        q_invperm.device(),
-                    )?,
-                    q_matrix: std::ptr::null_mut(),
-                }));
-
-                Ok(Self {
-                    q_weight,
-                    q_scale,
-                    q_groups,
-                    q_invperm,
-                    bias,
-                    bits,
-                    exllama_state,
-                })
-            }
+            } => Self::new(
+                q_weight,
+                q_scale,
+                q_scale_max,
+                q_groups,
+                q_perm,
+                q_group_map,
+                q_invperm,
+                bias,
+                bits,
+            ),
             QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
