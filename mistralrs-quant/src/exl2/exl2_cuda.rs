@@ -17,7 +17,7 @@ use half::f16;
 
 use crate::{
     utils::{get_cuda_device, get_cuda_slice},
-    IsqType, QuantMethod, QuantMethodConfig,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
 use super::ffi::{exl2_create_q_matrix, exl2_destroy_q_matrix, exl2_reconstruct_q_matrix};
@@ -321,5 +321,14 @@ impl Drop for Exl2Layer {
                 state.q_matrix = std::ptr::null_mut();
             }
         }
+    }
+}
+
+impl QuantizedSerde for Exl2Layer {
+    fn isq_serde_supported(&self) -> bool {
+        false
+    }
+    fn name(&self) -> &'static str {
+        "exl2"
     }
 }

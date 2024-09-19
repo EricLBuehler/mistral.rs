@@ -5,7 +5,7 @@ use half::{bf16, f16};
 
 const HQFF_VERSION_MAJOR: u32 = 0;
 const HQFF_VERSION_MINOR: u32 = 1;
-const HQFF_VERSION_PATCH: u32 = 0;
+const HQFF_VERSION_PATCH: u32 = 1;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 pub(crate) const HQFF_VERSION: u32 =
@@ -47,6 +47,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
     let bias = match tensor.dtype() {
         DType::U8 => data_to_bytes::<u8>(tensor.to_vec1()?),
         DType::U32 => data_to_bytes::<u32>(tensor.to_vec1()?),
+        DType::I16 => data_to_bytes::<i16>(tensor.to_vec1()?),
         DType::I32 => data_to_bytes::<i32>(tensor.to_vec1()?),
         DType::I64 => data_to_bytes::<i64>(tensor.to_vec1()?),
         DType::F16 => data_to_bytes::<half::f16>(tensor.to_vec1()?),
@@ -65,6 +66,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::BF16 => 5,
         DType::F32 => 6,
         DType::F64 => 7,
+        DType::I16 => 8,
     };
     buffer.extend(&dtype.to_le_bytes());
 
@@ -95,6 +97,7 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         5 => DType::BF16,
         6 => DType::F32,
         7 => DType::F64,
+        8 => DType::I16,
         _ => candle_core::bail!("unknown dtype for quantized bias tensor {dtype}"),
     };
 
@@ -113,6 +116,7 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::BF16 => bytes_to_data::<bf16>(&tensor_data, &dims, device),
         DType::F32 => bytes_to_data::<f32>(&tensor_data, &dims, device),
         DType::F64 => bytes_to_data::<f64>(&tensor_data, &dims, device),
+        DType::I16 => bytes_to_data::<i16>(&tensor_data, &dims, device),
         DType::I32 => bytes_to_data::<i32>(&tensor_data, &dims, device),
         DType::I64 => bytes_to_data::<i64>(&tensor_data, &dims, device),
         DType::U32 => bytes_to_data::<u32>(&tensor_data, &dims, device),
