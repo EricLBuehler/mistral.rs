@@ -41,8 +41,8 @@ impl FluxStepperConfig {
     pub fn default_for_guidance(has_guidance: bool) -> Self {
         if has_guidance {
             Self {
-                height: 1380,
-                width: 768,
+                height: 720,
+                width: 1280,
                 num_steps: 50,
                 guidance_config: Some(FluxStepperShift {
                     base_shift: 0.5,
@@ -53,8 +53,8 @@ impl FluxStepperConfig {
             }
         } else {
             Self {
-                height: 1380,
-                width: 768,
+                height: 720,
+                width: 1280,
                 num_steps: 4,
                 guidance_config: None,
                 is_guidance: false,

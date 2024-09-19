@@ -2,8 +2,6 @@
 
 use candle_core::{Device, Result, Tensor};
 
-use crate::utils::progress::NiceProgressBar;
-
 pub fn get_noise(
     num_samples: usize,
     height: usize,
@@ -114,7 +112,7 @@ fn denoise_inner(
         None
     };
     let mut img = img.clone();
-    for window in NiceProgressBar::<_, 'g'>(timesteps.windows(2), "processing timesteps") {
+    for window in timesteps.windows(2) {
         let (t_curr, t_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
