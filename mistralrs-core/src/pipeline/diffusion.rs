@@ -131,7 +131,6 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        dbg!(&paths);
         let paths = &paths
             .as_ref()
             .as_any()
@@ -180,12 +179,13 @@ impl Loader for DiffusionLoader {
                 let vbs = paths
                     .filenames
                     .iter()
-                    .map(|path| {
+                    .zip(self.inner.force_cpu_vb())
+                    .map(|(path, force_cpu)| {
                         from_mmaped_safetensors(
                             vec![path.clone()],
                             Vec::new(),
                             Some(dtype),
-                            device,
+                            if force_cpu { &Device::Cpu } else { device },
                             silent,
                             |_| true,
                         )
@@ -290,7 +290,7 @@ impl MetadataMixin for DiffusionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
         let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
         let img = self.model.forward(prompts)?.to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;

@@ -2,6 +2,8 @@
 
 use candle_core::{Device, Result, Tensor};
 
+use crate::utils::progress::NiceProgressBar;
+
 pub fn get_noise(
     num_samples: usize,
     height: usize,
@@ -95,7 +97,7 @@ pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
 
 #[allow(clippy::too_many_arguments)]
 fn denoise_inner(
-    model: &super::model::Flux,
+    model: &mut super::model::Flux,
     img: &Tensor,
     img_ids: &Tensor,
     txt: &Tensor,
@@ -112,7 +114,7 @@ fn denoise_inner(
         None
     };
     let mut img = img.clone();
-    for window in timesteps.windows(2) {
+    for window in NiceProgressBar::<_, 'g'>(timesteps.windows(2), "processing timesteps") {
         let (t_curr, t_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
@@ -126,7 +128,7 @@ fn denoise_inner(
 
 #[allow(clippy::too_many_arguments)]
 pub fn denoise(
-    model: &super::model::Flux,
+    model: &mut super::model::Flux,
     img: &Tensor,
     img_ids: &Tensor,
     txt: &Tensor,
@@ -149,7 +151,7 @@ pub fn denoise(
 
 #[allow(clippy::too_many_arguments)]
 pub fn denoise_no_guidance(
-    model: &super::model::Flux,
+    model: &mut super::model::Flux,
     img: &Tensor,
     img_ids: &Tensor,
     txt: &Tensor,

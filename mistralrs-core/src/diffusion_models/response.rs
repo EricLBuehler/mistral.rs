@@ -5,7 +5,8 @@ use image::DynamicImage;
 use uuid::Uuid;
 
 use crate::{
-    sequence::Sequence, ImageChoice, ImageGenerationResponse, ImageGenerationResponseFormat,
+    sequence::{Sequence, SequenceState, StopReason},
+    ImageChoice, ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 
 pub async fn send_responses(
@@ -61,6 +62,8 @@ pub async fn send_responses(
             )
             .await
             .map_err(candle_core::Error::msg)?;
+
+        seq.set_state(SequenceState::Done(StopReason::Eos));
     }
 
     Ok(())

@@ -637,7 +637,7 @@ impl MetadataMixin for GGUFPipeline {
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {

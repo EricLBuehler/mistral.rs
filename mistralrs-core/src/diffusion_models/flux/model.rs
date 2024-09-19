@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
 use serde::Deserialize;
 
@@ -294,6 +294,28 @@ impl SelfAttention {
         let (q, k, v) = self.qkv(xs)?;
         attention(&q, &k, &v, pe)?.apply(&self.proj)
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.qkv = Linear::new(
+            self.qkv.weight().to_device(device)?,
+            self.qkv.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.proj = Linear::new(
+            self.proj.weight().to_device(device)?,
+            self.proj.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.norm = QkNorm {
+            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
+                self.norm.query_norm.inner().weight().to_device(device)?,
+                1e-6,
+            ),
+            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
+                self.norm.key_norm.inner().weight().to_device(device)?,
+                1e-6,
+            ),
+        };
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +329,18 @@ impl Mlp {
         let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
         let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
+    }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.lin1 = Linear::new(
+            self.lin1.weight().to_device(device)?,
+            self.lin1.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.lin2 = Linear::new(
+            self.lin2.weight().to_device(device)?,
+            self.lin2.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        Ok(())
     }
 }
 
@@ -401,6 +435,50 @@ impl DoubleStreamBlock {
 
         Ok((img, txt))
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.img_mod.lin = Linear::new(
+            self.img_mod.lin.weight().to_device(device)?,
+            self.img_mod
+                .lin
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.img_norm1 = LayerNorm::new(
+            self.img_norm1.weight().to_device(device)?,
+            self.img_norm1.bias().to_device(device)?,
+            1e-6,
+        );
+        self.img_attn.cast_to(device)?;
+        self.img_norm2 = LayerNorm::new(
+            self.img_norm2.weight().to_device(device)?,
+            self.img_norm2.bias().to_device(device)?,
+            1e-6,
+        );
+        self.img_mlp.cast_to(device)?;
+
+        self.txt_mod.lin = Linear::new(
+            self.txt_mod.lin.weight().to_device(device)?,
+            self.txt_mod
+                .lin
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.txt_norm1 = LayerNorm::new(
+            self.txt_norm1.weight().to_device(device)?,
+            self.txt_norm1.bias().to_device(device)?,
+            1e-6,
+        );
+        self.txt_attn.cast_to(device)?;
+        self.txt_norm2 = LayerNorm::new(
+            self.txt_norm2.weight().to_device(device)?,
+            self.txt_norm2.bias().to_device(device)?,
+            1e-6,
+        );
+        self.txt_mlp.cast_to(device)?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -454,6 +532,40 @@ impl SingleStreamBlock {
         let output = Tensor::cat(&[attn, mlp.gelu()?], 2)?.apply(&self.linear2)?;
         xs + mod_.gate(&output)
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.linear1 = Linear::new(
+            self.linear1.weight().to_device(device)?,
+            self.linear1.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.linear2 = Linear::new(
+            self.linear2.weight().to_device(device)?,
+            self.linear2.bias().map(|x| x.to_device(device).unwrap()),
+        );
+        self.norm = QkNorm {
+            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
+                self.norm.query_norm.inner().weight().to_device(device)?,
+                1e-6,
+            ),
+            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
+                self.norm.key_norm.inner().weight().to_device(device)?,
+                1e-6,
+            ),
+        };
+        self.pre_norm = LayerNorm::new(
+            self.pre_norm.weight().to_device(device)?,
+            self.pre_norm.bias().to_device(device)?,
+            1e-6,
+        );
+        self.modulation.lin = Linear::new(
+            self.modulation.lin.weight().to_device(device)?,
+            self.modulation
+                .lin
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -497,12 +609,25 @@ pub struct Flux {
     double_blocks: Vec<DoubleStreamBlock>,
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
+    device: Device,
 }
 
 impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let img_in = candle_nn::linear(cfg.in_channels, HIDDEN_SIZE, vb.pp("img_in"))?;
-        let txt_in = candle_nn::linear(cfg.joint_attention_dim, HIDDEN_SIZE, vb.pp("txt_in"))?;
+    pub fn new(cfg: &Config, vb: VarBuilder, device: Device) -> Result<Self> {
+        if !vb.device().is_cpu() {
+            candle_core::bail!("FLUX model VB device must be CPU");
+        }
+
+        let img_in = candle_nn::linear(
+            cfg.in_channels,
+            HIDDEN_SIZE,
+            vb.pp("img_in").set_device(device.clone()),
+        )?;
+        let txt_in = candle_nn::linear(
+            cfg.joint_attention_dim,
+            HIDDEN_SIZE,
+            vb.pp("txt_in").set_device(device.clone()),
+        )?;
         let mut double_blocks = Vec::with_capacity(cfg.num_layers);
         let vb_d = vb.pp("double_blocks");
         for idx in 0..cfg.num_layers {
@@ -515,16 +640,32 @@ impl Flux {
             let sb = SingleStreamBlock::new(cfg, vb_s.pp(idx))?;
             single_blocks.push(sb)
         }
-        let time_in = MlpEmbedder::new(256, HIDDEN_SIZE, vb.pp("time_in"))?;
-        let vector_in =
-            MlpEmbedder::new(cfg.pooled_projection_dim, HIDDEN_SIZE, vb.pp("vector_in"))?;
+        let time_in = MlpEmbedder::new(
+            256,
+            HIDDEN_SIZE,
+            vb.pp("time_in").set_device(device.clone()),
+        )?;
+        let vector_in = MlpEmbedder::new(
+            cfg.pooled_projection_dim,
+            HIDDEN_SIZE,
+            vb.pp("vector_in").set_device(device.clone()),
+        )?;
         let guidance_in = if cfg.guidance_embeds {
-            let mlp = MlpEmbedder::new(256, HIDDEN_SIZE, vb.pp("guidance_in"))?;
+            let mlp = MlpEmbedder::new(
+                256,
+                HIDDEN_SIZE,
+                vb.pp("guidance_in").set_device(device.clone()),
+            )?;
             Some(mlp)
         } else {
             None
         };
-        let final_layer = LastLayer::new(HIDDEN_SIZE, 1, cfg.in_channels, vb.pp("final_layer"))?;
+        let final_layer = LastLayer::new(
+            HIDDEN_SIZE,
+            1,
+            cfg.in_channels,
+            vb.pp("final_layer").set_device(device.clone()),
+        )?;
         let pe_dim = HIDDEN_SIZE / cfg.num_attention_heads;
         let pe_embedder = EmbedNd::new(pe_dim, THETA, AXES_DIM.to_vec());
         Ok(Self {
@@ -537,12 +678,13 @@ impl Flux {
             double_blocks,
             single_blocks,
             final_layer,
+            device: device.clone(),
         })
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
-        &self,
+        &mut self,
         img: &Tensor,
         img_ids: &Tensor,
         txt: &Tensor,
@@ -574,13 +716,17 @@ impl Flux {
         let vec_ = (vec_ + y.apply(&self.vector_in))?;
 
         // Double blocks
-        for block in self.double_blocks.iter() {
-            (img, txt) = block.forward(&img, &txt, &vec_, &pe)?
+        for block in self.double_blocks.iter_mut() {
+            block.cast_to(&self.device)?;
+            (img, txt) = block.forward(&img, &txt, &vec_, &pe)?;
+            block.cast_to(&Device::Cpu)?;
         }
         // Single blocks
         let mut img = Tensor::cat(&[&txt, &img], 1)?;
-        for block in self.single_blocks.iter() {
+        for block in self.single_blocks.iter_mut() {
+            block.cast_to(&self.device)?;
             img = block.forward(&img, &vec_, &pe)?;
+            block.cast_to(&Device::Cpu)?;
         }
         let img = img.i((.., txt.dim(1)?..))?;
         self.final_layer.forward(&img, &vec_)

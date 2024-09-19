@@ -307,7 +307,7 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
+    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
         unreachable!()
     }
     async fn sample_causal_gen(

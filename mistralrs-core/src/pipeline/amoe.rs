@@ -238,7 +238,7 @@ impl MetadataMixin for AnyMoePipeline {
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)

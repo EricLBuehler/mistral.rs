@@ -171,7 +171,7 @@ impl FluxStepper {
             t5_tok: t5_tokenizer,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
-            flux_model: Flux::new(flux_cfg, flux_vb)?,
+            flux_model: Flux::new(flux_cfg, flux_vb, device.clone())?,
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
             device: device.clone(),
@@ -183,7 +183,7 @@ impl FluxStepper {
 }
 
 impl DiffusionModel for FluxStepper {
-    fn forward(&self, prompts: Vec<String>) -> Result<Tensor> {
+    fn forward(&mut self, prompts: Vec<String>) -> Result<Tensor> {
         let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &self.device)?;
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
@@ -200,16 +200,13 @@ impl DiffusionModel for FluxStepper {
         info!("Hotloading T5 XXL model.");
         let t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
 
-        println!("T5 ids\n{t5_input_ids}");
         let t5_embed = t5_encoder.forward(&t5_input_ids)?;
-        println!("T5\n{t5_embed}");
 
         let clip_input_ids = get_tokenization(&self.clip_tok, prompts, &self.device)?;
         let clip_embed = self
             .clip_text
             .forward(&clip_input_ids)?
             .to_dtype(self.dtype)?;
-        println!("CLIP\n{clip_embed}");
 
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
@@ -225,13 +222,10 @@ impl DiffusionModel for FluxStepper {
                 .guidance_config
                 .map(|s| (state.img.dims()[1], s.base_shift, s.max_shift)),
         );
-        println!("{state:?}");
-        println!("{timesteps:?}");
 
-        dbg!(&self.cfg.guidance_config);
         let img = if let Some(guidance_cfg) = &self.cfg.guidance_config {
             flux::sampling::denoise(
-                &self.flux_model,
+                &mut self.flux_model,
                 &state.img,
                 &state.img_ids,
                 &state.txt,
@@ -242,7 +236,7 @@ impl DiffusionModel for FluxStepper {
             )?
         } else {
             flux::sampling::denoise_no_guidance(
-                &self.flux_model,
+                &mut self.flux_model,
                 &state.img,
                 &state.img_ids,
                 &state.txt,
@@ -252,10 +246,8 @@ impl DiffusionModel for FluxStepper {
             )?
         };
         let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
-        println!("latent img\n{img}");
 
         let img = self.flux_vae.decode(&latent_img)?;
-        println!("img\n{img}");
 
         let normalized_img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(DType::U8)?;
 

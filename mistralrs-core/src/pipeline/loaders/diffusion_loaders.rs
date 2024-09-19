@@ -33,7 +33,7 @@ use crate::{
 
 pub trait DiffusionModel {
     /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
-    fn forward(&self, prompts: Vec<String>) -> candle_core::Result<Tensor>;
+    fn forward(&mut self, prompts: Vec<String>) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;
 }
@@ -43,6 +43,7 @@ pub trait DiffusionModelLoader {
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     fn get_config_filenames(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
+    fn force_cpu_vb(&self) -> Vec<bool>;
     // `configs` and `vbs` should be corresponding. It is up to the implementer to maintain this invaraint.
     fn load(
         &self,
@@ -152,6 +153,9 @@ impl DiffusionModelLoader for FluxLoader {
 
         // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
+    }
+    fn force_cpu_vb(&self) -> Vec<bool> {
+        vec![true, false]
     }
     fn load(
         &self,

@@ -250,7 +250,7 @@ pub trait Pipeline:
     + AnyMoePipelineMixin
 {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
