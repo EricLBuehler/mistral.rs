@@ -138,9 +138,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.88"
+version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e1496f8fb1fbf272686b8d37f523dab3e4a7443300055e74cdaa449f3114356"
+checksum = "86fdf8605db99b54d3cd748a44c6d04df638eb5dafb219b135d0149bd0db01f6"
 dependencies = [
  "backtrace",
 ]
@@ -380,26 +380,21 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
-version = "1.7.1"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8318a53db07bb3f8dca91a600466bdb3f2eaadeedfdbcf02e1accbad9271ba50"
+checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 
 [[package]]
 name = "candle-core"
 version = "0.6.1"
-source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
 dependencies = [
- "accelerate-src",
  "byteorder",
- "candle-kernels 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
- "candle-metal-kernels",
+ "candle-kernels 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=7f5a470)",
  "cudarc",
  "gemm",
  "half",
- "intel-mkl-src",
- "libc",
  "memmap2",
- "metal",
  "num-traits",
  "num_cpus",
  "rand",
@@ -414,14 +409,19 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.6.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=9e31a19#9e31a192642b4048e3df75173efddebaf663fef2"
 dependencies = [
+ "accelerate-src",
  "byteorder",
- "candle-kernels 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=7f5a470)",
+ "candle-kernels 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
+ "candle-metal-kernels",
  "cudarc",
  "gemm",
  "half",
+ "intel-mkl-src",
+ "libc",
  "memmap2",
+ "metal",
  "num-traits",
  "num_cpus",
  "rand",
@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.1"
-source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -455,7 +455,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.6.1"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=7f5a470#7f5a47040e798f0076014c9d9e82cc6cb25708a0"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=9e31a19#9e31a192642b4048e3df75173efddebaf663fef2"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -463,7 +463,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.6.1"
-source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=9e31a19#9e31a192642b4048e3df75173efddebaf663fef2"
 dependencies = [
  "metal",
  "once_cell",
@@ -474,10 +474,10 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.6.1"
-source = "git+https://github.com/ro99/candle.git?rev=2ecc6cc#2ecc6cc071b6b6c68062f327aa8343ad08dbde83"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=9e31a19#9e31a192642b4048e3df75173efddebaf663fef2"
 dependencies = [
  "accelerate-src",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "candle-metal-kernels",
  "half",
  "intel-mkl-src",
@@ -491,9 +491,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.1.18"
+version = "1.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b62ac837cdb5cb22e10a256099b4fc502b1dfe560cb282963a974d7abd80e476"
+checksum = "07b1695e2c7e8fc85310cde85aeaab7e3097f593c91d209d3f9df76c928100f0"
 dependencies = [
  "shlex",
 ]
@@ -1653,9 +1653,9 @@ dependencies = [
 
 [[package]]
 name = "iana-time-zone"
-version = "0.1.60"
+version = "0.1.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7ffbb5a1b541ea2561f8c41c087286cc091e21e556a4f09a8f6cbf17b69b141"
+checksum = "235e081f3925a06703c2d0117ea8b91f042756fd6e7a6e5d901e8ca1a996b220"
 dependencies = [
  "android_system_properties",
  "core-foundation-sys",
@@ -2026,9 +2026,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja"
-version = "2.2.0"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d7d3e3a3eece1fa4618237ad41e1de855ced47eab705cec1c9a920e1d1c5aad"
+checksum = "1028b628753a7e1a88fc59c9ba4b02ecc3bc0bd3c7af23df667bc28df9b3310e"
 dependencies = [
  "serde",
  "serde_json",
@@ -2036,9 +2036,9 @@ dependencies = [
 
 [[package]]
 name = "minijinja-contrib"
-version = "2.2.0"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "744a2b84dbd22398e347594ed2aef9d3f1b948934e3e6e94ef69ecd39d597f4b"
+checksum = "39ffd46ee854be23604a20efd6c9655374fefbe4d44b949dc0f907305d92873a"
 dependencies = [
  "minijinja",
  "serde",
@@ -2098,7 +2098,7 @@ name = "mistralrs"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "either",
  "futures",
  "image",
@@ -2124,7 +2124,7 @@ dependencies = [
  "buildstructor",
  "bytemuck",
  "bytemuck_derive",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "candle-flash-attn",
  "candle-nn",
  "cfgrammar",
@@ -2185,7 +2185,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "half",
 ]
 
@@ -2196,7 +2196,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "base64 0.22.1",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "data-url",
  "either",
  "futures",
@@ -2218,7 +2218,7 @@ name = "mistralrs-quant"
 version = "0.3.0"
 dependencies = [
  "bindgen_cuda 0.1.5",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "candle-nn",
  "half",
  "lazy_static",
@@ -2235,7 +2235,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "axum",
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "clap",
  "ctrlc",
  "data-url",
@@ -2261,7 +2261,7 @@ dependencies = [
 name = "mistralrs-vision"
 version = "0.3.0"
 dependencies = [
- "candle-core 0.6.1 (git+https://github.com/ro99/candle.git?rev=2ecc6cc)",
+ "candle-core 0.6.1 (git+https://github.com/EricLBuehler/candle.git?rev=9e31a19)",
  "image",
 ]
 
@@ -2832,9 +2832,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "831e8e819a138c36e212f3af3fd9eeffed6bf1510a805af35b0edee5ffa59433"
+checksum = "15ee168e30649f7f234c3d49ef5a7a6cbf5134289bc46c29ff3155fa3221c225"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2863,9 +2863,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e8730e591b14492a8945cdff32f089250b05f5accecf74aeddf9e8272ce1fa8"
+checksum = "e61cef80755fe9e46bb8a0b8f20752ca7676dcc07a5277d8b7768c6172e529b3"
 dependencies = [
  "once_cell",
  "target-lexicon",
@@ -2873,9 +2873,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e97e919d2df92eb88ca80a037969f44e5e70356559654962cbb3316d00300c6"
+checksum = "67ce096073ec5405f5ee2b8b31f03a68e02aa10d5d4f565eca04acc41931fa1c"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -2883,9 +2883,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb57983022ad41f9e683a599f2fd13c3664d7063a3ac5714cae4b7bee7d3f206"
+checksum = "2440c6d12bc8f3ae39f1e775266fa5122fd0c8891ce7520fa6048e683ad3de28"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -2895,9 +2895,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec480c0c51ddec81019531705acac51bcdbeae563557c982aa8263bb96880372"
+checksum = "1be962f0e06da8f8465729ea2cb71a416d2257dff56cbe40a70d3e62a93ae5d1"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4017,9 +4017,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.22.20"
+version = "0.22.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "583c44c02ad26b0c3f3066fe629275e50627026c51ac2e595cca4c230ce1ce1d"
+checksum = "3b072cee73c449a636ffd6f32bd8de3a9f7119139aff882f44943ce2986dc5cf"
 dependencies = [
  "indexmap",
  "serde",
@@ -4206,9 +4206,9 @@ checksum = "e91b56cd4cadaeb79bbf1a5645f6b4f8dc5bde8834ad5894a8db35fda9efa1fe"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a56d1686db2308d901306f92a263857ef59ea39678a5458e7cb17f01415101f5"
+checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
 dependencies = [
  "tinyvec",
 ]
@@ -4502,9 +4502,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "0.26.5"
+version = "0.26.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bd24728e5af82c6c4ec1b66ac4844bdf8156257fccda846ec58b42cd0cdbe6a"
+checksum = "841c67bff177718f1d4dfefde8d8f0e78f9b6589319ba88312f567fc5841a958"
 dependencies = [
  "rustls-pki-types",
 ]
