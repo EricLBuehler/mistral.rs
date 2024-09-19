@@ -18,6 +18,7 @@ use crate::{
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
@@ -265,7 +266,14 @@ impl Engine {
                         }
 
                         for seq in scheduled.prompt.iter_mut() {
-                            seq.set_state(SequenceState::RunningCompletion);
+                            match seq.sequence_stepping_type() {
+                                SeqStepType::OneShot => {
+                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
+                                }
+                                SeqStepType::PromptAndDecode => {
+                                    seq.set_state(SequenceState::RunningCompletion)
+                                }
+                            }
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time travel has occurred!")
@@ -530,6 +538,11 @@ impl Engine {
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
             _ => None,
+        };
+
+        let seq_step_type = match &request.messages {
+            RequestMessage::ImageGeneration { .. } => SeqStepType::OneShot,
+            _ => SeqStepType::PromptAndDecode,
         };
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
@@ -799,6 +812,7 @@ impl Engine {
                 trie,
                 matcher.clone(),
                 image_generation_format,
+                seq_step_type,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

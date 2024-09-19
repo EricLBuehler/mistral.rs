@@ -159,6 +159,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
                     txt[..completion_bytes_pos].trim_start().to_string()
                 }
+                crate::sequence::StopReason::GeneratedImage => {
+                    candle_core::bail!("Stop reason was `GeneratedImage`.")
+                }
             };
 
             if seq.get_mut_group().is_chat {

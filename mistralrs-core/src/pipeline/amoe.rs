@@ -22,7 +22,7 @@ use crate::{
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
@@ -569,5 +569,6 @@ fn new_dummy_seq(
         None,
         None,
         None,
+        SeqStepType::PromptAndDecode,
     )
 }

@@ -37,6 +37,7 @@ pub enum StopReason {
         completion_bytes_pos: usize,
     },
     Canceled,
+    GeneratedImage,
 }
 
 impl Display for StopReason {
@@ -46,6 +47,7 @@ impl Display for StopReason {
             StopReason::Length(_) | StopReason::ModelLength(_) => write!(f, "length"),
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
+            StopReason::GeneratedImage => write!(f, "generated-image"),
         }
     }
 }
@@ -144,6 +146,12 @@ impl SequenceCustomMetadata {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum SeqStepType {
+    PromptAndDecode,
+    OneShot,
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -158,6 +166,7 @@ pub struct Sequence {
     response_index: usize,
     creation_time: u64,
     prompt: String,
+    sequence_stepping_type: SeqStepType,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -267,6 +276,7 @@ impl Sequence {
         tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        sequence_stepping_type: SeqStepType,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -324,6 +334,7 @@ impl Sequence {
             tok_trie,
             tools,
             image_gen_response_format,
+            sequence_stepping_type,
         }
     }
 
@@ -709,6 +720,10 @@ impl Sequence {
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.image_gen_response_format
+    }
+
+    pub fn sequence_stepping_type(&self) -> &SeqStepType {
+        &self.sequence_stepping_type
     }
 }
 
