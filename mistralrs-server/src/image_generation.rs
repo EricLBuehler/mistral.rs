@@ -14,7 +14,7 @@ use mistralrs_core::{
 };
 use serde::Serialize;
 
-pub enum CompletionResponder {
+pub enum ImageGenerationResponder {
     Json(ImageGenerationResponse),
     InternalError(Box<dyn Error>),
     ValidationError(Box<dyn Error>),
@@ -40,14 +40,14 @@ impl JsonError {
 }
 impl ErrorToResponse for JsonError {}
 
-impl IntoResponse for CompletionResponder {
+impl IntoResponse for ImageGenerationResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
-            CompletionResponder::Json(s) => Json(s).into_response(),
-            CompletionResponder::InternalError(e) => {
+            ImageGenerationResponder::Json(s) => Json(s).into_response(),
+            ImageGenerationResponder::InternalError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
-            CompletionResponder::ValidationError(e) => {
+            ImageGenerationResponder::ValidationError(e) => {
                 JsonError::new(e.to_string()).to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
             }
         }
@@ -92,7 +92,7 @@ fn parse_request(
 pub async fn image_generation(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<ImageGenerationRequest>,
-) -> CompletionResponder {
+) -> ImageGenerationResponder {
     let (tx, mut rx) = channel(10_000);
 
     let request = match parse_request(oairequest, state.clone(), tx) {
@@ -100,7 +100,7 @@ pub async fn image_generation(
         Err(e) => {
             let e = anyhow::Error::msg(e.to_string());
             MistralRs::maybe_log_error(state, &*e);
-            return CompletionResponder::InternalError(e.into());
+            return ImageGenerationResponder::InternalError(e.into());
         }
     };
     let sender = state.get_sender().unwrap();
@@ -108,7 +108,7 @@ pub async fn image_generation(
     if let Err(e) = sender.send(request).await {
         let e = anyhow::Error::msg(e.to_string());
         MistralRs::maybe_log_error(state, &*e);
-        return CompletionResponder::InternalError(e.into());
+        return ImageGenerationResponder::InternalError(e.into());
     }
 
     let response = match rx.recv().await {
@@ -116,21 +116,25 @@ pub async fn image_generation(
         None => {
             let e = anyhow::Error::msg("No response received from the model.");
             MistralRs::maybe_log_error(state, &*e);
-            return CompletionResponder::InternalError(e.into());
+            return ImageGenerationResponder::InternalError(e.into());
         }
     };
 
     match response {
         Response::InternalError(e) => {
             MistralRs::maybe_log_error(state, &*e);
-            CompletionResponder::InternalError(e)
+            ImageGenerationResponder::InternalError(e)
         }
-        Response::ValidationError(e) => CompletionResponder::ValidationError(e),
+        Response::ValidationError(e) => ImageGenerationResponder::ValidationError(e),
         Response::ImageGeneration(response) => {
             MistralRs::maybe_log_response(state, &response);
-            CompletionResponder::Json(response)
+            ImageGenerationResponder::Json(response)
         }
-        Response::CompletionModelError(_, _) => unreachable!(),
+        Response::CompletionModelError(m, _) => {
+            let e = anyhow::Error::msg(m.to_string());
+            MistralRs::maybe_log_error(state, &*e);
+            ImageGenerationResponder::InternalError(e.into())
+        }
         Response::CompletionDone(_) => unreachable!(),
         Response::CompletionChunk(_) => unreachable!(),
         Response::Chunk(_) => unreachable!(),

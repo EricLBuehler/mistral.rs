@@ -13,7 +13,7 @@ use crate::{
         t5::{self, T5EncoderModel},
     },
     pipeline::DiffusionModel,
-    utils::varbuilder_utils::from_mmaped_safetensors,
+    utils::varbuilder_utils::from_mmaped_safetensors, MemoryUsage,
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
@@ -106,7 +106,7 @@ fn get_t5_model(
             .map_err(candle_core::Error::msg)?,
         vec![],
         Some(dtype),
-        device,
+        &Device::Cpu,
         silent,
         |_| true,
     )?;
@@ -114,7 +114,7 @@ fn get_t5_model(
     let config = std::fs::read_to_string(config_filename)?;
     let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
 
-    t5::T5EncoderModel::load(vb, &config)
+    t5::T5EncoderModel::load(vb, &config, device)
 }
 
 fn get_clip_model_and_tokenizer(
@@ -199,7 +199,7 @@ impl DiffusionModel for FluxStepper {
 
         let t5_embed = {
             info!("Hotloading T5 XXL model.");
-            let t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
+            let mut t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
             t5_encoder.forward(&t5_input_ids)?
         };
 
@@ -209,6 +209,8 @@ impl DiffusionModel for FluxStepper {
             .forward(&clip_input_ids)?
             .to_dtype(self.dtype)?;
 
+        dbg!(&t5_embed, &clip_embed);
+
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
             self.cfg.height,
@@ -216,6 +218,7 @@ impl DiffusionModel for FluxStepper {
             self.device(),
         )?
         .to_dtype(self.dtype)?;
+        dbg!(&img);
         let state = flux::sampling::State::new(&t5_embed, &clip_embed, &img)?;
         let timesteps = flux::sampling::get_schedule(
             self.cfg.num_steps,
@@ -246,7 +249,11 @@ impl DiffusionModel for FluxStepper {
                 &timesteps,
             )?
         };
+        dbg!(&img);
         let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
+        dbg!(&latent_img);
+
+        dbg!(MemoryUsage.get_memory_available(&self.device)? as f32 / (1024*1024) as f32);
 
         let img = self.flux_vae.decode(&latent_img)?;
 

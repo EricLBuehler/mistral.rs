@@ -245,6 +245,38 @@ impl T5LayerFF {
             layer_norm,
         })
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.layer_norm = T5LayerNorm {
+            weight: self.layer_norm.weight.to_device(device)?,
+            variance_epsilon: self.layer_norm.variance_epsilon,
+        };
+        if let Some(dense) = &mut self.dense_act {
+            dense.wi = Linear::new(
+                dense.wi.weight().to_device(device)?,
+                dense.wi.bias().map(|x| x.to_device(device).unwrap()),
+            );
+            dense.wo = Linear::new(
+                dense.wo.weight().to_device(device)?,
+                dense.wo.bias().map(|x| x.to_device(device).unwrap()),
+            );
+        }
+        if let Some(dense) = &mut self.gated_dense_act {
+            dense.wi_0 = Linear::new(
+                dense.wi_0.weight().to_device(device)?,
+                dense.wi_0.bias().map(|x| x.to_device(device).unwrap()),
+            );
+            dense.wi_1 = Linear::new(
+                dense.wi_1.weight().to_device(device)?,
+                dense.wi_1.bias().map(|x| x.to_device(device).unwrap()),
+            );
+            dense.wo = Linear::new(
+                dense.wo.weight().to_device(device)?,
+                dense.wo.bias().map(|x| x.to_device(device).unwrap()),
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Module for T5LayerFF {
@@ -455,6 +487,45 @@ impl T5LayerSelfAttention {
         let ys = (xs + ys)?;
         Ok((ys, position_bias))
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.self_attention.q = Linear::new(
+            self.self_attention.q.weight().to_device(device)?,
+            self.self_attention
+                .q
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.self_attention.k = Linear::new(
+            self.self_attention.k.weight().to_device(device)?,
+            self.self_attention
+                .k
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.self_attention.v = Linear::new(
+            self.self_attention.v.weight().to_device(device)?,
+            self.self_attention
+                .v
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.self_attention.o = Linear::new(
+            self.self_attention.o.weight().to_device(device)?,
+            self.self_attention
+                .o
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        if let Some(embed) = &mut self.self_attention.relative_attention_bias {
+            *embed = Embedding::new(embed.embeddings().to_device(device)?, embed.hidden_size());
+        }
+        self.layer_norm = T5LayerNorm {
+            weight: self.layer_norm.weight.to_device(device)?,
+            variance_epsilon: self.layer_norm.variance_epsilon,
+        };
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -489,6 +560,45 @@ impl T5LayerCrossAttention {
         )?;
         let ys = (hidden_states + ys)?;
         Ok((ys, position_bias))
+    }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.cross_attention.q = Linear::new(
+            self.cross_attention.q.weight().to_device(device)?,
+            self.cross_attention
+                .q
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.cross_attention.k = Linear::new(
+            self.cross_attention.k.weight().to_device(device)?,
+            self.cross_attention
+                .k
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.cross_attention.v = Linear::new(
+            self.cross_attention.v.weight().to_device(device)?,
+            self.cross_attention
+                .v
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        self.cross_attention.o = Linear::new(
+            self.cross_attention.o.weight().to_device(device)?,
+            self.cross_attention
+                .o
+                .bias()
+                .map(|x| x.to_device(device).unwrap()),
+        );
+        if let Some(embed) = &mut self.cross_attention.relative_attention_bias {
+            *embed = Embedding::new(embed.embeddings().to_device(device)?, embed.hidden_size());
+        }
+        self.layer_norm = T5LayerNorm {
+            weight: self.layer_norm.weight.to_device(device)?,
+            variance_epsilon: self.layer_norm.variance_epsilon,
+        };
+        Ok(())
     }
 }
 
@@ -606,6 +716,15 @@ impl T5Block {
         }
         Ok((xs, position_bias))
     }
+
+    fn cast_to(&mut self, device: &Device) -> Result<()> {
+        self.self_attn.cast_to(device)?;
+        if let Some(cross_attn) = &mut self.cross_attn {
+            cross_attn.cast_to(device)?;
+        }
+        self.ff.cast_to(device)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -613,39 +732,49 @@ struct T5Stack {
     block: Vec<T5Block>,
     shared: Arc<Embedding>,
     final_layer_norm: T5LayerNorm,
+    device: Device,
 }
 
 impl T5Stack {
-    fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
+    fn load(
+        decoder: bool,
+        vb: VarBuilder,
+        shared: &Arc<Embedding>,
+        cfg: &Config,
+        device: &Device,
+    ) -> Result<Self> {
         let block = (0..cfg.num_layers)
             .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let final_layer_norm = T5LayerNorm::load(
             cfg.d_model,
             cfg.layer_norm_epsilon,
-            vb.pp("final_layer_norm"),
+            vb.pp("final_layer_norm").set_device(device.clone()),
         )?;
         Ok(Self {
             block,
             shared: shared.clone(),
             final_layer_norm,
+            device: device.clone(),
         })
     }
 
     fn forward(
-        &self,
+        &mut self,
         input_ids: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
-        for block in self.block.iter() {
+        for block in self.block.iter_mut() {
+            block.cast_to(&self.device)?;
             (hidden_states, position_bias) = block.forward(
                 &hidden_states,
                 position_bias.as_ref(),
                 encoder_hidden_states,
-            )?
+            )?;
+            block.cast_to(&Device::Cpu)?;
         }
         self.final_layer_norm.forward(&hidden_states)
     }
@@ -657,7 +786,7 @@ pub struct T5EncoderModel {
 }
 
 impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {
@@ -665,13 +794,17 @@ impl T5EncoderModel {
         } else {
             vb.pp("encoder").pp("embed_tokens")
         };
-        let shared = embedding(cfg.vocab_size, cfg.d_model, shared_vb)?;
+        let shared = embedding(
+            cfg.vocab_size,
+            cfg.d_model,
+            shared_vb.set_device(device.clone()),
+        )?;
         let shared = Arc::new(shared);
-        let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
+        let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg, device)?;
         Ok(Self { encoder })
     }
 
-    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids, None)
     }
 }
