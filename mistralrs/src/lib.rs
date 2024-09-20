@@ -42,9 +42,12 @@ pub mod messages;
 pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages};
 
 pub mod text_model;
-pub use text_model::{PagedAttentionMetaBuilder, TextModel, TextModelBuilder};
+pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
 
 pub mod lora_model;
+
+pub mod model;
+pub use model::{best_device, Model};
 
 pub use candle_core::{DType, Device, Result, Tensor};
 pub use mistralrs_core::*;

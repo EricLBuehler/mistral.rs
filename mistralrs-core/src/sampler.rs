@@ -143,7 +143,21 @@ impl DrySamplingParamsInner {
     }
 }
 
-/// Customizable logtis processor
+/// Customizable logits processor.
+///
+/// # Example
+/// ```rust
+/// struct ThresholdLogitsProcessor;
+/// impl CustomLogitsProcessor for ThresholdLogitsProcessor {
+///     fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+///         // Mask is 1 for true, 0 for false.
+///         let mask = logits.ge(0.5)?;
+///         logits.broadcast_mul(&mask.to_dtype(logits.dtype())?)
+///     }
+/// }
+/// let processor1: Arc<dyn CustomLogitsProcessor> = Arc::new(|logits: &Tensor, _context: &[u32]| logits * 1.23);
+/// let processor2: Arc<dyn CustomLogitsProcessor> = Arc::new(ThresholdLogitsProcessor);
+/// ```
 pub trait CustomLogitsProcessor: Send + Sync {
     /// Logits and sequence context (prompt and generated tokens), returning modified tokens.
     fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor>;

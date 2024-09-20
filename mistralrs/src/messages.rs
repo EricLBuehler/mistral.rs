@@ -33,6 +33,12 @@ impl Display for TextMessageRole {
     }
 }
 
+impl Default for TextMessages {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextMessages {
     pub fn new() -> Self {
         Self(Vec::new())
@@ -83,6 +89,12 @@ pub struct RequestBuilder {
     constraint: Constraint,
     tools: Vec<Tool>,
     tool_choice: ToolChoice,
+}
+
+impl Default for RequestBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RequestBuilder {

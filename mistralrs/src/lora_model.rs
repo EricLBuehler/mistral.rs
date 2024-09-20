@@ -1,14 +1,6 @@
-use std::sync::Arc;
-
-use anyhow::Context;
 use mistralrs_core::*;
-use tokio::sync::mpsc::channel;
 
-use crate::{text_model::best_device, RequestLike, TextModelBuilder};
-
-pub struct LoraModel {
-    runner: Arc<MistralRs>,
-}
+use crate::{best_device, Model, TextModelBuilder};
 
 pub struct LoraModelBuilder {
     text_model: TextModelBuilder,
@@ -29,7 +21,7 @@ impl LoraModelBuilder {
         }
     }
 
-    pub async fn build(self) -> anyhow::Result<LoraModel> {
+    pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.text_model.use_flash_attn,
             prompt_batchsize: self.text_model.prompt_batchsize,
@@ -95,53 +87,6 @@ impl LoraModelBuilder {
             runner = runner.with_prefix_cache_n(n)
         }
 
-        Ok(LoraModel::new(runner.build()))
-    }
-}
-
-impl LoraModel {
-    pub fn new(runner: Arc<MistralRs>) -> Self {
-        Self { runner }
-    }
-
-    /// Generate with the model.
-    pub async fn send_chat_request<R: RequestLike>(
-        &self,
-        mut request: R,
-    ) -> anyhow::Result<ChatCompletionResponse> {
-        let (tx, mut rx) = channel(1);
-
-        let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
-            (Some(a), Some(b))
-        } else {
-            (None, None)
-        };
-        let request = Request::Normal(NormalRequest {
-            messages: RequestMessage::Chat(request.take_messages()),
-            sampling_params: SamplingParams::default(),
-            response: tx,
-            return_logprobs: request.return_logprobs(),
-            is_streaming: false,
-            id: 0,
-            constraint: request.take_constraint(),
-            suffix: None,
-            adapters: request.take_adapters(),
-            tools,
-            tool_choice,
-            logits_processors: request.take_logits_processors(),
-        });
-
-        self.runner.get_sender()?.send(request).await?;
-
-        let ResponseOk::Done(response) = rx
-            .recv()
-            .await
-            .context("Channel was erroneously closed!")?
-            .as_result()?
-        else {
-            anyhow::bail!("Got unexpected response type.")
-        };
-
-        Ok(response)
+        Ok(Model::new(runner.build()))
     }
 }
