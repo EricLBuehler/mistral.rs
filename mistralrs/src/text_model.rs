@@ -7,7 +7,7 @@ use tokio::sync::mpsc::channel;
 use crate::RequestLike;
 
 /// Gets the best device, cpu, cuda if compiled with CUDA
-fn best_device(force_cpu: bool) -> Result<Device> {
+pub(crate) fn best_device(force_cpu: bool) -> Result<Device> {
     if force_cpu {
         return Ok(Device::Cpu);
     }
@@ -27,30 +27,30 @@ pub struct TextModel {
 
 pub struct TextModelBuilder {
     // Loading model
-    model_id: String,
-    token_source: TokenSource,
-    hf_revision: Option<String>,
-    write_uqff: Option<PathBuf>,
-    from_uqff: Option<PathBuf>,
-    chat_template: Option<String>,
-    tokenizer_json: Option<String>,
+    pub(crate) model_id: String,
+    pub(crate) token_source: TokenSource,
+    pub(crate) hf_revision: Option<String>,
+    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) chat_template: Option<String>,
+    pub(crate) tokenizer_json: Option<String>,
 
     // Model running
-    use_flash_attn: bool,
-    prompt_batchsize: Option<NonZeroUsize>,
-    topology: Option<Topology>,
-    organization: IsqOrganization,
-    loader_type: Option<NormalLoaderType>,
-    dtype: ModelDType,
-    force_cpu: bool,
-    isq: Option<IsqType>,
+    pub(crate) use_flash_attn: bool,
+    pub(crate) prompt_batchsize: Option<NonZeroUsize>,
+    pub(crate) topology: Option<Topology>,
+    pub(crate) organization: IsqOrganization,
+    pub(crate) loader_type: Option<NormalLoaderType>,
+    pub(crate) dtype: ModelDType,
+    pub(crate) force_cpu: bool,
+    pub(crate) isq: Option<IsqType>,
 
     // Other things
-    paged_attn_cfg: Option<PagedAttentionConfig>,
-    max_num_seqs: usize,
-    no_kv_cache: bool,
-    with_logging: bool,
-    prefix_cache_n: Option<usize>,
+    pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) max_num_seqs: usize,
+    pub(crate) no_kv_cache: bool,
+    pub(crate) with_logging: bool,
+    pub(crate) prefix_cache_n: Option<usize>,
 }
 
 pub struct PagedAttentionMetaBuilder {
