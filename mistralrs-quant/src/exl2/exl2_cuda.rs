@@ -31,7 +31,6 @@ pub struct Exl2Layer {
     q_groups: Tensor,
     q_invperm: Tensor,
     bias: Option<Tensor>,
-    bits: i32,
     exllama_state: Arc<Mutex<ExllamaState>>,
 }
 
@@ -54,17 +53,14 @@ impl Exl2Layer {
         q_scale: Tensor,
         q_scale_max: Tensor,
         q_groups: Tensor,
-        q_perm: Tensor,
-        q_group_map: Tensor,
         q_invperm: Tensor,
         bias: Option<Tensor>,
-        bits: i32,
     ) -> Result<Self> {
         let exllama_state = Arc::new(Mutex::new(ExllamaState {
             initialized: false,
             q_scale_max,
-            q_perm,
-            q_group_map,
+            q_perm: Tensor::zeros((1,), DType::I16, q_invperm.device())?,
+            q_group_map: Tensor::zeros((1,), DType::I16, q_invperm.device())?,
             q_invperm_short: Tensor::zeros(q_invperm.shape(), DType::I16, q_invperm.device())?,
             q_matrix: std::ptr::null_mut(),
         }));
@@ -75,7 +71,6 @@ impl Exl2Layer {
             q_groups,
             q_invperm,
             bias,
-            bits,
             exllama_state,
         };
         this.initialize_exllama()?;
@@ -224,22 +219,9 @@ impl QuantMethod for Exl2Layer {
                 q_scale,
                 q_scale_max,
                 q_groups,
-                q_perm,
-                q_invperm,
-                q_group_map,
-                bias,
-                bits,
-            } => Self::new(
-                q_weight,
-                q_scale,
-                q_scale_max,
-                q_groups,
-                q_perm,
-                q_group_map,
                 q_invperm,
                 bias,
-                bits,
-            ),
+            } => Self::new(q_weight, q_scale, q_scale_max, q_groups, q_invperm, bias),
             QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)

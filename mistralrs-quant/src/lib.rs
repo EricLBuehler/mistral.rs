@@ -7,7 +7,7 @@ use std::{
 
 use candle_core::{
     quantized::{GgmlDType, QTensor},
-    DType, Device, Result, Tensor,
+    Context, DType, Device, Result, Tensor,
 };
 
 mod exl2;
@@ -17,6 +17,7 @@ mod hqq;
 mod unquantized;
 mod utils;
 
+use exl2::Exl2Layer;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -46,20 +47,17 @@ impl Display for QuantMethodType {
 pub struct QuantizedConfig {
     pub bits: usize,
     pub quant_method: QuantMethodType,
-    pub group_size: usize,
+    pub group_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
 pub enum QuantMethodConfig {
     Exl2 {
-        bits: i32,
         q_weight: Tensor,
         q_scale: Tensor,
         q_scale_max: Tensor,
         q_groups: Tensor,
-        q_perm: Tensor,
         q_invperm: Tensor,
-        q_group_map: Tensor,
         bias: Option<Tensor>,
     },
     Gptq {
@@ -294,7 +292,10 @@ pub fn gptq_linear(
         Default::default(),
         DType::I32,
     )?;
-    let scale_and_zero_size = in_dim / config.group_size;
+    let scale_and_zero_size = in_dim
+        / config
+            .group_size
+            .context("GPTQ requires group size in QuantizedConfig")?;
     let qzeros = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
         "qzeros",
@@ -320,4 +321,25 @@ pub fn gptq_linear(
         bias,
     };
     Ok(Arc::new(GptqLayer::new(config)?))
+}
+
+pub fn exl2_linear(
+    _in_dim: usize,
+    _out_dim: usize,
+    _config: &QuantizedConfig,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let q_weight = vb.get_unchecked_dtype("q_weight", DType::I32)?;
+    let q_scale_max = vb.get_unchecked_dtype("q_scale_max", DType::F16)?;
+    let q_scale = vb.get_unchecked_dtype("q_scale", DType::I32)?;
+    let q_invperm = vb.get_unchecked_dtype("q_invperm", DType::I32)?;
+    let q_groups = vb.get_unchecked_dtype("q_groups", DType::I16)?;
+    Ok(Arc::new(Exl2Layer::new(QuantMethodConfig::Exl2 {
+        q_weight,
+        q_scale,
+        q_scale_max,
+        q_groups,
+        q_invperm,
+        bias: None,
+    })?))
 }
