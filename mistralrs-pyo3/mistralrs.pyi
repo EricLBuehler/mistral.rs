@@ -102,6 +102,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class XLora:
@@ -112,6 +113,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class Lora:
@@ -121,6 +123,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 
     @dataclass
     class GGUF:
@@ -185,6 +188,7 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        write_uqff: str | None = None
 
 class Runner:
     def __init__(
@@ -203,6 +207,7 @@ class Runner:
         pa_gpu_mem: int | float | None = None,
         pa_blk_size: int | None = None,
         no_paged_attn: bool = False,
+        seed: int | None = None,
     ) -> None:
         """
         Load a model.
@@ -238,6 +243,7 @@ class Runner:
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
         - `no_paged_attn` disables PagedAttention on CUDA
+        - `seed`, used to ensure reproducible random number generation.
         """
         ...
 

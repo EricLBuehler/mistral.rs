@@ -154,9 +154,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let mut tool_calls = Vec::new();
                 let mut text_new = Some(text.clone());
                 if let Some(ref matcher) = seq.tools {
-                    let calls = matcher
-                        .get_call(&text)
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    let calls = matcher.get_call(&text).map_err(candle_core::Error::msg)?;
                     if !calls.is_empty() {
                         text_new = None;
                     }
@@ -369,12 +367,12 @@ pub async fn sample_sequence(
                     SequenceRecognizer::Regex(ref mut rx) => {
                         seq.tok_trie
                             .append_token(rx.as_mut(), second_logprobs_response.token)
-                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                            .map_err(candle_core::Error::msg)?;
                     }
                     SequenceRecognizer::Cfg(ref mut cfg) => {
                         seq.tok_trie
                             .append_token(cfg.as_mut(), second_logprobs_response.token)
-                            .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                            .map_err(candle_core::Error::msg)?;
                     }
                     SequenceRecognizer::None | SequenceRecognizer::Kbnf(_) => {}
                 }

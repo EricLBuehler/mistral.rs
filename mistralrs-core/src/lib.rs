@@ -2,7 +2,7 @@
 
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
-pub use engine::TERMINATE_ALL_NEXT_STEP;
+pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
 use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
@@ -13,7 +13,10 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{self, AtomicBool, AtomicUsize},
+        Arc, Mutex, RwLock,
+    },
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -98,6 +101,7 @@ pub use utils::paged_attn_supported;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
+static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
@@ -111,6 +115,7 @@ pub struct MistralRs {
     next_request_id: Mutex<RefCell<usize>>,
     reboot_state: RebootState,
     engine_handler: RwLock<JoinHandle<()>>,
+    engine_id: usize,
 }
 
 #[derive(Clone)]
@@ -258,11 +263,10 @@ fn set_gemm_reduced_precision_f16() {}
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
-        self.sender
-            .write()
-            .expect("Failed to get sender write in Drop")
-            .blocking_send(Request::Terminate)
-            .expect("Sending failed in Drop");
+        ENGINE_INSTRUCTIONS
+            .lock()
+            .expect("`ENGINE_INSTRUCTIONS` was poisioned")
+            .insert(self.engine_id, Some(EngineInstruction::Terminate));
     }
 }
 
@@ -331,7 +335,10 @@ impl MistralRs {
             });
         });
 
+        let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
+
         Arc::new(Self {
+            engine_id,
             sender,
             log,
             id,

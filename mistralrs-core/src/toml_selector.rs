@@ -1,4 +1,4 @@
-use std::{fs::File, num::NonZeroUsize};
+use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -42,6 +42,12 @@ pub enum TomlModelSelected {
 
         /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         organization: Option<IsqOrganization>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -68,6 +74,12 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -90,6 +102,12 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -257,6 +275,12 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 }
 
@@ -349,12 +373,16 @@ fn loader_from_selected(
             dtype: _,
             topology,
             organization,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -369,12 +397,16 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -397,12 +429,16 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -577,11 +613,15 @@ fn loader_from_selected(
             arch,
             dtype: _,
             topology,
+            write_uqff,
+            from_uqff,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_batchsize: args.prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
             },
             args.chat_template,
             args.tokenizer_json,

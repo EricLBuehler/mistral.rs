@@ -29,10 +29,12 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             prompt_batchsize: None,
             topology: None,
             organization: Default::default(),
+            write_uqff: None,
+            from_uqff: None,
         },
         None,
         None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
+        Some("microsoft/Phi-3.5-mini-instruct".to_string()),
     )
     .build(None)?;
     // Load, into a Pipeline

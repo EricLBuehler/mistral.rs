@@ -29,6 +29,8 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
             prompt_batchsize: None,
             topology: None,
             organization: Default::default(),
+            write_uqff: None,
+            from_uqff: None,
         },
         None,
         None,

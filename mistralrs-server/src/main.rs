@@ -46,6 +46,10 @@ struct Args {
     #[arg(long)]
     serve_ip: Option<String>,
 
+    /// Integer seed to ensure reproducible random number generation.
+    #[arg(short, long)]
+    seed: Option<u64>,
+
     /// Port to serve on.
     #[arg(short, long)]
     port: Option<String>,
@@ -294,6 +298,10 @@ async fn main() -> Result<()> {
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
+
+    if let Some(seed) = args.seed {
+        device.set_seed(seed)?;
+    }
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",

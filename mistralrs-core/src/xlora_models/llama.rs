@@ -645,7 +645,7 @@ impl XLoraLlama {
                         .expect("Failed to create RoPE"),
                     );
                     Block::load(
-                        vb.pp(&format!("model.layers.{i}")),
+                        vb.pp(format!("model.layers.{i}")),
                         cfg,
                         lora_config,
                         &mut count,

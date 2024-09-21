@@ -177,7 +177,7 @@ impl XLoraClassifier {
                     let lin = linear(
                         config.xlora_size,
                         config.xlora_size,
-                        vb.pp(&format!("inner.{i}")),
+                        vb.pp(format!("inner.{i}")),
                     )?;
                     inner.push(Box::new(Linear::new(
                         lin.weight().to_dtype(DType::F32)?,
@@ -187,7 +187,7 @@ impl XLoraClassifier {
                     let lin = linear_no_bias(
                         config.xlora_size,
                         config.xlora_size,
-                        vb.pp(&format!("inner.{i}")),
+                        vb.pp(format!("inner.{i}")),
                     )?;
                     inner.push(Box::new(Linear::new(
                         lin.weight().to_dtype(DType::F32)?,

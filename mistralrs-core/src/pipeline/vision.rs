@@ -21,8 +21,9 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
+    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -35,7 +36,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -62,6 +63,8 @@ pub struct VisionLoader {
     tokenizer_json: Option<String>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
 }
 
 #[derive(Default)]
@@ -80,6 +83,8 @@ pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
     pub prompt_batchsize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -114,6 +119,8 @@ impl VisionLoaderBuilder {
             tokenizer_json: self.tokenizer_json,
             xlora_model_id: None,
             xlora_order: None,
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
         })
     }
 }
@@ -134,12 +141,17 @@ impl Loader for VisionLoader {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
             silent
         );
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -261,13 +273,24 @@ impl Loader for VisionLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if in_situ_quant.is_some() || self.config.topology.is_some() {
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.from_uqff.is_none()
+        {
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
                 IsqOrganization::Default,
+                self.config.write_uqff.as_ref(),
+            )?;
+        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
+            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                &from_uqff,
             )?;
         }
 
@@ -352,6 +375,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.topology.as_ref(),
                 self.silent,
                 IsqOrganization::Default,
+                None,
             )
             .map_err(anyhow::Error::msg)
     }
@@ -411,6 +435,21 @@ impl Pipeline for VisionPipeline {
             mut paged_attn_meta,
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
+        let paged_attn_meta = match (
+            self.get_metadata().cache_engine.as_ref(),
+            &mut paged_attn_meta,
+        ) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+            (Some(_), None) => {
+                // This can happen if Rust-side user code is wrong
+                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            }
+            (None, Some(_)) => {
+                // This should never happen but we handle it anyway
+                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+            }
+            (None, None) => None,
+        };
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
@@ -419,12 +458,7 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             model_specific_args,
-            self.get_metadata().cache_engine.as_ref().map(|engine| {
-                (
-                    engine.get_kv_cache().clone(),
-                    paged_attn_meta.as_mut().unwrap(),
-                )
-            }),
+            paged_attn_meta,
             &flash_meta,
         )?;
         Ok(ForwardInputsResult::CausalGeneration { logits })
@@ -475,16 +509,16 @@ impl AnyMoePipelineMixin for VisionPipeline {
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -524,9 +558,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),

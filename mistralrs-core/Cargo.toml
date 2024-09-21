@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "3c8e120", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "8a99f7c", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -75,6 +75,7 @@ uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex = "1.10.6"
+safetensors = "0.4.5"
 kbnf = "0.5.1"
 ahash = "0.8.11"
 
