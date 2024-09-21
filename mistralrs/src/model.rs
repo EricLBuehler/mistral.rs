@@ -70,4 +70,23 @@ impl Model {
 
         Ok(response)
     }
+
+    /// Activate certain adapters on the model, they will be used for requests which do not specify unique adapters.
+    pub async fn activate_adapters<A: ToString>(&self, adapters: Vec<A>) -> anyhow::Result<()> {
+        let request = Request::ActivateAdapters(
+            adapters
+                .into_iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>(),
+        );
+
+        Ok(self.runner.get_sender()?.send(request).await?)
+    }
+
+    /// Reapply ISQ to the model. This will be done on whatever device the model is already on.
+    pub async fn re_isq_model(&self, isq_type: IsqType) -> anyhow::Result<()> {
+        let request = Request::ReIsq(isq_type);
+
+        Ok(self.runner.get_sender()?.send(request).await?)
+    }
 }

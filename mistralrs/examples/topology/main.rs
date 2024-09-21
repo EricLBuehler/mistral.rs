@@ -1,126 +1,66 @@
-use either::Either;
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
-
+use anyhow::Result;
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, IsqType, LayerTopology,
-    MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, Request, RequestMessage, ResponseOk, Result, SamplingParams,
-    SchedulerConfig, TokenSource, Topology,
+    IsqType, LayerTopology, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    TextModelBuilder, Topology,
 };
 
-/// Gets the best device, cpu, cuda if compiled with CUDA
-pub(crate) fn best_device() -> Result<Device> {
-    #[cfg(not(feature = "metal"))]
-    {
-        Device::cuda_if_available(0)
-    }
-    #[cfg(feature = "metal")]
-    {
-        Device::new_metal(0)
-    }
-}
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
+        .with_isq(IsqType::Q8_0)
+        .with_topology(
+            Topology::empty()
+                .with_range(
+                    0..8,
+                    LayerTopology {
+                        isq: Some(IsqType::Q3K),
+                        device: None,
+                    },
+                )
+                .with_range(
+                    8..16,
+                    LayerTopology {
+                        isq: Some(IsqType::Q4K),
+                        device: None,
+                    },
+                )
+                .with_range(
+                    16..24,
+                    LayerTopology {
+                        isq: Some(IsqType::Q6K),
+                        device: None,
+                    },
+                )
+                .with_range(
+                    24..32,
+                    LayerTopology {
+                        isq: Some(IsqType::Q8_0),
+                        device: None,
+                    },
+                ),
+        )
+        .with_logging()
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+        .build()
+        .await?;
 
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-            prompt_batchsize: None,
-            topology: Some(
-                Topology::empty()
-                    .with_range(
-                        0..8,
-                        LayerTopology {
-                            isq: Some(IsqType::Q3K),
-                            device: None,
-                        },
-                    )
-                    .with_range(
-                        8..16,
-                        LayerTopology {
-                            isq: Some(IsqType::Q4K),
-                            device: None,
-                        },
-                    )
-                    .with_range(
-                        16..24,
-                        LayerTopology {
-                            isq: Some(IsqType::Q6K),
-                            device: None,
-                        },
-                    )
-                    .with_range(
-                        24..32,
-                        LayerTopology {
-                            isq: Some(IsqType::Q8_0),
-                            device: None,
-                        },
-                    ),
-            ),
-            organization: Default::default(),
-            write_uqff: None,
-            from_uqff: None,
-        },
-        None,
-        None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-    )
-    .build(None)?;
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        Some(IsqType::Q4K), // In-situ quantize the model into q4k
-        None,               // No PagedAttention.
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
-    )
-    .build())
-}
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::System,
+            "You are an AI agent with a specialty in programming.",
+        )
+        .add_message(
+            TextMessageRole::User,
+            "Hello! How are you? Please write generic binary search function in Rust.",
+        );
 
-fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let response = model.send_chat_request(messages).await?;
 
-    let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::Chat(vec![IndexMap::from([
-            ("role".to_string(), Either::Left("user".to_string())),
-            ("content".to_string(), Either::Left("Hello!".to_string())),
-        ])]),
-        sampling_params: SamplingParams::default(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: None,
-        tool_choice: None,
-        logits_processors: None,
-    });
-    mistralrs.get_sender()?.blocking_send(request)?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
 
-    let response = rx.blocking_recv().unwrap().as_result().unwrap();
-    match response {
-        ResponseOk::Done(c) => println!(
-            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content.as_ref().unwrap(),
-            c.usage.avg_prompt_tok_per_sec,
-            c.usage.avg_compl_tok_per_sec
-        ),
-        _ => unreachable!(),
-    }
     Ok(())
 }

@@ -100,7 +100,7 @@ impl TextModelBuilder {
         self
     }
 
-    /// Set the model topology for use during loading.
+    /// Set the model topology for use during loading. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
         self
@@ -155,7 +155,7 @@ impl TextModelBuilder {
         self
     }
 
-    /// Use ISQ of a certain type.
+    /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
         self

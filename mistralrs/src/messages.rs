@@ -13,6 +13,7 @@ pub trait RequestLike {
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
 pub enum TextMessageRole {
@@ -81,6 +82,7 @@ impl RequestLike for TextMessages {
     }
 }
 
+#[derive(Clone)]
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
@@ -94,6 +96,20 @@ pub struct RequestBuilder {
 impl Default for RequestBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<TextMessages> for RequestBuilder {
+    fn from(value: TextMessages) -> Self {
+        Self {
+            messages: value.0,
+            logits_processors: Vec::new(),
+            adapters: Vec::new(),
+            return_logprobs: false,
+            constraint: Constraint::None,
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Auto,
+        }
     }
 }
 
@@ -125,6 +141,17 @@ impl RequestBuilder {
 
     pub fn set_adapters(mut self, adapters: Vec<String>) -> Self {
         self.adapters = adapters;
+        self
+    }
+
+    /// The default tool choice is auto.
+    pub fn set_tools(mut self, tools: Vec<Tool>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn set_tool_choice(mut self, tool_choice: ToolChoice) -> Self {
+        self.tool_choice = tool_choice;
         self
     }
 
