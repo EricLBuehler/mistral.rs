@@ -806,13 +806,28 @@
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Activation, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
     amoe::{
@@ -1268,7 +1283,26 @@
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
+
         <span class="kw">let </span>head_dim = cfg.head_dim();
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta <span class="kw">as </span>f32,
+                    head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )<span class="question-mark">?</span>),
+            );
+        }
+
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">for </span>layer_idx <span class="kw">in
@@ -1277,14 +1311,10 @@
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta <span class="kw">as </span>f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb_m.dtype(),
-            )<span class="question-mark">?</span>);
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                 AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(

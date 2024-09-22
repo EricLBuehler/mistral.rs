@@ -394,9 +394,23 @@
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
 <a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::sync::Arc;
+</span><span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -451,7 +465,7 @@
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
 }
@@ -626,17 +640,29 @@
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
+            <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    head_dim,
+                    context_window,
+                    device,
+                    <span class="bool-val">true</span>,
+                    DType::F32,
+                )<span class="question-mark">?</span>),
+            );
+        }
+
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
-            <span class="kw">let </span>rotary = RotaryEmbedding::new(
-                rope_freq_base,
-                head_dim,
-                context_window,
-                device,
-                <span class="bool-val">true</span>,
-                DType::F32,
-            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>rotary = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
 
             <span class="kw">let </span>ffn_up = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_up"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>ffn_down = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_down"</span>), device)<span class="question-mark">?</span>;

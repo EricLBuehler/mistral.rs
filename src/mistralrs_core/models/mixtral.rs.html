@@ -689,6 +689,19 @@
 <a href="#689" id="689">689</a>
 <a href="#690" id="690">690</a>
 <a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
@@ -698,7 +711,7 @@
 <span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>serde::Deserialize;
-<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
@@ -1183,6 +1196,23 @@
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta <span class="kw">as </span>f32,
+                    head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">for </span>layer_idx <span class="kw">in
@@ -1191,14 +1221,10 @@
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta <span class="kw">as </span>f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb_m.dtype(),
-            )<span class="question-mark">?</span>);
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                 AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(

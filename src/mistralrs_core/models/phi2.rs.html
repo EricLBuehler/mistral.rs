@@ -742,9 +742,22 @@
 <a href="#742" id="742">742</a>
 <a href="#743" id="743">743</a>
 <a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::sync::Arc;
+</span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="doccomment">/// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -899,7 +912,7 @@
     dense: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     q_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
     k_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -911,7 +924,7 @@
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
         vb: VarBuilder,
-        rope: RotaryEmbedding,
+        rope: Arc&lt;RotaryEmbedding&gt;,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
@@ -1095,7 +1108,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rotary_emb: RotaryEmbedding,
+        rotary_emb: Arc&lt;RotaryEmbedding&gt;,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
@@ -1184,6 +1197,25 @@
             cfg.layer_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"final_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="comment">// Alternative rope scalings are not supported
+            </span>ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
         <span class="kw">for </span>layer_idx <span class="kw">in
@@ -1192,16 +1224,10 @@
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-            <span class="comment">// Alternative rope scalings are not supported.
-            </span><span class="kw">let </span>rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb.dtype(),
-            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                 AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(

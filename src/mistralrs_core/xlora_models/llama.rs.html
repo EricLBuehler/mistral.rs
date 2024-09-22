@@ -881,6 +881,17 @@
 <a href="#881" id="881">881</a>
 <a href="#882" id="882">882</a>
 <a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1512,21 +1523,32 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(i, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(Llama3RotaryEmbedding::new(
+                    vb.dtype(),
+                    cfg,
+                    device,
+                    is_gptx,
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>blocks: Vec&lt;<span class="kw">_</span>&gt; =
             NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
                 .into_iter()
                 .map(|i| {
-                    <span class="kw">let </span>rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(
-                            vb.dtype(),
-                            cfg,
-                            mapper
-                                .device_for(i, <span class="bool-val">false</span>)
-                                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
-                            is_gptx,
-                        )
-                        .expect(<span class="string">"Failed to create RoPE"</span>),
-                    );
+                    <span class="kw">let </span>device = mapper
+                        .device_for(i, <span class="bool-val">false</span>)
+                        .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+                    <span class="kw">let </span>rotary_emb = ropes
+                        .get(<span class="kw-2">&amp;</span>device.location())
+                        .expect(<span class="string">"No RoPE for device location!"</span>)
+                        .clone();
                     Block::load(
                         vb.pp(<span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)),
                         cfg,

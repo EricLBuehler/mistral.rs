@@ -985,6 +985,20 @@
 <a href="#985" id="985">985</a>
 <a href="#986" id="986">986</a>
 <a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1509,20 +1523,34 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta <span class="kw">as </span>f32,
+                    cfg.head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
-            <span class="kw">let </span>rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta <span class="kw">as </span>f32,
-                cfg.head_dim,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, <span class="bool-val">false</span>)
-                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )<span class="question-mark">?</span>);
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,

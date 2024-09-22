@@ -1002,9 +1002,22 @@
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
 <a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
@@ -1183,7 +1196,7 @@
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary: RotaryEmbedding,
+    rotary: Arc&lt;RotaryEmbedding&gt;,
     sdpa_params: SdpaParams,
 }
 
@@ -1413,7 +1426,7 @@
                 n_head: ct.hparams.n_head <span class="kw">as </span>usize,
                 n_kv_head: ct.hparams.n_head <span class="kw">as </span>usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize,
-                rotary: rotary.clone(),
+                rotary: rotary.clone().into(),
                 sdpa_params: SdpaParams {
                     n_kv_groups: ct.hparams.n_head <span class="kw">as </span>usize / n_kv_head,
                     use_flash_attn: <span class="bool-val">false</span>,
@@ -1534,18 +1547,29 @@
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {
+            <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    rope_dim,
+                    max_seq_len,
+                    device,
+                    <span class="bool-val">false</span>,
+                    DType::F32,
+                )<span class="question-mark">?</span>),
+            );
+        }
+
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);
             <span class="kw">let </span>device = mapper.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(device);
-            <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
-                rope_freq_base,
-                head_dim,
-                rope_dim,
-                max_seq_len,
-                device,
-                <span class="bool-val">false</span>,
-                DType::F32,
-            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>rotary = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
 
             <span class="kw">let </span>attention_wq = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_q.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>attention_wk = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.attn_k.weight"</span>), device)<span class="question-mark">?</span>;

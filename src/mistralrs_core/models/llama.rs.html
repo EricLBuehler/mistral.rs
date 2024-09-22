@@ -739,13 +739,28 @@
 <a href="#739" id="739">739</a>
 <a href="#740" id="740">740</a>
 <a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>serde::Deserialize;
-<span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
     amoe::{
@@ -1219,6 +1234,21 @@
             mapper.set_nm_device(vb.pp(<span class="string">"model.norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(i, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(Llama3RotaryEmbedding::new(
+                    vb.dtype(),
+                    cfg,
+                    device,
+                    is_gptx,
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span>blocks: Vec&lt;<span class="kw">_</span>&gt; =
             NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
                 .into_iter()
@@ -1226,10 +1256,10 @@
                     <span class="kw">let </span>device = mapper
                         .device_for(i, <span class="bool-val">false</span>)
                         .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-                    <span class="kw">let </span>rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(vb.dtype(), cfg, device, is_gptx)
-                            .expect(<span class="string">"Failed to create RoPE"</span>),
-                    );
+                    <span class="kw">let </span>rotary_emb = ropes
+                        .get(<span class="kw-2">&amp;</span>device.location())
+                        .expect(<span class="string">"No RoPE for device location!"</span>)
+                        .clone();
                     <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                         AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                         AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(

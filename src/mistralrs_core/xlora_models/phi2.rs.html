@@ -865,6 +865,20 @@
 <a href="#865" id="865">865</a>
 <a href="#866" id="866">866</a>
 <a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -993,7 +1007,7 @@
     dense: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     q_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
     k_layernorm: <span class="prelude-ty">Option</span>&lt;LayerNorm&gt;,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc&lt;RotaryEmbedding&gt;,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -1011,7 +1025,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc&lt;RotaryEmbedding&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
@@ -1203,7 +1217,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc&lt;RotaryEmbedding&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
@@ -1322,22 +1336,36 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_m = vb_m.pp(<span class="string">"layers"</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="comment">// Alternative rope scalings are not supported
+            </span>ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )<span class="question-mark">?</span>),
+            );
+        }
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
-            <span class="comment">// Alternative rope scalings are not supported.
-            </span><span class="kw">let </span>rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() <span class="kw">as </span>f64) <span class="kw">as </span>usize,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, <span class="bool-val">false</span>)
-                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )<span class="question-mark">?</span>;
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
             <span class="kw">let </span>layer = DecoderLayer::new(
                 cfg,
                 vb_m.pp(layer_idx),
