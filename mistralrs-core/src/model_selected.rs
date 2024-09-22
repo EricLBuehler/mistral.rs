@@ -50,6 +50,7 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        #[allow(rustdoc::bare_urls)]
         /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         #[arg(short, long)]
         organization: Option<IsqOrganization>,

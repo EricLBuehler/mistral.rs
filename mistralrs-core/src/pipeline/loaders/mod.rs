@@ -42,6 +42,8 @@ pub trait ModelPaths {
     fn get_tokenizer_filename(&self) -> &PathBuf;
 
     /// File where the content is expected to deserialize to [`ChatTemplate`].
+    ///
+    /// [`ChatTemplate`]: crate::ChatTemplate
     fn get_template_filename(&self) -> &Option<PathBuf>;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
