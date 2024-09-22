@@ -1,7 +1,6 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
-    TextModelBuilder,
+    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 };
 
 #[tokio::main]
