@@ -372,6 +372,7 @@
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
 <a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::path::PathBuf;
 
 <span class="kw">use </span>clap::Subcommand;
@@ -424,7 +425,8 @@
         </span><span class="attr">#[arg(long)]
         </span>topology: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
-        <span class="doccomment">/// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        <span class="attr">#[allow(rustdoc::bare_urls)]
+        </span><span class="doccomment">/// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
         </span><span class="attr">#[arg(short, long)]
         </span>organization: <span class="prelude-ty">Option</span>&lt;IsqOrganization&gt;,
 

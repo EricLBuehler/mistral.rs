@@ -51,57 +51,111 @@
 <a href="#51" id="51">51</a>
 <a href="#52" id="52">52</a>
 <a href="#53" id="53">53</a>
-</pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous, multithreaded API to `mistral.rs`.
+<a href="#54" id="54">54</a>
+<a href="#55" id="55">55</a>
+<a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a>
+<a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a>
+<a href="#76" id="76">76</a>
+<a href="#77" id="77">77</a>
+<a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+</pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
+//!
+//! To get started loading a model, check out the following builders:
+//! - [`TextModelBuilder`]
+//! - [`LoraModelBuilder`]
+//! - [`XLoraModelBuilder`]
+//! - [`GgufModelBuilder`]
+//! - [`GgufLoraModelBuilder`]
+//! - [`GgufXLoraModelBuilder`]
+//! - [`VisionModelBuilder`]
+//!
+//! Check out the [`v0_4_api`] module for concise documentation of this, newer API.
 //!
 //! ## Example
 //! ```no_run
-//! use std::sync::Arc;
-//! use tokio::sync::mpsc::channel;
-//!
+//! use anyhow::Result;
 //! use mistralrs::{
-//!     Constraint, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-//!     NormalLoaderType, NormalRequest, Request, RequestMessage, Response,
-//!     SamplingParams, SchedulerConfig, DefaultSchedulerMethod, TokenSource,
+//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
 //! };
 //!
-//! fn setup() -&gt; anyhow::Result&lt;Arc&lt;MistralRs&gt;&gt; {
-//!     // See the examples for how to load your model.
-//!     todo!()
-//! }
+//! #[tokio::main]
+//! async fn main() -&gt; Result&lt;()&gt; {
+//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
+//!         .with_isq(IsqType::Q8_0)
+//!         .with_logging()
+//!         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+//!         .build()
+//!         .await?;
 //!
-//! fn main() -&gt; anyhow::Result&lt;()&gt; {
-//!     let mistralrs = setup()?;
+//!     let messages = TextMessages::new()
+//!         .add_message(
+//!             TextMessageRole::System,
+//!             "You are an AI agent with a specialty in programming.",
+//!         )
+//!         .add_message(
+//!             TextMessageRole::User,
+//!             "Hello! How are you? Please write generic binary search function in Rust.",
+//!         );
 //!
-//!     let (tx, mut rx) = channel(10_000);
-//!     let request = Request::Normal(NormalRequest {
-//!         messages: RequestMessage::Completion {
-//!             text: "Hello! My name is ".to_string(),
-//!             echo_prompt: false,
-//!             best_of: 1,
-//!         },
-//!         sampling_params: SamplingParams::default(),
-//!         response: tx,
-//!         return_logprobs: false,
-//!         is_streaming: false,
-//!         id: 0,
-//!         constraint: Constraint::None,
-//!         suffix: None,
-//!         adapters: None,
-//!         tool_choice: None,
-//!         tools: None,
-//!         logits_processors: None,
-//!     });
-//!     mistralrs.get_sender()?.blocking_send(request)?;
+//!     let response = model.send_chat_request(messages).await?;
 //!
-//!     let response = rx.blocking_recv().unwrap();
-//!     match response {
-//!         Response::CompletionDone(c) =&gt; println!("Text: {}", c.choices[0].text),
-//!         _ =&gt; unreachable!(),
-//!     }
+//!     println!("{}", response.choices[0].message.content.as_ref().unwrap());
+//!     dbg!(
+//!         response.usage.avg_prompt_tok_per_sec,
+//!         response.usage.avg_compl_tok_per_sec
+//!     );
+//!
 //!     Ok(())
 //! }
 //! ```
 
-</span><span class="kw">pub use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+</span><span class="kw">mod </span>gguf;
+<span class="kw">mod </span>gguf_lora_model;
+<span class="kw">mod </span>gguf_xlora_model;
+<span class="kw">mod </span>lora_model;
+<span class="kw">mod </span>messages;
+<span class="kw">mod </span>model;
+<span class="kw">mod </span>text_model;
+<span class="kw">mod </span>vision_model;
+<span class="kw">mod </span>xlora_model;
+
+<span class="doccomment">/// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
+</span><span class="kw">pub mod </span>v0_4_api {
+    <span class="kw">pub use </span><span class="kw">super</span>::gguf::GgufModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::gguf_lora_model::GgufLoraModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::gguf_xlora_model::GgufXLoraModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::lora_model::LoraModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::messages::{
+        RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages,
+    };
+    <span class="kw">pub use </span><span class="kw">super</span>::model::{best_device, Model};
+    <span class="kw">pub use </span><span class="kw">super</span>::text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
+    <span class="kw">pub use </span><span class="kw">super</span>::vision_model::VisionModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::xlora_model::XLoraModelBuilder;
+}
+
+<span class="kw">pub use </span>v0_4_api::<span class="kw-2">*</span>;
+
+<span class="kw">pub use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub use </span>mistralrs_core::<span class="kw-2">*</span>;
 </code></pre></div></section></main></body></html>

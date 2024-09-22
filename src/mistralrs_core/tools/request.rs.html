@@ -31,6 +31,9 @@
 <a href="#31" id="31">31</a>
 <a href="#32" id="32">32</a>
 <a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+<a href="#36" id="36">36</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>serde_json::Value;
@@ -44,10 +47,13 @@
 <span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 </span><span class="kw">pub enum </span>ToolChoice {
     <span class="attr">#[serde(rename = <span class="string">"none"</span>)]
+    </span><span class="doccomment">/// Disallow selection of tools.
     </span><span class="prelude-val">None</span>,
     <span class="attr">#[serde(rename = <span class="string">"auto"</span>)]
+    </span><span class="doccomment">/// Allow automatic selection of any given tool, or none.
     </span>Auto,
     <span class="attr">#[serde(untagged)]
+    </span><span class="doccomment">/// Force selection of a given tool.
     </span>Tool(Tool),
 }
 

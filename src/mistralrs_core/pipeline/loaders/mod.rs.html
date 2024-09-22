@@ -390,6 +390,8 @@
 <a href="#390" id="390">390</a>
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -434,6 +436,8 @@
     </span><span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
 
     <span class="doccomment">/// File where the content is expected to deserialize to [`ChatTemplate`].
+    ///
+    /// [`ChatTemplate`]: crate::ChatTemplate
     </span><span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
 
     <span class="doccomment">/// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
