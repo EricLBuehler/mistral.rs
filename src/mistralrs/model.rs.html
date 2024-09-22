@@ -109,6 +109,8 @@
 <a href="#109" id="109">109</a>
 <a href="#110" id="110">110</a>
 <a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
@@ -141,6 +143,7 @@
 /// - [`GgufLoraModelBuilder`]
 /// - [`GgufXLoraModelBuilder`]
 /// - [`VisionModelBuilder`]
+/// - [`AnyMoeModelBuilder`]
 ///
 /// [`TextModelBuilder`]: crate::TextModelBuilder
 /// [`LoraModelBuilder`]: crate::LoraModelBuilder
@@ -150,6 +153,7 @@
 /// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
 /// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
 /// [`VisionModelBuilder`]: crate::VisionModelBuilder
+/// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
 ///
 </span><span class="kw">pub struct </span>Model {
     runner: Arc&lt;MistralRs&gt;,

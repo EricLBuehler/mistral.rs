@@ -206,6 +206,15 @@
 <a href="#206" id="206">206</a>
 <a href="#207" id="207">207</a>
 <a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::num::NonZeroUsize;
 
@@ -221,6 +230,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -257,6 +267,7 @@
             with_logging: <span class="bool-val">false</span>,
             topology: <span class="prelude-val">None</span>,
             tok_model_id: <span class="prelude-val">None</span>,
+            device_mapping: <span class="prelude-val">None</span>,
         }
     }
 
@@ -350,6 +361,13 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
+    /// the [`Topology`], see [`Self::with_topology`].
+    </span><span class="kw">pub fn </span>with_device_mapping(<span class="kw-2">mut </span><span class="self">self</span>, device_mapping: DeviceMapMetadata) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.device_mapping = <span class="prelude-val">Some</span>(device_mapping);
+        <span class="self">self
+    </span>}
+
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = GGUFSpecificConfig {
             prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
@@ -376,7 +394,7 @@
             <span class="kw-2">&amp;</span>ModelDType::Auto,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.with_logging,
-            DeviceMapMetadata::dummy(),
+            <span class="self">self</span>.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
             <span class="prelude-val">None</span>,
             <span class="self">self</span>.paged_attn_cfg,
         )<span class="question-mark">?</span>;

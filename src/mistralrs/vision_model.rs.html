@@ -164,6 +164,15 @@
 <a href="#164" id="164">164</a>
 <a href="#165" id="165">165</a>
 <a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
@@ -179,6 +188,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -216,6 +226,7 @@
             isq: <span class="prelude-val">None</span>,
             max_num_seqs: <span class="number">32</span>,
             with_logging: <span class="bool-val">false</span>,
+            device_mapping: <span class="prelude-val">None</span>,
         }
     }
 
@@ -285,6 +296,13 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
+    /// the [`Topology`], see [`Self::with_topology`].
+    </span><span class="kw">pub fn </span>with_device_mapping(<span class="kw-2">mut </span><span class="self">self</span>, device_mapping: DeviceMapMetadata) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.device_mapping = <span class="prelude-val">Some</span>(device_mapping);
+        <span class="self">self
+    </span>}
+
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = VisionSpecificConfig {
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
@@ -313,7 +331,7 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.dtype,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.with_logging,
-            DeviceMapMetadata::dummy(),
+            <span class="self">self</span>.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
             <span class="self">self</span>.isq,
             <span class="prelude-val">None</span>,
         )<span class="question-mark">?</span>;
