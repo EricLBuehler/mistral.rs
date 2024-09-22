@@ -1,5 +1,5 @@
 //! This crate provides an asynchronous API to `mistral.rs`.
-//! 
+//!
 //! To get started loading a model, check out the following builders:
 //! - [`TextModelBuilder`]
 //! - [`LoraModelBuilder`]
@@ -8,7 +8,7 @@
 //! - [`GgufLoraModelBuilder`]
 //! - [`GgufXLoraModelBuilder`]
 //! - [`VisionModelBuilder`]
-//! 
+//!
 //! Check out the [`v0_4_api`] module for concise documentation of this, newer API.
 //!
 //! ## Example
