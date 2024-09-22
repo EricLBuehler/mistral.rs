@@ -205,7 +205,7 @@ impl TextModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper. Genrally, it is more programmatic and easier to use
+    /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
     /// the [`Topology`], see [`Self::with_topology`].
     pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
         self.device_mapping = Some(device_mapping);
