@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -155,7 +155,7 @@ struct Attention {
     dense: Arc<dyn QuantMethod>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -167,7 +167,7 @@ impl Attention {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
@@ -351,7 +351,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rotary_emb: RotaryEmbedding,
+        rotary_emb: Arc<RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -440,6 +440,25 @@ impl Model {
             cfg.layer_norm_eps,
             mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            // Alternative rope scalings are not supported
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         for layer_idx in
@@ -448,16 +467,10 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            // Alternative rope scalings are not supported.
-            let rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb.dtype(),
-            )?;
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(

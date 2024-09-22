@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::attention::SdpaParams;
@@ -55,7 +56,7 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -230,17 +231,29 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let mapper = mapper.into_mapper(block_count, device, topology)?;
 
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..block_count {
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    head_dim,
+                    context_window,
+                    device,
+                    true,
+                    DType::F32,
+                )?),
+            );
+        }
+
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new(
-                rope_freq_base,
-                head_dim,
-                context_window,
-                device,
-                true,
-                DType::F32,
-            )?;
+            let rotary = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
 
             let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
             let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
