@@ -3,6 +3,7 @@ use std::{num::NonZeroUsize, path::PathBuf};
 
 use crate::{best_device, Model};
 
+/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
 pub struct TextModelBuilder {
     // Loading model
     pub(crate) model_id: String,
@@ -31,6 +32,7 @@ pub struct TextModelBuilder {
     pub(crate) prefix_cache_n: Option<usize>,
 }
 
+/// Builder for PagedAttention metadata.
 pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
     mem_cpu: usize,
@@ -106,7 +108,7 @@ impl TextModelBuilder {
         self
     }
 
-    /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, https://arxiv.org/abs/2310.02410)
+    /// Organize ISQ to enable MoQE (Mixture of Quantized Experts, <https://arxiv.org/abs/2310.02410>)
     pub fn with_mixture_qexperts_isq(mut self) -> Self {
         self.organization = IsqOrganization::MoeExpertsOnly;
         self

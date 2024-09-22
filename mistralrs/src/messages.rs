@@ -5,6 +5,7 @@ use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
 
+/// A type which can be used as a request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
     fn take_messages(&mut self) -> RequestMessage;
@@ -16,13 +17,16 @@ pub trait RequestLike {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Plain text (chat) messages.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
+/// A chat message role.
 pub enum TextMessageRole {
     User,
     Assistant,
     System,
     Tool,
+    Custom(String),
 }
 
 impl Display for TextMessageRole {
@@ -32,6 +36,7 @@ impl Display for TextMessageRole {
             Self::Assistant => write!(f, "assistant"),
             Self::System => write!(f, "system"),
             Self::Tool => write!(f, "tool"),
+            Self::Custom(c) => write!(f, "{c}"),
         }
     }
 }
@@ -88,6 +93,7 @@ impl RequestLike for TextMessages {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Text (chat) messages with images.
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
@@ -222,6 +228,7 @@ impl RequestLike for VisionMessages {
 }
 
 #[derive(Clone)]
+/// A way to add messages with finer control given.
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,

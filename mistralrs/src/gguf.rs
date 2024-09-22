@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 
 use crate::{best_device, Model};
 
+/// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
     // Loading model
     pub(crate) model_id: String,
@@ -103,6 +104,8 @@ impl GgufModelBuilder {
     /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
     ///
     /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
+    ///
+    /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
     pub fn with_paged_attn(
         mut self,
         paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,

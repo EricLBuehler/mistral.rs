@@ -2,6 +2,7 @@ use mistralrs_core::*;
 
 use crate::{best_device, GgufModelBuilder, Model};
 
+/// Wrapper of [`GgufModelBuilder`] for LoRA models.
 pub struct GgufLoraModelBuilder {
     gguf_model: GgufModelBuilder,
     lora_model_id: String,
@@ -9,7 +10,7 @@ pub struct GgufLoraModelBuilder {
 }
 
 impl GgufLoraModelBuilder {
-    pub fn from_text_model_builder(
+    pub fn from_gguf_model_builder(
         gguf_model: GgufModelBuilder,
         lora_model_id: impl ToString,
         ordering: Ordering,

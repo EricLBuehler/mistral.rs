@@ -21,6 +21,25 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
     }
 }
 
+/// The object used to interact with the model. This can be used with many varietes of models, \
+/// and as such may be created with one of:
+/// - [`TextModelBuilder`]
+/// - [`LoraModelBuilder`]
+/// - [`XLoraModelBuilder`]
+/// - [`GgufModelBuilder`]
+/// - [`GgufLoraModelBuilder`]
+/// - [`GgufXLoraModelBuilder`]
+/// - [`VisionModelBuilder`]
+///
+/// [`TextModelBuilder`]: crate::TextModelBuilder
+/// [`LoraModelBuilder`]: crate::LoraModelBuilder
+/// [`XLoraModelBuilder`]: crate::XLoraModelBuilder
+/// [`GgufModelBuilder`]: crate::GgufModelBuilder
+/// [`GgufModelBuilder`]: crate::GgufModelBuilder
+/// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
+/// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
+/// [`VisionModelBuilder`]: crate::VisionModelBuilder
+///
 pub struct Model {
     runner: Arc<MistralRs>,
 }

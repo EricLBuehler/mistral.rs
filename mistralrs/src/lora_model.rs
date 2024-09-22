@@ -2,6 +2,7 @@ use mistralrs_core::*;
 
 use crate::{best_device, Model, TextModelBuilder};
 
+/// Wrapper of [`TextModelBuilder`] for LoRA models.
 pub struct LoraModelBuilder {
     text_model: TextModelBuilder,
     lora_model_id: String,
