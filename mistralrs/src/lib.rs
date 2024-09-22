@@ -1,4 +1,15 @@
-//! This crate provides an asynchronous, multithreaded API to `mistral.rs`.
+//! This crate provides an asynchronous API to `mistral.rs`.
+//! 
+//! To get started loading a model, check out the following builders:
+//! - [`TextModelBuilder`]
+//! - [`LoraModelBuilder`]
+//! - [`XLoraModelBuilder`]
+//! - [`GgufModelBuilder`]
+//! - [`GgufLoraModelBuilder`]
+//! - [`GgufXLoraModelBuilder`]
+//! - [`VisionModelBuilder`]
+//! 
+//! Check out the [`v0_4_api`] module for concise documentation of this, newer API.
 //!
 //! ## Example
 //! ```no_run
@@ -48,7 +59,7 @@ mod text_model;
 mod vision_model;
 mod xlora_model;
 
-/// Upcoming API for v0.4.0. Other APIs will be deprecated.
+/// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
 pub mod v0_4_api {
     pub use super::gguf::GgufModelBuilder;
     pub use super::gguf_lora_model::GgufLoraModelBuilder;
