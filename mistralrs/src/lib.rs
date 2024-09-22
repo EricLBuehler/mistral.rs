@@ -54,8 +54,10 @@ pub mod gguf;
 pub use gguf::GgufModelBuilder;
 
 pub mod gguf_lora_model;
+pub use gguf_lora_model::GgufLoraModelBuilder;
 
 pub mod gguf_xlora_model;
+pub use gguf_xlora_model::GgufXLoraModelBuilder;
 
 pub mod model;
 pub use model::{best_device, Model};
