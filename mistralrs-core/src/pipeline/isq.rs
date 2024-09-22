@@ -91,7 +91,7 @@ pub enum IsqOrganization {
     #[serde(rename = "default")]
     Default,
     /// Only quantize MoE experts, if applicable. The enables MoQE.
-    /// https://arxiv.org/abs/2310.02410
+    /// <https://arxiv.org/abs/2310.02410>
     #[serde(rename = "moqe")]
     MoeExpertsOnly,
 }

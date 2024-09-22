@@ -5,7 +5,7 @@
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{
@@ -432,6 +432,16 @@ impl Model {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
@@ -440,7 +450,10 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(

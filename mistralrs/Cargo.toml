@@ -38,11 +38,19 @@ name = "simple"
 required-features = []
 
 [[example]]
-name = "grammar"
+name = "batching"
 required-features = []
 
 [[example]]
-name = "quantized"
+name = "custom_logits_processor"
+required-features = []
+
+[[example]]
+name = "gemma2"
+required-features = []
+
+[[example]]
+name = "grammar"
 required-features = []
 
 [[example]]
@@ -54,11 +62,39 @@ name = "lora"
 required-features = []
 
 [[example]]
+name = "lora_activation"
+required-features = []
+
+[[example]]
+name = "paged_attn"
+required-features = []
+
+[[example]]
+name = "phi3_5_moe"
+required-features = []
+
+[[example]]
+name = "mixture_of_quant_experts"
+required-features = []
+
+[[example]]
+name = "tools"
+required-features = []
+
+[[example]]
+name = "tools_llama_8b"
+required-features = []
+
+[[example]]
+name = "topology"
+required-features = []
+
+[[example]]
 name = "xlora"
 required-features = []
 
 [[example]]
-name = "lora_activation"
+name = "gguf"
 required-features = []
 
 [[example]]
@@ -87,28 +123,4 @@ required-features = []
 
 [[example]]
 name = "anymoe_lora"
-required-features = []
-
-[[example]]
-name = "paged_attn"
-required-features = []
-
-[[example]]
-name = "tools"
-required-features = []
-
-[[example]]
-name = "batching"
-required-features = []
-
-[[example]]
-name = "topology"
-required-features = []
-
-[[example]]
-name = "phi3_5_moe"
-required-features = []
-
-[[example]]
-name = "mixture_of_quant_experts"
 required-features = []
