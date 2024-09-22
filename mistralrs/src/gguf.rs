@@ -13,6 +13,7 @@ pub struct GgufModelBuilder {
     pub(crate) hf_revision: Option<String>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
+    pub(crate) device_mapping: Option<DeviceMapMetadata>,
 
     // Model running
     pub(crate) prompt_batchsize: Option<NonZeroUsize>,
@@ -49,6 +50,7 @@ impl GgufModelBuilder {
             with_logging: false,
             topology: None,
             tok_model_id: None,
+            device_mapping: None,
         }
     }
 
@@ -142,6 +144,13 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Provide metadata to initialize the device mapper. Genrally, it is more programmatic and easier to use
+    /// the [`Topology`], see [`Self::with_topology`].
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+        self.device_mapping = Some(device_mapping);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
             prompt_batchsize: self.prompt_batchsize,
@@ -168,7 +177,7 @@ impl GgufModelBuilder {
             &ModelDType::Auto,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            DeviceMapMetadata::dummy(),
+            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
             None,
             self.paged_attn_cfg,
         )?;

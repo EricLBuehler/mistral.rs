@@ -13,6 +13,7 @@ pub struct TextModelBuilder {
     pub(crate) from_uqff: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
+    pub(crate) device_mapping: Option<DeviceMapMetadata>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -93,6 +94,7 @@ impl TextModelBuilder {
             no_kv_cache: false,
             prefix_cache_n: Some(16),
             with_logging: false,
+            device_mapping: None,
         }
     }
 
@@ -203,6 +205,13 @@ impl TextModelBuilder {
         self
     }
 
+    /// Provide metadata to initialize the device mapper. Genrally, it is more programmatic and easier to use
+    /// the [`Topology`], see [`Self::with_topology`].
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+        self.device_mapping = Some(device_mapping);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -233,7 +242,7 @@ impl TextModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            DeviceMapMetadata::dummy(),
+            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
             self.isq,
             self.paged_attn_cfg,
         )?;

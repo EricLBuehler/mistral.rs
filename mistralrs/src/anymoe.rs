@@ -79,7 +79,9 @@ impl AnyMoeModelBuilder {
             &self.base.dtype,
             &best_device(self.base.force_cpu)?,
             !self.base.with_logging,
-            DeviceMapMetadata::dummy(),
+            self.base
+                .device_mapping
+                .unwrap_or(DeviceMapMetadata::dummy()),
             self.base.isq,
             self.base.paged_attn_cfg,
         )?;

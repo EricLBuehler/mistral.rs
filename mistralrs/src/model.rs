@@ -30,6 +30,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// - [`GgufLoraModelBuilder`]
 /// - [`GgufXLoraModelBuilder`]
 /// - [`VisionModelBuilder`]
+/// - [`AnyMoeModelBuilder`]
 ///
 /// [`TextModelBuilder`]: crate::TextModelBuilder
 /// [`LoraModelBuilder`]: crate::LoraModelBuilder
@@ -39,6 +40,7 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
 /// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
 /// [`VisionModelBuilder`]: crate::VisionModelBuilder
+/// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
 ///
 pub struct Model {
     runner: Arc<MistralRs>,
