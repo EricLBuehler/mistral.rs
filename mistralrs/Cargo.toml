@@ -89,17 +89,17 @@ required-features = []
 name = "topology"
 required-features = []
 
-# [[example]]
-# name = "quantized"
-# required-features = []
+[[example]]
+name = "xlora"
+required-features = []
 
-# [[example]]
-# name = "xlora"
-# required-features = []
+[[example]]
+name = "gguf"
+required-features = []
 
-# [[example]]
-# name = "gguf_locally"
-# required-features = []
+[[example]]
+name = "gguf_locally"
+required-features = []
 
 # [[example]]
 # name = "phi3v"

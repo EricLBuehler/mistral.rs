@@ -47,6 +47,16 @@ pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
 pub mod lora_model;
 pub use lora_model::LoraModelBuilder;
 
+pub mod xlora_model;
+pub use xlora_model::XLoraModelBuilder;
+
+pub mod gguf;
+pub use gguf::GgufModelBuilder;
+
+pub mod gguf_lora_model;
+
+pub mod gguf_xlora_model;
+
 pub mod model;
 pub use model::{best_device, Model};
 
