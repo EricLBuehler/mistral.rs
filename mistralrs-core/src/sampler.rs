@@ -147,6 +147,10 @@ impl DrySamplingParamsInner {
 ///
 /// # Example
 /// ```rust
+/// use std::{sync::Arc, ops::Mul};
+/// use mistralrs_core::CustomLogitsProcessor;
+/// use candle_core::{Result, Tensor};
+///
 /// struct ThresholdLogitsProcessor;
 /// impl CustomLogitsProcessor for ThresholdLogitsProcessor {
 ///     fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
