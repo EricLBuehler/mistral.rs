@@ -163,9 +163,18 @@ impl TextModelBuilder {
 
     /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
     /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
-    pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-        self.paged_attn_cfg = Some(paged_attn_cfg);
-        self
+    ///
+    /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
+    pub fn with_paged_attn(
+        mut self,
+        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
+    ) -> anyhow::Result<Self> {
+        if paged_attn_supported() {
+            self.paged_attn_cfg = Some(paged_attn_cfg()?);
+        } else {
+            self.paged_attn_cfg = None;
+        }
+        Ok(self)
     }
 
     /// Set the maximum number of sequences which can be run at once.

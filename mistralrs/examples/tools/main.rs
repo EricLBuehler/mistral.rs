@@ -20,20 +20,19 @@ fn get_weather(input: GetWeatherInput) -> String {
 async fn main() -> Result<()> {
     let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-8B-Instruct".to_string())
         .with_logging()
-        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()
         .await?;
 
     let parameters: HashMap<String, Value> = serde_json::from_value(json!({
         "type": "object",
         "properties": {
-            "location": {
-            "type": "string",
-            "description": "The city and state, e.g. San Francisco, CA",
+            "place": {
+                "type": "string",
+                "description": "The city and state, e.g. San Francisco, CA",
             },
-            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
         },
-        "required": ["location"],
+        "required": ["place"],
     }))?;
 
     let tools = vec![Tool {
@@ -59,7 +58,11 @@ async fn main() -> Result<()> {
         let called = &message.tool_calls[0];
         if called.function.name == "get_weather" {
             let input: GetWeatherInput = serde_json::from_str(&called.function.arguments)?;
+            println!("Called tool `get_weather` with arguments {input:?}");
+
             let result = get_weather(input);
+            println!("Output of tool call: {result}");
+
             // Add tool call message from assistant so it knows what it called
             messages = messages.add_message(
                 TextMessageRole::Assistant,

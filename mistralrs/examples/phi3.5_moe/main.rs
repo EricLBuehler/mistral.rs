@@ -9,7 +9,7 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("microsoft/Phi-3.5-MoE-instruct".to_string())
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()
         .await?;
 

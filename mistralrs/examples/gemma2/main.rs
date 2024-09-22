@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
     let model = TextModelBuilder::new("google/gemma-2-9b-it".to_string())
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()
         .await?;
 

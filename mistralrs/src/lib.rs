@@ -12,7 +12,7 @@
 //!     let model = TextModel::builder("microsoft/Phi-3.5-mini-instruct".to_string())
 //!         .with_isq(IsqType::Q8_0)
 //!         .with_logging()
-//!         .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
+//!         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
 //!         .build()
 //!         .await?;
 //!
