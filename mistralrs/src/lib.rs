@@ -39,7 +39,7 @@
 //! ```
 
 pub mod messages;
-pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages};
+pub use messages::{RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages};
 
 pub mod text_model;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
@@ -58,6 +58,9 @@ pub use gguf_lora_model::GgufLoraModelBuilder;
 
 pub mod gguf_xlora_model;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
+
+pub mod vision_model;
+pub use vision_model::VisionModelBuilder;
 
 pub mod model;
 pub use model::{best_device, Model};

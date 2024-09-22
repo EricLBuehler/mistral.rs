@@ -101,21 +101,21 @@ required-features = []
 name = "gguf_locally"
 required-features = []
 
-# [[example]]
-# name = "phi3v"
-# required-features = []
+[[example]]
+name = "phi3v"
+required-features = []
 
-# [[example]]
-# name = "idefics2"
-# required-features = []
+[[example]]
+name = "idefics2"
+required-features = []
 
-# [[example]]
-# name = "llava"
-# required-features = []
+[[example]]
+name = "llava"
+required-features = []
 
-# [[example]]
-# name = "llava_next"
-# required-features = []
+[[example]]
+name = "llava_next"
+required-features = []
 
 # [[example]]
 # name = "anymoe"

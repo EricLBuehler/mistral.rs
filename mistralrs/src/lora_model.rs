@@ -11,12 +11,12 @@ pub struct LoraModelBuilder {
 impl LoraModelBuilder {
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
-        lora_model_id: String,
+        lora_model_id: impl ToString,
         ordering: Ordering,
     ) -> Self {
         Self {
             text_model,
-            lora_model_id,
+            lora_model_id: lora_model_id.to_string(),
             ordering,
         }
     }

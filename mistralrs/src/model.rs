@@ -43,7 +43,7 @@ impl Model {
             (None, None)
         };
         let request = Request::Normal(NormalRequest {
-            messages: RequestMessage::Chat(request.take_messages()),
+            messages: request.take_messages(),
             sampling_params: SamplingParams::default(),
             response: tx,
             return_logprobs: request.return_logprobs(),

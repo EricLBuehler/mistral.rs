@@ -1,60 +1,55 @@
 use mistralrs_core::*;
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 use crate::{best_device, Model};
 
-pub struct GgufModelBuilder {
+pub struct VisionModelBuilder {
     // Loading model
     pub(crate) model_id: String,
-    pub(crate) files: Vec<String>,
-    pub(crate) tok_model_id: Option<String>,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
+    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) from_uqff: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
 
     // Model running
+    pub(crate) use_flash_attn: bool,
     pub(crate) prompt_batchsize: Option<NonZeroUsize>,
-    pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
+    pub(crate) loader_type: VisionLoaderType,
+    pub(crate) dtype: ModelDType,
+    pub(crate) force_cpu: bool,
+    pub(crate) isq: Option<IsqType>,
 
     // Other things
-    pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
     pub(crate) max_num_seqs: usize,
-    pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
-    pub(crate) prefix_cache_n: Option<usize>,
 }
 
-impl GgufModelBuilder {
+impl VisionModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
-    /// - Number of sequences to hold in prefix cache is 16.
-    pub fn new(model_id: impl ToString, files: Vec<impl ToString>) -> Self {
+    pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
-            files: files.into_iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+            use_flash_attn: cfg!(feature = "flash-attn"),
+            topology: None,
+            write_uqff: None,
+            from_uqff: None,
             prompt_batchsize: None,
             chat_template: None,
             tokenizer_json: None,
+            loader_type,
+            dtype: ModelDType::Auto,
             force_cpu: false,
             token_source: TokenSource::CacheToken,
             hf_revision: None,
-            paged_attn_cfg: None,
+            isq: None,
             max_num_seqs: 32,
-            no_kv_cache: false,
-            prefix_cache_n: Some(16),
             with_logging: false,
-            topology: None,
-            tok_model_id: None,
         }
-    }
-
-    /// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
-    pub fn with_tok_model_id(mut self, tok_model_id: impl ToString) -> Self {
-        self.tok_model_id = Some(tok_model_id.to_string());
-        self
     }
 
     /// Set the prompt batchsize to use for inference.
@@ -81,6 +76,12 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Load the model in a certain dtype.
+    pub fn with_dtype(mut self, dtype: ModelDType) -> Self {
+        self.dtype = dtype;
+        self
+    }
+
     /// Force usage of the CPU device. Do not use PagedAttention with this.
     pub fn with_force_cpu(mut self) -> Self {
         self.force_cpu = true;
@@ -99,37 +100,15 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
-    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
-    ///
-    /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
-    pub fn with_paged_attn(
-        mut self,
-        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
-    ) -> anyhow::Result<Self> {
-        if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg()?);
-        } else {
-            self.paged_attn_cfg = None;
-        }
-        Ok(self)
+    /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
+    pub fn with_isq(mut self, isq: IsqType) -> Self {
+        self.isq = Some(isq);
+        self
     }
 
     /// Set the maximum number of sequences which can be run at once.
     pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
         self.max_num_seqs = max_num_seqs;
-        self
-    }
-
-    /// Disable KV cache. Trade performance for memory usage.
-    pub fn with_no_kv_cache(mut self) -> Self {
-        self.no_kv_cache = true;
-        self
-    }
-
-    /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
-    pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
-        self.prefix_cache_n = n_seqs;
         self
     }
 
@@ -140,65 +119,46 @@ impl GgufModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
-        let config = GGUFSpecificConfig {
+        let config = VisionSpecificConfig {
+            use_flash_attn: self.use_flash_attn,
             prompt_batchsize: self.prompt_batchsize,
             topology: self.topology,
+            write_uqff: self.write_uqff,
+            from_uqff: self.from_uqff,
         };
 
         if self.with_logging {
             initialize_logging();
         }
 
-        let loader = GGUFLoaderBuilder::new(
-            self.chat_template,
-            self.tok_model_id,
-            self.model_id,
-            self.files,
+        let loader = VisionLoaderBuilder::new(
             config,
+            self.chat_template,
+            self.tokenizer_json,
+            Some(self.model_id),
         )
-        .build();
+        .build(self.loader_type);
 
         // Load, into a Pipeline
         let pipeline = loader.load_model_from_hf(
             self.hf_revision,
             self.token_source,
-            &ModelDType::Auto,
+            &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
             DeviceMapMetadata::dummy(),
+            self.isq,
             None,
-            self.paged_attn_cfg,
         )?;
 
-        let scheduler_method = match self.paged_attn_cfg {
-            Some(_) => {
-                let config = pipeline
-                    .lock()
-                    .await
-                    .get_metadata()
-                    .cache_config
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-
-                SchedulerConfig::PagedAttentionMeta {
-                    max_num_seqs: self.max_num_seqs,
-                    config,
-                }
-            }
-            None => SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
-            },
+        let scheduler_method = SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.no_kv_cache)
+        let runner = MistralRsBuilder::new(pipeline, scheduler_method)
+            .with_no_kv_cache(false)
             .with_gemm_full_precision_f16(true)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
-
-        if let Some(n) = self.prefix_cache_n {
-            runner = runner.with_prefix_cache_n(n)
-        }
+            .with_no_prefix_cache(false);
 
         Ok(Model::new(runner.build()))
     }

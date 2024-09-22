@@ -9,10 +9,10 @@ async fn main() -> Result<()> {
     // chat template from the specified file, and the tokenizer and model from a
     // local GGUF file at the path specified.
     let model = GgufModelBuilder::new(
-        "gguf_models/mistral_v0.1/".to_string(),
-        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()],
+        "gguf_models/mistral_v0.1/",
+        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf"],
     )
-    .with_chat_template("chat_templates/mistral.json".to_string())
+    .with_chat_template("chat_templates/mistral.json")
     .with_logging()
     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
     .build()

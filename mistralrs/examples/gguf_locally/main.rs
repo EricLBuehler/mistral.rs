@@ -6,8 +6,8 @@ use mistralrs::{
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = GgufModelBuilder::new(
-        "microsoft/Phi-3.5-mini-instruct".to_string(),
-        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string()],
+        "microsoft/Phi-3.5-mini-instruct",
+        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf"],
     )
     .with_logging()
     .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

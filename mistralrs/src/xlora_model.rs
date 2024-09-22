@@ -12,12 +12,12 @@ pub struct XLoraModelBuilder {
 impl XLoraModelBuilder {
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
-        xlora_model_id: String,
+        xlora_model_id: impl ToString,
         ordering: Ordering,
     ) -> Self {
         Self {
             text_model,
-            xlora_model_id,
+            xlora_model_id: xlora_model_id.to_string(),
             ordering,
             tgt_non_granular_index: None,
         }

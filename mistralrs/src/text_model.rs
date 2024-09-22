@@ -69,9 +69,9 @@ impl TextModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
-    pub fn new(model_id: String) -> Self {
+    pub fn new(model_id: impl ToString) -> Self {
         Self {
-            model_id,
+            model_id: model_id.to_string(),
             use_flash_attn: cfg!(feature = "flash-attn"),
             prompt_batchsize: None,
             topology: None,
@@ -113,14 +113,14 @@ impl TextModelBuilder {
     }
 
     /// Literal Jinja chat template OR Path (ending in `.json`) to one.
-    pub fn with_chat_template(mut self, chat_template: String) -> Self {
-        self.chat_template = Some(chat_template);
+    pub fn with_chat_template(mut self, chat_template: impl ToString) -> Self {
+        self.chat_template = Some(chat_template.to_string());
         self
     }
 
     /// Path to a discrete `tokenizer.json` file.
-    pub fn with_tokenizer_json(mut self, tokenizer_json: String) -> Self {
-        self.tokenizer_json = Some(tokenizer_json);
+    pub fn with_tokenizer_json(mut self, tokenizer_json: impl ToString) -> Self {
+        self.tokenizer_json = Some(tokenizer_json.to_string());
         self
     }
 
@@ -150,8 +150,8 @@ impl TextModelBuilder {
     }
 
     /// Set the revision to use for a Hugging Face remote model.
-    pub fn with_hf_revision(mut self, revision: String) -> Self {
-        self.hf_revision = Some(revision);
+    pub fn with_hf_revision(mut self, revision: impl ToString) -> Self {
+        self.hf_revision = Some(revision.to_string());
         self
     }
 

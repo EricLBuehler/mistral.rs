@@ -11,12 +11,12 @@ pub struct GgufLoraModelBuilder {
 impl GgufLoraModelBuilder {
     pub fn from_text_model_builder(
         gguf_model: GgufModelBuilder,
-        lora_model_id: String,
+        lora_model_id: impl ToString,
         ordering: Ordering,
     ) -> Self {
         Self {
             gguf_model,
-            lora_model_id,
+            lora_model_id: lora_model_id.to_string(),
             ordering,
         }
     }

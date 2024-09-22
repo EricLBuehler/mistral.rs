@@ -5,7 +5,7 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-MoE-instruct".to_string())
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-MoE-instruct")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

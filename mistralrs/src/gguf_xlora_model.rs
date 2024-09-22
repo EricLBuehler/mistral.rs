@@ -12,12 +12,12 @@ pub struct GgufXLoraModelBuilder {
 impl GgufXLoraModelBuilder {
     pub fn from_text_model_builder(
         gguf_model: GgufModelBuilder,
-        xlora_model_id: String,
+        xlora_model_id: impl ToString,
         ordering: Ordering,
     ) -> Self {
         Self {
             gguf_model,
-            xlora_model_id,
+            xlora_model_id: xlora_model_id.to_string(),
             ordering,
             tgt_non_granular_index: None,
         }

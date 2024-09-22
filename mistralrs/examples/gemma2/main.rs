@@ -5,7 +5,7 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("google/gemma-2-9b-it".to_string())
+    let model = TextModelBuilder::new("google/gemma-2-9b-it")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

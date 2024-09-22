@@ -7,8 +7,8 @@ use mistralrs::{TextMessageRole, TextMessages, TextModelBuilder, XLoraModelBuild
 async fn main() -> Result<()> {
     let model =
         XLoraModelBuilder::from_text_model_builder(
-            TextModelBuilder::new("HuggingFaceH4/zephyr-7b-beta".to_string()).with_logging(),
-            "lamm-mit/x-lora".to_string(),
+            TextModelBuilder::new("HuggingFaceH4/zephyr-7b-beta").with_logging(),
+            "lamm-mit/x-lora",
             serde_json::from_reader(File::open("my-ordering-file.json").unwrap_or_else(|_| {
                 panic!("Could not load ordering file at my-ordering-file.json")
             }))?,
