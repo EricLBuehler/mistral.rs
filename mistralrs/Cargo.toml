@@ -82,6 +82,10 @@ name = "tools"
 required-features = []
 
 [[example]]
+name = "tools_llama_8b"
+required-features = []
+
+[[example]]
 name = "topology"
 required-features = []
 

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mistralrs::{
-    Function, IsqType, RequestBuilder, TextMessageRole, TextModelBuilder, Tool, ToolChoice,
-    ToolType,
+    Function, IsqType, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole,
+    TextModelBuilder, Tool, ToolChoice, ToolType,
 };
 use serde_json::{json, Value};
 
@@ -13,14 +13,15 @@ struct GetWeatherInput {
 }
 
 fn get_weather(input: GetWeatherInput) -> String {
-    format!("Weather in {}: Temperature: 25C. Wind: calm. Dew point: 10C. Precipitiation: 5cm of rain expected.", input.place)
+    format!("In {} the weather is great!", input.place)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-70B-Instruct".to_string())
+    let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-8B-Instruct".to_string())
         .with_logging()
-        .with_isq(IsqType::Q8_0)
+        .with_isq(IsqType::Q4K)
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
         .build()
         .await?;
 
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
         "properties": {
             "place": {
                 "type": "string",
-                "description": "The place to get the weather for.",
+                "description": "The place for which to retrieve the weather.",
             },
         },
         "required": ["place"],
@@ -45,7 +46,7 @@ async fn main() -> Result<()> {
     }];
 
     // We will keep all the messages here
-    let mut messages = RequestBuilder::new()
+    let messages = RequestBuilder::new()
         .add_message(TextMessageRole::User, "What is the weather in Boston?")
         .set_tools(tools)
         .set_tool_choice(ToolChoice::Auto);
@@ -63,24 +64,7 @@ async fn main() -> Result<()> {
             let result = get_weather(input);
             println!("Output of tool call: {result}");
 
-            // Add tool call message from assistant so it knows what it called
-            // Then, add message from the tool
-            messages = messages
-                .add_message(
-                    TextMessageRole::Assistant,
-                    json!({
-                        "name": called.function.name,
-                        "parameters": called.function.arguments,
-                    })
-                    .to_string(),
-                )
-                .add_message(TextMessageRole::Tool, result)
-                .set_tool_choice(ToolChoice::None);
-
-            let response = model.send_chat_request(messages.clone()).await?;
-
-            let message = &response.choices[0].message;
-            println!("Output of model: {:?}", message.content);
+            // Llama 3.1 doesn't do well with tool calling in the chat loop. For this, check out the full `tool` example!
         }
     }
 
