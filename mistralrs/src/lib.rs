@@ -8,6 +8,7 @@
 //! - [`GgufLoraModelBuilder`]
 //! - [`GgufXLoraModelBuilder`]
 //! - [`VisionModelBuilder`]
+//! - [`AnyMoeModelBuilder`]
 //!
 //! Check out the [`v0_4_api`] module for concise documentation of this, newer API.
 //!
@@ -49,6 +50,7 @@
 //! }
 //! ```
 
+mod anymoe;
 mod gguf;
 mod gguf_lora_model;
 mod gguf_xlora_model;
@@ -61,6 +63,7 @@ mod xlora_model;
 
 /// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
 pub mod v0_4_api {
+    pub use super::anymoe::AnyMoeModelBuilder;
     pub use super::gguf::GgufModelBuilder;
     pub use super::gguf_lora_model::GgufLoraModelBuilder;
     pub use super::gguf_xlora_model::GgufXLoraModelBuilder;
