@@ -5,6 +5,7 @@ use either::Either;
 use indexmap::IndexMap;
 
 pub trait RequestLike {
+    fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
     fn take_messages(&mut self) -> Vec<IndexMap<String, MessageContent>>;
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
     fn take_adapters(&mut self) -> Option<Vec<String>>;
@@ -60,6 +61,9 @@ impl TextMessages {
 }
 
 impl RequestLike for TextMessages {
+    fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
+        &self.0
+    }
     fn take_messages(&mut self) -> Vec<IndexMap<String, MessageContent>> {
         let mut other = Vec::new();
         std::mem::swap(&mut other, &mut self.0);
@@ -167,11 +171,16 @@ impl RequestBuilder {
 }
 
 impl RequestLike for RequestBuilder {
+    fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
+        &self.messages
+    }
+
     fn take_messages(&mut self) -> Vec<IndexMap<String, MessageContent>> {
         let mut other = Vec::new();
         std::mem::swap(&mut other, &mut self.messages);
         other
     }
+
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         if self.logits_processors.is_empty() {
             None
@@ -181,6 +190,7 @@ impl RequestLike for RequestBuilder {
             Some(other)
         }
     }
+
     fn take_adapters(&mut self) -> Option<Vec<String>> {
         if self.adapters.is_empty() {
             None
@@ -190,14 +200,17 @@ impl RequestLike for RequestBuilder {
             Some(other)
         }
     }
+
     fn return_logprobs(&self) -> bool {
         self.return_logprobs
     }
+
     fn take_constraint(&mut self) -> Constraint {
         let mut other = Constraint::None;
         std::mem::swap(&mut other, &mut self.constraint);
         other
     }
+
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)> {
         if self.tools.is_empty() {
             None

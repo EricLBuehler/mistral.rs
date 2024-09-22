@@ -64,16 +64,18 @@ async fn main() -> Result<()> {
             println!("Output of tool call: {result}");
 
             // Add tool call message from assistant so it knows what it called
-            messages = messages.add_message(
-                TextMessageRole::Assistant,
-                json!({
-                    "name": called.function.name,
-                    "parameters": called.function.arguments,
-                })
-                .to_string(),
-            );
-            // Add message from the tool
-            messages = messages.add_message(TextMessageRole::Tool, result);
+            // Then, add message from the tool
+            messages = messages
+                .add_message(
+                    TextMessageRole::Assistant,
+                    json!({
+                        "name": called.function.name,
+                        "parameters": called.function.arguments,
+                    })
+                    .to_string(),
+                )
+                .add_message(TextMessageRole::Tool, result)
+                .set_tool_choice(ToolChoice::None);
 
             let response = model.send_chat_request(messages.clone()).await?;
 
