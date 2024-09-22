@@ -126,7 +126,7 @@ struct Attention {
     dense: Arc<dyn LinearLayerLike + Send + Sync>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -144,7 +144,7 @@ impl Attention {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
@@ -336,7 +336,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -455,22 +455,36 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            // Alternative rope scalings are not supported
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )?),
+            );
+        }
         let mut count = 0;
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            // Alternative rope scalings are not supported.
-            let rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )?;
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let layer = DecoderLayer::new(
                 cfg,
                 vb_m.pp(layer_idx),

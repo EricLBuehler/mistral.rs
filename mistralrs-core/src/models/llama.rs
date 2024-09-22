@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{
@@ -478,6 +478,21 @@ impl Llama {
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let mut ropes = HashMap::new();
+        for i in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(Llama3RotaryEmbedding::new(
+                    vb.dtype(),
+                    cfg,
+                    device,
+                    is_gptx,
+                )?),
+            );
+        }
         let blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
@@ -485,10 +500,10 @@ impl Llama {
                     let device = mapper
                         .device_for(i, false)
                         .unwrap_or(&normal_loading_metadata.real_device);
-                    let rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(vb.dtype(), cfg, device, is_gptx)
-                            .expect("Failed to create RoPE"),
-                    );
+                    let rotary_emb = ropes
+                        .get(&device.location())
+                        .expect("No RoPE for device location!")
+                        .clone();
                     let paged_attn = match &attention_mechanism {
                         AttentionImplementation::Eager => None,
                         AttentionImplementation::PagedAttention => Some(
