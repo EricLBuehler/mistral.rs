@@ -14,6 +14,7 @@ pub trait RequestLike {
     fn return_logprobs(&self) -> bool;
     fn take_constraint(&mut self) -> Constraint;
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
+    fn take_sampling_params(&mut self) -> SamplingParams;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +90,9 @@ impl RequestLike for TextMessages {
     }
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)> {
         None
+    }
+    fn take_sampling_params(&mut self) -> SamplingParams {
+        SamplingParams::default()
     }
 }
 
@@ -225,11 +229,14 @@ impl RequestLike for VisionMessages {
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)> {
         None
     }
+    fn take_sampling_params(&mut self) -> SamplingParams {
+        SamplingParams::default()
+    }
 }
 
 #[derive(Clone)]
 /// A way to add messages with finer control given.
-/// 
+///
 /// This includes control over:
 /// - Logits processors
 /// - Constraints
@@ -493,5 +500,10 @@ impl RequestLike for RequestBuilder {
             std::mem::swap(&mut other_tc, &mut self.tool_choice);
             Some((other_ts, other_tc))
         }
+    }
+    fn take_sampling_params(&mut self) -> SamplingParams {
+        let mut other = SamplingParams::default();
+        std::mem::swap(&mut other, &mut self.sampling_params);
+        other
     }
 }
