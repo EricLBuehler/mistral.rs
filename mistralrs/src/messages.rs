@@ -20,7 +20,7 @@ pub trait RequestLike {
 #[derive(Debug, Clone, PartialEq)]
 /// Plain text (chat) messages.
 ///
-/// No contraints, logits processors, logprobs, tools, or adapters.
+/// No constraints, logits processors, logprobs, tools, or adapters.
 ///
 /// Sampling is deterministic.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
@@ -103,7 +103,7 @@ impl RequestLike for TextMessages {
 #[derive(Debug, Clone, PartialEq)]
 /// Text (chat) messages with images.
 ///
-/// No contraints, logits processors, logprobs, tools, or adapters.
+/// No constraints, logits processors, logprobs, tools, or adapters.
 ///
 /// Sampling is deterministic.
 pub struct VisionMessages {
