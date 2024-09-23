@@ -63,6 +63,29 @@ impl Default for SamplingParams {
     }
 }
 
+impl SamplingParams {
+    /// This sets up the parameters so that there is:
+    /// - No temperature, topk, topp, minp
+    /// - No penalties, stop tokens, or logit bias
+    /// - No maximum length
+    pub fn deterministic() -> Self {
+        Self {
+            temperature: None,
+            top_k: None,
+            top_p: None,
+            min_p: None,
+            top_n_logprobs: 0,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_toks: None,
+            max_len: None,
+            logits_bias: None,
+            n_choices: 1,
+            dry_params: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DrySamplingParams {
     pub sequence_breakers: Vec<String>,

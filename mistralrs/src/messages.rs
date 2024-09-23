@@ -1,4 +1,4 @@
-use std::{fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
 
 use super::*;
 use either::Either;
@@ -229,6 +229,13 @@ impl RequestLike for VisionMessages {
 
 #[derive(Clone)]
 /// A way to add messages with finer control given.
+/// 
+/// This includes control over:
+/// - Logits processors
+/// - Constraints
+/// - Logprobs
+/// - Tools
+/// - Sampling
 pub struct RequestBuilder {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
@@ -238,6 +245,7 @@ pub struct RequestBuilder {
     constraint: Constraint,
     tools: Vec<Tool>,
     tool_choice: ToolChoice,
+    sampling_params: SamplingParams,
 }
 
 impl Default for RequestBuilder {
@@ -257,6 +265,7 @@ impl From<TextMessages> for RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
+            sampling_params: SamplingParams::default(),
         }
     }
 }
@@ -272,6 +281,7 @@ impl From<VisionMessages> for RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
+            sampling_params: SamplingParams::default(),
         }
     }
 }
@@ -287,6 +297,7 @@ impl RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
+            sampling_params: SamplingParams::default(),
         }
     }
 
@@ -340,6 +351,82 @@ impl RequestBuilder {
 
     pub fn set_constraint(mut self, constraint: Constraint) -> Self {
         self.constraint = constraint;
+        self
+    }
+
+    /// Set the sampling parameters as given.
+    pub fn set_sampling(mut self, params: SamplingParams) -> Self {
+        self.sampling_params = params;
+        self
+    }
+
+    /// Set the sampling parameters for deterministic generation.
+    /// This sets up the parameters so that there is:
+    /// - No temperature, topk, topp, minp
+    /// - No penalties, stop tokens, or logit bias
+    /// - No maximum length
+    pub fn set_deterministic_sampler(mut self) -> Self {
+        self.sampling_params = SamplingParams::deterministic();
+        self
+    }
+
+    pub fn set_sampler_temperature(mut self, temperature: f64) -> Self {
+        self.sampling_params.temperature = Some(temperature);
+        self
+    }
+
+    pub fn set_sampler_topk(mut self, topk: usize) -> Self {
+        self.sampling_params.top_k = Some(topk);
+        self
+    }
+
+    pub fn set_sampler_topp(mut self, topp: f64) -> Self {
+        self.sampling_params.top_p = Some(topp);
+        self
+    }
+
+    pub fn set_sampler_minp(mut self, minp: f64) -> Self {
+        self.sampling_params.min_p = Some(minp);
+        self
+    }
+
+    pub fn set_sampler_topn_logprobs(mut self, top_n_logprobs: usize) -> Self {
+        self.sampling_params.top_n_logprobs = top_n_logprobs;
+        self
+    }
+
+    pub fn set_sampler_frequency_penalty(mut self, frequency_penalty: f32) -> Self {
+        self.sampling_params.frequency_penalty = Some(frequency_penalty);
+        self
+    }
+
+    pub fn set_sampler_presence_penalty(mut self, presence_penalty: f32) -> Self {
+        self.sampling_params.presence_penalty = Some(presence_penalty);
+        self
+    }
+
+    pub fn set_sampler_stop_toks(mut self, stop_toks: StopTokens) -> Self {
+        self.sampling_params.stop_toks = Some(stop_toks);
+        self
+    }
+
+    pub fn set_sampler_max_len(mut self, max_len: usize) -> Self {
+        self.sampling_params.max_len = Some(max_len);
+        self
+    }
+
+    pub fn set_sampler_logits_bias(mut self, logits_bias: HashMap<u32, f32>) -> Self {
+        self.sampling_params.logits_bias = Some(logits_bias);
+        self
+    }
+
+    pub fn set_sampler_n_choices(mut self, n_choices: usize) -> Self {
+        self.sampling_params.n_choices = n_choices;
+        self
+    }
+
+    pub fn set_sampler_dry_params(mut self, dry_params: DrySamplingParams) -> Self {
+        self.sampling_params.dry_params = Some(dry_params);
         self
     }
 }
