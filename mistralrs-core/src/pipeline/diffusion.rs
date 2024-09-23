@@ -66,7 +66,8 @@ impl DiffusionLoaderBuilder {
 
     pub fn build(self, loader: DiffusionLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn DiffusionModelLoader> = match loader {
-            DiffusionLoaderType::Flux => Box::new(FluxLoader),
+            DiffusionLoaderType::Flux => Box::new(FluxLoader { offload: false }),
+            DiffusionLoaderType::FluxOffloaded => Box::new(FluxLoader { offload: true }),
         };
         Box::new(DiffusionLoader {
             inner: loader,

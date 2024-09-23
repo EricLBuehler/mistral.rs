@@ -733,6 +733,7 @@ struct T5Stack {
     shared: Arc<Embedding>,
     final_layer_norm: T5LayerNorm,
     device: Device,
+    offloaded: bool,
 }
 
 impl T5Stack {
@@ -742,6 +743,7 @@ impl T5Stack {
         shared: &Arc<Embedding>,
         cfg: &Config,
         device: &Device,
+        offloaded: bool,
     ) -> Result<Self> {
         let block = (0..cfg.num_layers)
             .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
@@ -756,6 +758,7 @@ impl T5Stack {
             shared: shared.clone(),
             final_layer_norm,
             device: device.clone(),
+            offloaded,
         })
     }
 
@@ -768,13 +771,17 @@ impl T5Stack {
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
         for block in self.block.iter_mut() {
-            block.cast_to(&self.device)?;
+            if self.offloaded {
+                block.cast_to(&self.device)?;
+            }
             (hidden_states, position_bias) = block.forward(
                 &hidden_states,
                 position_bias.as_ref(),
                 encoder_hidden_states,
             )?;
-            block.cast_to(&Device::Cpu)?;
+            if self.offloaded {
+                block.cast_to(&Device::Cpu)?;
+            }
         }
         self.final_layer_norm.forward(&hidden_states)
     }
@@ -786,7 +793,7 @@ pub struct T5EncoderModel {
 }
 
 impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, offloaded: bool) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {
@@ -800,7 +807,7 @@ impl T5EncoderModel {
             shared_vb.set_device(device.clone()),
         )?;
         let shared = Arc::new(shared);
-        let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg, device)?;
+        let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg, device, offloaded)?;
         Ok(Self { encoder })
     }
 

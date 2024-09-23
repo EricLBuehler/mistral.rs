@@ -13,7 +13,7 @@ use crate::{
         t5::{self, T5EncoderModel},
     },
     pipeline::DiffusionModel,
-    utils::varbuilder_utils::from_mmaped_safetensors, MemoryUsage,
+    utils::varbuilder_utils::from_mmaped_safetensors,
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
@@ -75,6 +75,7 @@ pub struct FluxStepper {
     dtype: DType,
     api: Api,
     silent: bool,
+    offloaded: bool,
 }
 
 fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
@@ -91,6 +92,7 @@ fn get_t5_model(
     dtype: DType,
     device: &Device,
     silent: bool,
+    offloaded: bool,
 ) -> candle_core::Result<T5EncoderModel> {
     let repo = api.repo(hf_hub::Repo::with_revision(
         "EricB/t5-v1_1-xxl-enc-only".to_string(),
@@ -114,7 +116,7 @@ fn get_t5_model(
     let config = std::fs::read_to_string(config_filename)?;
     let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
 
-    t5::T5EncoderModel::load(vb, &config, device)
+    t5::T5EncoderModel::load(vb, &config, device, offloaded)
 }
 
 fn get_clip_model_and_tokenizer(
@@ -158,6 +160,7 @@ impl FluxStepper {
         dtype: DType,
         device: &Device,
         silent: bool,
+        offloaded: bool,
     ) -> anyhow::Result<Self> {
         let api = Api::new()?;
 
@@ -171,13 +174,14 @@ impl FluxStepper {
             t5_tok: t5_tokenizer,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
-            flux_model: Flux::new(flux_cfg, flux_vb, device.clone())?,
+            flux_model: Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?,
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
             device: device.clone(),
             dtype,
             api,
             silent,
+            offloaded,
         })
     }
 }
@@ -199,7 +203,13 @@ impl DiffusionModel for FluxStepper {
 
         let t5_embed = {
             info!("Hotloading T5 XXL model.");
-            let mut t5_encoder = get_t5_model(&self.api, self.dtype, &self.device, self.silent)?;
+            let mut t5_encoder = get_t5_model(
+                &self.api,
+                self.dtype,
+                &self.device,
+                self.silent,
+                self.offloaded,
+            )?;
             t5_encoder.forward(&t5_input_ids)?
         };
 
@@ -209,8 +219,6 @@ impl DiffusionModel for FluxStepper {
             .forward(&clip_input_ids)?
             .to_dtype(self.dtype)?;
 
-        dbg!(&t5_embed, &clip_embed);
-
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
             self.cfg.height,
@@ -218,7 +226,7 @@ impl DiffusionModel for FluxStepper {
             self.device(),
         )?
         .to_dtype(self.dtype)?;
-        dbg!(&img);
+
         let state = flux::sampling::State::new(&t5_embed, &clip_embed, &img)?;
         let timesteps = flux::sampling::get_schedule(
             self.cfg.num_steps,
@@ -249,11 +257,8 @@ impl DiffusionModel for FluxStepper {
                 &timesteps,
             )?
         };
-        dbg!(&img);
-        let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
-        dbg!(&latent_img);
 
-        dbg!(MemoryUsage.get_memory_available(&self.device)? as f32 / (1024*1024) as f32);
+        let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
 
         let img = self.flux_vae.decode(&latent_img)?;
 

@@ -62,6 +62,8 @@ pub trait DiffusionModelLoader {
 pub enum DiffusionLoaderType {
     #[serde(rename = "flux")]
     Flux,
+    #[serde(rename = "flux-offloaded")]
+    FluxOffloaded,
 }
 
 impl FromStr for DiffusionLoaderType {
@@ -69,6 +71,7 @@ impl FromStr for DiffusionLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "flux" => Ok(Self::Flux),
+            "flux-offloaded" => Ok(Self::FluxOffloaded),
             a => Err(format!(
                 "Unknown architecture `{a}`. Possible architectures: `flux`."
             )),
@@ -132,7 +135,9 @@ impl ModelPaths for DiffusionModelPaths {
 /// [`DiffusionLoader`] for a Flux Diffusion model.
 ///
 /// [`DiffusionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.DiffusionLoader.html
-pub struct FluxLoader;
+pub struct FluxLoader {
+    pub(crate) offload: bool,
+}
 
 impl DiffusionModelLoader for FluxLoader {
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>> {
@@ -155,7 +160,7 @@ impl DiffusionModelLoader for FluxLoader {
         Ok(vec![flux_file, ae_file])
     }
     fn force_cpu_vb(&self) -> Vec<bool> {
-        vec![true, false]
+        vec![self.offload, false]
     }
     fn load(
         &self,
@@ -187,6 +192,7 @@ impl DiffusionModelLoader for FluxLoader {
             flux_dtype,
             &normal_loading_metadata.real_device,
             silent,
+            self.offload,
         )?))
     }
 }

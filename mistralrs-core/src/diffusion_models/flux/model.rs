@@ -610,10 +610,11 @@ pub struct Flux {
     single_blocks: Vec<SingleStreamBlock>,
     final_layer: LastLayer,
     device: Device,
+    offloaded: bool,
 }
 
 impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder, device: Device) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
         if !vb.device().is_cpu() {
             candle_core::bail!("FLUX model VB device must be CPU");
         }
@@ -679,6 +680,7 @@ impl Flux {
             single_blocks,
             final_layer,
             device: device.clone(),
+            offloaded,
         })
     }
 
@@ -717,16 +719,24 @@ impl Flux {
 
         // Double blocks
         for block in self.double_blocks.iter_mut() {
-            block.cast_to(&self.device)?;
+            if self.offloaded {
+                block.cast_to(&self.device)?;
+            }
             (img, txt) = block.forward(&img, &txt, &vec_, &pe)?;
-            block.cast_to(&Device::Cpu)?;
+            if self.offloaded {
+                block.cast_to(&Device::Cpu)?;
+            }
         }
         // Single blocks
         let mut img = Tensor::cat(&[&txt, &img], 1)?;
         for block in self.single_blocks.iter_mut() {
-            block.cast_to(&self.device)?;
+            if self.offloaded {
+                block.cast_to(&self.device)?;
+            }
             img = block.forward(&img, &vec_, &pe)?;
-            block.cast_to(&Device::Cpu)?;
+            if self.offloaded {
+                block.cast_to(&Device::Cpu)?;
+            }
         }
         let img = img.i((.., txt.dim(1)?..))?;
         self.final_layer.forward(&img, &vec_)
