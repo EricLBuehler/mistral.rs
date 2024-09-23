@@ -19,6 +19,10 @@ pub trait RequestLike {
 
 #[derive(Debug, Clone, PartialEq)]
 /// Plain text (chat) messages.
+///
+/// No contraints, logits processors, logprobs, tools, or adapters.
+///
+/// Sampling is deterministic.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
 /// A chat message role.
@@ -92,12 +96,16 @@ impl RequestLike for TextMessages {
         None
     }
     fn take_sampling_params(&mut self) -> SamplingParams {
-        SamplingParams::default()
+        SamplingParams::deterministic()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 /// Text (chat) messages with images.
+///
+/// No contraints, logits processors, logprobs, tools, or adapters.
+///
+/// Sampling is deterministic.
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
@@ -230,7 +238,7 @@ impl RequestLike for VisionMessages {
         None
     }
     fn take_sampling_params(&mut self) -> SamplingParams {
-        SamplingParams::default()
+        SamplingParams::deterministic()
     }
 }
 
@@ -272,7 +280,7 @@ impl From<TextMessages> for RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
-            sampling_params: SamplingParams::default(),
+            sampling_params: SamplingParams::deterministic(),
         }
     }
 }
@@ -288,7 +296,7 @@ impl From<VisionMessages> for RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
-            sampling_params: SamplingParams::default(),
+            sampling_params: SamplingParams::deterministic(),
         }
     }
 }
@@ -304,7 +312,7 @@ impl RequestBuilder {
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
-            sampling_params: SamplingParams::default(),
+            sampling_params: SamplingParams::deterministic(),
         }
     }
 
@@ -502,7 +510,7 @@ impl RequestLike for RequestBuilder {
         }
     }
     fn take_sampling_params(&mut self) -> SamplingParams {
-        let mut other = SamplingParams::default();
+        let mut other = SamplingParams::deterministic();
         std::mem::swap(&mut other, &mut self.sampling_params);
         other
     }
