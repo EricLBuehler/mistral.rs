@@ -167,11 +167,7 @@ impl VisionMessages {
             ("role".to_string(), Either::Left(role.to_string())),
             (
                 "content".to_string(),
-                Either::Left(format!(
-                    "<|image_{}|>{}",
-                    self.images.len(),
-                    text.to_string()
-                )),
+                Either::Left(format!("<image>{}", text.to_string())),
             ),
         ]));
         self
