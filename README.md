@@ -62,7 +62,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
     ```
 
-- φ³ 📷 Run the FLUX.1 diffusion model: [documentation and guide here](docs/FLUX.md)
+- 🌲📷 Run the FLUX.1 diffusion model: [documentation and guide here](docs/FLUX.md)
 
     <img src="https://github.com/user-attachments/assets/82bf5009-e3e9-402b-acf9-c48a52c7721b" width = "400" height = "267">
 
