@@ -44,8 +44,12 @@ pub struct SamplingParams {
     pub dry_params: Option<DrySamplingParams>,
 }
 
-impl Default for SamplingParams {
-    fn default() -> Self {
+impl SamplingParams {
+    /// This sets up the parameters so that there is:
+    /// - No temperature, topk, topp, minp
+    /// - No penalties, stop tokens, or logit bias
+    /// - No maximum length
+    pub fn deterministic() -> Self {
         Self {
             temperature: None,
             top_k: None,
