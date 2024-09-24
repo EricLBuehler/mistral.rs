@@ -65,7 +65,7 @@ impl Model {
         };
         let request = Request::Normal(NormalRequest {
             messages: request.take_messages(),
-            sampling_params: SamplingParams::default(),
+            sampling_params: request.take_sampling_params(),
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
