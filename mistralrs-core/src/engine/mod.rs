@@ -116,331 +116,341 @@ impl Engine {
                 break 'lp;
             }
 
-            while let Ok(request) = self.rx.try_recv() {
-                if matches!(request, Request::Terminate) {
-                    break 'lp;
+            tokio::select! {
+                Some(request) = self.rx.recv() => {
+                    if matches!(request, Request::Terminate) {
+                        break;
+                    }
+                    self.handle_request(request).await;
                 }
-                self.handle_request(request).await;
-            }
-            let run_start = Instant::now();
-            let scheduled = self.scheduler.schedule();
 
-            match scheduled {
-                SchedulerOutput::DefaultScheduler {
-                    output: mut scheduled,
-                } => {
-                    let mut prompt_ts = None;
-                    let mut completion_ts = None;
-                    if scheduled.completion.len() > 0 {
-                        let throughput_start = Instant::now();
-                        let current_completion_ids: Vec<usize> =
-                            scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                        let res = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                            let pre_op = if !self.no_kv_cache
-                                && last_completion_ids != current_completion_ids
-                            {
-                                CacheInstruction::In(
-                                    scheduled.completion[0]
-                                        .get_adapters()
-                                        .map(AdapterInstruction::Activate)
-                                        .unwrap_or(AdapterInstruction::None),
-                                )
-                            } else {
-                                CacheInstruction::Nothing(
-                                    scheduled.completion[0]
-                                        .get_adapters()
-                                        .map(AdapterInstruction::Activate)
-                                        .unwrap_or(AdapterInstruction::None),
-                                )
-                            };
-                            let post_op = if !self.no_kv_cache {
-                                CacheInstruction::Out
-                            } else {
-                                CacheInstruction::Reset {
-                                    reset_non_granular: false,
-                                    adapter_inst: AdapterInstruction::None,
+                else => {
+                    let scheduled = self.scheduler.schedule();
+
+                    match scheduled {
+                        SchedulerOutput::DefaultScheduler {
+                            output: mut scheduled,
+                        } => {
+                            let has_scheduled_sequences =
+                            !scheduled.prompt.is_empty() || !scheduled.completion.is_empty();
+
+                            if has_scheduled_sequences {
+                                let run_start = Instant::now();
+
+                                let mut prompt_ts = None;
+                                let mut completion_ts = None;
+                                if scheduled.completion.len() > 0 {
+                                    let throughput_start = Instant::now();
+                                    let current_completion_ids: Vec<usize> =
+                                        scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                                    let res = {
+                                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                                        let pre_op = if !self.no_kv_cache
+                                            && last_completion_ids != current_completion_ids
+                                        {
+                                            CacheInstruction::In(
+                                                scheduled.completion[0]
+                                                    .get_adapters()
+                                                    .map(AdapterInstruction::Activate)
+                                                    .unwrap_or(AdapterInstruction::None),
+                                            )
+                                        } else {
+                                            CacheInstruction::Nothing(
+                                                scheduled.completion[0]
+                                                    .get_adapters()
+                                                    .map(AdapterInstruction::Activate)
+                                                    .unwrap_or(AdapterInstruction::None),
+                                            )
+                                        };
+                                        let post_op = if !self.no_kv_cache {
+                                            CacheInstruction::Out
+                                        } else {
+                                            CacheInstruction::Reset {
+                                                reset_non_granular: false,
+                                                adapter_inst: AdapterInstruction::None,
+                                            }
+                                        };
+
+                                        pipeline
+                                            .step(
+                                                &mut scheduled.completion,
+                                                false,
+                                                &mut self.prefix_cacher,
+                                                self.disable_eos_stop,
+                                                rng.clone(),
+                                                CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                                            )
+                                            .await
+                                    };
+
+                                    handle_pipeline_forward_error!(
+                                        "completion step",
+                                        res,
+                                        &mut scheduled.completion,
+                                        self.pipeline,
+                                        'lp,
+                                        self.prefix_cacher
+                                    );
+
+                                    let throughput_end = Instant::now();
+                                    #[allow(clippy::cast_precision_loss)]
+                                    if self.throughput_logging_enabled {
+                                        completion_ts = Some(
+                                            scheduled.completion.len() as f64
+                                                / throughput_end
+                                                    .duration_since(throughput_start)
+                                                    .as_secs_f64(),
+                                        );
+                                    }
+
+                                    last_completion_ids = current_completion_ids;
                                 }
-                            };
 
-                            pipeline
-                                .step(
-                                    &mut scheduled.completion,
-                                    false,
-                                    &mut self.prefix_cacher,
-                                    self.disable_eos_stop,
-                                    rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
-                                )
-                                .await
-                        };
+                                if scheduled.prompt.len() > 0 {
+                                    let throughput_start = Instant::now();
+                                    let logits = {
+                                        let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                        handle_pipeline_forward_error!(
-                            "completion step",
-                            res,
-                            &mut scheduled.completion,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
+                                        // Run the prompt seqs
+                                        let post_op = if !self.no_kv_cache {
+                                            CacheInstruction::Out
+                                        } else {
+                                            CacheInstruction::Reset {
+                                                reset_non_granular: false,
+                                                adapter_inst: AdapterInstruction::None,
+                                            }
+                                        };
+                                        let adapter_inst = scheduled.prompt[0]
+                                            .get_adapters()
+                                            .map(AdapterInstruction::Activate)
+                                            .unwrap_or(AdapterInstruction::None);
 
-                        let throughput_end = Instant::now();
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            completion_ts = Some(
-                                scheduled.completion.len() as f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
-                            );
-                        }
+                                        // Reset non granular state because the old sequence must be dead.
+                                        // Technically we don't need to do this but it is better to be safe.
+                                        pipeline
+                                            .step(
+                                                &mut scheduled.prompt,
+                                                true,
+                                                &mut self.prefix_cacher,
+                                                self.disable_eos_stop,
+                                                rng.clone(),
+                                                CacheBackendMetadata::DefaultInstructions {
+                                                    pre_op: CacheInstruction::Reset {
+                                                        reset_non_granular: false,
+                                                        adapter_inst,
+                                                    },
+                                                    post_op,
+                                                },
+                                            )
+                                            .await
+                                    };
 
-                        last_completion_ids = current_completion_ids;
-                    }
+                                    handle_pipeline_forward_error!(
+                                        "prompt step",
+                                        logits,
+                                        &mut scheduled.prompt,
+                                        self.pipeline,
+                                        'lp,
+                                        self.prefix_cacher
+                                    );
 
-                    if scheduled.prompt.len() > 0 {
-                        let throughput_start = Instant::now();
-                        let logits = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                                    let throughput_end = Instant::now();
+                                    #[allow(clippy::cast_precision_loss)]
+                                    if self.throughput_logging_enabled {
+                                        prompt_ts = Some(
+                                            scheduled
+                                                .prompt
+                                                .iter()
+                                                .map(|seq| seq.get_toks().len())
+                                                .sum::<usize>() as f64
+                                                / throughput_end
+                                                    .duration_since(throughput_start)
+                                                    .as_secs_f64(),
+                                        );
+                                    }
 
-                            // Run the prompt seqs
-                            let post_op = if !self.no_kv_cache {
-                                CacheInstruction::Out
-                            } else {
-                                CacheInstruction::Reset {
-                                    reset_non_granular: false,
-                                    adapter_inst: AdapterInstruction::None,
+                                    for seq in scheduled.prompt.iter_mut() {
+                                        seq.set_state(SequenceState::RunningCompletion);
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .expect("Time travel has occurred!")
+                                            .as_millis();
+                                        #[allow(clippy::cast_precision_loss)]
+                                        let prompt_tok_per_sec =
+                                            seq.len() as f32 / (now - seq.timestamp()) as f32;
+                                        seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                        seq.prompt_timestamp = Some(now);
+                                    }
+                                    last_completion_ids = vec![];
                                 }
-                            };
-                            let adapter_inst = scheduled.prompt[0]
-                                .get_adapters()
-                                .map(AdapterInstruction::Activate)
-                                .unwrap_or(AdapterInstruction::None);
 
-                            // Reset non granular state because the old sequence must be dead.
-                            // Technically we don't need to do this but it is better to be safe.
-                            pipeline
-                                .step(
-                                    &mut scheduled.prompt,
-                                    true,
-                                    &mut self.prefix_cacher,
-                                    self.disable_eos_stop,
-                                    rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Reset {
-                                            reset_non_granular: false,
-                                            adapter_inst,
-                                        },
-                                        post_op,
-                                    },
-                                )
-                                .await
-                        };
+                                if self.is_debug {
+                                    let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                                    let total_len = scheduled.prompt.len() + scheduled.completion.len();
+                                    if total_len > 0 {
+                                        let prompt_lengths = scheduled
+                                            .prompt
+                                            .iter()
+                                            .map(|seq| seq.len().to_string())
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
 
-                        handle_pipeline_forward_error!(
-                            "prompt step",
-                            logits,
-                            &mut scheduled.prompt,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
+                                        let completion_lengths = scheduled
+                                            .completion
+                                            .iter()
+                                            .map(|seq| seq.len().to_string())
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
 
-                        let throughput_end = Instant::now();
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            prompt_ts = Some(
-                                scheduled
-                                    .prompt
-                                    .iter()
-                                    .map(|seq| seq.get_toks().len())
-                                    .sum::<usize>() as f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
-                            );
-                        }
+                                        tracing::info!(
+                                            "Prompt[{}] Completion[{}] - {}ms",
+                                            prompt_lengths,
+                                            completion_lengths,
+                                            ms_from_last_run * 1000.,
+                                        );
+                                    }
+                                }
 
-                        for seq in scheduled.prompt.iter_mut() {
-                            seq.set_state(SequenceState::RunningCompletion);
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            #[allow(clippy::cast_precision_loss)]
-                            let prompt_tok_per_sec =
-                                seq.len() as f32 / (now - seq.timestamp()) as f32;
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                            seq.prompt_timestamp = Some(now);
-                        }
-                        last_completion_ids = vec![];
-                    }
+                                if self.throughput_logging_enabled {
+                                    match (prompt_ts, completion_ts) {
+                                        (Some(prompt), Some(completion)) => {
+                                            info!("Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s");
+                                        }
+                                        (None, Some(completion)) => {
+                                            info!("Throughput (scheduler V1): Completion {completion} T/s");
+                                        }
+                                        (Some(prompt), None) => {
+                                            info!("Throughput (scheduler V1): Prompt: {prompt} T/s");
+                                        }
+                                        (None, None) => (),
+                                    }
+                                }
 
-                    if self.is_debug {
-                        let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                        let total_len = scheduled.prompt.len() + scheduled.completion.len();
-                        if total_len > 0 {
-                            let prompt_lengths = scheduled
-                                .prompt
-                                .iter()
-                                .map(|seq| seq.len().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            let completion_lengths = scheduled
-                                .completion
-                                .iter()
-                                .map(|seq| seq.len().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            tracing::info!(
-                                "Prompt[{}] Completion[{}] - {}ms",
-                                prompt_lengths,
-                                completion_lengths,
-                                ms_from_last_run * 1000.,
-                            );
-                        }
-                    }
-
-                    if self.throughput_logging_enabled {
-                        match (prompt_ts, completion_ts) {
-                            (Some(prompt), Some(completion)) => {
-                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s");
+                            } else {
+                                tokio::task::yield_now().await;
                             }
-                            (None, Some(completion)) => {
-                                info!("Throughput (scheduler V1): Completion {completion} T/s");
-                            }
-                            (Some(prompt), None) => {
-                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s");
-                            }
-                            (None, None) => (),
+
                         }
-                    }
+                        SchedulerOutput::PagedAttention { mut output } => {
+                            if !output.scheduled.is_empty() {
+                                let run_start = Instant::now();
 
-                    if scheduled.prompt.len() == 0
-                        && scheduled.completion.len() == 0
-                        && self.scheduler.waiting_len() == 0
-                    {
-                        // If there is nothing to do, sleep until a request comes in
-                        if let Some(request) = self.rx.recv().await {
-                            if matches!(request, Request::Terminate) {
-                                break 'lp;
-                            }
-                            self.handle_request(request).await;
-                        }
-                    }
-                }
-                SchedulerOutput::PagedAttention { mut output } => {
-                    if !output.scheduled.is_empty() {
-                        let throughput_start = Instant::now();
+                                let throughput_start = Instant::now();
 
-                        let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
+                                let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
-                        let mut guards = output
-                            .scheduled
-                            .iter_mut()
-                            .map(|seq| seq.lock().unwrap())
-                            .collect::<Vec<_>>();
+                                let mut guards = output
+                                    .scheduled
+                                    .iter_mut()
+                                    .map(|seq| seq.lock().unwrap())
+                                    .collect::<Vec<_>>();
 
-                        let mut guards_mut =
-                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+                                let mut guards_mut =
+                                    guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
-                        let res = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                                let res = {
+                                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                            let block_size = self.scheduler.block_size().unwrap();
+                                    let block_size = self.scheduler.block_size().unwrap();
 
-                            let metadata = PagedAttentionMeta {
-                                block_size,
-                                sliding_window: pipeline.get_metadata().sliding_window,
-                                block_engine: self.scheduler.block_engine().unwrap(),
-                            };
+                                    let metadata = PagedAttentionMeta {
+                                        block_size,
+                                        sliding_window: pipeline.get_metadata().sliding_window,
+                                        block_engine: self.scheduler.block_engine().unwrap(),
+                                    };
 
-                            pipeline
-                                .step(
-                                    &mut guards_mut,
-                                    is_prompt,
-                                    &mut self.prefix_cacher,
-                                    self.disable_eos_stop,
-                                    rng.clone(),
-                                    CacheBackendMetadata::PagedAttention {
-                                        metadata,
-                                        blocks_to_copy: output.blocks_to_copy,
-                                        blocks_to_swap_in: output.blocks_to_swap_in,
-                                        blocks_to_swap_out: output.blocks_to_swap_out,
-                                    },
-                                )
-                                .await
-                        };
-
-                        handle_pipeline_forward_error!(
-                            "step",
-                            res,
-                            &mut guards_mut,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
-
-                        if self.is_debug {
-                            let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                            let total_len = guards.len();
-                            if total_len > 0 {
-                                let lengths = guards
-                                    .iter()
-                                    .map(|seq| seq.len().to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-
-                                let (prompt_lengths, completion_lengths) = if is_prompt {
-                                    (lengths, "".to_string())
-                                } else {
-                                    ("".to_string(), lengths)
+                                    pipeline
+                                        .step(
+                                            &mut guards_mut,
+                                            is_prompt,
+                                            &mut self.prefix_cacher,
+                                            self.disable_eos_stop,
+                                            rng.clone(),
+                                            CacheBackendMetadata::PagedAttention {
+                                                metadata,
+                                                blocks_to_copy: output.blocks_to_copy,
+                                                blocks_to_swap_in: output.blocks_to_swap_in,
+                                                blocks_to_swap_out: output.blocks_to_swap_out,
+                                            },
+                                        )
+                                        .await
                                 };
 
-                                tracing::info!(
-                                    "Prompt[{}] Completion[{}] - {}ms",
-                                    prompt_lengths,
-                                    completion_lengths,
-                                    ms_from_last_run * 1000.,
+                                handle_pipeline_forward_error!(
+                                    "step",
+                                    res,
+                                    &mut guards_mut,
+                                    self.pipeline,
+                                    'lp,
+                                    self.prefix_cacher
                                 );
-                            }
-                        }
 
-                        let throughput_end = Instant::now();
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            let n_toks = if is_prompt {
-                                guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
-                            } else {
-                                guards.len()
-                            };
-                            let ts = n_toks as f64
-                                / throughput_end
-                                    .duration_since(throughput_start)
-                                    .as_secs_f64();
-                            info!("Throughput (scheduler V2): {ts} T/s");
-                        }
+                                if self.is_debug {
+                                    let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                                    let total_len = guards.len();
+                                    if total_len > 0 {
+                                        let lengths = guards
+                                            .iter()
+                                            .map(|seq| seq.len().to_string())
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
 
-                        if is_prompt {
-                            for mut seq in guards {
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .expect("Time travel has occurred!")
-                                    .as_millis();
+                                        let (prompt_lengths, completion_lengths) = if is_prompt {
+                                            (lengths, "".to_string())
+                                        } else {
+                                            ("".to_string(), lengths)
+                                        };
+
+                                        tracing::info!(
+                                            "Prompt[{}] Completion[{}] - {}ms",
+                                            prompt_lengths,
+                                            completion_lengths,
+                                            ms_from_last_run * 1000.,
+                                        );
+                                    }
+                                }
+
+                                let throughput_end = Instant::now();
                                 #[allow(clippy::cast_precision_loss)]
-                                let prompt_tok_per_sec =
-                                    seq.len() as f32 / (now - seq.timestamp()) as f32;
-                                seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
-                                seq.prompt_timestamp = Some(now);
+                                if self.throughput_logging_enabled {
+                                    let n_toks = if is_prompt {
+                                        guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
+                                    } else {
+                                        guards.len()
+                                    };
+                                    let ts = n_toks as f64
+                                        / throughput_end
+                                            .duration_since(throughput_start)
+                                            .as_secs_f64();
+                                    info!("Throughput (scheduler V2): {ts} T/s");
+                                }
+
+                                if is_prompt {
+                                    for mut seq in guards {
+                                        let now = SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .expect("Time travel has occurred!")
+                                            .as_millis();
+                                        #[allow(clippy::cast_precision_loss)]
+                                        let prompt_tok_per_sec =
+                                            seq.len() as f32 / (now - seq.timestamp()) as f32;
+                                        seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                        seq.prompt_timestamp = Some(now);
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            self.scheduler.free_finished_sequence_groups();
+                    // if there are no more pending requests in the scheduler, yield the current task
+                    // this will mark the task as `Pending` for one runtime tick, the loop will resume on the next tick
+                    if self.scheduler.waiting_len() == 0 {
+                        tokio::task::yield_now().await;
+                    }
+
+                    self.scheduler.free_finished_sequence_groups();
+                }
+            };
         }
     }
 
