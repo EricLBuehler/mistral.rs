@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
-    ModelDType,
+    DiffusionLoaderType, ModelDType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -12,6 +12,10 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 }
 
 fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
     x.parse()
 }
 
@@ -371,5 +375,20 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+    },
+
+    /// Select a diffusion plain model, without quantization or adapters
+    DiffusionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_diffusion_arch)]
+        arch: DiffusionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
     },
 }

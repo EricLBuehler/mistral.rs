@@ -182,7 +182,7 @@ impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcess
 pub struct Sampler {
     temperature: Option<f64>,
     top_n_logprobs: usize,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Option<Arc<Tokenizer>>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     dry_params: Option<DrySamplingParamsInner>,
@@ -199,14 +199,14 @@ pub struct Sampler {
 pub struct TopLogprob {
     pub token: u32,
     pub logprob: f32,
-    pub bytes: String,
+    pub bytes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Logprobs {
     pub token: u32,
     pub logprob: f32,
-    pub bytes: String,
+    pub bytes: Option<String>,
     pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
@@ -219,7 +219,7 @@ impl Sampler {
     pub fn new(
         temperature: Option<f64>,
         top_n_logprobs: usize,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
         dry_params: Option<DrySamplingParams>,
@@ -233,7 +233,11 @@ impl Sampler {
         } else {
             temperature
         };
-        let dry_params = dry_params.map(|params| DrySamplingParamsInner::from(params, &tokenizer));
+        let dry_params = if let Some(ref tokenizer) = tokenizer {
+            dry_params.map(|params| DrySamplingParamsInner::from(params, tokenizer))
+        } else {
+            None
+        };
         let dry_params = match dry_params {
             Some(fallible) => Some(fallible?),
             None => None,
@@ -274,21 +278,32 @@ impl Sampler {
             top_n_toks.push(argsort_indices[val]);
         }
 
-        let mut bytes = Vec::new();
-        for tok in &top_n_toks {
-            bytes.push(
-                self.tokenizer
-                    .decode(&[*tok as u32], false)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            );
+        if let Some(tokenizer) = &self.tokenizer {
+            let mut bytes = Vec::new();
+            for tok in &top_n_toks {
+                bytes.push(
+                    tokenizer
+                        .decode(&[*tok as u32], false)
+                        .map_err(|x| Error::Msg(x.to_string()))?,
+                );
+            }
+
+            Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
+                .map(|(bytes, (token, logprob))| TopLogprob {
+                    token: token as u32,
+                    logprob,
+                    bytes: Some(bytes),
+                })
+                .collect::<Vec<_>>())
+        } else {
+            Ok(zip(top_n_toks, top_n_logprobs)
+                .map(|(token, logprob)| TopLogprob {
+                    token: token as u32,
+                    logprob,
+                    bytes: None,
+                })
+                .collect::<Vec<_>>())
         }
-        Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
-            .map(|(bytes, (token, logprob))| TopLogprob {
-                token: token as u32,
-                logprob,
-                bytes,
-            })
-            .collect::<Vec<_>>())
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
@@ -305,14 +320,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -382,14 +404,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -412,14 +441,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token.try_into().unwrap()], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token as u32,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token.try_into().unwrap()], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -680,7 +716,7 @@ mod tests {
         let sampler = Sampler::new(
             None,
             10,
-            get_tokenizer().into(),
+            Some(get_tokenizer().into()),
             None,
             None,
             None,
@@ -712,7 +748,7 @@ mod tests {
         let sampler = Sampler::new(
             None,
             10,
-            get_tokenizer().into(),
+            Some(get_tokenizer().into()),
             None,
             None,
             None,

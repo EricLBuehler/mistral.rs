@@ -2,7 +2,9 @@
 extend-ignore-identifiers-re = [
     "Mmaped",
     "mmaped",
-    "arange"
+    "arange",
+    "Nd",
+    "nin"
 ]
 
 [files]

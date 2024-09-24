@@ -76,6 +76,8 @@ schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex = "1.10.6"
 safetensors = "0.4.5"
+serde_plain = "1.0.2"
+as-any = "0.3.1"
 
 [features]
 pyo3_macros = ["pyo3"]

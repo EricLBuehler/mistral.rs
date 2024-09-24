@@ -4,6 +4,7 @@ use std::{
 };
 
 use image::DynamicImage;
+use mistralrs_core::ResponseErr;
 use pyo3::{exceptions::PyValueError, PyErr};
 
 pub(crate) struct PyApiErr(pub(crate) PyErr);
@@ -74,6 +75,12 @@ impl From<&str> for PyApiErr {
 impl From<PyApiErr> for PyErr {
     fn from(value: PyApiErr) -> Self {
         value.0
+    }
+}
+
+impl From<Box<ResponseErr>> for PyApiErr {
+    fn from(value: Box<ResponseErr>) -> Self {
+        Self(PyValueError::new_err(value.to_string()))
     }
 }
 

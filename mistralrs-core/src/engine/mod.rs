@@ -18,6 +18,7 @@ use crate::{
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
@@ -77,7 +78,10 @@ impl Engine {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
-        assert_eq!(has_no_kv_cache, no_kv_cache);
+        if no_kv_cache {
+            // Diffusion models...
+            assert_eq!(has_no_kv_cache, no_kv_cache);
+        }
         // Prefix caching is always disabled if using PagedAttention for now.
         // TODO
         let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
@@ -89,7 +93,7 @@ impl Engine {
             scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
-            no_kv_cache,
+            no_kv_cache: no_kv_cache & !has_no_kv_cache,
             prefix_cacher: PrefixCacheManager::new(
                 device,
                 prefix_cache_n,
@@ -262,7 +266,14 @@ impl Engine {
                         }
 
                         for seq in scheduled.prompt.iter_mut() {
-                            seq.set_state(SequenceState::RunningCompletion);
+                            match seq.sequence_stepping_type() {
+                                SeqStepType::OneShot => {
+                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
+                                }
+                                SeqStepType::PromptAndDecode => {
+                                    seq.set_state(SequenceState::RunningCompletion)
+                                }
+                            }
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Time travel has occurred!")
@@ -490,12 +501,14 @@ impl Engine {
             RequestMessage::Completion { best_of, .. } => best_of,
             RequestMessage::Chat(_)
             | RequestMessage::CompletionTokens(_)
-            | RequestMessage::VisionChat { .. } => 1,
+            | RequestMessage::VisionChat { .. }
+            | RequestMessage::ImageGeneration { .. } => 1,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
-                .has_chat_template()
+                .as_ref()
+                .is_some_and(|ch_t| ch_t.has_chat_template())
         {
             request
                     .response
@@ -522,7 +535,24 @@ impl Engine {
             None
         };
 
-        let mut prompt = match request.messages {
+        let image_generation_format = match &request.messages {
+            RequestMessage::ImageGeneration { format, .. } => Some(*format),
+            _ => None,
+        };
+
+        let seq_step_type = match &request.messages {
+            RequestMessage::ImageGeneration { .. } => SeqStepType::OneShot,
+            _ => SeqStepType::PromptAndDecode,
+        };
+
+        let diffusion_params = match &request.messages {
+            RequestMessage::ImageGeneration {
+                generation_params, ..
+            } => Some(generation_params.clone()),
+            _ => None,
+        };
+
+        let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
                 images: _,
@@ -538,17 +568,45 @@ impl Engine {
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
-                let prompt = get_mut_arcmutex!(self.pipeline)
-                    .tokenizer()
-                    .encode(text, true)
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "Completion requests require the pipeline to have a tokenizer".into(),
+                        ))
+                        .await
+                        .expect("Expected receiver.");
+                    return;
+                };
+                let prompt = tokenizer
+                    .encode(text.clone(), true)
                     .map_err(anyhow::Error::msg);
-                handle_seq_error!(prompt, request.response)
-                    .get_ids()
-                    .to_vec()
+                (
+                    handle_seq_error!(prompt, request.response)
+                        .get_ids()
+                        .to_vec(),
+                    text,
+                )
             }
-            RequestMessage::CompletionTokens(it) => it,
+            RequestMessage::ImageGeneration { prompt, .. } => (vec![u32::MAX], prompt),
+            RequestMessage::CompletionTokens(it) => {
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "Completion requests w/ raw tokens require the pipeline to have a tokenizer".into(),
+                        ))
+                        .await
+                        .expect("Expected receiver.");
+                    return;
+                };
+                let prompt = tokenizer
+                    .decode(&it, false)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                (it, handle_seq_error!(prompt, request.response))
+            }
         };
-        if prompt.is_empty() {
+        if prompt_tokens.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -559,7 +617,7 @@ impl Engine {
             return;
         }
 
-        if prompt.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
+        if prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len {
             if !self.truncate_sequence {
                 request
                     .response
@@ -568,7 +626,7 @@ impl Engine {
                     )).await.expect("Expected receiver.");
                 return;
             } else {
-                let prompt_len = prompt.len();
+                let prompt_len = prompt_tokens.len();
                 let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
                 let currently_over = prompt_len - max_len;
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
@@ -580,12 +638,12 @@ impl Engine {
                 } else {
                     10
                 };
-                prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt.len());
+                prompt_tokens = prompt_tokens[(currently_over + sampling_max)..].to_vec();
+                warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
         let prefill_cache = handle_seq_error!(
-            self.prefix_cacher.search_for_matching_cache(&prompt),
+            self.prefix_cacher.search_for_matching_cache(&prompt_tokens),
             request.response
         );
 
@@ -609,14 +667,16 @@ impl Engine {
                 };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
-                    if tok_trie.has_extensions(tok_trie.token(*id)) {
-                        request
-                            .response
-                            .send(Response::ValidationError(
-                                format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
-                            ))
-                            .await .expect("Expected receiver.");
-                        return;
+                    if let Some(tok_trie) = tok_trie.as_ref() {
+                        if tok_trie.has_extensions(tok_trie.token(*id)) {
+                            request
+                                .response
+                                .send(Response::ValidationError(
+                                    format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
+                                ))
+                                .await .expect("Expected receiver.");
+                            return;
+                        }
                     }
                 }
 
@@ -634,13 +694,26 @@ impl Engine {
                 };
 
                 for stop_txt in s {
+                    let Some(tokenizer) = &tokenizer else {
+                        request
+                            .response
+                            .send(Response::ValidationError(
+                                "Completion requests require the pipeline to have a tokenizer"
+                                    .into(),
+                            ))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    };
                     let encoded = tokenizer.encode(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
 
                     if toks.len() == 1 {
-                        if tok_trie.has_extensions(tok_trie.token(toks[0])) {
+                        if tok_trie.as_ref().is_some_and(|tok_trie| {
+                            tok_trie.has_extensions(tok_trie.token(toks[0]))
+                        }) {
                             stop_strings.push(stop_txt.clone());
                         } else {
                             stop_toks.push(toks[0]);
@@ -712,9 +785,14 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
-            let trie = (*get_mut_arcmutex!(self.pipeline).get_metadata().tok_trie).clone();
+            let trie = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .tok_trie
+                .as_ref()
+                .map(|x| (**x).clone());
             let seq = Sequence::new_waiting(
-                prompt.clone(),
+                prompt_tokens.clone(),
+                prompt_text.clone(),
                 self.id,
                 now.as_millis(),
                 num_hidden_layers,
@@ -731,12 +809,7 @@ impl Engine {
                 recognizer,
                 request.suffix.clone(),
                 if echo_prompt {
-                    Some(
-                        get_mut_arcmutex!(self.pipeline)
-                            .tokenizer()
-                            .decode(&prompt, false)
-                            .expect("cannot decode completion tokens"),
-                    )
+                    Some(prompt_text.clone())
                 } else {
                     None
                 },
@@ -745,6 +818,9 @@ impl Engine {
                 block_size,
                 trie,
                 matcher.clone(),
+                image_generation_format,
+                seq_step_type,
+                diffusion_params.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

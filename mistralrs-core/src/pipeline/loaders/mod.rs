@@ -1,21 +1,35 @@
+mod diffusion_loaders;
 mod normal_loaders;
 mod vision_loaders;
 
-use std::{collections::HashMap, fmt, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{self, Debug},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+};
 
 use anyhow::Result;
+use as_any::AsAny;
 use candle_core::Device;
 use mistralrs_quant::IsqType;
+use tokio::sync::Mutex;
+
 pub use normal_loaders::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
     Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
-use tokio::sync::Mutex;
 pub use vision_loaders::{
     Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModel,
     VisionModelLoader,
+};
+
+pub use diffusion_loaders::{
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
+    DiffusionModelPathsInner, FluxLoader,
 };
 
 use crate::{
@@ -27,7 +41,7 @@ use super::Pipeline;
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths {
+pub trait ModelPaths: AsAny + Debug {
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
@@ -74,9 +88,9 @@ pub trait ModelPaths {
     fn get_processor_config(&self) -> &Option<PathBuf>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// All local paths and metadata necessary to load a model.
-pub struct LocalModelPaths<P> {
+pub struct LocalModelPaths<P: Debug> {
     pub tokenizer_filename: P,
     pub config_filename: P,
     pub template_filename: Option<P>,
@@ -92,7 +106,7 @@ pub struct LocalModelPaths<P> {
     pub processor_config: Option<P>,
 }
 
-impl<P> LocalModelPaths<P> {
+impl<P: Debug> LocalModelPaths<P> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         tokenizer_filename: P,

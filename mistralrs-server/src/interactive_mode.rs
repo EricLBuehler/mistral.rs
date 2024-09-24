@@ -172,6 +172,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
             }
         }
         if throughput {
