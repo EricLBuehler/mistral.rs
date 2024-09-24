@@ -51,6 +51,14 @@ fn default_1usize() -> usize {
     1
 }
 
+fn default_720usize() -> usize {
+    720
+}
+
+fn default_1280usize() -> usize {
+    1280
+}
+
 fn default_model() -> String {
     "default".to_string()
 }
@@ -217,4 +225,10 @@ pub struct ImageGenerationRequest {
     pub n_choices: usize,
     #[serde(default = "default_response_format")]
     pub response_format: ImageGenerationResponseFormat,
+    #[serde(default = "default_720usize")]
+    #[schema(example = 720)]
+    pub height: usize,
+    #[serde(default = "default_1280usize")]
+    #[schema(example = 1280)]
+    pub width: usize,
 }

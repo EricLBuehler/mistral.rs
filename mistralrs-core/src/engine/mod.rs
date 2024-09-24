@@ -545,6 +545,13 @@ impl Engine {
             _ => SeqStepType::PromptAndDecode,
         };
 
+        let diffusion_params = match &request.messages {
+            RequestMessage::ImageGeneration {
+                generation_params, ..
+            } => Some(generation_params.clone()),
+            _ => None,
+        };
+
         let (mut prompt_tokens, prompt_text) = match request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
@@ -813,6 +820,7 @@ impl Engine {
                 matcher.clone(),
                 image_generation_format,
                 seq_step_type,
+                diffusion_params.clone(),
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

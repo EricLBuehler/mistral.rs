@@ -292,8 +292,8 @@ impl MetadataMixin for DiffusionPipeline {
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
     fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
-        let ModelInputs { prompts } = *inputs.downcast().expect("Downcast failed.");
-        let img = self.model.forward(prompts)?.to_dtype(DType::U8)?;
+        let ModelInputs { prompts, params } = *inputs.downcast().expect("Downcast failed.");
+        let img = self.model.forward(prompts, params)?.to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;
         let mut images = Vec::new();
         for b_img in img.chunk(img.dim(0)?, 0)? {

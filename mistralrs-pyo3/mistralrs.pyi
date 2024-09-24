@@ -294,7 +294,11 @@ class Runner:
         """
 
     def generate_image(
-        self, prompt: str, response_format: ImageGenerationResponseFormat
+        self,
+        prompt: str,
+        response_format: ImageGenerationResponseFormat,
+        height: int = 720,
+        width: int = 1280,
     ) -> ImageGenerationResponse:
         """
         Generate an image.

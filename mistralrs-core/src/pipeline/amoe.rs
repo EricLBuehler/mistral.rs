@@ -570,5 +570,6 @@ fn new_dummy_seq(
         None,
         None,
         SeqStepType::PromptAndDecode,
+        None,
     )
 }

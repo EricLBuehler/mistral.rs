@@ -1,6 +1,6 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::Device;
 use indexmap::IndexMap;
 use tokenizers::Tokenizer;
@@ -13,6 +13,8 @@ use crate::{
     sequence::Sequence,
     MessageContent, Pipeline,
 };
+
+use super::DiffusionGenerationParams;
 
 pub struct DiffusionProcessor;
 
@@ -45,6 +47,7 @@ pub struct DiffusionInputsProcessor;
 #[derive(Clone)]
 pub struct ModelInputs {
     pub(crate) prompts: Vec<String>,
+    pub(crate) params: DiffusionGenerationParams,
 }
 
 impl InputsProcessor for DiffusionInputsProcessor {
@@ -76,6 +79,9 @@ impl InputsProcessor for DiffusionInputsProcessor {
                         .iter_mut()
                         .map(|seq| seq.get_initial_prompt().to_string())
                         .collect::<Vec<_>>(),
+                    params: input_seqs[0]
+                        .get_diffusion_diffusion_params()
+                        .context("Diffusion model params must be present")?,
                 };
                 Ok(InputProcessorOutput {
                     inputs: Box::new(inputs),

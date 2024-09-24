@@ -11,6 +11,7 @@ use crate::{
         clip::text::{ClipConfig, ClipTextTransformer},
         flux,
         t5::{self, T5EncoderModel},
+        DiffusionGenerationParams,
     },
     pipeline::DiffusionModel,
     utils::varbuilder_utils::from_mmaped_safetensors,
@@ -30,8 +31,6 @@ pub struct FluxStepperShift {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperConfig {
-    pub height: usize,
-    pub width: usize,
     pub num_steps: usize,
     pub guidance_config: Option<FluxStepperShift>,
     pub is_guidance: bool,
@@ -41,8 +40,6 @@ impl FluxStepperConfig {
     pub fn default_for_guidance(has_guidance: bool) -> Self {
         if has_guidance {
             Self {
-                height: 720,
-                width: 1280,
                 num_steps: 50,
                 guidance_config: Some(FluxStepperShift {
                     base_shift: 0.5,
@@ -53,8 +50,6 @@ impl FluxStepperConfig {
             }
         } else {
             Self {
-                height: 720,
-                width: 1280,
                 num_steps: 4,
                 guidance_config: None,
                 is_guidance: false,
@@ -108,7 +103,7 @@ fn get_t5_model(
             .map_err(candle_core::Error::msg)?,
         vec![],
         Some(dtype),
-        &device,
+        device,
         silent,
         |_| true,
     )?;
@@ -187,7 +182,11 @@ impl FluxStepper {
 }
 
 impl DiffusionModel for FluxStepper {
-    fn forward(&mut self, prompts: Vec<String>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        prompts: Vec<String>,
+        params: DiffusionGenerationParams,
+    ) -> Result<Tensor> {
         let mut t5_input_ids = get_tokenization(&self.t5_tok, prompts.clone(), &self.device)?;
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
@@ -221,8 +220,8 @@ impl DiffusionModel for FluxStepper {
 
         let img = flux::sampling::get_noise(
             t5_embed.dim(0)?,
-            self.cfg.height,
-            self.cfg.width,
+            params.height,
+            params.width,
             self.device(),
         )?
         .to_dtype(self.dtype)?;
@@ -258,7 +257,7 @@ impl DiffusionModel for FluxStepper {
             )?
         };
 
-        let latent_img = flux::sampling::unpack(&img, self.cfg.height, self.cfg.width)?;
+        let latent_img = flux::sampling::unpack(&img, params.height, params.width)?;
 
         let img = self.flux_vae.decode(&latent_img)?;
 

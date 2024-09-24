@@ -21,9 +21,12 @@ use tracing::info;
 use super::{ModelPaths, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,
-    diffusion_models::flux::{
-        self,
-        stepper::{FluxStepper, FluxStepperConfig},
+    diffusion_models::{
+        flux::{
+            self,
+            stepper::{FluxStepper, FluxStepperConfig},
+        },
+        DiffusionGenerationParams,
     },
     lora::LoraConfig,
     paged_attention::AttentionImplementation,
@@ -33,7 +36,11 @@ use crate::{
 
 pub trait DiffusionModel {
     /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
-    fn forward(&mut self, prompts: Vec<String>) -> candle_core::Result<Tensor>;
+    fn forward(
+        &mut self,
+        prompts: Vec<String>,
+        params: DiffusionGenerationParams,
+    ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;
 }

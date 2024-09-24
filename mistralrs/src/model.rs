@@ -96,6 +96,7 @@ impl Model {
         &self,
         prompt: impl ToString,
         response_format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
     ) -> anyhow::Result<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -104,6 +105,7 @@ impl Model {
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
+                generation_params,
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

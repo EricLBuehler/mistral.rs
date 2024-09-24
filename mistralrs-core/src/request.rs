@@ -7,7 +7,7 @@ use crate::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
-    CustomLogitsProcessor,
+    CustomLogitsProcessor, DiffusionGenerationParams,
 };
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
@@ -47,6 +47,7 @@ pub enum RequestMessage {
     ImageGeneration {
         prompt: String,
         format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
     },
 }
 

@@ -20,13 +20,13 @@ use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionLoaderBuilder, DiffusionSpecificConfig,
-    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, IsqOrganization,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
+    DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    IsqOrganization, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
+    Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
+    StopTokens, TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -1011,10 +1011,18 @@ impl Runner {
     }
 
     /// Generate an image.
+    #[pyo3(signature = (
+        prompt,
+        response_format,
+        height = 720,
+        width = 1280,
+    ))]
     fn generate_image(
         &self,
         prompt: String,
         response_format: ImageGenerationResponseFormat,
+        height: usize,
+        width: usize,
     ) -> PyApiResult<ImageGenerationResponse> {
         let (tx, mut rx) = channel(1);
 
@@ -1023,6 +1031,7 @@ impl Runner {
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
+                generation_params: DiffusionGenerationParams { height, width },
             },
             sampling_params: SamplingParams::deterministic(),
             response: tx,

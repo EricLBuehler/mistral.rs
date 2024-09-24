@@ -9,8 +9,8 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    Constraint, ImageGenerationResponse, MistralRs, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams,
+    Constraint, DiffusionGenerationParams, ImageGenerationResponse, MistralRs, NormalRequest,
+    Request, RequestMessage, Response, SamplingParams,
 };
 use serde::Serialize;
 
@@ -67,6 +67,10 @@ fn parse_request(
         messages: RequestMessage::ImageGeneration {
             prompt: oairequest.prompt,
             format: oairequest.response_format,
+            generation_params: DiffusionGenerationParams {
+                height: oairequest.height,
+                width: oairequest.width,
+            },
         },
         sampling_params: SamplingParams::deterministic(),
         response: tx,

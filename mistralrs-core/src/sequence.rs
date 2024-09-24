@@ -11,6 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::DiffusionGenerationParams,
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -170,6 +171,7 @@ pub struct Sequence {
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
+    diffusion_params: Option<DiffusionGenerationParams>,
 
     // Grammars
     pub(crate) tok_trie: Option<TokTrie>,
@@ -277,6 +279,7 @@ impl Sequence {
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
+        diffusion_params: Option<DiffusionGenerationParams>,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -335,6 +338,7 @@ impl Sequence {
             tools,
             image_gen_response_format,
             sequence_stepping_type,
+            diffusion_params,
         }
     }
 
@@ -724,6 +728,10 @@ impl Sequence {
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
         &self.sequence_stepping_type
+    }
+
+    pub fn get_diffusion_diffusion_params(&self) -> Option<DiffusionGenerationParams> {
+        self.diffusion_params.clone()
     }
 }
 

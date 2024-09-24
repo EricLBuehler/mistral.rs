@@ -1,7 +1,10 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use mistralrs::{DiffusionLoaderType, DiffusionModelBuilder, ImageGenerationResponseFormat};
+use mistralrs::{
+    DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder,
+    ImageGenerationResponseFormat,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,6 +22,7 @@ async fn main() -> Result<()> {
         .generate_image(
             "A vibrant sunset in the mountains, 4k, high quality.".to_string(),
             ImageGenerationResponseFormat::Url,
+            DiffusionGenerationParams::default(),
         )
         .await?;
 

@@ -15,6 +15,7 @@ mod sampling;
 mod speculative;
 mod vision;
 
+pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::diffusion_models::response::send_responses;
