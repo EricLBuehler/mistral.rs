@@ -51,6 +51,7 @@
 //! ```
 
 mod anymoe;
+mod diffusion_model;
 mod gguf;
 mod gguf_lora_model;
 mod gguf_xlora_model;
@@ -64,6 +65,7 @@ mod xlora_model;
 /// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
 pub mod v0_4_api {
     pub use super::anymoe::AnyMoeModelBuilder;
+    pub use super::diffusion_model::DiffusionModelBuilder;
     pub use super::gguf::GgufModelBuilder;
     pub use super::gguf_lora_model::GgufLoraModelBuilder;
     pub use super::gguf_xlora_model::GgufXLoraModelBuilder;

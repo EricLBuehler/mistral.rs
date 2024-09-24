@@ -615,10 +615,6 @@ pub struct Flux {
 
 impl Flux {
     pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
-        if !vb.device().is_cpu() {
-            candle_core::bail!("FLUX model VB device must be CPU");
-        }
-
         let img_in = candle_nn::linear(
             cfg.in_channels,
             HIDDEN_SIZE,

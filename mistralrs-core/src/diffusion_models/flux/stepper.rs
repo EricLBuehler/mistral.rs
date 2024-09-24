@@ -108,7 +108,7 @@ fn get_t5_model(
             .map_err(candle_core::Error::msg)?,
         vec![],
         Some(dtype),
-        &Device::Cpu,
+        &device,
         silent,
         |_| true,
     )?;

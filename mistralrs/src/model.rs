@@ -92,6 +92,45 @@ impl Model {
         Ok(response)
     }
 
+    pub async fn generate_image(
+        &self,
+        prompt: impl ToString,
+        response_format: ImageGenerationResponseFormat,
+    ) -> anyhow::Result<ImageGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = Request::Normal(NormalRequest {
+            id: 0,
+            messages: RequestMessage::ImageGeneration {
+                prompt: prompt.to_string(),
+                format: response_format,
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            adapters: None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+        });
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let ResponseOk::ImageGeneration(response) = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+
+        Ok(response)
+    }
+
     /// Activate certain adapters on the model, they will be used for requests which do not specify unique adapters.
     pub async fn activate_adapters<A: ToString>(&self, adapters: Vec<A>) -> anyhow::Result<()> {
         let request = Request::ActivateAdapters(

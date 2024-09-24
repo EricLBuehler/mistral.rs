@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
+use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
@@ -19,12 +20,13 @@ use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, IsqOrganization, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionLoaderBuilder, DiffusionSpecificConfig,
+    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, IsqOrganization,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -87,6 +89,7 @@ fn parse_which(
             organization,
             write_uqff,
             from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -115,6 +118,7 @@ fn parse_which(
             topology,
             write_uqff,
             from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -148,6 +152,7 @@ fn parse_which(
             topology,
             write_uqff,
             from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -175,6 +180,7 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
             topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -195,6 +201,7 @@ fn parse_which(
             order,
             tgt_non_granular_index,
             topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -223,6 +230,7 @@ fn parse_which(
             adapters_model_id,
             order,
             topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -249,6 +257,7 @@ fn parse_which(
             quantized_filename,
             gqa,
             topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -273,6 +282,7 @@ fn parse_which(
             tgt_non_granular_index,
             gqa,
             topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -305,6 +315,7 @@ fn parse_which(
             order,
             gqa,
             topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -333,6 +344,7 @@ fn parse_which(
             topology,
             write_uqff,
             from_uqff,
+            dtype: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -346,6 +358,14 @@ fn parse_which(
             Some(model_id),
         )
         .build(arch.into()),
+        Which::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => {
+            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
+                .build(arch.into())
+        }
     })
 }
 
@@ -399,7 +419,8 @@ impl Runner {
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
-            | Which::VisionPlain { .. } => None,
+            | Which::VisionPlain { .. }
+            | Which::DiffusionPlain { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -412,6 +433,19 @@ impl Runner {
                 tgt_non_granular_index,
                 ..
             } => tgt_non_granular_index,
+        };
+        let dtype = match which {
+            Which::Plain { dtype, .. }
+            | Which::Lora { dtype, .. }
+            | Which::GGUF { dtype, .. }
+            | Which::LoraGGUF { dtype, .. }
+            | Which::GGML { dtype, .. }
+            | Which::LoraGGML { dtype, .. }
+            | Which::VisionPlain { dtype, .. }
+            | Which::DiffusionPlain { dtype, .. }
+            | Which::XLora { dtype, .. }
+            | Which::XLoraGGUF { dtype, .. }
+            | Which::XLoraGGML { dtype, .. } => dtype,
         };
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
@@ -554,7 +588,7 @@ impl Runner {
             .load_model_from_hf(
                 None,
                 TokenSource::from_str(token_source).map_err(PyApiErr::from)?,
-                &ModelDType::Auto,
+                &dtype,
                 device,
                 true, // Silent for jupyter
                 mapper,
@@ -976,6 +1010,46 @@ impl Runner {
         })
     }
 
+    /// Generate an image.
+    fn generate_image(
+        &self,
+        prompt: String,
+        response_format: ImageGenerationResponseFormat,
+    ) -> PyApiResult<ImageGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(NormalRequest {
+            id: 0,
+            messages: RequestMessage::ImageGeneration {
+                prompt: prompt.to_string(),
+                format: response_format,
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            adapters: None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+        });
+
+        let sender = self.runner.get_sender()?;
+        sender.blocking_send(request).unwrap();
+
+        let ResponseOk::ImageGeneration(response) = rx
+            .blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(response)
+    }
+
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
     fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
@@ -1021,5 +1095,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::CompletionChoice>()?;
     m.add_class::<mistralrs_core::CompletionResponse>()?;
     m.add_class::<mistralrs_core::TopLogprob>()?;
+    m.add_class::<mistralrs_core::ModelDType>()?;
+    m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
     Ok(())
 }

@@ -68,7 +68,7 @@ fn parse_request(
             prompt: oairequest.prompt,
             format: oairequest.response_format,
         },
-        sampling_params: SamplingParams::default(),
+        sampling_params: SamplingParams::deterministic(),
         response: tx,
         return_logprobs: false,
         is_streaming: false,
