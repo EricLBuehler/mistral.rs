@@ -636,6 +636,28 @@
 <a href="#636" id="636">636</a>
 <a href="#637" id="637">637</a>
 <a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
@@ -818,8 +840,22 @@
         draft: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         config: SpeculativeConfig,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target).tokenizer().get_vocab(<span class="bool-val">true</span>)
-            != <span class="macro">get_mut_arcmutex!</span>(draft).tokenizer().get_vocab(<span class="bool-val">true</span>)
+        <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(target)
+            .tokenizer()
+            .as_ref()
+            .ok_or(candle_core::Error::Msg(
+                <span class="string">"`SpeculativePipeline::new` requires the target pipeline to have a token trie"
+                    </span>.to_string(),
+            ))<span class="question-mark">?
+            </span>.get_vocab(<span class="bool-val">true</span>)
+            != <span class="macro">get_mut_arcmutex!</span>(draft)
+                .tokenizer()
+                .as_ref()
+                .ok_or(candle_core::Error::Msg(
+                    <span class="string">"`SpeculativePipeline::new` requires the draft pipeline to have a token trie"
+                        </span>.to_string(),
+                ))<span class="question-mark">?
+                </span>.get_vocab(<span class="bool-val">true</span>)
         {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Target and draft models' tokenizer vocab do not match. This is required for speculative decoding."</span>);
         }
@@ -851,7 +887,7 @@
 }
 
 <span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_chat_template()
     }
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
@@ -909,7 +945,7 @@
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).device()
     }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
@@ -931,7 +967,7 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;</span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult&gt; {
+    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult&gt; {
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">async fn </span>sample_causal_gen(
@@ -1207,14 +1243,22 @@
                             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
                                 .get_metadata()
                                 .tok_trie
-                                .append_token(rx.as_mut(), accepted.token)
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    <span class="string">"`SpeculativePipeline::step` requires a token trie"</span>.to_string(),
+                                ))<span class="question-mark">?
+                                </span>.append_token(rx.as_mut(), accepted.token)
                                 .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                         }
                         SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
                             <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
                                 .get_metadata()
                                 .tok_trie
-                                .append_token(cfg.as_mut(), accepted.token)
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    <span class="string">"`SpeculativePipeline::step` requires a token trie"</span>.to_string(),
+                                ))<span class="question-mark">?
+                                </span>.append_token(cfg.as_mut(), accepted.token)
                                 .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                         }
                         SequenceRecognizer::None =&gt; {}

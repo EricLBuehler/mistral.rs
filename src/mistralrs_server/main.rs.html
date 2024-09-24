@@ -481,6 +481,16 @@
 <a href="#481" id="481">481</a>
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -496,17 +506,26 @@
     Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
     PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
-<span class="kw">use </span>openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+<span class="kw">use </span>openai::{
+    ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
+    StopTokens,
+};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{num::NonZeroUsize, sync::Arc};
+
 <span class="kw">mod </span>chat_completion;
 <span class="kw">mod </span>completions;
-<span class="kw">use crate</span>::{chat_completion::__path_chatcompletions, completions::completions};
-
-<span class="kw">use crate</span>::{chat_completion::chatcompletions, openai::ModelObject};
+<span class="kw">mod </span>image_generation;
 <span class="kw">mod </span>interactive_mode;
 <span class="kw">mod </span>openai;
 <span class="kw">mod </span>util;
+
+<span class="kw">use </span><span class="kw">crate</span>::openai::ModelObject;
+<span class="kw">use crate</span>::{
+    chat_completion::{__path_chatcompletions, chatcompletions},
+    completions::completions,
+    image_generation::image_generation,
+};
 
 <span class="kw">use </span>interactive_mode::interactive_mode;
 <span class="kw">use </span>tower_http::cors::{AllowOrigin, CorsLayer};
@@ -710,7 +729,7 @@
     #[openapi(
         paths(models, health, chatcompletions),
         components(
-            schemas(ModelObjects, ModelObject, ChatCompletionRequest, StopTokens, Message)),
+            schemas(ModelObjects, ModelObject, ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, StopTokens, Message)),
         tags(
             (name = <span class="string">"Mistral.rs"</span>, description = <span class="string">"Mistral.rs API"</span>)
         ),
@@ -740,6 +759,7 @@
         .route(<span class="string">"/"</span>, get(health))
         .route(<span class="string">"/activate_adapters"</span>, post(activate_adapters))
         .route(<span class="string">"/re_isq"</span>, post(re_isq))
+        .route(<span class="string">"/v1/images/generations"</span>, post(image_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)

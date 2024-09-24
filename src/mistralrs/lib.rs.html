@@ -81,6 +81,8 @@
 <a href="#81" id="81">81</a>
 <a href="#82" id="82">82</a>
 <a href="#83" id="83">83</a>
+<a href="#84" id="84">84</a>
+<a href="#85" id="85">85</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
 //!
 //! To get started loading a model, check out the following builders:
@@ -134,6 +136,7 @@
 //! ```
 
 </span><span class="kw">mod </span>anymoe;
+<span class="kw">mod </span>diffusion_model;
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>gguf_lora_model;
 <span class="kw">mod </span>gguf_xlora_model;
@@ -147,6 +150,7 @@
 <span class="doccomment">/// This will be the API as of v0.4.0. Other APIs will *not* be deprecated, but moved into a module such as this one.
 </span><span class="kw">pub mod </span>v0_4_api {
     <span class="kw">pub use </span><span class="kw">super</span>::anymoe::AnyMoeModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::diffusion_model::DiffusionModelBuilder;
     <span class="kw">pub use </span><span class="kw">super</span>::gguf::GgufModelBuilder;
     <span class="kw">pub use </span><span class="kw">super</span>::gguf_lora_model::GgufLoraModelBuilder;
     <span class="kw">pub use </span><span class="kw">super</span>::gguf_xlora_model::GgufXLoraModelBuilder;

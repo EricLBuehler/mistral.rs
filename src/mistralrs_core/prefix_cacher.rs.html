@@ -357,7 +357,7 @@
 
     <span class="doccomment">/// Search for a matching cache given some toks
     </span><span class="kw">pub fn </span>search_for_matching_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;MatchingCache&gt;&gt; {
-        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache || toks.is_empty() {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
 

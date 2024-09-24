@@ -572,6 +572,7 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -592,12 +593,11 @@
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">use crate</span>::{
-    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
@@ -781,7 +781,7 @@
 }
 
 <span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>AnyMoePipeline {
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">crate</span>::ChatTemplate&gt; {
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">crate</span>::ChatTemplate&gt;&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_chat_template()
     }
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
@@ -805,7 +805,7 @@
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).reset_non_granular_state()
     }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;tokenizers::Tokenizer&gt; {
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;tokenizers::Tokenizer&gt;&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
     }
 }
@@ -813,7 +813,7 @@
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>AnyMoePipeline {
     <span class="kw">fn </span>forward_inputs(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs)
@@ -1014,7 +1014,6 @@
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
-                        (<span class="kw-2">*</span><span class="self">self</span>.get_metadata().tok_trie).clone(),
                     ));
                 }
                 <span class="kw">let </span><span class="kw-2">mut </span>input_seqs = seqs.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
@@ -1114,15 +1113,15 @@
 <span class="doccomment">/// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
 /// has no information other than the input tokens (and maybe images).
 </span><span class="kw">fn </span>new_dummy_seq(
-    tokens: Vec&lt;u32&gt;,
+    (tokens, prompt): (Vec&lt;u32&gt;, String),
     dummy_sender: tokio::sync::mpsc::Sender&lt;Response&gt;,
     dummy_sampler: Sampler,
     dummy_group: Arc&lt;tokio::sync::Mutex&lt;SequenceGroup&gt;&gt;,
     images: <span class="prelude-ty">Option</span>&lt;Vec&lt;DynamicImage&gt;&gt;,
-    trie: TokTrie,
 ) -&gt; Sequence {
     Sequence::new_waiting(
         tokens,
+        prompt,
         <span class="number">0</span>,
         <span class="number">0</span>,
         <span class="number">1</span>,
@@ -1142,7 +1141,10 @@
         <span class="prelude-val">None</span>,
         images,
         <span class="prelude-val">None</span>, <span class="comment">// TODO incorrect for PagedAttention
-        </span>trie,
+        </span><span class="prelude-val">None</span>,
+        <span class="prelude-val">None</span>,
+        <span class="prelude-val">None</span>,
+        SeqStepType::PromptAndDecode,
         <span class="prelude-val">None</span>,
     )
 }

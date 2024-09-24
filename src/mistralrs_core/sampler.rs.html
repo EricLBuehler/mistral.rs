@@ -732,6 +732,42 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -916,7 +952,7 @@
 </span><span class="kw">pub struct </span>Sampler {
     temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     top_n_logprobs: usize,
-    tokenizer: Arc&lt;Tokenizer&gt;,
+    tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
     frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
     dry_params: <span class="prelude-ty">Option</span>&lt;DrySamplingParamsInner&gt;,
@@ -933,14 +969,14 @@
 </span><span class="kw">pub struct </span>TopLogprob {
     <span class="kw">pub </span>token: u32,
     <span class="kw">pub </span>logprob: f32,
-    <span class="kw">pub </span>bytes: String,
+    <span class="kw">pub </span>bytes: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>Logprobs {
     <span class="kw">pub </span>token: u32,
     <span class="kw">pub </span>logprob: f32,
-    <span class="kw">pub </span>bytes: String,
+    <span class="kw">pub </span>bytes: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>top_logprobs: <span class="prelude-ty">Option</span>&lt;Vec&lt;TopLogprob&gt;&gt;,
 }
 
@@ -953,7 +989,7 @@
     </span><span class="kw">pub fn </span>new(
         temperature: <span class="prelude-ty">Option</span>&lt;f64&gt;,
         top_n_logprobs: usize,
-        tokenizer: Arc&lt;Tokenizer&gt;,
+        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
         frequency_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         presence_penalty: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         dry_params: <span class="prelude-ty">Option</span>&lt;DrySamplingParams&gt;,
@@ -967,7 +1003,11 @@
         </span>} <span class="kw">else </span>{
             temperature
         };
-        <span class="kw">let </span>dry_params = dry_params.map(|params| DrySamplingParamsInner::from(params, <span class="kw-2">&amp;</span>tokenizer));
+        <span class="kw">let </span>dry_params = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>tokenizer) = tokenizer {
+            dry_params.map(|params| DrySamplingParamsInner::from(params, tokenizer))
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
         <span class="kw">let </span>dry_params = <span class="kw">match </span>dry_params {
             <span class="prelude-val">Some</span>(fallible) =&gt; <span class="prelude-val">Some</span>(fallible<span class="question-mark">?</span>),
             <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
@@ -1008,21 +1048,32 @@
             top_n_toks.push(argsort_indices[val]);
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>bytes = Vec::new();
-        <span class="kw">for </span>tok <span class="kw">in </span><span class="kw-2">&amp;</span>top_n_toks {
-            bytes.push(
-                <span class="self">self</span>.tokenizer
-                    .decode(<span class="kw-2">&amp;</span>[<span class="kw-2">*</span>tok <span class="kw">as </span>u32], <span class="bool-val">false</span>)
-                    .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
-            );
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer {
+            <span class="kw">let </span><span class="kw-2">mut </span>bytes = Vec::new();
+            <span class="kw">for </span>tok <span class="kw">in </span><span class="kw-2">&amp;</span>top_n_toks {
+                bytes.push(
+                    tokenizer
+                        .decode(<span class="kw-2">&amp;</span>[<span class="kw-2">*</span>tok <span class="kw">as </span>u32], <span class="bool-val">false</span>)
+                        .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+                );
+            }
+
+            <span class="prelude-val">Ok</span>(zip(bytes, zip(top_n_toks, top_n_logprobs))
+                .map(|(bytes, (token, logprob))| TopLogprob {
+                    token: token <span class="kw">as </span>u32,
+                    logprob,
+                    bytes: <span class="prelude-val">Some</span>(bytes),
+                })
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(zip(top_n_toks, top_n_logprobs)
+                .map(|(token, logprob)| TopLogprob {
+                    token: token <span class="kw">as </span>u32,
+                    logprob,
+                    bytes: <span class="prelude-val">None</span>,
+                })
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
         }
-        <span class="prelude-val">Ok</span>(zip(bytes, zip(top_n_toks, top_n_logprobs))
-            .map(|(bytes, (token, logprob))| TopLogprob {
-                token: token <span class="kw">as </span>u32,
-                logprob,
-                bytes,
-            })
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
     }
 
     <span class="kw">fn </span>sample_argmax(<span class="kw-2">&amp;</span><span class="self">self</span>, logits: Tensor, return_logprobs: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
@@ -1039,14 +1090,21 @@
             <span class="prelude-val">None
         </span>};
 
+        <span class="kw">let </span>bytes = <span class="kw">if let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer {
+            <span class="prelude-val">Some</span>(
+                tokenizer
+                    .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">false</span>)
+                    .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            )
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
         <span class="prelude-val">Ok</span>(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: <span class="self">self
-                </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">false</span>)
-                .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            bytes,
         })
     }
 
@@ -1116,14 +1174,21 @@
             <span class="prelude-val">None
         </span>};
 
+        <span class="kw">let </span>bytes = <span class="kw">if let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer {
+            <span class="prelude-val">Some</span>(
+                tokenizer
+                    .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">false</span>)
+                    .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            )
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
         <span class="prelude-val">Ok</span>(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: <span class="self">self
-                </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token], <span class="bool-val">false</span>)
-                .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            bytes,
         })
     }
 
@@ -1146,14 +1211,21 @@
             <span class="prelude-val">None
         </span>};
 
+        <span class="kw">let </span>bytes = <span class="kw">if let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer {
+            <span class="prelude-val">Some</span>(
+                tokenizer
+                    .decode(<span class="kw-2">&amp;</span>[next_token.try_into().unwrap()], <span class="bool-val">false</span>)
+                    .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            )
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
         <span class="prelude-val">Ok</span>(Logprobs {
             token: next_token <span class="kw">as </span>u32,
             logprob,
             top_logprobs,
-            bytes: <span class="self">self
-                </span>.tokenizer
-                .decode(<span class="kw-2">&amp;</span>[next_token.try_into().unwrap()], <span class="bool-val">false</span>)
-                .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
+            bytes,
         })
     }
 
@@ -1414,7 +1486,7 @@
         <span class="kw">let </span>sampler = Sampler::new(
             <span class="prelude-val">None</span>,
             <span class="number">10</span>,
-            get_tokenizer().into(),
+            <span class="prelude-val">Some</span>(get_tokenizer().into()),
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
@@ -1446,7 +1518,7 @@
         <span class="kw">let </span>sampler = Sampler::new(
             <span class="prelude-val">None</span>,
             <span class="number">10</span>,
-            get_tokenizer().into(),
+            <span class="prelude-val">Some</span>(get_tokenizer().into()),
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,

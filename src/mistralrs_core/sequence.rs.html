@@ -815,6 +815,79 @@
 <a href="#815" id="815">815</a>
 <a href="#816" id="816">816</a>
 <a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -828,9 +901,11 @@
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::DiffusionGenerationParams,
     response::CompletionChoice,
     tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 <span class="kw">use crate</span>::{
     get_mut_group,
@@ -853,6 +928,7 @@
         completion_bytes_pos: usize,
     },
     Canceled,
+    GeneratedImage,
 }
 
 <span class="kw">impl </span>Display <span class="kw">for </span>StopReason {
@@ -862,6 +938,7 @@
             StopReason::Length(<span class="kw">_</span>) | StopReason::ModelLength(<span class="kw">_</span>) =&gt; <span class="macro">write!</span>(f, <span class="string">"length"</span>),
             StopReason::StopTok(<span class="kw">_</span>) | StopReason::StopString { .. } =&gt; <span class="macro">write!</span>(f, <span class="string">"stop"</span>),
             StopReason::Canceled =&gt; <span class="macro">write!</span>(f, <span class="string">"canceled"</span>),
+            StopReason::GeneratedImage =&gt; <span class="macro">write!</span>(f, <span class="string">"generated-image"</span>),
         }
     }
 }
@@ -960,6 +1037,12 @@
     }
 }
 
+<span class="attr">#[derive(Clone, Copy)]
+</span><span class="kw">pub enum </span>SeqStepType {
+    PromptAndDecode,
+    OneShot,
+}
+
 <span class="kw">pub struct </span>Sequence {
     <span class="comment">// Metadata, const
     </span>id: usize,
@@ -973,12 +1056,28 @@
     responder: Sender&lt;Response&gt;,
     response_index: usize,
     creation_time: u64,
-    prefill_prompt_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
-    suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    prompt: String,
+    sequence_stepping_type: SeqStepType,
+
+    <span class="comment">// Image generation
+    </span>image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
+    diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
+
+    <span class="comment">// Grammars
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) tok_trie: <span class="prelude-ty">Option</span>&lt;TokTrie&gt;,
+
+    <span class="comment">// Completion requests
+    </span>suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
     prefix: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    is_tmp: bool,
-    adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) tok_trie: TokTrie,
+
+    <span class="comment">// Speculative
+    </span>is_tmp: bool,
+
+    <span class="comment">// Prefix caching
+    </span>prefill_prompt_toks: <span class="prelude-ty">Option</span>&lt;Vec&lt;u32&gt;&gt;,
+
+    <span class="comment">// Adapter dynamic config
+    </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
     <span class="comment">// Cache
     </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -1044,6 +1143,7 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new_waiting(
         tokens: Vec&lt;u32&gt;,
+        prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -1065,8 +1165,11 @@
         <span class="comment">// Paged attention
         </span>block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         <span class="comment">//
-        </span>tok_trie: TokTrie,
+        </span>tok_trie: <span class="prelude-ty">Option</span>&lt;TokTrie&gt;,
         tools: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
+        image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
+        sequence_stepping_type: SeqStepType,
+        diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
@@ -1081,6 +1184,7 @@
             .append_tokens_to_blocks(tokens.iter().map(|x| <span class="kw-2">*</span>x <span class="kw">as </span>usize).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;());
         <span class="self">Self </span>{
             tokens,
+            prompt,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -1122,6 +1226,9 @@
             custom_metadata,
             tok_trie,
             tools,
+            image_gen_response_format,
+            sequence_stepping_type,
+            diffusion_params,
         }
     }
 
@@ -1224,6 +1331,10 @@
             <span class="kw">return </span>toks;
         }
         <span class="kw-2">&amp;</span><span class="self">self</span>.tokens
+    }
+
+    <span class="kw">pub fn </span>get_initial_prompt(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>str {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.prompt
     }
 
     <span class="doccomment">/// This will also set prompt_len
@@ -1450,6 +1561,11 @@
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks += <span class="self">self</span>.len();
     }
 
+    <span class="kw">pub fn </span>add_image_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: ImageChoice) {
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).image_choices.push(choice);
+        <span class="self">self</span>.update_time_info();
+    }
+
     <span class="kw">pub fn </span>add_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: Choice) {
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>).choices.push(choice);
         <span class="self">self</span>.update_time_info();
@@ -1495,6 +1611,18 @@
     <span class="kw">pub fn </span>images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[image::DynamicImage]&gt; {
         <span class="self">self</span>.input_images.as_deref()
     }
+
+    <span class="kw">pub fn </span>image_gen_response_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt; {
+        <span class="self">self</span>.image_gen_response_format
+    }
+
+    <span class="kw">pub fn </span>sequence_stepping_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SeqStepType {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.sequence_stepping_type
+    }
+
+    <span class="kw">pub fn </span>get_diffusion_diffusion_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt; {
+        <span class="self">self</span>.diffusion_params.clone()
+    }
 }
 
 <span class="kw">pub struct </span>SequenceGroup {
@@ -1506,6 +1634,7 @@
     <span class="kw">pub </span>total_time: u128,
     <span class="kw">pub </span>total_completion_time: u128,
     choices: Vec&lt;Choice&gt;,
+    image_choices: Vec&lt;ImageChoice&gt;,
     completion_choices: Vec&lt;(f32, CompletionChoice)&gt;,
     <span class="kw">pub </span>chat_streaming_chunks: Vec&lt;ChunkChoice&gt;,
     <span class="kw">pub </span>completion_streaming_chunks: Vec&lt;CompletionChunkChoice&gt;,
@@ -1517,6 +1646,7 @@
     <span class="kw">pub fn </span>new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             choices: Vec::new(),
+            image_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: <span class="number">0</span>,
@@ -1549,6 +1679,10 @@
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
     }
 
+    <span class="kw">pub fn </span>get_image_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ImageChoice] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.image_choices
+    }
+
     <span class="kw">pub fn </span>get_usage(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Usage {
         <span class="attr">#[allow(clippy::cast_precision_loss)]
         </span>Usage {
@@ -1574,6 +1708,18 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
             sender.send(Response::Done(response)).<span class="kw">await</span><span class="question-mark">?</span>;
+        }
+
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">pub async fn </span>maybe_send_image_gen_response(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        response: ImageGenerationResponse,
+        sender: Sender&lt;Response&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+        <span class="kw">if </span><span class="self">self</span>.image_choices.len() == <span class="self">self</span>.n_choices {
+            sender.send(Response::ImageGeneration(response)).<span class="kw">await</span><span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(())

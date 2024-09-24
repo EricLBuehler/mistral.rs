@@ -553,6 +553,7 @@
 <a href="#553" id="553">553</a>
 <a href="#554" id="554">554</a>
 <a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -669,6 +670,7 @@
                         usages.push(res.usage);
                     }
                     Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                    Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 },
                 <span class="prelude-val">None </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Expected a Done response, got None"</span>,),
             }

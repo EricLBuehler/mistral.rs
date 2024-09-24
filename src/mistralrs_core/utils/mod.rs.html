@@ -231,6 +231,12 @@
 <a href="#231" id="231">231</a>
 <a href="#232" id="232">232</a>
 <a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
 </pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gguf_metadata;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>log;
@@ -330,11 +336,13 @@
                 <span class="macro">error!</span>(<span class="string">"{} - Model failed with error: {:?}"</span>, <span class="macro-nonterminal">$stage</span>, <span class="kw-2">&amp;</span>e);
                 <span class="kw">for </span>seq <span class="kw">in </span><span class="macro-nonterminal">$seq_slice</span>.iter_mut() {
                     <span class="comment">// Step 1: Add all choices to groups
-                    </span><span class="kw">let </span>res = <span class="kw">match </span>tokenizer
-                        .decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>)
+                    </span><span class="kw">let </span>res = <span class="kw">match </span><span class="kw-2">&amp;</span>tokenizer
                     {
-                        <span class="prelude-val">Ok</span>(v) =&gt; v,
-                        <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="string">""</span>.to_string(),
+                        <span class="prelude-val">Some</span>(tok) =&gt; <span class="kw">match </span>tok.decode(<span class="kw-2">&amp;</span>seq.get_toks()[seq.prompt_tokens()..], <span class="bool-val">false</span>) {
+                            <span class="prelude-val">Ok</span>(t) =&gt; t,
+                            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; <span class="string">""</span>.to_string()
+                        },
+                        <span class="prelude-val">None </span>=&gt; <span class="string">""</span>.to_string()
                     };
 
                     <span class="kw">if </span>seq.get_mut_group().is_chat {
@@ -435,13 +443,17 @@
 #[macro_export]
 </span><span class="macro">macro_rules!</span> get_bias_if_not_allowed {
     (<span class="macro-nonterminal">$tok_trie</span>:expr, <span class="macro-nonterminal">$rx</span>:expr, <span class="macro-nonterminal">$next_token_id</span>:expr) =&gt; {
-        <span class="kw">if </span><span class="macro-nonterminal">$tok_trie</span>.token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(tok_trie) = <span class="kw-2">&amp;</span><span class="macro-nonterminal">$tok_trie </span>{
+            <span class="kw">if </span>tok_trie.token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
+                <span class="prelude-val">None
+            </span>} <span class="kw">else </span>{
+                <span class="kw">let </span><span class="kw-2">mut </span>token_set = tok_trie.alloc_token_set();
+                tok_trie.compute_bias(<span class="macro-nonterminal">$rx</span>, <span class="kw-2">&amp;mut </span>token_set);
+                <span class="prelude-val">Some</span>(token_set)
+            }
+        } <span class="kw">else </span>{
             <span class="prelude-val">None
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span><span class="kw-2">mut </span>token_set = <span class="macro-nonterminal">$tok_trie</span>.alloc_token_set();
-            <span class="macro-nonterminal">$tok_trie</span>.compute_bias(<span class="macro-nonterminal">$rx</span>, <span class="kw-2">&amp;mut </span>token_set);
-            <span class="prelude-val">Some</span>(token_set)
-        }
+        </span>}
     };
 }
 

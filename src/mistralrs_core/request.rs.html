@@ -134,15 +134,30 @@
 <a href="#134" id="134">134</a>
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">use crate</span>::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
-    CustomLogitsProcessor,
+    CustomLogitsProcessor, DiffusionGenerationParams,
 };
 <span class="kw">use </span>std::{fmt::Debug, sync::Arc};
 <span class="kw">use </span>tokio::sync::mpsc::Sender;
@@ -153,6 +168,14 @@
     Regex(String),
     Yacc(String),
     <span class="prelude-val">None</span>,
+}
+
+<span class="attr">#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass(eq, eq_int))]
+</span><span class="doccomment">/// Image generation response format
+</span><span class="kw">pub enum </span>ImageGenerationResponseFormat {
+    Url,
+    B64Json,
 }
 
 <span class="kw">pub type </span>MessageContent = Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;;
@@ -170,6 +193,11 @@
     VisionChat {
         images: Vec&lt;image::DynamicImage&gt;,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
+    },
+    ImageGeneration {
+        prompt: String,
+        format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
     },
 }
 

@@ -394,6 +394,17 @@
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
 <a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
@@ -402,8 +413,9 @@
 <span class="kw">use crate</span>::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    GGUFSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs,
-    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig, Loader, ModelDType,
+    ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 <span class="doccomment">/// A builder for a loader using the selected model.
@@ -457,7 +469,8 @@
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::Toml { .. }
-        | ModelSelected::VisionPlain { .. } =&gt; <span class="prelude-val">None</span>,
+        | ModelSelected::VisionPlain { .. }
+        | ModelSelected::DiffusionPlain { .. } =&gt; <span class="prelude-val">None</span>,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -478,7 +491,8 @@
         ModelSelected::Plain { dtype, .. }
         | ModelSelected::Lora { dtype, .. }
         | ModelSelected::XLora { dtype, .. }
-        | ModelSelected::VisionPlain { dtype, .. } =&gt; <span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype),
+        | ModelSelected::VisionPlain { dtype, .. }
+        | ModelSelected::DiffusionPlain { dtype, .. } =&gt; <span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype),
         ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
@@ -787,6 +801,14 @@
             <span class="prelude-val">Some</span>(model_id),
         )
         .build(arch),
+        ModelSelected::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: <span class="kw">_</span>,
+        } =&gt; {
+            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, <span class="prelude-val">Some</span>(model_id))
+                .build(arch)
+        }
     };
     <span class="prelude-val">Ok</span>(loader)
 }

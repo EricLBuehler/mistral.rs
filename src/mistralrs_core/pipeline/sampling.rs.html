@@ -399,6 +399,33 @@
 <a href="#399" id="399">399</a>
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -424,7 +451,14 @@
     <span class="kw">let </span>is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     seq.add_token(
         logprobs.clone(),
-        this.get_metadata().tok_trie.decode(<span class="kw-2">&amp;</span>[logprobs.token]),
+        this.get_metadata()
+            .tok_trie
+            .as_ref()
+            .ok_or(candle_core::Error::Msg(
+                <span class="string">"`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
+                    </span>.to_string(),
+            ))<span class="question-mark">?
+            </span>.decode(<span class="kw-2">&amp;</span>[logprobs.token]),
         <span class="kw-2">&amp;</span>is_done,
     );
     <span class="comment">// Handle streaming requests
@@ -447,7 +481,7 @@
                         logprobs: <span class="kw">if </span>seq.return_logprobs() {
                             <span class="prelude-val">Some</span>(<span class="kw">crate</span>::ResponseLogprob {
                                 token: delta,
-                                bytes: logprobs.bytes.clone().into_bytes(),
+                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
                                 logprob: logprobs.logprob,
                                 top_logprobs: logprobs.top_logprobs.unwrap().clone(),
                             })
@@ -464,7 +498,7 @@
                             logprobs: <span class="kw">if </span>seq.return_logprobs() {
                                 <span class="prelude-val">Some</span>(<span class="kw">crate</span>::ResponseLogprob {
                                     token: delta,
-                                    bytes: logprobs.bytes.clone().into_bytes(),
+                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
                                     logprob: logprobs.logprob,
                                     top_logprobs: logprobs.top_logprobs.unwrap().clone(),
                                 })
@@ -517,10 +551,15 @@
                 <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
                     <span class="kw">let </span>resp_logprob = <span class="kw">crate</span>::ResponseLogprob {
                         token: <span class="macro">crate::handle_seq_error_ok!</span>(
-                            tokenizer.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
+                            tokenizer
+                            .as_ref()
+                            .ok_or(candle_core::Error::Msg(
+                                <span class="string">"`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
+                                    </span>.to_string(),
+                            ))<span class="question-mark">?</span>.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
                             seq.responder()
                         ),
-                        bytes: logprob.bytes.clone().into_bytes(),
+                        bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
                         top_logprobs: logprob.top_logprobs.clone().unwrap(),
                     };
@@ -547,6 +586,9 @@
                 } =&gt; {
                     <span class="kw">let </span>txt = String::from_utf8_lossy(seq.completion_bytes());
                     txt[..completion_bytes_pos].trim_start().to_string()
+                }
+                <span class="kw">crate</span>::sequence::StopReason::GeneratedImage =&gt; {
+                    <span class="macro">candle_core::bail!</span>(<span class="string">"Stop reason was `GeneratedImage`."</span>)
                 }
             };
 
@@ -721,7 +763,15 @@
     };
     <span class="kw">let </span>second_logprobs_response = <span class="kw">match </span>bias_if_not_allowed {
         <span class="prelude-val">Some</span>(token_set) =&gt; {
-            <span class="kw">let </span><span class="kw-2">mut </span>acc = <span class="macro">vec!</span>[-f32::INFINITY; seq.tok_trie.vocab_size()];
+            <span class="kw">let </span><span class="kw-2">mut </span>acc = <span class="macro">vec!</span>[
+                -f32::INFINITY;
+                seq.tok_trie
+                    .as_ref()
+                    .ok_or(candle_core::Error::Msg(
+                        <span class="string">"TokTrie must be present in pipeline if bias is calculated"</span>.to_string()
+                    ))<span class="question-mark">?
+                    </span>.vocab_size()
+            ];
             token_set.apply_to(<span class="kw-2">&amp;mut </span>acc);
             <span class="kw">let </span>new_logits = (logits + Tensor::from_slice(<span class="kw-2">&amp;</span>acc, acc.len(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
@@ -752,15 +802,19 @@
         <span class="prelude-val">None </span>=&gt; first_lobprobs_response,
     };
 
-    <span class="kw">if </span>add_to_trie {
+    <span class="kw">if </span>add_to_trie &amp;&amp; seq.tok_trie.is_some() {
         <span class="kw">match </span>seq.recognizer {
             SequenceRecognizer::Regex(<span class="kw-2">ref mut </span>rx) =&gt; {
                 seq.tok_trie
+                    .as_ref()
+                    .unwrap()
                     .append_token(rx.as_mut(), second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
             }
             SequenceRecognizer::Cfg(<span class="kw-2">ref mut </span>cfg) =&gt; {
                 seq.tok_trie
+                    .as_ref()
+                    .unwrap()
                     .append_token(cfg.as_mut(), second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
             }

@@ -844,7 +844,7 @@
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>process_inputs(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        tokenizer: Arc&lt;Tokenizer&gt;,
+        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -1399,7 +1399,7 @@
     <span class="kw">impl </span>InputsProcessor <span class="kw">for </span>TextInputsProcessor {
         <span class="kw">fn </span>process_inputs(
             <span class="kw-2">&amp;</span><span class="self">self</span>,
-            <span class="kw">_</span>: Arc&lt;Tokenizer&gt;,
+            <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
             input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
             is_prompt: bool,
             is_xlora: bool,

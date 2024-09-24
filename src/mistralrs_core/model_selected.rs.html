@@ -373,13 +373,32 @@
 <a href="#373" id="373">373</a>
 <a href="#374" id="374">374</a>
 <a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::path::PathBuf;
 
 <span class="kw">use </span>clap::Subcommand;
 
 <span class="kw">use crate</span>::{
     pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
-    ModelDType,
+    DiffusionLoaderType, ModelDType,
 };
 
 <span class="kw">fn </span>parse_arch(x: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;NormalLoaderType, String&gt; {
@@ -387,6 +406,10 @@
 }
 
 <span class="kw">fn </span>parse_vision_arch(x: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;VisionLoaderType, String&gt; {
+    x.parse()
+}
+
+<span class="kw">fn </span>parse_diffusion_arch(x: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;DiffusionLoaderType, String&gt; {
     x.parse()
 }
 
@@ -746,6 +769,21 @@
         <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         </span><span class="attr">#[arg(short, long)]
         </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    },
+
+    <span class="doccomment">/// Select a diffusion plain model, without quantization or adapters
+    </span>DiffusionPlain {
+        <span class="doccomment">/// Model ID to load from. This may be a HF hub repo or a local path.
+        </span><span class="attr">#[arg(short, long)]
+        </span>model_id: String,
+
+        <span class="doccomment">/// The architecture of the model.
+        </span><span class="attr">#[arg(short, long, value_parser = parse_diffusion_arch)]
+        </span>arch: DiffusionLoaderType,
+
+        <span class="doccomment">/// Model data type. Defaults to `auto`.
+        </span><span class="attr">#[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        </span>dtype: ModelDType,
     },
 }
 </code></pre></div></section></main></body></html>

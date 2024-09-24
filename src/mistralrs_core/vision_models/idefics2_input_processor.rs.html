@@ -353,6 +353,8 @@
 <a href="#353" id="353">353</a>
 <a href="#354" id="354">354</a>
 <a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -411,7 +413,7 @@
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
         add_generation_prompt: bool,
         tools: Vec&lt;Tool&gt;,
-    ) -&gt; anyhow::Result&lt;Vec&lt;u32&gt;&gt; {
+    ) -&gt; anyhow::Result&lt;(Vec&lt;u32&gt;, String)&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = apply_chat_template(
             pipeline,
             messages,
@@ -446,11 +448,13 @@
             <span class="self">self</span>.fake_image_token,
         );
 
-        <span class="kw">let </span>encoding = pipeline
-            .tokenizer()
-            .encode(prompt, <span class="bool-val">true</span>)
+        <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span>pipeline.tokenizer() <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Idefics2InputProcessor requires a specified tokenizer."</span>,);
+        };
+        <span class="kw">let </span>encoding = tokenizer
+            .encode(prompt.clone(), <span class="bool-val">true</span>)
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(encoding.get_ids().to_vec())
+        <span class="prelude-val">Ok</span>((encoding.get_ids().to_vec(), prompt))
     }
 
     <span class="kw">fn </span>inputs_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>InputsProcessor&gt; {
@@ -472,7 +476,7 @@
     }
     <span class="kw">fn </span>process_inputs(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        <span class="kw">_</span>: Arc&lt;Tokenizer&gt;,
+        <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
         is_xlora: bool,

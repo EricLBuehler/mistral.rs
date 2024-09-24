@@ -297,6 +297,8 @@
 <a href="#297" id="297">297</a>
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
     env,
@@ -373,6 +375,7 @@
                 Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
         }
@@ -593,6 +596,7 @@
             Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
         }
     }
 }

@@ -365,6 +365,11 @@
 <a href="#365" id="365">365</a>
 <a href="#366" id="366">366</a>
 <a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
@@ -443,7 +448,7 @@
     }
     <span class="kw">fn </span>process_inputs(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        tokenizer: Arc&lt;Tokenizer&gt;,
+        tokenizer: <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -468,6 +473,11 @@
         </span><span class="kw">if </span>prompt_batchsize.is_some() {
             <span class="macro">warn!</span>(<span class="string">"`prompt_batchsize` is set. Idefics 2 does not support prompt batching."</span>);
         }
+        <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = tokenizer <span class="kw">else </span>{
+            <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                <span class="string">"LLaVAInputProcessor requires a specified tokenizer."</span>,
+            ))));
+        };
 
         <span class="kw">let </span>config = other_config
             .clone()
@@ -504,7 +514,7 @@
             <span class="kw">return </span>Box::new(
                 text_models_inputs_processor::TextInputsProcessor
                     .process_inputs(
-                        tokenizer,
+                        <span class="prelude-val">Some</span>(tokenizer),
                         input_seqs,
                         is_prompt,
                         is_xlora,

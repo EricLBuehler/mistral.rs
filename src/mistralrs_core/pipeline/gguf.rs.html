@@ -1254,7 +1254,7 @@
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: <span class="prelude-val">Some</span>(tok_trie),
                 has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -1282,8 +1282,8 @@
 }
 
 <span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>GGUFPipeline {
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt; {
-        <span class="self">self</span>.chat_template.clone()
+    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
+        <span class="prelude-val">Some</span>(<span class="self">self</span>.chat_template.clone())
     }
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="prelude-val">None
@@ -1353,8 +1353,8 @@
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
         }
     }
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt; {
-        <span class="self">self</span>.tokenizer.clone()
+    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+        <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
     }
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
         <span class="self">self</span>.model_id.clone()
@@ -1373,7 +1373,7 @@
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>GGUFPipeline {
     <span class="kw">fn </span>forward_inputs(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {

@@ -760,6 +760,82 @@
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
 <a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -780,6 +856,7 @@
     request::NormalRequest,
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
@@ -839,7 +916,10 @@
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
         <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().has_no_kv_cache;
-        <span class="macro">assert_eq!</span>(has_no_kv_cache, no_kv_cache);
+        <span class="kw">if </span>no_kv_cache {
+            <span class="comment">// Diffusion models...
+            </span><span class="macro">assert_eq!</span>(has_no_kv_cache, no_kv_cache);
+        }
         <span class="comment">// Prefix caching is always disabled if using PagedAttention for now.
         // TODO
         </span><span class="kw">let </span>no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
@@ -851,7 +931,7 @@
             scheduler: config.into_scheduler(),
             id: <span class="number">0</span>,
             truncate_sequence,
-            no_kv_cache,
+            no_kv_cache: no_kv_cache &amp; !has_no_kv_cache,
             prefix_cacher: PrefixCacheManager::new(
                 device,
                 prefix_cache_n,
@@ -1024,7 +1104,14 @@
                         }
 
                         <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
-                            seq.set_state(SequenceState::RunningCompletion);
+                            <span class="kw">match </span>seq.sequence_stepping_type() {
+                                SeqStepType::OneShot =&gt; {
+                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
+                                }
+                                SeqStepType::PromptAndDecode =&gt; {
+                                    seq.set_state(SequenceState::RunningCompletion)
+                                }
+                            }
                             <span class="kw">let </span>now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect(<span class="string">"Time travel has occurred!"</span>)
@@ -1252,12 +1339,14 @@
             RequestMessage::Completion { best_of, .. } =&gt; best_of,
             RequestMessage::Chat(<span class="kw">_</span>)
             | RequestMessage::CompletionTokens(<span class="kw">_</span>)
-            | RequestMessage::VisionChat { .. } =&gt; <span class="number">1</span>,
+            | RequestMessage::VisionChat { .. }
+            | RequestMessage::ImageGeneration { .. } =&gt; <span class="number">1</span>,
         };
         <span class="kw">if </span>is_chat
             &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
                 .get_chat_template()
-                .has_chat_template()
+                .as_ref()
+                .is_some_and(|ch_t| ch_t.has_chat_template())
         {
             request
                     .response
@@ -1284,7 +1373,24 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="kw">let </span><span class="kw-2">mut </span>prompt = <span class="kw">match </span>request.messages {
+        <span class="kw">let </span>image_generation_format = <span class="kw">match </span><span class="kw-2">&amp;</span>request.messages {
+            RequestMessage::ImageGeneration { format, .. } =&gt; <span class="prelude-val">Some</span>(<span class="kw-2">*</span>format),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+        };
+
+        <span class="kw">let </span>seq_step_type = <span class="kw">match </span><span class="kw-2">&amp;</span>request.messages {
+            RequestMessage::ImageGeneration { .. } =&gt; SeqStepType::OneShot,
+            <span class="kw">_ </span>=&gt; SeqStepType::PromptAndDecode,
+        };
+
+        <span class="kw">let </span>diffusion_params = <span class="kw">match </span><span class="kw-2">&amp;</span>request.messages {
+            RequestMessage::ImageGeneration {
+                generation_params, ..
+            } =&gt; <span class="prelude-val">Some</span>(generation_params.clone()),
+            <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+        };
+
+        <span class="kw">let </span>(<span class="kw-2">mut </span>prompt_tokens, prompt_text) = <span class="kw">match </span>request.messages {
             RequestMessage::Chat(messages)
             | RequestMessage::VisionChat {
                 images: <span class="kw">_</span>,
@@ -1300,17 +1406,45 @@
                 <span class="macro">handle_seq_error!</span>(template, request.response)
             }
             RequestMessage::Completion { text, .. } =&gt; {
-                <span class="kw">let </span>prompt = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
-                    .tokenizer()
-                    .encode(text, <span class="bool-val">true</span>)
+                <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer() <span class="kw">else </span>{
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            <span class="string">"Completion requests require the pipeline to have a tokenizer"</span>.into(),
+                        ))
+                        .<span class="kw">await
+                        </span>.expect(<span class="string">"Expected receiver."</span>);
+                    <span class="kw">return</span>;
+                };
+                <span class="kw">let </span>prompt = tokenizer
+                    .encode(text.clone(), <span class="bool-val">true</span>)
                     .map_err(anyhow::Error::msg);
-                <span class="macro">handle_seq_error!</span>(prompt, request.response)
-                    .get_ids()
-                    .to_vec()
+                (
+                    <span class="macro">handle_seq_error!</span>(prompt, request.response)
+                        .get_ids()
+                        .to_vec(),
+                    text,
+                )
             }
-            RequestMessage::CompletionTokens(it) =&gt; it,
+            RequestMessage::ImageGeneration { prompt, .. } =&gt; (<span class="macro">vec!</span>[u32::MAX], prompt),
+            RequestMessage::CompletionTokens(it) =&gt; {
+                <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).tokenizer() <span class="kw">else </span>{
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            <span class="string">"Completion requests w/ raw tokens require the pipeline to have a tokenizer"</span>.into(),
+                        ))
+                        .<span class="kw">await
+                        </span>.expect(<span class="string">"Expected receiver."</span>);
+                    <span class="kw">return</span>;
+                };
+                <span class="kw">let </span>prompt = tokenizer
+                    .decode(<span class="kw-2">&amp;</span>it, <span class="bool-val">false</span>)
+                    .map_err(|e| anyhow::Error::msg(e.to_string()));
+                (it, <span class="macro">handle_seq_error!</span>(prompt, request.response))
+            }
         };
-        <span class="kw">if </span>prompt.is_empty() {
+        <span class="kw">if </span>prompt_tokens.is_empty() {
             request
                 .response
                 .send(Response::ValidationError(
@@ -1321,7 +1455,7 @@
             <span class="kw">return</span>;
         }
 
-        <span class="kw">if </span>prompt.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().max_seq_len {
+        <span class="kw">if </span>prompt_tokens.len() &gt; <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().max_seq_len {
             <span class="kw">if </span>!<span class="self">self</span>.truncate_sequence {
                 request
                     .response
@@ -1330,7 +1464,7 @@
                     )).<span class="kw">await</span>.expect(<span class="string">"Expected receiver."</span>);
                 <span class="kw">return</span>;
             } <span class="kw">else </span>{
-                <span class="kw">let </span>prompt_len = prompt.len();
+                <span class="kw">let </span>prompt_len = prompt_tokens.len();
                 <span class="kw">let </span>max_len = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().max_seq_len;
                 <span class="kw">let </span>currently_over = prompt_len - max_len;
                 <span class="kw">let </span>sampling_max = <span class="kw">if let </span><span class="prelude-val">Some</span>(sampling_max) = request.sampling_params.max_len {
@@ -1342,12 +1476,12 @@
                 } <span class="kw">else </span>{
                     <span class="number">10
                 </span>};
-                prompt = prompt[(currently_over + sampling_max)..].to_vec();
-                <span class="macro">warn!</span>(<span class="string">"Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation."</span>, request.id, currently_over, prompt_len - prompt.len());
+                prompt_tokens = prompt_tokens[(currently_over + sampling_max)..].to_vec();
+                <span class="macro">warn!</span>(<span class="string">"Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation."</span>, request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
         <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
-            <span class="self">self</span>.prefix_cacher.search_for_matching_cache(<span class="kw-2">&amp;</span>prompt),
+            <span class="self">self</span>.prefix_cacher.search_for_matching_cache(<span class="kw-2">&amp;</span>prompt_tokens),
             request.response
         );
 
@@ -1371,14 +1505,16 @@
                 };
                 <span class="kw">for </span>id <span class="kw">in </span>i {
                     <span class="comment">// We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
-                    </span><span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(<span class="kw-2">*</span>id)) {
-                        request
-                            .response
-                            .send(Response::ValidationError(
-                                <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
-                            ))
-                            .<span class="kw">await </span>.expect(<span class="string">"Expected receiver."</span>);
-                        <span class="kw">return</span>;
+                    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(tok_trie) = tok_trie.as_ref() {
+                        <span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(<span class="kw-2">*</span>id)) {
+                            request
+                                .response
+                                .send(Response::ValidationError(
+                                    <span class="macro">format!</span>(<span class="string">"Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token."</span>, tok_trie.token_str(<span class="kw-2">*</span>id)).into(),
+                                ))
+                                .<span class="kw">await </span>.expect(<span class="string">"Expected receiver."</span>);
+                            <span class="kw">return</span>;
+                        }
                     }
                 }
 
@@ -1396,13 +1532,26 @@
                 };
 
                 <span class="kw">for </span>stop_txt <span class="kw">in </span>s {
+                    <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = <span class="kw-2">&amp;</span>tokenizer <span class="kw">else </span>{
+                        request
+                            .response
+                            .send(Response::ValidationError(
+                                <span class="string">"Completion requests require the pipeline to have a tokenizer"
+                                    </span>.into(),
+                            ))
+                            .<span class="kw">await
+                            </span>.expect(<span class="string">"Expected receiver."</span>);
+                        <span class="kw">return</span>;
+                    };
                     <span class="kw">let </span>encoded = tokenizer.encode(stop_txt.to_string(), <span class="bool-val">true</span>);
                     <span class="kw">let </span>toks = <span class="macro">handle_seq_error!</span>(encoded, request.response)
                         .get_ids()
                         .to_vec();
 
                     <span class="kw">if </span>toks.len() == <span class="number">1 </span>{
-                        <span class="kw">if </span>tok_trie.has_extensions(tok_trie.token(toks[<span class="number">0</span>])) {
+                        <span class="kw">if </span>tok_trie.as_ref().is_some_and(|tok_trie| {
+                            tok_trie.has_extensions(tok_trie.token(toks[<span class="number">0</span>]))
+                        }) {
                             stop_strings.push(stop_txt.clone());
                         } <span class="kw">else </span>{
                             stop_toks.push(toks[<span class="number">0</span>]);
@@ -1474,9 +1623,14 @@
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
-            <span class="kw">let </span>trie = (<span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata().tok_trie).clone();
+            <span class="kw">let </span>trie = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                .get_metadata()
+                .tok_trie
+                .as_ref()
+                .map(|x| (<span class="kw-2">**</span>x).clone());
             <span class="kw">let </span>seq = Sequence::new_waiting(
-                prompt.clone(),
+                prompt_tokens.clone(),
+                prompt_text.clone(),
                 <span class="self">self</span>.id,
                 now.as_millis(),
                 num_hidden_layers,
@@ -1493,12 +1647,7 @@
                 recognizer,
                 request.suffix.clone(),
                 <span class="kw">if </span>echo_prompt {
-                    <span class="prelude-val">Some</span>(
-                        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
-                            .tokenizer()
-                            .decode(<span class="kw-2">&amp;</span>prompt, <span class="bool-val">false</span>)
-                            .expect(<span class="string">"cannot decode completion tokens"</span>),
-                    )
+                    <span class="prelude-val">Some</span>(prompt_text.clone())
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
                 </span>},
@@ -1507,6 +1656,9 @@
                 block_size,
                 trie,
                 matcher.clone(),
+                image_generation_format,
+                seq_step_type,
+                diffusion_params.clone(),
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

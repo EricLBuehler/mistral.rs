@@ -716,9 +716,72 @@
 <a href="#716" id="716">716</a>
 <a href="#717" id="717">717</a>
 <a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
+<span class="kw">mod </span>diffusion;
 <span class="kw">mod </span>ggml;
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>inputs_processor;
@@ -731,22 +794,28 @@
 <span class="kw">mod </span>sampling;
 <span class="kw">mod </span>speculative;
 <span class="kw">mod </span>vision;
+
+<span class="kw">pub use </span><span class="kw">super</span>::diffusion_models::DiffusionGenerationParams;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+<span class="kw">use </span><span class="kw">crate</span>::diffusion_models::response::send_responses;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{CacheConfig, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">pub use </span>amoe::{AnyMoeLoader, AnyMoePipeline};
 <span class="kw">use </span>chat_template::ChatTemplate;
+<span class="kw">pub use </span>diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
 <span class="kw">pub use </span>ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 <span class="kw">pub use </span>gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+<span class="kw">use </span>image::DynamicImage;
 <span class="kw">pub use </span>inputs_processor::InputProcessorOutput;
 <span class="kw">pub use </span>isq::{parse_isq_value, IsqModel, IsqOrganization};
 <span class="kw">pub use </span>loaders::{
-    AdapterKind, AutoLoader, Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind,
-    Qwen2Loader, Starcoder2Loader, TokenSource, VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -776,7 +845,8 @@
 
 <span class="kw">pub struct </span>GeneralMetadata {
     <span class="kw">pub </span>max_seq_len: usize,
-    <span class="kw">pub </span>tok_trie: Arc&lt;TokTrie&gt;,
+    <span class="doccomment">/// Only None if it doesnt make sense for the model
+    </span><span class="kw">pub </span>tok_trie: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokTrie&gt;&gt;,
     <span class="kw">pub </span>has_no_kv_cache: bool,
     <span class="kw">pub </span>num_hidden_layers: usize,
     <span class="kw">pub </span>eos_tok: Vec&lt;u32&gt;,
@@ -810,7 +880,8 @@
     <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>Processor&gt; {
         Arc::new(BasicProcessor)
     }
-    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;ChatTemplate&gt;;
+    <span class="doccomment">/// Only None if it doesnt make sense for the model
+    </span><span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt;;
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;;
 }
 
@@ -839,7 +910,8 @@
 
 <span class="kw">pub trait </span>MetadataMixin {
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device;
-    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;Tokenizer&gt;;
+    <span class="doccomment">/// Only None if it doesnt make sense for the model
+    </span><span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt;;
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>);
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt;;
@@ -903,6 +975,7 @@
 </span><span class="kw">pub enum </span>ModelCategory {
     Text,
     Vision { has_conv2d: bool },
+    Diffusion,
 }
 
 <span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {
@@ -921,6 +994,7 @@
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">pub enum </span>ForwardInputsResult {
     CausalGeneration { logits: Tensor },
+    Image { images: Vec&lt;DynamicImage&gt; },
 }
 
 <span class="kw">impl </span>ForwardInputsResult {
@@ -928,6 +1002,9 @@
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::CausalGeneration { logits } =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::CausalGeneration {
                 logits: logits.i(bs_idx)<span class="question-mark">?</span>,
+            }),
+            <span class="self">Self</span>::Image { images } =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Image {
+                images: <span class="macro">vec!</span>[images[bs_idx].clone()],
             }),
         }
     }
@@ -937,6 +1014,7 @@
             <span class="self">Self</span>::CausalGeneration { logits } =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::CausalGeneration {
                 logits: logits.to_device(device)<span class="question-mark">?</span>,
             }),
+            <span class="self">Self</span>::Image { .. } =&gt; <span class="prelude-val">Ok</span>(<span class="self">self</span>.clone()),
         }
     }
 }
@@ -953,7 +1031,7 @@
     + AnyMoePipelineMixin
 {
     <span class="kw">fn </span>forward_inputs(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt;;
 
@@ -1077,7 +1155,9 @@
                                     <span class="attr">#[allow(irrefutable_let_patterns)]
                                     </span><span class="kw">let </span>ForwardInputsResult::CausalGeneration { logits } = r
                                     <span class="kw">else </span>{
-                                        <span class="macro">unreachable!</span>(<span class="string">"All results must have same type"</span>)
+                                        <span class="macro">unreachable!</span>(
+                                            <span class="string">"All results must have same type, `CausalGeneration`"
+                                        </span>)
                                     };
                                     logits
                                 })
@@ -1085,6 +1165,28 @@
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .<span class="kw">await</span><span class="question-mark">?</span>;
+                    }
+                    ForwardInputsResult::Image { .. } =&gt; {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    <span class="attr">#[allow(irrefutable_let_patterns)]
+                                    </span><span class="kw">let </span>ForwardInputsResult::Image { images } = r
+                                    <span class="kw">else </span>{
+                                        <span class="macro">unreachable!</span>(
+                                            <span class="string">"All results must have same type, `CausalGeneration`"
+                                        </span>)
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect(<span class="string">"Must have at least 1 element."</span>)
+                                })
+                                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                         )
                         .<span class="kw">await</span><span class="question-mark">?</span>;
                     }
@@ -1157,6 +1259,28 @@
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .<span class="kw">await</span><span class="question-mark">?</span>;
+                    }
+                    ForwardInputsResult::Image { .. } =&gt; {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    <span class="attr">#[allow(irrefutable_let_patterns)]
+                                    </span><span class="kw">let </span>ForwardInputsResult::Image { images } = r
+                                    <span class="kw">else </span>{
+                                        <span class="macro">unreachable!</span>(
+                                            <span class="string">"All results must have same type, `CausalGeneration`"
+                                        </span>)
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect(<span class="string">"Must have at least 1 element."</span>)
+                                })
+                                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                         )
                         .<span class="kw">await</span><span class="question-mark">?</span>;
                     }
