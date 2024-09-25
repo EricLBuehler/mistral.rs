@@ -769,6 +769,24 @@
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
 <a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
     Tensor, WithDType, D,
@@ -878,6 +896,12 @@
                 <span class="kw">let </span>result = CpuStorage::I64(result);
                 <span class="prelude-val">Ok</span>((result, l1.shape().clone()))
             }
+            CpuStorage::I16(vs1) =&gt; {
+                <span class="kw">let </span>vs2 = s2.as_slice::&lt;i16&gt;().unwrap();
+                <span class="kw">let </span>result = <span class="self">self</span>.bitwise(vs1, vs2);
+                <span class="kw">let </span>result = CpuStorage::I16(result);
+                <span class="prelude-val">Ok</span>((result, l1.shape().clone()))
+            }
             CpuStorage::I32(vs1) =&gt; {
                 <span class="kw">let </span>vs2 = s2.as_slice::&lt;i32&gt;().unwrap();
                 <span class="kw">let </span>result = <span class="self">self</span>.bitwise(vs1, vs2);
@@ -935,6 +959,12 @@
             DType::I32 =&gt; {
                 <span class="kw">let </span>d_in1_ptr = <span class="kw-2">*</span>s1.as_cuda_slice::&lt;i32&gt;()<span class="question-mark">?</span>.device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
                 <span class="kw">let </span>d_in2_ptr = <span class="kw-2">*</span>s2.as_cuda_slice::&lt;i32&gt;()<span class="question-mark">?</span>.device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
+                <span class="kw">let </span>elem_count = l1.shape().elem_count();
+                (d_in1_ptr, d_in2_ptr, elem_count)
+            }
+            DType::I16 =&gt; {
+                <span class="kw">let </span>d_in1_ptr = <span class="kw-2">*</span>s1.as_cuda_slice::&lt;i16&gt;()<span class="question-mark">?</span>.device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
+                <span class="kw">let </span>d_in2_ptr = <span class="kw-2">*</span>s2.as_cuda_slice::&lt;i16&gt;()<span class="question-mark">?</span>.device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
                 <span class="kw">let </span>elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
@@ -1150,6 +1180,7 @@
             candle_core::DType::U8 =&gt; ffi::count_nonzero_u8(d_in, n),
             candle_core::DType::U32 =&gt; ffi::count_nonzero_u32(d_in, n),
             candle_core::DType::I64 =&gt; ffi::count_nonzero_i64(d_in, n),
+            candle_core::DType::I16 =&gt; ffi::count_nonzero_i16(d_in, n),
             candle_core::DType::I32 =&gt; ffi::count_nonzero_i32(d_in, n),
             candle_core::DType::BF16 =&gt; ffi::count_nonzero_bf16(d_in, n),
             candle_core::DType::F16 =&gt; ffi::count_nonzero_f16(d_in, n),
@@ -1181,6 +1212,9 @@
             candle_core::DType::I32 =&gt; {
                 ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
+            candle_core::DType::I16 =&gt; {
+                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
+            }
             candle_core::DType::BF16 =&gt; {
                 ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
@@ -1209,6 +1243,7 @@
         <span class="kw">let </span>result = <span class="kw">match </span>storage {
             candle_core::CpuStorage::U8(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::U32(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
+            candle_core::CpuStorage::I16(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::I32(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::I64(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::BF16(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
@@ -1236,6 +1271,7 @@
             candle_core::DType::U8 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;u8&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::U32 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;u32&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::I32 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;i32&gt;()<span class="question-mark">?</span>.device_ptr(),
+            candle_core::DType::I16 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;i16&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::I64 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;i64&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::BF16 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;bf16&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::F16 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;f16&gt;()<span class="question-mark">?</span>.device_ptr(),

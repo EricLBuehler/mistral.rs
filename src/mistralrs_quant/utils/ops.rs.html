@@ -383,6 +383,14 @@
 <a href="#383" id="383">383</a>
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
     Tensor, WithDType,
@@ -442,6 +450,7 @@
                 <span class="kw">let </span>result = CpuStorage::U8(result);
                 <span class="prelude-val">Ok</span>((result, l1.shape().clone()))
             }
+            CpuStorage::I16(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I16, <span class="string">"bitwise-or"</span>)),
             CpuStorage::U32(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::U32, <span class="string">"bitwise-or"</span>)),
             CpuStorage::I64(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I64, <span class="string">"bitwise-or"</span>)),
             CpuStorage::I32(vs1) =&gt; {
@@ -491,6 +500,9 @@
                     .device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
                 <span class="kw">let </span>elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
+            }
+            DType::I16 =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I16, <span class="string">"bitwise-or"</span>));
             }
             DType::U32 =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::U32, <span class="string">"bitwise-or"</span>));
@@ -595,6 +607,7 @@
                 <span class="kw">let </span>result = CpuStorage::U8(result);
                 <span class="prelude-val">Ok</span>((result, l1.shape().clone()))
             }
+            CpuStorage::I16(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I16, <span class="string">"leftshifr"</span>)),
             CpuStorage::U32(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::U32, <span class="string">"leftshifr"</span>)),
             CpuStorage::I64(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I64, <span class="string">"leftshifr"</span>)),
             CpuStorage::I32(vs1) =&gt; {
@@ -619,6 +632,9 @@
                     .device_ptr() <span class="kw">as </span><span class="kw-2">*const </span>c_void;
                 <span class="kw">let </span>elem_count = l1.shape().elem_count();
                 (d_in1_ptr, elem_count)
+            }
+            DType::I16 =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::I16, <span class="string">"leftshift"</span>));
             }
             DType::U32 =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::U32, <span class="string">"leftshift"</span>));

@@ -162,6 +162,10 @@
 <a href="#162" id="162">162</a>
 <a href="#163" id="163">163</a>
 <a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
@@ -169,7 +173,7 @@
 
 <span class="kw">const </span>HQFF_VERSION_MAJOR: u32 = <span class="number">0</span>;
 <span class="kw">const </span>HQFF_VERSION_MINOR: u32 = <span class="number">1</span>;
-<span class="kw">const </span>HQFF_VERSION_PATCH: u32 = <span class="number">0</span>;
+<span class="kw">const </span>HQFF_VERSION_PATCH: u32 = <span class="number">1</span>;
 
 <span class="doccomment">/// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>HQFF_VERSION: u32 =
@@ -211,6 +215,7 @@
     <span class="kw">let </span>bias = <span class="kw">match </span>tensor.dtype() {
         DType::U8 =&gt; data_to_bytes::&lt;u8&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
         DType::U32 =&gt; data_to_bytes::&lt;u32&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
+        DType::I16 =&gt; data_to_bytes::&lt;i16&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
         DType::I32 =&gt; data_to_bytes::&lt;i32&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
         DType::I64 =&gt; data_to_bytes::&lt;i64&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
         DType::F16 =&gt; data_to_bytes::&lt;half::f16&gt;(tensor.to_vec1()<span class="question-mark">?</span>),
@@ -229,6 +234,7 @@
         DType::BF16 =&gt; <span class="number">5</span>,
         DType::F32 =&gt; <span class="number">6</span>,
         DType::F64 =&gt; <span class="number">7</span>,
+        DType::I16 =&gt; <span class="number">8</span>,
     };
     buffer.extend(<span class="kw-2">&amp;</span>dtype.to_le_bytes());
 
@@ -259,6 +265,7 @@
         <span class="number">5 </span>=&gt; DType::BF16,
         <span class="number">6 </span>=&gt; DType::F32,
         <span class="number">7 </span>=&gt; DType::F64,
+        <span class="number">8 </span>=&gt; DType::I16,
         <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"unknown dtype for quantized bias tensor {dtype}"</span>),
     };
 
@@ -279,6 +286,7 @@
         DType::F64 =&gt; bytes_to_data::&lt;f64&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
         DType::I32 =&gt; bytes_to_data::&lt;i32&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
         DType::I64 =&gt; bytes_to_data::&lt;i64&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
+        DType::I16 =&gt; bytes_to_data::&lt;i16&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
         DType::U32 =&gt; bytes_to_data::&lt;u32&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
         DType::U8 =&gt; bytes_to_data::&lt;u8&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
     }

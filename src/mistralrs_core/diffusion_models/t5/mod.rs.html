@@ -815,6 +815,8 @@
 <a href="#815" id="815">815</a>
 <a href="#816" id="816">816</a>
 <a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// T5 Text Model
@@ -1436,6 +1438,7 @@
         <span class="kw">match </span><span class="self">self</span>.dtype() {
             DType::U8 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u8&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
             DType::U32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
+            DType::I16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i16&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
             DType::I32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
             DType::I64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i64&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
             DType::F16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::f16&gt;()<span class="question-mark">? </span>== half::f16::from_f32_const(<span class="number">0.</span>)),
@@ -1450,6 +1453,7 @@
     <span class="kw">let </span><span class="kw-2">mut </span>max = <span class="kw">match </span>xs.dtype() {
         DType::U8 =&gt; u8::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
         DType::U32 =&gt; u32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
+        DType::I16 =&gt; i16::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
         DType::I32 =&gt; i32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
         DType::I64 =&gt; i64::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
         DType::F16 =&gt; half::f16::MAX.to_f64_const() - <span class="number">1000.</span>,
