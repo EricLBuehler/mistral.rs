@@ -107,6 +107,12 @@ impl CustomOp2 for BitWise {
                 let result = CpuStorage::I64(result);
                 Ok((result, l1.shape().clone()))
             }
+            CpuStorage::I16(vs1) => {
+                let vs2 = s2.as_slice::<i16>().unwrap();
+                let result = self.bitwise(vs1, vs2);
+                let result = CpuStorage::I16(result);
+                Ok((result, l1.shape().clone()))
+            }
             CpuStorage::I32(vs1) => {
                 let vs2 = s2.as_slice::<i32>().unwrap();
                 let result = self.bitwise(vs1, vs2);
@@ -164,6 +170,12 @@ impl CustomOp2 for BitWise {
             DType::I32 => {
                 let d_in1_ptr = *s1.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
                 let d_in2_ptr = *s2.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
+                let elem_count = l1.shape().elem_count();
+                (d_in1_ptr, d_in2_ptr, elem_count)
+            }
+            DType::I16 => {
+                let d_in1_ptr = *s1.as_cuda_slice::<i16>()?.device_ptr() as *const c_void;
+                let d_in2_ptr = *s2.as_cuda_slice::<i16>()?.device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
@@ -379,6 +391,7 @@ fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) ->
             candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n),
             candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n),
             candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
+            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
             candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
             candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
             candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
@@ -410,6 +423,9 @@ fn nonzero_cuda(
             candle_core::DType::I32 => {
                 ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
+            candle_core::DType::I16 => {
+                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
+            }
             candle_core::DType::BF16 => {
                 ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
@@ -438,6 +454,7 @@ impl CustomOp1 for NonZero {
         let result = match storage {
             candle_core::CpuStorage::U8(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::U32(vs) => self.nonzero(vs, layout),
+            candle_core::CpuStorage::I16(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::I32(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::I64(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
@@ -465,6 +482,7 @@ impl CustomOp1 for NonZero {
             candle_core::DType::U8 => *storage.as_cuda_slice::<u8>()?.device_ptr(),
             candle_core::DType::U32 => *storage.as_cuda_slice::<u32>()?.device_ptr(),
             candle_core::DType::I32 => *storage.as_cuda_slice::<i32>()?.device_ptr(),
+            candle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
             candle_core::DType::I64 => *storage.as_cuda_slice::<i64>()?.device_ptr(),
             candle_core::DType::BF16 => *storage.as_cuda_slice::<bf16>()?.device_ptr(),
             candle_core::DType::F16 => *storage.as_cuda_slice::<f16>()?.device_ptr(),
