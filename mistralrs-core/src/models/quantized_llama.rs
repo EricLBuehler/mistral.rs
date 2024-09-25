@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use candle_core::quantized::ggml_file;
@@ -128,7 +129,7 @@ struct LayerWeights {
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary: RotaryEmbedding,
+    rotary: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -294,7 +295,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                rotary: rotary.clone(),
+                rotary: rotary.clone().into(),
                 paged_attn: None, // TODO
                 sdpa_params: SdpaParams {
                     n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
@@ -434,17 +435,29 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..block_count {
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    rope_dim,
+                    max_seq_len,
+                    device,
+                    false,
+                    DType::F32,
+                )?),
+            );
+        }
+
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new(
-                rope_freq_base,
-                rope_dim,
-                max_seq_len,
-                device,
-                false,
-                DType::F32,
-            )?;
+            let rotary = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
 
             let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;

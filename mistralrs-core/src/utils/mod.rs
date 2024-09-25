@@ -97,11 +97,13 @@ macro_rules! handle_pipeline_forward_error {
                 error!("{} - Model failed with error: {:?}", $stage, &e);
                 for seq in $seq_slice.iter_mut() {
                     // Step 1: Add all choices to groups
-                    let res = match tokenizer
-                        .decode(&seq.get_toks()[seq.prompt_tokens()..], false)
+                    let res = match &tokenizer
                     {
-                        Ok(v) => v,
-                        Err(_) => "".to_string(),
+                        Some(tok) => match tok.decode(&seq.get_toks()[seq.prompt_tokens()..], false) {
+                            Ok(t) => t,
+                            Err(_) => "".to_string()
+                        },
+                        None => "".to_string()
                     };
 
                     if seq.get_mut_group().is_chat {
@@ -202,12 +204,16 @@ macro_rules! get_mut_group {
 #[macro_export]
 macro_rules! get_bias_if_not_allowed {
     ($tok_trie:expr, $rx:expr, $next_token_id:expr) => {
-        if $tok_trie.token_allowed($rx, $next_token_id) {
-            None
+        if let Some(tok_trie) = &$tok_trie {
+            if tok_trie.token_allowed($rx, $next_token_id) {
+                None
+            } else {
+                let mut token_set = tok_trie.alloc_token_set();
+                tok_trie.compute_bias($rx, &mut token_set);
+                Some(token_set)
+            }
         } else {
-            let mut token_set = $tok_trie.alloc_token_set();
-            $tok_trie.compute_bias($rx, &mut token_set);
-            Some(token_set)
+            None
         }
     };
 }

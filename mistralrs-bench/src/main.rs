@@ -114,6 +114,7 @@ fn run_bench(
                         usages.push(res.usage);
                     }
                     Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }

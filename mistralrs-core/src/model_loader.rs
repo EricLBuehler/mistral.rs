@@ -8,8 +8,9 @@ use crate::{
     exl2::EXL2_MULTI_FILE_DELIMITER,
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    GGUFSpecificConfig, Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs,
-    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig, Loader, ModelDType,
+    ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
+    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -64,7 +65,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::Toml { .. }
-        | ModelSelected::VisionPlain { .. } => None,
+        | ModelSelected::VisionPlain { .. }
+        | ModelSelected::DiffusionPlain { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -85,7 +87,8 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         ModelSelected::Plain { dtype, .. }
         | ModelSelected::Lora { dtype, .. }
         | ModelSelected::XLora { dtype, .. }
-        | ModelSelected::VisionPlain { dtype, .. } => Ok(*dtype),
+        | ModelSelected::VisionPlain { dtype, .. }
+        | ModelSelected::DiffusionPlain { dtype, .. } => Ok(*dtype),
         ModelSelected::GGUF { .. }
         | ModelSelected::EXL2 { .. }
         | ModelSelected::LoraGGUF { .. }
@@ -441,6 +444,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(model_id),
         )
         .build(arch),
+        ModelSelected::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => {
+            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
+                .build(arch)
+        }
     };
     Ok(loader)
 }

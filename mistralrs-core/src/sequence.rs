@@ -11,9 +11,11 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::DiffusionGenerationParams,
     response::CompletionChoice,
     tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 use crate::{
     get_mut_group,
@@ -36,6 +38,7 @@ pub enum StopReason {
         completion_bytes_pos: usize,
     },
     Canceled,
+    GeneratedImage,
 }
 
 impl Display for StopReason {
@@ -45,6 +48,7 @@ impl Display for StopReason {
             StopReason::Length(_) | StopReason::ModelLength(_) => write!(f, "length"),
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
+            StopReason::GeneratedImage => write!(f, "generated-image"),
         }
     }
 }
@@ -143,6 +147,12 @@ impl SequenceCustomMetadata {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum SeqStepType {
+    PromptAndDecode,
+    OneShot,
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -156,12 +166,28 @@ pub struct Sequence {
     responder: Sender<Response>,
     response_index: usize,
     creation_time: u64,
-    prefill_prompt_toks: Option<Vec<u32>>,
+    prompt: String,
+    sequence_stepping_type: SeqStepType,
+
+    // Image generation
+    image_gen_response_format: Option<ImageGenerationResponseFormat>,
+    diffusion_params: Option<DiffusionGenerationParams>,
+
+    // Grammars
+    pub(crate) tok_trie: Option<TokTrie>,
+
+    // Completion requests
     suffix: Option<String>,
     prefix: Option<String>,
+
+    // Speculative
     is_tmp: bool,
+
+    // Prefix caching
+    prefill_prompt_toks: Option<Vec<u32>>,
+
+    // Adapter dynamic config
     adapters: Option<Vec<String>>,
-    pub(crate) tok_trie: TokTrie,
 
     // Cache
     scaling_cache: Option<Tensor>,
@@ -227,6 +253,7 @@ impl Sequence {
     #[allow(clippy::too_many_arguments)]
     pub fn new_waiting(
         tokens: Vec<u32>,
+        prompt: String,
         id: usize,
         timestamp: u128,
         layers: usize,
@@ -248,8 +275,11 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tok_trie: TokTrie,
+        tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        sequence_stepping_type: SeqStepType,
+        diffusion_params: Option<DiffusionGenerationParams>,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -264,6 +294,7 @@ impl Sequence {
             .append_tokens_to_blocks(tokens.iter().map(|x| *x as usize).collect::<Vec<_>>());
         Self {
             tokens,
+            prompt,
             logprobs: Vec::new(),
             prompt_len,
             id,
@@ -305,6 +336,9 @@ impl Sequence {
             custom_metadata,
             tok_trie,
             tools,
+            image_gen_response_format,
+            sequence_stepping_type,
+            diffusion_params,
         }
     }
 
@@ -407,6 +441,10 @@ impl Sequence {
             return toks;
         }
         &self.tokens
+    }
+
+    pub fn get_initial_prompt(&self) -> &str {
+        &self.prompt
     }
 
     /// This will also set prompt_len
@@ -633,6 +671,11 @@ impl Sequence {
         get_mut_group!(self).total_toks += self.len();
     }
 
+    pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
+        get_mut_group!(self).image_choices.push(choice);
+        self.update_time_info();
+    }
+
     pub fn add_choice_to_group(&self, choice: Choice) {
         get_mut_group!(self).choices.push(choice);
         self.update_time_info();
@@ -678,6 +721,18 @@ impl Sequence {
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_deref()
     }
+
+    pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
+        self.image_gen_response_format
+    }
+
+    pub fn sequence_stepping_type(&self) -> &SeqStepType {
+        &self.sequence_stepping_type
+    }
+
+    pub fn get_diffusion_diffusion_params(&self) -> Option<DiffusionGenerationParams> {
+        self.diffusion_params.clone()
+    }
 }
 
 pub struct SequenceGroup {
@@ -689,6 +744,7 @@ pub struct SequenceGroup {
     pub total_time: u128,
     pub total_completion_time: u128,
     choices: Vec<Choice>,
+    image_choices: Vec<ImageChoice>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
@@ -700,6 +756,7 @@ impl SequenceGroup {
     pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
         Self {
             choices: Vec::new(),
+            image_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
@@ -732,6 +789,10 @@ impl SequenceGroup {
             .collect::<Vec<_>>()
     }
 
+    pub fn get_image_choices(&self) -> &[ImageChoice] {
+        &self.image_choices
+    }
+
     pub fn get_usage(&self) -> Usage {
         #[allow(clippy::cast_precision_loss)]
         Usage {
@@ -757,6 +818,18 @@ impl SequenceGroup {
     ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
             sender.send(Response::Done(response)).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_image_gen_response(
+        &self,
+        response: ImageGenerationResponse,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        if self.image_choices.len() == self.n_choices {
+            sender.send(Response::ImageGeneration(response)).await?;
         }
 
         Ok(())

@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "61d19cc", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9c62368", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -59,7 +59,7 @@ derive_more = { version = "0.99.17", default-features = false, features = [
 ] }
 akin = "0.4.0"
 variantly = "0.4.0"
-buildstructor = "0.5.4"
+buildstructor.workspace = true
 tracing-subscriber.workspace = true
 derive-new = "0.6.0"
 itertools = "0.13.0"
@@ -76,6 +76,8 @@ schemars = "0.8.21"
 serde_yaml = "0.9.34"
 regex = "1.10.6"
 safetensors = "0.4.5"
+serde_plain = "1.0.2"
+as-any = "0.3.1"
 
 [features]
 pyo3_macros = ["pyo3"]

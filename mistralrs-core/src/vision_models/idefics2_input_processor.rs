@@ -56,7 +56,7 @@ impl Processor for Idefics2Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         tools: Vec<Tool>,
-    ) -> anyhow::Result<Vec<u32>> {
+    ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
@@ -91,11 +91,13 @@ impl Processor for Idefics2Processor {
             self.fake_image_token,
         );
 
-        let encoding = pipeline
-            .tokenizer()
-            .encode(prompt, true)
+        let Some(tokenizer) = &pipeline.tokenizer() else {
+            anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
+        };
+        let encoding = tokenizer
+            .encode(prompt.clone(), true)
             .map_err(anyhow::Error::msg)?;
-        Ok(encoding.get_ids().to_vec())
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
 
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
@@ -117,7 +119,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
     }
     fn process_inputs(
         &self,
-        _: Arc<Tokenizer>,
+        _: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,

@@ -70,7 +70,7 @@ impl InputsProcessor for Phi3InputsProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -95,6 +95,11 @@ impl InputsProcessor for Phi3InputsProcessor {
         if prompt_batchsize.is_some() {
             warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
+        let Some(tokenizer) = tokenizer else {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Phi3InputProcessor requires a specified tokenizer.",
+            ))));
+        };
 
         let config = other_config
             .clone()
@@ -139,7 +144,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             return Box::new(
                 text_models_inputs_processor::TextInputsProcessor
                     .process_inputs(
-                        tokenizer,
+                        Some(tokenizer),
                         input_seqs,
                         is_prompt,
                         is_xlora,

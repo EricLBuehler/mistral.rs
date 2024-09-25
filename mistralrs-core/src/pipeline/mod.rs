@@ -1,6 +1,7 @@
 mod amoe;
 mod cache_manager;
 pub mod chat_template;
+mod diffusion;
 mod exl2;
 mod ggml;
 mod gguf;
@@ -15,22 +16,28 @@ mod sampling;
 mod speculative;
 mod vision;
 
+pub use super::diffusion_models::DiffusionGenerationParams;
+
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::diffusion_models::response::send_responses;
 use crate::paged_attention::{CacheConfig, CacheEngine};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
+pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
-    AdapterKind, AutoLoader, Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
-    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind,
-    Qwen2Loader, Starcoder2Loader, TokenSource, VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -60,7 +67,8 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    pub tok_trie: Arc<TokTrie>,
+    /// Only None if it doesnt make sense for the model
+    pub tok_trie: Option<Arc<TokTrie>>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
@@ -94,7 +102,8 @@ pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
         Arc::new(BasicProcessor)
     }
-    fn get_chat_template(&self) -> Arc<ChatTemplate>;
+    /// Only None if it doesnt make sense for the model
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
 }
 
@@ -123,7 +132,8 @@ pub trait AdapterActivationMixin {
 
 pub trait MetadataMixin {
     fn device(&self) -> Device;
-    fn tokenizer(&self) -> Arc<Tokenizer>;
+    /// Only None if it doesnt make sense for the model
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
@@ -187,6 +197,7 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision { has_conv2d: bool },
+    Diffusion,
 }
 
 pub enum CacheBackendMetadata<'a> {
@@ -205,6 +216,7 @@ pub enum CacheBackendMetadata<'a> {
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
     CausalGeneration { logits: Tensor },
+    Image { images: Vec<DynamicImage> },
 }
 
 impl ForwardInputsResult {
@@ -212,6 +224,9 @@ impl ForwardInputsResult {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
+            }),
+            Self::Image { images } => Ok(Self::Image {
+                images: vec![images[bs_idx].clone()],
             }),
         }
     }
@@ -221,6 +236,7 @@ impl ForwardInputsResult {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
             }),
+            Self::Image { .. } => Ok(self.clone()),
         }
     }
 }
@@ -237,7 +253,7 @@ pub trait Pipeline:
     + AnyMoePipelineMixin
 {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
@@ -361,7 +377,9 @@ pub trait Pipeline:
                                     #[allow(irrefutable_let_patterns)]
                                     let ForwardInputsResult::CausalGeneration { logits } = r
                                     else {
-                                        unreachable!("All results must have same type")
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
                                     };
                                     logits
                                 })
@@ -369,6 +387,28 @@ pub trait Pipeline:
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
                         )
                         .await?;
                     }
@@ -441,6 +481,28 @@ pub trait Pipeline:
                             prefix_cacher,
                             disable_eos_stop,
                             rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
                         )
                         .await?;
                     }

@@ -13,17 +13,26 @@ use mistralrs_core::{
     Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
     PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
-use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use openai::{
+    ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
+    StopTokens,
+};
 use serde::{Deserialize, Serialize};
 use std::{num::NonZeroUsize, sync::Arc};
+
 mod chat_completion;
 mod completions;
-use crate::{chat_completion::__path_chatcompletions, completions::completions};
-
-use crate::{chat_completion::chatcompletions, openai::ModelObject};
+mod image_generation;
 mod interactive_mode;
 mod openai;
 mod util;
+
+use crate::openai::ModelObject;
+use crate::{
+    chat_completion::{__path_chatcompletions, chatcompletions},
+    completions::completions,
+    image_generation::image_generation,
+};
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -227,7 +236,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     #[openapi(
         paths(models, health, chatcompletions),
         components(
-            schemas(ModelObjects, ModelObject, ChatCompletionRequest, StopTokens, Message)),
+            schemas(ModelObjects, ModelObject, ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, StopTokens, Message)),
         tags(
             (name = "Mistral.rs", description = "Mistral.rs API")
         ),
@@ -257,6 +266,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
+        .route("/v1/images/generations", post(image_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)

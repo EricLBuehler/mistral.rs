@@ -29,7 +29,7 @@ pub trait InputsProcessor {
     #[allow(clippy::too_many_arguments)]
     fn process_inputs(
         &self,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -584,7 +584,7 @@ pub mod text_models_inputs_processor {
     impl InputsProcessor for TextInputsProcessor {
         fn process_inputs(
             &self,
-            _: Arc<Tokenizer>,
+            _: Option<Arc<Tokenizer>>,
             input_seqs: &mut [&mut Sequence],
             is_prompt: bool,
             is_xlora: bool,

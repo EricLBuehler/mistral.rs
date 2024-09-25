@@ -161,7 +161,7 @@ impl PrefixCacheManager {
 
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
-        if self.no_prefix_cache {
+        if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
         }
 

@@ -8,6 +8,7 @@ extern "C" {
     pub(crate) fn count_nonzero_f64(d_in: *const c_void, N: u32) -> u32;
     pub(crate) fn count_nonzero_u8(d_in: *const c_void, N: u32) -> u32;
     pub(crate) fn count_nonzero_u32(d_in: *const c_void, N: u32) -> u32;
+    pub(crate) fn count_nonzero_i16(d_in: *const c_void, N: u32) -> u32;
     pub(crate) fn count_nonzero_i64(d_in: *const c_void, N: u32) -> u32;
     pub(crate) fn count_nonzero_i32(d_in: *const c_void, N: u32) -> u32;
     pub(crate) fn count_nonzero_i16(d_in: *const c_void, N: u32) -> u32;
@@ -60,6 +61,14 @@ extern "C" {
         d_out: *mut c_void,
     );
     pub(crate) fn nonzero_i64(
+        d_in: *const c_void,
+        N: u32,
+        num_nonzero: u32,
+        dims: *const c_void,
+        num_dims: u32,
+        d_out: *mut c_void,
+    );
+    pub(crate) fn nonzero_i16(
         d_in: *const c_void,
         N: u32,
         num_nonzero: u32,

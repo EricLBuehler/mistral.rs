@@ -345,7 +345,10 @@ impl Scheduler for PagedAttentionScheduler {
         }
     }
     fn waiting_len(&self) -> usize {
-        self.waiting.len()
+        self.waiting.len() + self.swapped_out.len()
+    }
+    fn running_len(&self) -> usize {
+        self.running.len()
     }
     fn block_tables(&self) -> Option<&BlockTables> {
         Some(&self.block_engine.block_tables)

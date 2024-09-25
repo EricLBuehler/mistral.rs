@@ -57,6 +57,7 @@ impl CustomOp2 for BitWiseOr {
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
             }
+            CpuStorage::I16(_) => Err(Error::UnsupportedDTypeForOp(DType::I16, "bitwise-or")),
             CpuStorage::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "bitwise-or")),
             CpuStorage::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "bitwise-or")),
             CpuStorage::I32(vs1) => {
@@ -107,6 +108,9 @@ impl CustomOp2 for BitWiseOr {
                     .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
+            }
+            DType::I16 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::I16, "bitwise-or"));
             }
             DType::U32 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::U32, "bitwise-or"));
@@ -214,6 +218,7 @@ impl CustomOp1 for Leftshift {
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
             }
+            CpuStorage::I16(_) => Err(Error::UnsupportedDTypeForOp(DType::I16, "leftshifr")),
             CpuStorage::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "leftshifr")),
             CpuStorage::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "leftshifr")),
             CpuStorage::I32(vs1) => {
@@ -239,6 +244,9 @@ impl CustomOp1 for Leftshift {
                     .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, elem_count)
+            }
+            DType::I16 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::I16, "leftshift"));
             }
             DType::U32 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::U32, "leftshift"));
