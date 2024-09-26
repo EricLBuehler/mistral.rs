@@ -103,7 +103,7 @@ impl MLlamaModel {
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp("multi_model_projector"),
+                vb.pp("multi_modal_projector"),
             )?,
             hidden_size: cfg.text_config.hidden_size,
         })

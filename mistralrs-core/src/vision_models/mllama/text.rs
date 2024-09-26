@@ -65,23 +65,23 @@ impl MLlamaTextSelfAttention {
         Ok(Self {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_attention_heads * cfg.hidden_size,
+                cfg.num_attention_heads * cfg.head_dim(),
                 vb.pp("q_proj"),
             )?,
             k_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_key_value_heads * cfg.hidden_size,
-                vb.pp("q_proj"),
+                cfg.num_key_value_heads * cfg.head_dim(),
+                vb.pp("k_proj"),
             )?,
             v_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_key_value_heads * cfg.hidden_size,
-                vb.pp("q_proj"),
+                cfg.num_key_value_heads * cfg.head_dim(),
+                vb.pp("v_proj"),
             )?,
             o_proj: linear_no_bias(
-                cfg.num_attention_heads * cfg.hidden_size,
+                cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
-                vb.pp("q_proj"),
+                vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
@@ -213,23 +213,23 @@ impl MLlamaTextCrossAttention {
         Ok(Self {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_attention_heads * cfg.hidden_size,
+                cfg.num_attention_heads * cfg.head_dim(),
                 vb.pp("q_proj"),
             )?,
             k_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_key_value_heads * cfg.hidden_size,
-                vb.pp("q_proj"),
+                cfg.num_key_value_heads * cfg.head_dim(),
+                vb.pp("k_proj"),
             )?,
             v_proj: linear_no_bias(
                 cfg.hidden_size,
-                cfg.num_key_value_heads * cfg.hidden_size,
-                vb.pp("q_proj"),
+                cfg.num_key_value_heads * cfg.head_dim(),
+                vb.pp("v_proj"),
             )?,
             o_proj: linear_no_bias(
-                cfg.num_attention_heads * cfg.hidden_size,
+                cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
-                vb.pp("q_proj"),
+                vb.pp("o_proj"),
             )?,
             q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
             k_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("k_norm"))?,
@@ -305,7 +305,7 @@ impl MLlamaCrossAttentionDecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        let attn = MLlamaTextCrossAttention::new(cfg, vb.pp("self_attn"))?;
+        let attn = MLlamaTextCrossAttention::new(cfg, vb.pp("cross_attn"))?;
 
         Ok(Self {
             attn,

@@ -1,6 +1,8 @@
 use candle_core::{Result, Tensor};
 use candle_nn::Module;
 
+use crate::serde_default_fn;
+
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub(super) enum VisionActivation {
     QuickGelu,
@@ -25,12 +27,15 @@ impl Module for VisionActivation {
     }
 }
 
+serde_default_fn!(usize, d_attn_heads, 16);
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct MLlamaVisionConfig {
     pub(super) hidden_size: usize,
     pub(super) hidden_act: VisionActivation,
     pub(super) num_hidden_layers: usize,
     pub(super) num_global_layers: usize,
+    #[serde(default = "d_attn_heads")]
     pub(super) num_attention_heads: usize,
     pub(super) num_channels: usize,
     pub(super) intermediate_size: usize,
@@ -80,6 +85,8 @@ pub(crate) struct MLlamaRopeScaling {
     pub(crate) high_freq_factor: Option<f32>,
 }
 
+serde_default_fn!(bool, d_flash_attn, false);
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MLlamaTextConfig {
     pub(crate) rope_scaling: Option<MLlamaRopeScaling>,
@@ -95,6 +102,7 @@ pub struct MLlamaTextConfig {
     pub(crate) max_position_embeddings: usize,
     pub(crate) tie_word_embeddings: bool,
     pub(crate) cross_attention_layers: Vec<usize>,
+    #[serde(default = "d_flash_attn")]
     pub(crate) use_flash_attn: bool,
 }
 

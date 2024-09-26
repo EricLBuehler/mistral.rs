@@ -215,7 +215,7 @@ impl MLlamaVisionEncoderLayer {
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.norm_eps,
-            vb.pp("post_attention_layernorm "),
+            vb.pp("post_attention_layernorm"),
         )?;
 
         if GATED {
