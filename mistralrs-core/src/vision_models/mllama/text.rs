@@ -428,7 +428,7 @@ impl MLlamaTextModel {
         })
     }
 
-    fn forward(
+    pub(super) fn forward(
         &self,
         input_ids: &Tensor,
         cross_attn_states: Option<&Tensor>,
