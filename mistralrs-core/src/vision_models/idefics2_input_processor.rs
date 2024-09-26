@@ -201,6 +201,9 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     pixel_attention_mask,
                     image_sizes: _,
                     num_img_tokens: _,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -354,6 +357,9 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             pixel_attention_mask: Some(Tensor::cat(&patch_masks, 0)?),
             image_sizes: None,
             num_img_tokens: None,
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

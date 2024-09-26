@@ -346,7 +346,7 @@ pub(super) struct MLlamaVisionModel {
     layernorm_post: LayerNorm,
     transformer: MLlamaVisionEncoder,
     global_transformer: MLlamaVisionEncoder,
-    num_patches: usize,
+    pub(super) num_patches: usize,
     intermediate_layers_indices: Tensor,
 }
 

@@ -23,6 +23,7 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::LLaVAProcessor;
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
+use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -83,6 +84,8 @@ pub enum VisionLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
+    #[serde(rename = "mllama")]
+    MLlama,
 }
 
 impl FromStr for VisionLoaderType {
@@ -93,7 +96,8 @@ impl FromStr for VisionLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`.")),
+            "mllama" => Ok(Self::MLlama),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `mllama`.")),
         }
     }
 }
@@ -291,6 +295,49 @@ impl VisionModelLoader for LLaVALoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: LLaVAConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
+}
+
+// ======================== MLlama Loader
+
+/// [`VisionLoader`] for an Llama Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct MLlamaLoader;
+
+impl VisionModelLoader for MLlamaLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        // config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(MLlamaModel::new(&config, vb)?))
+    }
+    fn is_gptx(&self) -> bool {
+        false
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        // config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(MLlamaProcessor::new())
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: MLlamaConfig = serde_json::from_str(config)?;
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }

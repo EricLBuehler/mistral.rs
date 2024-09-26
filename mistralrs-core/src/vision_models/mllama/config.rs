@@ -26,7 +26,7 @@ impl Module for VisionActivation {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub(super) struct MLlamaVisionConfig {
+pub(crate) struct MLlamaVisionConfig {
     pub(super) hidden_size: usize,
     pub(super) hidden_act: VisionActivation,
     pub(super) num_hidden_layers: usize,
@@ -60,6 +60,7 @@ pub(crate) enum MLlamaRopeType {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct MLlamaRopeScaling {
     pub(crate) rope_type: MLlamaRopeType,
     pub(crate) factor: Option<f32>,
@@ -74,7 +75,7 @@ pub(crate) struct MLlamaRopeScaling {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub(crate) struct MLlamaTextConfig {
+pub struct MLlamaTextConfig {
     pub(crate) rope_scaling: Option<MLlamaRopeScaling>,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -86,7 +87,7 @@ pub(crate) struct MLlamaTextConfig {
     pub(crate) rope_theta: f32,
     pub(crate) rms_norm_eps: f64,
     pub(crate) max_position_embeddings: usize,
-    pub(crate) tie_word_embeddings: usize,
+    pub(crate) tie_word_embeddings: bool,
     pub(crate) cross_attention_layers: Vec<usize>,
 }
 
@@ -94,5 +95,4 @@ pub(crate) struct MLlamaTextConfig {
 pub(crate) struct MLlamaConfig {
     pub(crate) vision_config: MLlamaVisionConfig,
     pub(crate) text_config: MLlamaTextConfig,
-    pub(crate) image_token_index: usize,
 }

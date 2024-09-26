@@ -3,15 +3,75 @@ mod inputs_processor;
 mod text;
 mod vision;
 
+use core::f64;
+use std::{any::Any, sync::Arc};
+
 pub(crate) use config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
 use config::{MLlamaVisionConfig, VisionActivation};
+pub(crate) use inputs_processor::MLlamaProcessor;
 use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
-use candle_core::{Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{linear, Linear, Module, VarBuilder};
+use mistralrs_quant::QuantMethod;
 
-struct MLlamaModel {
+use crate::{
+    amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
+    layers_masker::masked_fill,
+    paged_attention::ModelConfigMetadata,
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, VisionModel,
+    },
+};
+
+fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    let indices = Tensor::new(
+        (0..xs.dim(dim)?)
+            .into_iter()
+            .flat_map(|i| vec![i as u32; repeats])
+            .collect::<Vec<_>>(),
+        xs.device(),
+    )?;
+    xs.index_select(&indices, dim)
+}
+
+// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L99
+fn prepare_cross_attention_mask(
+    cross_attention_mask: &Tensor,
+    num_vision_tokens: usize,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    let bs = cross_attention_mask.dim(0)?;
+    let text_total_length = cross_attention_mask.dim(1)?;
+    let mut cross_attn_mask = repeat_interleave(&cross_attention_mask, num_vision_tokens, 3)?;
+    cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
+    cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
+
+    // Invert the mask
+    let inverted_cross_attn_mask = (1. - cross_attn_mask)?.to_dtype(dtype)?;
+    cross_attn_mask = masked_fill(
+        &inverted_cross_attn_mask,
+        &inverted_cross_attn_mask.eq(1.)?,
+        f64::NEG_INFINITY,
+    )?;
+
+    // Apply full-row bias which return 4d tensor of shape (b, h, s1, 1) where
+    // value is 0 if a full row in cross attn mask's last dimension contains
+    // negative infinity values, otherwise it's 1
+    let full_text_row_masked_out_mask = cross_attn_mask
+        .ne(f64::NEG_INFINITY)?
+        .sum(D::Minus1)?
+        .ge(0.)?
+        .unsqueeze(D::Minus1)?;
+    cross_attn_mask = cross_attn_mask.broadcast_mul(&full_text_row_masked_out_mask)?;
+
+    Ok((cross_attn_mask, full_text_row_masked_out_mask))
+}
+
+pub(crate) struct MLlamaModel {
     vision_model: MLlamaVisionModel,
     language_model: MLlamaTextModel,
     multi_modal_projector: Linear,
@@ -19,7 +79,7 @@ struct MLlamaModel {
 }
 
 impl MLlamaModel {
-    fn new(cfg: &MLlamaConfig, vb: VarBuilder) -> Result<Self> {
+    pub(crate) fn new(cfg: &MLlamaConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             vision_model: MLlamaVisionModel::new(&cfg.vision_config, vb.pp("vision_model"))?,
             language_model: MLlamaTextModel::new(&cfg.text_config, vb.pp("language_model"))?,
@@ -32,12 +92,13 @@ impl MLlamaModel {
         })
     }
 
-    fn forward(
+    fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<&Tensor>,
         aspect_ratio_mask: Option<&Tensor>,
         aspect_ratio_ids: Option<&Tensor>,
+        cross_attn_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -61,13 +122,113 @@ impl MLlamaModel {
             None
         };
 
+        let (cross_attn_mask, full_text_row_masked_out_mask) =
+            if let Some(cross_attn_mask) = cross_attn_mask {
+                let (cmask, fmask) = prepare_cross_attention_mask(
+                    cross_attn_mask,
+                    self.vision_model.num_patches,
+                    self.multi_modal_projector.weight().dtype(),
+                )?;
+                (Some(cmask), Some(fmask))
+            } else {
+                (None, None)
+            };
+
         self.language_model.forward(
             input_ids,
             cross_attn_states.as_ref(),
-            None,
+            cross_attn_mask.as_ref(),
+            full_text_row_masked_out_mask.as_ref(),
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
         )
+    }
+}
+
+pub(crate) struct MLlamaSpecificArgs {
+    pub aspect_ratio_ids: Option<Tensor>,
+    pub aspect_ratio_mask: Option<Tensor>,
+    pub cross_attn_mask: Option<Tensor>,
+}
+
+impl VisionModel for MLlamaModel {
+    fn cache(&self) -> &Cache {
+        &self.language_model.self_attn_cache
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.language_model.cfg
+    }
+    fn device(&self) -> &Device {
+        &self.language_model.device
+    }
+    fn has_conv2d(&self) -> bool {
+        true
+    }
+    fn max_seq_len(&self) -> usize {
+        self.language_model.max_position_embeddings
+    }
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let MLlamaSpecificArgs {
+            aspect_ratio_ids,
+            aspect_ratio_mask,
+            cross_attn_mask,
+        } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `MLlamaSpecificArgs`");
+        self.forward_inner(
+            input_ids,
+            pixel_values.as_ref(),
+            aspect_ratio_mask.as_ref(),
+            aspect_ratio_ids.as_ref(),
+            cross_attn_mask.as_ref(),
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+        )
+    }
+}
+
+impl IsqModel for MLlamaModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        todo!()
+    }
+}
+
+impl AnyMoeBaseModelMixin for MLlamaModel {}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{Device, Result, Tensor};
+
+    use super::repeat_interleave;
+
+    #[test]
+    fn test_repeat_interleave() -> Result<()> {
+        let input = Tensor::new(vec![vec![vec![1u32, 2, 3], vec![4u32, 5, 6]]], &Device::Cpu)?;
+
+        let repeat_interleaved = repeat_interleave(&input, 2, 2)?;
+        assert_eq!(
+            repeat_interleaved.to_vec3::<u32>()?,
+            vec![vec![vec![1, 1, 2, 2, 3, 3], vec![4, 4, 5, 5, 6, 6]]]
+        );
+
+        Ok(())
     }
 }

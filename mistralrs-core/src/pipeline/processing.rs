@@ -20,7 +20,7 @@ pub trait ProcessorCreator {
 }
 
 pub enum MessagesAction {
-    // For idefics2
+    // For idefics2, others which use the "new" openai format
     Keep,
     // For everything else
     FlattenOnlyText,

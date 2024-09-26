@@ -126,6 +126,9 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -460,7 +463,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
-        (bs, max_num_images): (usize, usize),
+        (_, _): (usize, usize),
     ) -> Result<PreprocessedImages> {
         // If no images, will not call this.
         assert!(!images.is_empty());
@@ -544,6 +547,9 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             image_sizes: Some((image_sizes.0, image_sizes.1)),
             pixel_attention_mask: None,
             num_img_tokens: Some(num_img_tokens),
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

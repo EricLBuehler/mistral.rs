@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module, VarBuilder};
 
 use crate::{
@@ -199,7 +199,6 @@ struct MLlamaTextCrossAttention {
     v_proj: Linear,
     o_proj: Linear,
     sdpa_params: SdpaParams,
-    rope: Arc<Llama3RotaryEmbedding>,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     num_heads: usize,
@@ -208,11 +207,7 @@ struct MLlamaTextCrossAttention {
 }
 
 impl MLlamaTextCrossAttention {
-    fn new(
-        cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
-        rope: Arc<Llama3RotaryEmbedding>,
-    ) -> Result<Self> {
+    fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         Ok(Self {
@@ -245,7 +240,6 @@ impl MLlamaTextCrossAttention {
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
             },
-            rope,
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
             head_dim,
@@ -257,7 +251,6 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        mut kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -272,16 +265,14 @@ impl MLlamaTextCrossAttention {
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
-            k = self.k_norm.forward(&q)?;
+            k = self.k_norm.forward(&k)?;
 
             let mut v = self.v_proj.forward(&cross_attn_states)?;
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
-            Cache::update_kv_cache(&mut kv_cache, k, v, false)?
-        } else if let Some((k_cache, v_cache)) = kv_cache {
-            (k_cache.clone(), v_cache.clone())
+            (k, v)
         } else {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
@@ -305,11 +296,7 @@ struct MLlamaCrossAttentionDecoderLayer {
 }
 
 impl MLlamaCrossAttentionDecoderLayer {
-    fn new(
-        cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
-        rope: Arc<Llama3RotaryEmbedding>,
-    ) -> Result<Self> {
+    fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
         let mlp = MLlamaTextMlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -318,7 +305,7 @@ impl MLlamaCrossAttentionDecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        let attn = MLlamaTextCrossAttention::new(cfg, vb.pp("self_attn"), rope)?;
+        let attn = MLlamaTextCrossAttention::new(cfg, vb.pp("self_attn"))?;
 
         Ok(Self {
             attn,
@@ -337,20 +324,25 @@ impl MLlamaCrossAttentionDecoderLayer {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        full_text_row_masked_out_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, cross_attn_states, attention_mask)?;
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
         let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
         hidden_states = self.mlp.forward(&hidden_states)?;
+        if let Some(full_text_row_masked_out_mask) = full_text_row_masked_out_mask {
+            hidden_states = full_text_row_masked_out_mask
+                .i((.., 0))?
+                .broadcast_mul(&hidden_states)?;
+        }
 
         residual + hidden_states.broadcast_mul(&self.mlp_gate.tanh()?)?
     }
@@ -366,19 +358,28 @@ pub(super) struct MLlamaTextModel {
     lm_head: Linear,
     norm: RmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
-    cfg: ModelConfigMetadata,
-    self_attn_cache: Cache,
-    cross_attn_cache: Cache,
-    cross_attn_layers: Vec<usize>,
+    pub(crate) cfg: ModelConfigMetadata,
+    pub(crate) self_attn_cache: Cache,
+    pub(crate) device: Device,
+    pub(crate) max_position_embeddings: usize,
 }
 
 impl MLlamaTextModel {
     pub(super) fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
-        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let embed_tokens = embedding(
+            cfg.vocab_size + 8,
+            cfg.hidden_size,
+            vb.pp("model.embed_tokens"),
+        )?;
+
+        let lm_head = if cfg.tie_word_embeddings {
+            Linear::new(embed_tokens.embeddings().clone(), None)
+        } else {
+            linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        };
 
         let vb = vb.pp("model");
 
-        let embed_tokens = embedding(cfg.vocab_size + 8, cfg.hidden_size, vb.pp("embed_tokens"))?;
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
 
         let rope = Arc::new(Llama3RotaryEmbedding::new_mllama3(
@@ -392,11 +393,7 @@ impl MLlamaTextModel {
         for i in 0..cfg.num_hidden_layers {
             if cfg.cross_attention_layers.contains(&i) {
                 layers.push(MLlamaDecoderLayer::CrossAttn(
-                    MLlamaCrossAttentionDecoderLayer::new(
-                        cfg,
-                        vb.pp(format!("layers.{i}")),
-                        rope.clone(),
-                    )?,
+                    MLlamaCrossAttentionDecoderLayer::new(cfg, vb.pp(format!("layers.{i}")))?,
                 ))
             } else {
                 layers.push(MLlamaDecoderLayer::SelfAttn(
@@ -423,8 +420,8 @@ impl MLlamaTextModel {
                 head_dim: None,
             },
             self_attn_cache: Cache::new(cfg.num_hidden_layers, false),
-            cross_attn_cache: Cache::new(cfg.num_hidden_layers, false),
-            cross_attn_layers: cfg.cross_attention_layers.clone(),
+            device: vb.device().clone(),
+            max_position_embeddings: cfg.max_position_embeddings,
         })
     }
 
@@ -433,6 +430,7 @@ impl MLlamaTextModel {
         input_ids: &Tensor,
         cross_attn_states: Option<&Tensor>,
         cross_attention_mask: Option<&Tensor>,
+        full_text_row_masked_out_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -440,7 +438,6 @@ impl MLlamaTextModel {
         let mut hidden_states = self.embed_tokens.forward(&input_ids)?;
 
         let mut self_cache = self.self_attn_cache.lock();
-        let mut cross_cache = self.cross_attn_cache.lock();
         let self_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -463,14 +460,14 @@ impl MLlamaTextModel {
                     // For text-only path we should skip cross attention layers.
                     // Let's check if the layer is cross attention layer and if we have cross attention states
                     // or cached cross attention states.
-                    if cross_attn_states.is_none() && self.cross_attn_cache.lock()[0].is_none() {
+                    if cross_attn_states.is_none() {
                         continue;
                     }
                     hidden_states = attn.forward(
                         &hidden_states,
                         cross_attn_states,
                         cross_attention_mask,
-                        &mut cross_cache[i],
+                        full_text_row_masked_out_mask,
                     )?;
                 }
             }

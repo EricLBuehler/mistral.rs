@@ -2,8 +2,8 @@ use super::cache_manager::DefaultCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    Loader, MLlamaLoader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
+    Processor, TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -109,6 +109,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
+            VisionLoaderType::MLlama => Box::new(MLlamaLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
