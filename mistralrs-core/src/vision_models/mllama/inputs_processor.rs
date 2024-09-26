@@ -129,8 +129,11 @@ fn convert_sparse_cross_attention_mask_to_dense(
     let bs = cross_attn_token_mask.len();
     let max_num_images = cross_attn_token_mask.iter().map(|x| x.len()).max().unwrap();
 
-    let mut cross_attention_mask =
-        Tensor::zeros((bs, length, max_num_images, max_num_tiles), DType::I64, dev)?;
+    let mut cross_attention_mask = Tensor::zeros(
+        (bs, length, max_num_images, max_num_tiles),
+        DType::I64,
+        &Device::Cpu,
+    )?;
 
     for (sample_idx, (sample_masks, sample_num_tiles)) in
         cross_attn_token_mask.into_iter().zip(num_tiles).enumerate()
@@ -150,15 +153,15 @@ fn convert_sparse_cross_attention_mask_to_dense(
                     &(..mask_num_tiles),
                 ],
                 &Tensor::ones(
-                    (1, end as usize - start as usize, mask_idx, mask_num_tiles),
+                    (1, end as usize - start as usize, 1, mask_num_tiles),
                     DType::I64,
-                    dev,
+                    &Device::Cpu,
                 )?,
             )?;
         }
     }
 
-    Ok(cross_attention_mask)
+    cross_attention_mask.to_device(dev)
 }
 
 impl InputsProcessor for MLlamaImageProcessor {
@@ -321,7 +324,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                 .iter()
                 .map(|token_ids| {
                     get_cross_attention_token_mask(
-                        token_ids.to_vec1::<u32>().unwrap(),
+                        token_ids.squeeze(0).unwrap().to_vec1::<u32>().unwrap(),
                         image_token_id,
                     )
                 })
@@ -336,7 +339,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                     .expect("`max_image_tiles` must be set!"),
                 chunks
                     .iter()
-                    .map(|input_ids| input_ids.dims()[0])
+                    .map(|input_ids| *input_ids.dims().last().unwrap())
                     .max()
                     .unwrap(),
                 chunks[0].device(),
@@ -643,8 +646,8 @@ impl MLlamaImageProcessor {
         let mut num_sample_tiles = Vec::new();
         for (i, image) in images.into_iter().enumerate() {
             let num_tiles = image.dim(0)?;
-            stacked_images =
-                stacked_images.slice_assign(&[&i, &(..num_tiles), &.., &.., &..], &image)?;
+            stacked_images = stacked_images
+                .slice_assign(&[&i, &(..num_tiles), &.., &.., &..], &image.unsqueeze(0)?)?;
             num_sample_tiles.push(num_tiles)
         }
         Ok((stacked_images, num_sample_tiles))

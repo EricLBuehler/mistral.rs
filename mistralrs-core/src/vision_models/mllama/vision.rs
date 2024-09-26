@@ -431,6 +431,8 @@ impl MLlamaVisionModel {
         aspect_ratio_ids: &Tensor,
         aspect_ratio_mask: &Tensor,
     ) -> Result<Tensor> {
+        let pixel_values = pixel_values.to_dtype(self.class_embedding.dtype())?;
+        
         let bs = pixel_values.dim(0)?;
         let num_concurrent_media = pixel_values.dim(1)?;
         let num_tiles = pixel_values.dim(2)?;
