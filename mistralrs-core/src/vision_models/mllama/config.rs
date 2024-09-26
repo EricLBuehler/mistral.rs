@@ -89,6 +89,13 @@ pub struct MLlamaTextConfig {
     pub(crate) max_position_embeddings: usize,
     pub(crate) tie_word_embeddings: bool,
     pub(crate) cross_attention_layers: Vec<usize>,
+    pub(crate) use_flash_attn: bool,
+}
+
+impl MLlamaTextConfig {
+    pub(crate) fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

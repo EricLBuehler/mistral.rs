@@ -1,4 +1,11 @@
-use std::{any::Any, cell::Cell, collections::HashMap, num::NonZeroUsize, sync::Arc};
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+use std::{
+    any::Any,
+    collections::HashMap,
+    num::NonZeroUsize,
+    sync::{Arc, RwLock},
+};
 
 use candle_core::{Context, DType, Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage};
@@ -32,7 +39,7 @@ const IMAGE_TOKEN: &str = "<|image|>";
 // Input processor
 struct MLlamaImageProcessor {
     // To represent uninitialized, we do this. Should always be init by the time this is read.
-    max_image_tiles: Cell<Option<usize>>,
+    max_image_tiles: RwLock<Option<usize>>,
 }
 // Processor
 pub struct MLlamaProcessor;
@@ -46,7 +53,7 @@ impl MLlamaProcessor {
 impl Processor for MLlamaProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(MLlamaImageProcessor {
-            max_image_tiles: Cell::new(None),
+            max_image_tiles: RwLock::new(None),
         })
     }
 
@@ -76,7 +83,7 @@ fn get_cross_attention_token_mask(input_ids: Vec<u32>, image_token_id: u32) -> V
         return vec![(image_token_locations[0] as i64, -1)];
     }
 
-    let mut vision_masks = (&image_token_locations[..image_token_locations.len() - 1])
+    let mut vision_masks = image_token_locations[..image_token_locations.len() - 1]
         .iter()
         .zip(&image_token_locations[1..])
         .map(|(a, b)| (*a as i64, *b as i64))
@@ -324,7 +331,8 @@ impl InputsProcessor for MLlamaImageProcessor {
                 cross_attention_token_mask,
                 num_tiles_accum,
                 self.max_image_tiles
-                    .get()
+                    .read()
+                    .unwrap()
                     .expect("`max_image_tiles` must be set!"),
                 chunks
                     .iter()
@@ -618,7 +626,7 @@ impl MLlamaImageProcessor {
     /// Returns
     /// - stacked and packed images
     /// - a list of lists containing the number of tiles for each image in each batch sample.
-    /// Padding uses 0
+    ///   Padding uses 0
     fn pack_images(
         &self,
         images: Vec<Tensor>,
@@ -715,7 +723,7 @@ impl ImagePreProcessor for MLlamaImageProcessor {
         let max_image_tiles = config
             .max_image_tiles
             .context("`do_resize=false` is not supported, need `max_image_tiles`!")?;
-        self.max_image_tiles.set(Some(max_image_tiles));
+        *self.max_image_tiles.write().unwrap() = Some(max_image_tiles);
 
         for mut image in images {
             // Convert to rgb, default to true

@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{Device, IndexOp, Result, Tensor};
@@ -7,8 +9,8 @@ use crate::{
     attention::SdpaParams,
     layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::ModelConfigMetadata,
-    pipeline::{extract_logits, Cache},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{extract_logits, Cache, NormalLoadingMetadata},
 };
 
 use super::config::MLlamaTextConfig;
@@ -101,13 +103,13 @@ impl MLlamaTextSelfAttention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        mut kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut q = self.q_proj.forward(&hidden_states)?;
-        let mut k = self.k_proj.forward(&hidden_states)?;
-        let mut v = self.v_proj.forward(&hidden_states)?;
+        let mut q = self.q_proj.forward(hidden_states)?;
+        let mut k = self.k_proj.forward(hidden_states)?;
+        let mut v = self.v_proj.forward(hidden_states)?;
 
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
@@ -122,7 +124,7 @@ impl MLlamaTextSelfAttention {
         self.rope
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, bs)?;
 
-        (k, v) = Cache::update_kv_cache(&mut kv_cache, k, v, false)?;
+        (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let attn_output = Sdpa
             .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
@@ -208,8 +210,6 @@ struct MLlamaTextCrossAttention {
 
 impl MLlamaTextCrossAttention {
     fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
-        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-
         Ok(Self {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
@@ -231,18 +231,18 @@ impl MLlamaTextCrossAttention {
                 cfg.hidden_size,
                 vb.pp("q_proj"),
             )?,
-            q_norm: RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
-            k_norm: RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
+            q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
+            k_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("k_norm"))?,
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: false,
+                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
-                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                softmax_scale: 1.0 / (cfg.head_dim() as f32).sqrt(),
                 sliding_window: None,
             },
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
-            head_dim,
+            head_dim: cfg.head_dim(),
         })
     }
 
@@ -254,20 +254,20 @@ impl MLlamaTextCrossAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut q = self.q_proj.forward(&hidden_states)?;
+        let mut q = self.q_proj.forward(hidden_states)?;
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let mut k = self.k_proj.forward(&cross_attn_states)?;
+            let mut k = self.k_proj.forward(cross_attn_states)?;
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
             k = self.k_norm.forward(&k)?;
 
-            let mut v = self.v_proj.forward(&cross_attn_states)?;
+            let mut v = self.v_proj.forward(cross_attn_states)?;
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -365,7 +365,13 @@ pub(super) struct MLlamaTextModel {
 }
 
 impl MLlamaTextModel {
-    pub(super) fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
+    pub(super) fn new(
+        cfg: &MLlamaTextConfig,
+        vb: VarBuilder,
+        is_gptx: bool,
+        _normal_loading_metadata: &NormalLoadingMetadata,
+        _attention_mechanism: &AttentionImplementation,
+    ) -> Result<Self> {
         let embed_tokens = embedding(
             cfg.vocab_size + 8,
             cfg.hidden_size,
@@ -386,7 +392,7 @@ impl MLlamaTextModel {
             vb.dtype(),
             cfg,
             vb.device(),
-            true,
+            is_gptx,
         )?);
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -425,6 +431,7 @@ impl MLlamaTextModel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn forward(
         &self,
         input_ids: &Tensor,
@@ -435,7 +442,7 @@ impl MLlamaTextModel {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
-        let mut hidden_states = self.embed_tokens.forward(&input_ids)?;
+        let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let mut self_cache = self.self_attn_cache.lock();
         let self_mask = CausalMasker.make_causal_mask_as_attn_bias(

@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::ops::Mul;
 
 use candle_core::{Result, Tensor, D};
@@ -6,7 +8,7 @@ use candle_nn::{
     LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
 };
 
-use crate::{attention::SdpaParams, layers::Sdpa};
+use crate::{attention::SdpaParams, layers::Sdpa, pipeline::NormalLoadingMetadata};
 
 use super::{MLlamaVisionConfig, VisionActivation};
 
@@ -45,7 +47,7 @@ impl MLlamaPrecomputedPositionEmbedding {
             + gated_pos_embed.reshape((1, 1, self.num_patches, self.hidden_size))?)?;
 
         // precomputed tile position embeddings
-        let mut tile_position_embedding = self.tile_embedding.forward(&aspect_ratio_ids)?;
+        let mut tile_position_embedding = self.tile_embedding.forward(aspect_ratio_ids)?;
         let bs = hidden_state.dim(0)?;
         tile_position_embedding = tile_position_embedding.reshape((
             bs,
@@ -145,9 +147,9 @@ impl MLlamaVisionAttention {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L243
     fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
-        let mut q = self.q_proj.forward(&hidden_state)?;
-        let mut k = self.k_proj.forward(&hidden_state)?;
-        let mut v = self.v_proj.forward(&hidden_state)?;
+        let mut q = self.q_proj.forward(hidden_state)?;
+        let mut k = self.k_proj.forward(hidden_state)?;
+        let mut v = self.v_proj.forward(hidden_state)?;
 
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
@@ -191,7 +193,7 @@ impl MLlamaMlp {
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L223
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         self.fc2
-            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)
+            .forward(&self.act.forward(&self.fc1.forward(hidden_states)?)?)
     }
 }
 
@@ -351,7 +353,11 @@ pub(super) struct MLlamaVisionModel {
 }
 
 impl MLlamaVisionModel {
-    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub(super) fn new(
+        cfg: &MLlamaVisionConfig,
+        vb: VarBuilder,
+        _normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,

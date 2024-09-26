@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 mod config;
 mod inputs_processor;
 mod text;
@@ -20,17 +22,16 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers_masker::masked_fill,
-    paged_attention::ModelConfigMetadata,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, VisionModel,
+        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
 };
 
 fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
     let indices = Tensor::new(
         (0..xs.dim(dim)?)
-            .into_iter()
             .flat_map(|i| vec![i as u32; repeats])
             .collect::<Vec<_>>(),
         xs.device(),
@@ -46,7 +47,7 @@ fn prepare_cross_attention_mask(
 ) -> Result<(Tensor, Tensor)> {
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
-    let mut cross_attn_mask = repeat_interleave(&cross_attention_mask, num_vision_tokens, 3)?;
+    let mut cross_attn_mask = repeat_interleave(cross_attention_mask, num_vision_tokens, 3)?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
@@ -79,10 +80,26 @@ pub(crate) struct MLlamaModel {
 }
 
 impl MLlamaModel {
-    pub(crate) fn new(cfg: &MLlamaConfig, vb: VarBuilder) -> Result<Self> {
+    pub(crate) fn new(
+        cfg: &MLlamaConfig,
+        vb: VarBuilder,
+        is_gptx: bool,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Self> {
         Ok(Self {
-            vision_model: MLlamaVisionModel::new(&cfg.vision_config, vb.pp("vision_model"))?,
-            language_model: MLlamaTextModel::new(&cfg.text_config, vb.pp("language_model"))?,
+            vision_model: MLlamaVisionModel::new(
+                &cfg.vision_config,
+                vb.pp("vision_model"),
+                &normal_loading_metadata,
+            )?,
+            language_model: MLlamaTextModel::new(
+                &cfg.text_config,
+                vb.pp("language_model"),
+                is_gptx,
+                &normal_loading_metadata,
+                &attention_mechanism,
+            )?,
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
@@ -92,6 +109,7 @@ impl MLlamaModel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
         input_ids: &Tensor,

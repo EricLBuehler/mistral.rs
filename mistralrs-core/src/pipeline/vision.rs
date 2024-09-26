@@ -196,6 +196,10 @@ impl Loader for VisionLoader {
             paged_attn_config = None;
         }
 
+        if self.inner.supports_paged_attention() {
+            paged_attn_config = None;
+        }
+
         info!(
             "Model config: {:?}",
             self.inner

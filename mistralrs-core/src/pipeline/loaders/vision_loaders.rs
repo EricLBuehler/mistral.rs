@@ -70,6 +70,7 @@ pub trait VisionModelLoader {
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
+    fn supports_paged_attention(&self) -> bool;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -148,6 +149,9 @@ impl VisionModelLoader for Phi3VLoader {
         let config: Phi3Config = serde_json::from_str(config)?;
         Ok(config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -200,6 +204,9 @@ impl VisionModelLoader for Idefics2Loader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -248,6 +255,9 @@ impl VisionModelLoader for LLaVANextLoader {
         let config: LLaVAConfig = serde_json::from_str(config)?;
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
     }
 }
 
@@ -298,6 +308,9 @@ impl VisionModelLoader for LLaVALoader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
 }
 
 // ======================== MLlama Loader
@@ -317,20 +330,26 @@ impl VisionModelLoader for MLlamaLoader {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: MLlamaConfig = serde_json::from_str(config)?;
-        // config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(MLlamaModel::new(&config, vb)?))
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(MLlamaModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
     }
     fn is_gptx(&self) -> bool {
-        false
+        true
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         let mut config: MLlamaConfig = serde_json::from_str(config)?;
-        // config.use_flash_attn = use_flash_attn;
+        config.text_config.use_flash_attn = use_flash_attn;
         Ok(Box::new(config))
     }
     fn get_processor(
         &self,
-        model_config: &str,
+        _model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
@@ -340,5 +359,8 @@ impl VisionModelLoader for MLlamaLoader {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
     }
 }
