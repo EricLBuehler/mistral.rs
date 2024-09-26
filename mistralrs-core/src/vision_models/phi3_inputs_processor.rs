@@ -127,7 +127,12 @@ impl InputsProcessor for Phi3InputsProcessor {
                     image_sizes,
                     num_img_tokens,
                 } = self
-                    .preprocess(imgs, config, device)
+                    .preprocess(
+                        imgs,
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
                     .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
@@ -455,6 +460,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        (bs, max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
         // If no images, will not call this.
         assert!(!images.is_empty());

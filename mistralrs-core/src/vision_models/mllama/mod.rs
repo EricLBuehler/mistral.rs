@@ -1,4 +1,5 @@
 mod config;
+mod inputs_processor;
 mod text;
 mod vision;
 

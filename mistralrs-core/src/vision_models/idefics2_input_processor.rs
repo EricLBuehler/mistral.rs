@@ -207,6 +207,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                             .expect("Need to have images by this point."),
                         config,
                         device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
                     )
                     .expect("Preprocessing failed");
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
@@ -250,6 +251,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();

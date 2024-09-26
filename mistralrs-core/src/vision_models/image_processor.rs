@@ -23,11 +23,13 @@ pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_STD: [f64; 3];
 
     /// Preprocess the images for a specific batch.
+    /// `(bs, max_num_images)`, max_num_images is the max images per batches.
     #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        batch_info: (usize, usize),
     ) -> Result<PreprocessedImages>;
 }
