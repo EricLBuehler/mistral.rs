@@ -8,101 +8,7 @@ use candle_nn::{
 
 use crate::{attention::SdpaParams, layers::Sdpa};
 
-#[derive(Debug, Clone, Copy, serde::Deserialize)]
-pub enum VisionActivation {
-    QuickGelu,
-    #[serde(alias = "gelu")]
-    Gelu,
-    #[serde(alias = "gelu_new")]
-    NewGelu,
-    Relu,
-    Silu,
-}
-
-impl Module for VisionActivation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
-            Self::Gelu => xs.gelu_erf(),
-            // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
-            Self::NewGelu => xs.gelu(),
-            Self::Relu => xs.relu(),
-            Self::Silu => xs.silu(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct MLlamaVisionConfig {
-    hidden_size: usize,
-    hidden_act: VisionActivation,
-    num_hidden_layers: usize,
-    num_global_layers: usize,
-    num_attention_heads: usize,
-    num_channels: usize,
-    intermediate_size: usize,
-    vision_output_dim: usize,
-    image_size: usize,
-    patch_size: usize,
-    norm_eps: f64,
-    max_num_tiles: usize,
-    intermediate_layers_indices: Vec<usize>,
-    supported_aspect_ratios: Vec<(usize, usize)>,
-}
-
-impl MLlamaVisionConfig {
-    fn max_aspect_ratio_id(&self) -> usize {
-        self.supported_aspect_ratios.len()
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-enum MLlamaRopeType {
-    Default,
-    Linear,
-    Dynamic,
-    Yarn,
-    Longrope,
-    Llama3,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct MLlamaRopeScaling {
-    rope_type: MLlamaRopeType,
-    factor: Option<f64>,
-    original_max_position_embeddings: usize,
-    attention_factor: Option<f64>,
-    beta_fast: Option<f64>,
-    beta_slow: Option<f64>,
-    short_factor: Option<Vec<f64>>,
-    long_factor: Option<Vec<f64>>,
-    low_freq_factor: Option<f64>,
-    high_freq_factor: Option<f64>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct MLlamaTextConfig {
-    rope_scaling: Option<MLlamaRopeScaling>,
-    vocab_size: usize,
-    hidden_size: usize,
-    hidden_act: candle_nn::Activation,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    intermediate_size: usize,
-    rope_theta: f64,
-    rms_norm_eps: f64,
-    max_position_embeddings: usize,
-    tie_word_embeddings: usize,
-    cross_attention_layers: Vec<usize>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct MLlamaConfig {
-    vision_config: MLlamaVisionConfig,
-    text_config: MLlamaTextConfig,
-    image_token_index: usize,
-}
+use super::{MLlamaVisionConfig, VisionActivation};
 
 struct MLlamaPrecomputedPositionEmbedding {
     gate: Tensor,
@@ -278,7 +184,7 @@ impl MLlamaMlp {
         Ok(Self {
             act: cfg.hidden_act,
             fc1: linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?,
-            fc2: linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc1"))?,
+            fc2: linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?,
         })
     }
 
@@ -430,7 +336,7 @@ fn _prepare_aspect_ratio_attention_mask(
     attention_mask.unsqueeze(1)
 }
 
-struct MLlamaVisionModel {
+pub(crate) struct MLlamaVisionModel {
     patch_embedding: Conv2d,
     class_embedding: Tensor,
     gated_positional_embedding: MLlamaPrecomputedPositionEmbedding,
@@ -445,7 +351,7 @@ struct MLlamaVisionModel {
 }
 
 impl MLlamaVisionModel {
-    fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub(crate) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,
@@ -513,7 +419,7 @@ impl MLlamaVisionModel {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L1425
-    fn forward(
+    pub(crate) fn forward(
         &self,
         pixel_values: &Tensor,
         aspect_ratio_ids: &Tensor,
@@ -673,23 +579,5 @@ impl MLlamaVisionModel {
         let (bs, _, hidden_size) = hidden_state.dims3()?;
         let class_embedding = self.class_embedding.expand((bs, 1, hidden_size))?;
         Tensor::cat(&[class_embedding, hidden_state.clone()], 1)
-    }
-}
-
-struct MLlamaModel {
-    vision_model: MLlamaVisionModel,
-    multi_modal_projector: Linear,
-}
-
-impl MLlamaModel {
-    fn new(cfg: &MLlamaConfig, vb: VarBuilder) -> Result<Self> {
-        Ok(Self {
-            vision_model: MLlamaVisionModel::new(&cfg.vision_config, vb.pp("vision_model"))?,
-            multi_modal_projector: linear(
-                cfg.vision_config.vision_output_dim,
-                cfg.text_config.hidden_size,
-                vb.pp("multi_model_projector"),
-            )?,
-        })
     }
 }
