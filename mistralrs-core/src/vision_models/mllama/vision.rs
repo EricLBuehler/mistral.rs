@@ -336,7 +336,7 @@ fn _prepare_aspect_ratio_attention_mask(
     attention_mask.unsqueeze(1)
 }
 
-pub(crate) struct MLlamaVisionModel {
+pub(super) struct MLlamaVisionModel {
     patch_embedding: Conv2d,
     class_embedding: Tensor,
     gated_positional_embedding: MLlamaPrecomputedPositionEmbedding,
@@ -351,7 +351,7 @@ pub(crate) struct MLlamaVisionModel {
 }
 
 impl MLlamaVisionModel {
-    pub(crate) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,
@@ -419,7 +419,7 @@ impl MLlamaVisionModel {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L1425
-    pub(crate) fn forward(
+    pub(super) fn forward(
         &self,
         pixel_values: &Tensor,
         aspect_ratio_ids: &Tensor,

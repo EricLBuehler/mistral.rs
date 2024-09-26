@@ -1,4 +1,5 @@
 mod config;
+mod text;
 mod vision;
 
 use config::{
