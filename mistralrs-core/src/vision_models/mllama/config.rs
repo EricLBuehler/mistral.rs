@@ -51,11 +51,17 @@ impl MLlamaVisionConfig {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) enum MLlamaRopeType {
+    #[serde(rename = "default")]
     Default,
+    #[serde(rename = "linear")]
     Linear,
+    #[serde(rename = "dynamic")]
     Dynamic,
+    #[serde(rename = "yarn")]
     Yarn,
+    #[serde(rename = "longrope")]
     Longrope,
+    #[serde(rename = "llama3")]
     Llama3,
 }
 
