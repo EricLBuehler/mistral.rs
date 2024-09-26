@@ -44,7 +44,7 @@ impl MLlamaPrecomputedPositionEmbedding {
         let hidden_state = (hidden_state
             + gated_pos_embed.reshape((1, 1, self.num_patches, self.hidden_size))?)?;
 
-        // precomputed tile positon embeddings
+        // precomputed tile position embeddings
         let mut tile_position_embedding = self.tile_embedding.forward(&aspect_ratio_ids)?;
         let bs = hidden_state.dim(0)?;
         tile_position_embedding = tile_position_embedding.reshape((
@@ -555,13 +555,13 @@ impl MLlamaVisionModel {
             (num_patches as isize + num_padding_patches) as usize,
             (),
         ))?;
-        let ihs_last_dim = intermediate_hidden_states.dim(D::Minus1)?;
+        let inter_hs_last_dim = intermediate_hidden_states.dim(D::Minus1)?;
         intermediate_hidden_states = intermediate_hidden_states.narrow(
             D::Minus1,
             0,
             slice_index
-                .map(|i| (ihs_last_dim as isize + i) as usize)
-                .unwrap_or(ihs_last_dim),
+                .map(|i| (inter_hs_last_dim as isize + i) as usize)
+                .unwrap_or(inter_hs_last_dim),
         )?;
         intermediate_hidden_states = intermediate_hidden_states.reshape((
             bs,
@@ -571,7 +571,7 @@ impl MLlamaVisionModel {
             (),
         ))?;
 
-        // Concatentate final hidden state and intermediate hidden states
+        // Concatenate final hidden state and intermediate hidden states
         Tensor::cat(&[hidden_state, intermediate_hidden_states], D::Minus1)
     }
 
