@@ -2,7 +2,7 @@
 
 use std::ops::Mul;
 
-use candle_core::{Result, Tensor, D};
+use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{
     conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
@@ -43,8 +43,12 @@ impl MLlamaPrecomputedPositionEmbedding {
     fn forward(&self, hidden_state: &Tensor, aspect_ratio_ids: &Tensor) -> Result<Tensor> {
         // position embeddings
         let mut gated_pos_embed = (1. - self.gate.tanh()?)?.broadcast_mul(&self.embedding)?;
-        let hidden_state = (hidden_state
-            + gated_pos_embed.reshape((1, 1, self.num_patches, self.hidden_size))?)?;
+        let hidden_state = hidden_state.broadcast_add(&gated_pos_embed.reshape((
+            1,
+            1,
+            self.num_patches,
+            self.hidden_size,
+        ))?)?;
 
         // precomputed tile position embeddings
         let mut tile_position_embedding = self.tile_embedding.forward(aspect_ratio_ids)?;
@@ -57,7 +61,7 @@ impl MLlamaPrecomputedPositionEmbedding {
         ))?;
         gated_pos_embed = self.gate.tanh()?.broadcast_mul(&tile_position_embedding)?;
 
-        hidden_state + gated_pos_embed
+        hidden_state.broadcast_add(&gated_pos_embed)
     }
 }
 
@@ -95,7 +99,7 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
             embeddings = embeddings.broadcast_mul(&gate.tanh()?)?;
         }
 
-        hidden_state + embeddings
+        hidden_state.broadcast_add(&embeddings)
     }
 }
 
@@ -166,7 +170,14 @@ impl MLlamaVisionAttention {
             .transpose(1, 2)?;
 
         let attn_output = Sdpa
-            .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
+            .run_attention(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask,
+                None,
+                &self.sdpa_params,
+            )?
             .transpose(1, 2)?
             .contiguous()?
             .reshape((bs, q_sq, ()))?;
@@ -306,6 +317,8 @@ fn _prepare_aspect_ratio_attention_mask(
     aspect_ratio_mask: &Tensor,
     num_patches: usize,
     target_length: usize,
+    dtype: DType,
+    num_attn_heads: usize,
 ) -> Result<Tensor> {
     let (bs, max_num_tiles) = aspect_ratio_mask.dims2()?;
     let mut attention_mask = aspect_ratio_mask
@@ -314,11 +327,11 @@ fn _prepare_aspect_ratio_attention_mask(
 
     // Mask padding patches
     let pad_patches = target_length - num_patches;
-    let (dim_first, dim_second, dim_last) = attention_mask.dims3()?;
+    let (bs, d1, d2, d3) = attention_mask.dims4()?;
     attention_mask = attention_mask.slice_assign(
-        &[&.., &.., &(..dim_last - pad_patches)],
+        &[&.., &.., &(..d2 - pad_patches), &..],
         &Tensor::zeros(
-            (dim_first, dim_second, dim_last - pad_patches),
+            (bs, d1, d2 - pad_patches, d3),
             attention_mask.dtype(),
             attention_mask.device(),
         )?,
@@ -329,13 +342,19 @@ fn _prepare_aspect_ratio_attention_mask(
 
     // Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
-    attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, 1))?;
+    attention_mask = attention_mask
+        .reshape((bs, max_num_tiles * target_length, 1))?
+        .to_dtype(DType::F32)?
+        .to_dtype(dtype)?;
     attention_mask = attention_mask.matmul(
         &attention_mask
             .transpose(D::Minus1, D::Minus2)?
             .mul(f64::MIN)?,
     )?;
-    attention_mask.unsqueeze(1)
+    attention_mask
+        .unsqueeze(1)?
+        .contiguous()?
+        .repeat((1, num_attn_heads, 1, 1))
 }
 
 pub(super) struct MLlamaVisionModel {
@@ -350,6 +369,7 @@ pub(super) struct MLlamaVisionModel {
     global_transformer: MLlamaVisionEncoder,
     pub(super) num_patches: usize,
     intermediate_layers_indices: Tensor,
+    num_attn_heads: usize,
 }
 
 impl MLlamaVisionModel {
@@ -421,6 +441,7 @@ impl MLlamaVisionModel {
                     .collect::<Vec<_>>(),
                 vb.device(),
             )?,
+            num_attn_heads: cfg.num_attention_heads,
         })
     }
 
@@ -432,7 +453,7 @@ impl MLlamaVisionModel {
         aspect_ratio_mask: &Tensor,
     ) -> Result<Tensor> {
         let pixel_values = pixel_values.to_dtype(self.class_embedding.dtype())?;
-        
+
         let bs = pixel_values.dim(0)?;
         let num_concurrent_media = pixel_values.dim(1)?;
         let num_tiles = pixel_values.dim(2)?;
@@ -479,7 +500,7 @@ impl MLlamaVisionModel {
         // Compute padding tuple for pad function
         // (pad_left, pad_right, pad_left for dim -2, pad_right for dim -2)
         let _padding = (0usize, 0usize, 0usize, num_padding_patches);
-        if num_padding_patches < 0 {
+        if num_padding_patches >= 0 {
             hidden_state =
                 hidden_state.pad_with_zeros(D::Minus2, 0, num_padding_patches as usize)?;
         } else {
@@ -502,6 +523,8 @@ impl MLlamaVisionModel {
             &attention_mask,
             self.num_patches,
             hidden_state.dim(2)?,
+            hidden_state.dtype(),
+            self.num_attn_heads,
         )?;
 
         // Apply encoder
@@ -538,13 +561,12 @@ impl MLlamaVisionModel {
             (num_patches as isize + num_padding_patches) as usize,
             dim,
         ))?;
-        let hs_last_dim = hidden_state.dim(D::Minus1)?;
         hidden_state = hidden_state.narrow(
-            D::Minus1,
+            2,
             0,
             slice_index
-                .map(|i| (hs_last_dim as isize + i) as usize)
-                .unwrap_or(hs_last_dim),
+                .map(|i| (hidden_state.dims()[2] as isize + i) as usize)
+                .unwrap_or(hidden_state.dims()[2]),
         )?;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
@@ -563,13 +585,12 @@ impl MLlamaVisionModel {
             (num_patches as isize + num_padding_patches) as usize,
             (),
         ))?;
-        let inter_hs_last_dim = intermediate_hidden_states.dim(D::Minus1)?;
         intermediate_hidden_states = intermediate_hidden_states.narrow(
-            D::Minus1,
+            2,
             0,
             slice_index
-                .map(|i| (inter_hs_last_dim as isize + i) as usize)
-                .unwrap_or(inter_hs_last_dim),
+                .map(|i| (intermediate_hidden_states.dims()[2] as isize + i) as usize)
+                .unwrap_or(intermediate_hidden_states.dims()[2]),
         )?;
         intermediate_hidden_states = intermediate_hidden_states.reshape((
             bs,
