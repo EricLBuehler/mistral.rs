@@ -11,7 +11,7 @@ use candle_core::{Context, DType, Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage};
 use itertools::Itertools;
 use mistralrs_vision::{
-    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensor,
+    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
 };
 use tokenizers::Tokenizer;
@@ -746,7 +746,7 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             // at the end of resize:
             // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/image_transforms.py#L340
             let to_tensor_rescale = Transforms {
-                input: &ToTensor,
+                input: &ToTensorNoNorm,
                 inner_transforms: &[],
             };
             let mut image = image.apply(to_tensor_rescale, device)?;
