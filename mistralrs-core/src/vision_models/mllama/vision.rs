@@ -329,9 +329,9 @@ fn _prepare_aspect_ratio_attention_mask(
     let pad_patches = target_length - num_patches;
     let (bs, d1, d2, d3) = attention_mask.dims4()?;
     attention_mask = attention_mask.slice_assign(
-        &[&.., &.., &(..d2 - pad_patches), &..],
+        &[&.., &.., &(d2 - pad_patches..), &..],
         &Tensor::zeros(
-            (bs, d1, d2 - pad_patches, d3),
+            (bs, d1, pad_patches, d3),
             attention_mask.dtype(),
             attention_mask.device(),
         )?,
@@ -346,11 +346,8 @@ fn _prepare_aspect_ratio_attention_mask(
         .reshape((bs, max_num_tiles * target_length, 1))?
         .to_dtype(DType::F32)?
         .to_dtype(dtype)?;
-    attention_mask = attention_mask.matmul(
-        &attention_mask
-            .transpose(D::Minus1, D::Minus2)?
-            .mul(f64::MIN)?,
-    )?;
+    attention_mask =
+        attention_mask.matmul(&attention_mask.transpose(D::Minus1, D::Minus2)?.mul(-1e15)?)?;
     attention_mask
         .unsqueeze(1)?
         .contiguous()?
