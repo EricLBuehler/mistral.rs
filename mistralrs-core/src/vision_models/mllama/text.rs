@@ -7,7 +7,7 @@ use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module
 
 use crate::{
     attention::SdpaParams,
-    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, NormalLoadingMetadata},
@@ -111,18 +111,25 @@ impl MLlamaTextSelfAttention {
         let mut k = self.k_proj.forward(hidden_states)?;
         let mut v = self.v_proj.forward(hidden_states)?;
 
-        q = q
-            .reshape((bs, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        k = k
-            .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+        q = q.reshape((bs * q_len, self.num_heads, self.head_dim))?;
+        k = k.reshape((bs * q_len, self.num_kv_heads, self.head_dim))?;
         v = v
             .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         self.rope
             .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, bs)?;
+
+        if q.rank() == 3 {
+            q = q
+                .reshape((bs, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+            k = k
+                .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?
+                .contiguous()?;
+        }
 
         (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
@@ -200,7 +207,6 @@ struct MLlamaTextCrossAttention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     num_heads: usize,
@@ -233,13 +239,6 @@ impl MLlamaTextCrossAttention {
             )?,
             q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
             k_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("k_norm"))?,
-            sdpa_params: SdpaParams {
-                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: cfg.use_flash_attn,
-                softcap: None,
-                softmax_scale: 1.0 / (cfg.head_dim() as f32).sqrt(),
-                sliding_window: None,
-            },
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
             head_dim: cfg.head_dim(),
@@ -251,6 +250,7 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -272,15 +272,35 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
+            k = repeat_kv(k.clone(), self.num_heads / self.num_kv_heads)?.contiguous()?;
+            v = repeat_kv(v.clone(), self.num_heads / self.num_kv_heads)?.contiguous()?;
+
+            (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
             (k, v)
+        } else if let Some((k_cache, v_cache)) = kv_cache {
+            (k_cache.clone(), v_cache.clone())
         } else {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
-        let attn_output = Sdpa
-            .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
-            .transpose(1, 2)?
-            .reshape((bs, q_len, ()))?;
+        let attn_output = {
+            let att = MatMul.matmul_affine_div(
+                &q.contiguous()?,
+                &k.t()?.contiguous()?,
+                (self.head_dim as f64).sqrt(),
+            )?;
+
+            let att = match attention_mask {
+                Some(m) => att.broadcast_add(m)?,
+                None => att,
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            MatMul
+                .matmul(&att, &v.contiguous()?)?
+                .transpose(1, 2)?
+                .reshape((bs, q_len, ()))?
+        };
 
         self.o_proj.forward(&attn_output)
     }
@@ -325,14 +345,15 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states = self
-            .attn
-            .forward(&hidden_states, cross_attn_states, attention_mask)?;
+        hidden_states =
+            self.attn
+                .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
@@ -340,6 +361,7 @@ impl MLlamaCrossAttentionDecoderLayer {
         hidden_states = self.mlp.forward(&hidden_states)?;
         if let Some(full_text_row_masked_out_mask) = full_text_row_masked_out_mask {
             hidden_states = full_text_row_masked_out_mask
+                .to_dtype(hidden_states.dtype())?
                 .i((.., 0))?
                 .broadcast_mul(&hidden_states)?;
         }
@@ -475,6 +497,7 @@ impl MLlamaTextModel {
                         cross_attn_states,
                         cross_attention_mask,
                         full_text_row_masked_out_mask,
+                        &mut self_cache[i],
                     )?;
                 }
             }

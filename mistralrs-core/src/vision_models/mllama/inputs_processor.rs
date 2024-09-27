@@ -310,7 +310,7 @@ impl InputsProcessor for MLlamaImageProcessor {
 
             // Create cross attn mask
             let image_token_id = tokenizer
-                .encode(IMAGE_TOKEN, true)
+                .encode(IMAGE_TOKEN, false)
                 .unwrap()
                 .get_ids()
                 .to_vec();

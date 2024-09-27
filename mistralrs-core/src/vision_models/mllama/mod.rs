@@ -52,7 +52,9 @@ fn prepare_cross_attention_mask(
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
     // Invert the mask
-    let inverted_cross_attn_mask = (1. - cross_attn_mask)?.to_dtype(dtype)?;
+    let inverted_cross_attn_mask = (1. - cross_attn_mask)?
+        .to_dtype(DType::F32)?
+        .to_dtype(dtype)?;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.eq(1.)?,
@@ -67,7 +69,8 @@ fn prepare_cross_attention_mask(
         .sum(D::Minus1)?
         .ge(0.)?
         .unsqueeze(D::Minus1)?;
-    cross_attn_mask = cross_attn_mask.broadcast_mul(&full_text_row_masked_out_mask)?;
+    cross_attn_mask = cross_attn_mask
+        .broadcast_mul(&full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())?)?;
 
     Ok((cross_attn_mask, full_text_row_masked_out_mask))
 }
@@ -133,7 +136,7 @@ impl MLlamaModel {
                     .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
             let cross_attention_states = self
                 .multi_modal_projector
-                .forward(&vision_outputs)?
+                .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?;
             Some(cross_attention_states)
         } else {
