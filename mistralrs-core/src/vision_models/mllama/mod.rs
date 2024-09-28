@@ -145,11 +145,17 @@ impl MLlamaModel {
                 .to_device(&Device::Cpu)?
                 .write_npy("/home/ubuntu/dump/mistralrs/vision_outputs.npy")?;
             println!("DONE");
-            loop { }
+            loop {}
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?;
+            println!("reading cross_attention_states");
+            let cross_attention_states =
+                Tensor::read_npy("/home/ubuntu/dump/truth/cross_attention_states.npy")?
+                    .to_dtype(cross_attention_states.dtype())?
+                    .to_device(cross_attention_states.device())?;
+            println!("read cross_attention_states");
             Some(cross_attention_states)
         } else {
             None

@@ -258,18 +258,49 @@ class MllamaVisionAttention(nn.Module):
         key = key.view(batch_size, kv_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         value = value.view(batch_size, kv_seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
+        # print("First layer, after 1st attn q")
+        # np.save("/home/ubuntu/dump/truth/layer1_q_proj.npy", query.float().cpu().numpy())
+        # print("wrote layer1_q_proj")
+
+        # print("First layer, after 1st attn k")
+        # np.save("/home/ubuntu/dump/truth/layer1_k_proj.npy", key.float().cpu().numpy())
+        # print("wrote layer1_k_proj")
+
+        # print("First layer, after 1st attn v")
+        # np.save("/home/ubuntu/dump/truth/layer1_v_proj.npy", value.float().cpu().numpy())
+        # print("wrote layer1_v_proj")
+
         attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.head_dim)
 
+        print("First layer, after 1st attn qkT")
+        np.save("/home/ubuntu/dump/truth/layer1_qkT.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_qkT")
+
         if attention_mask is not None:  # no matter the length, we just slice it
+            print(f"{attention_mask.shape=}")
             causal_mask = attention_mask[:, :, :, : key.shape[-2]]
+            print(f"{causal_mask.shape=}")
             attn_weights = attn_weights + causal_mask
+
+        print("First layer, after 1st attn maskapply")
+        np.save("/home/ubuntu/dump/truth/layer1_maskapply.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_maskapply")
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+
+        print("First layer, after 1st attn softmax")
+        np.save("/home/ubuntu/dump/truth/layer1_softmax.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_softmax")
+        
         attn_output = torch.matmul(attn_weights, value)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(batch_size, q_seq_len, -1)
+
+        print("First layer, after 1st attn out")
+        np.save("/home/ubuntu/dump/truth/layer1_attn_out.npy", attn_output.float().cpu().numpy())
+        print("wrote layer1_attn_out")
 
         output = self.o_proj(attn_output)
 
@@ -324,7 +355,7 @@ class MllamaVisionSdpaAttention(MllamaVisionAttention):
         return output, None
 
 
-MLLAMA_VISION_ATTENTION_CLASSES = {"eager": MllamaVisionAttention, "sdpa": MllamaVisionSdpaAttention}
+MLLAMA_VISION_ATTENTION_CLASSES = {"eager": MllamaVisionAttention, "sdpa": MllamaVisionAttention } #MllamaVisionSdpaAttention}
 
 
 class MllamaVisionEncoderLayer(nn.Module):
@@ -355,15 +386,43 @@ class MllamaVisionEncoderLayer(nn.Module):
         # Self Attention
         residual = hidden_state
         hidden_state = self.input_layernorm(hidden_state)
+        
+        print("First layer, begin attn")
+        np.save("/home/ubuntu/dump/truth/layer1_beginattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_beginattn")
+
         hidden_state, attn_weights = self.self_attn(hidden_state, attention_mask=attention_mask)
+        
+        print("First layer, after attn")
+        np.save("/home/ubuntu/dump/truth/layer1_afterattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_afterattn")
+
         if self.is_gated:
             hidden_state = self.gate_attn.tanh() * hidden_state
         hidden_state = residual + hidden_state
 
+        print("First layer, after 1st res")
+        np.save("/home/ubuntu/dump/truth/layer1_afterres1.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_afterres1")
+
         # Feed forward
         residual = hidden_state
         hidden_state = self.post_attention_layernorm(hidden_state)
+        
+        print("First layer, begin mlp")
+        np.save("/home/ubuntu/dump/truth/layer1_beginmlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_beginmlp")
+
         hidden_state = self.mlp(hidden_state)
+        
+        print("First layer, after mlp")
+        np.save("/home/ubuntu/dump/truth/layer1_aftermlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        print("wrote layer1_aftermlp")
+
+        print("LOOPING")
+        while True:
+            pass
+
         if self.is_gated:
             hidden_state = self.gate_ffn.tanh() * hidden_state
         hidden_state = residual + hidden_state
@@ -1471,24 +1530,24 @@ class MllamaVisionModel(MllamaPreTrainedModel):
         # Patch embedding
         patch_embeds = self.patch_embedding(pixel_values.to(self.dtype).to(self.device))
         hidden_state = patch_embeds.flatten(2).transpose(1, 2)
-        np.save("/home/ubuntu/dump/truth/patch_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote patch_emb")
+        # np.save("/home/ubuntu/dump/truth/patch_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote patch_emb")
 
         # Tile embeddings
         _, num_patches, dim = hidden_state.shape
         hidden_state = hidden_state.reshape(batch_size * num_concurrent_media, num_tiles, -1, dim)
         hidden_state = self.pre_tile_positional_embedding(hidden_state, aspect_ratio_ids)
 
-        np.save("/home/ubuntu/dump/truth/tile_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote tile_emb")
+        # np.save("/home/ubuntu/dump/truth/tile_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote tile_emb")
 
         # Add cls token
         hidden_state = hidden_state.reshape(batch_size * num_concurrent_media * num_tiles, num_patches, dim)
         hidden_state = self.apply_class_embedding(hidden_state)
         num_patches += 1
 
-        np.save("/home/ubuntu/dump/truth/cls_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote cls_emb")
+        # np.save("/home/ubuntu/dump/truth/cls_emb.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote cls_emb")
 
         # Position embeddings
         hidden_state = hidden_state.reshape(batch_size * num_concurrent_media, num_tiles, num_patches, dim)
@@ -1496,8 +1555,8 @@ class MllamaVisionModel(MllamaPreTrainedModel):
 
         hidden_state = self.layernorm_pre(hidden_state)
 
-        np.save("/home/ubuntu/dump/truth/ln_pre.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote ln_pre")
+        # np.save("/home/ubuntu/dump/truth/ln_pre.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote ln_pre")
 
 
         # Compute the number of tokens to pad
@@ -1520,8 +1579,9 @@ class MllamaVisionModel(MllamaPreTrainedModel):
             target_length=hidden_state.shape[2],
             dtype=self.dtype,
         )
-        np.save("/home/ubuntu/dump/truth/attention_mask.npy", attention_mask.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote attention_mask")
+        # np.save("/home/ubuntu/dump/truth/attention_mask.npy", attention_mask.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # #np.save("/home/ubuntu/dump/truth/attention_mask.npy", attention_mask.float().cpu().numpy())
+        # print("wrote attention_mask")
 
         # Apply encoder
         hidden_state = hidden_state.view(batch_size * num_concurrent_media, -1, dim)
@@ -2210,6 +2270,7 @@ class MllamaForConditionalGeneration(MllamaPreTrainedModel, GenerationMixin):
             cross_attention_states = self.multi_modal_projector(cross_attention_states).reshape(
                 -1, cross_attention_states.shape[-2], self.hidden_size
             )
+            np.save("/home/ubuntu/dump/truth/cross_attention_states.npy", cross_attention_states.float().cpu().numpy())
 
         if cross_attention_mask is not None:
             cross_attention_mask, full_text_row_masked_out_mask = _prepare_cross_attention_mask(
