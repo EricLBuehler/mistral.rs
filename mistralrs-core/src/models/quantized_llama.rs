@@ -420,10 +420,14 @@ impl ModelConfig::FromGGUF for ModelWeights {
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
+        let tok_embeddings = qtok_embeddings.dequantize(device)?;
         let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
-        let output = ct.tensor("output.weight", device)?;
+        let output = if !ct.has_tensor("output.weight") {
+            ct.tensor("token_embd.weight", device)?
+        } else {
+            ct.tensor("output.weight", device)?
+        };
         let mut layers = Vec::with_capacity(block_count);
 
         let mapper = mapper.into_mapper(block_count, device, topology)?;
