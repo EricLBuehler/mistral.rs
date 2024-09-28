@@ -131,16 +131,17 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            println!("reading");
-            let pixel_values = Tensor::read_npy("/home/ubuntu/dump/truth/packed_images.npy")?
-                .to_dtype(pixel_values.dtype())?
-                .to_device(pixel_values.device())?;
-            println!("read");
+            // println!("reading");
+            // let pixel_values = Tensor::read_npy("/home/ubuntu/dump/truth/packed_images.npy")?
+            //     .to_dtype(pixel_values.dtype())?
+            //     .to_device(pixel_values.device())?;
+            // println!("read");
             let vision_outputs =
                 self.vision_model
                     .forward(&pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+            println!("writing vision outputs");
+            dbg!(&vision_outputs);
             vision_outputs
-                .narrow(4, 0, 1024)?
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?
                 .write_npy("/home/ubuntu/dump/mistralrs/vision_outputs.npy")?;

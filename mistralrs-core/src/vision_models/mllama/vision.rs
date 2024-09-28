@@ -10,7 +10,7 @@ use candle_nn::{
 
 use crate::{
     attention::SdpaParams,
-    layers::{MatMul, Sdpa},
+    layers::{FusedBiasLinear, Sdpa},
     pipeline::NormalLoadingMetadata,
 };
 
@@ -172,95 +172,19 @@ impl MLlamaVisionAttention {
         v = v
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-
-        // println!("First layer, after 1st attn q");
-        // dbg!(&q);
-        // q.to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/layer1_q_proj.npy")?;
-        // println!("Wrote layer1_q_proj");
-
-        // println!("First layer, after 1st attn k");
-        // dbg!(&k);
-        // k.to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/layer1_k_proj.npy")?;
-        // println!("Wrote layer1_k_proj");
-
-        // println!("First layer, after 1st attn v");
-        // dbg!(&v);
-        // v.to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/layer1_v_proj.npy")?;
-        // println!("Wrote layer1_v_proj");
-
-        let attn_output = {
-            let att = MatMul.matmul_affine_div(
+        
+        let attn_output = Sdpa
+            .run_attention(
                 &q.contiguous()?,
-                &k.t()?.contiguous()?,
-                (self.head_dim as f64).sqrt(),
-            )?;
-
-            println!("First layer, after 1st attn qkt");
-            dbg!(&att);
-            att.narrow(D::Minus1, 0, 1024)?
-                .to_dtype(DType::F32)?
-                .to_device(&candle_core::Device::Cpu)?
-                .write_npy("/home/ubuntu/dump/mistralrs/layer1_qkT.npy")?;
-            println!("Wrote layer1_qkT");
-
-            dbg!(&attention_mask);
-            let att = match attention_mask {
-                Some(m) => att.broadcast_add(m)?,
-                None => att,
-            };
-
-            println!("First layer, after maskapply");
-            dbg!(&att);
-            att.narrow(D::Minus1, 0, 1024)?
-                .to_dtype(DType::F32)?
-                .to_device(&candle_core::Device::Cpu)?
-                .write_npy("/home/ubuntu/dump/mistralrs/layer1_maskapply.npy")?;
-            println!("Wrote layer1_maskapply");
-
-            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                .to_dtype(att.dtype())?;
-
-            println!("First layer, after softmax");
-            dbg!(&att);
-            att.narrow(D::Minus1, 0, 1024)?
-                .to_dtype(DType::F32)?
-                .to_device(&candle_core::Device::Cpu)?
-                .write_npy("/home/ubuntu/dump/mistralrs/layer1_softmax.npy")?;
-            println!("Wrote layer1_softmax");
-
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            MatMul
-                .matmul(&att, &v.contiguous()?)?
-                .transpose(1, 2)?
-                .reshape((bs, q_sq, ()))?
-        };
-
-        // let attn_output = Sdpa
-        //     .run_attention(
-        //         &q.contiguous()?,
-        //         &k.contiguous()?,
-        //         &v.contiguous()?,
-        //         attention_mask,
-        //         None,
-        //         &self.sdpa_params,
-        //     )?
-        //     .transpose(1, 2)?
-        //     .contiguous()?
-        //     .reshape((bs, q_sq, ()))?;
-
-        println!("First layer, after 1st attn out");
-        dbg!(&attn_output);
-        attn_output
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_attn_out.npy")?;
-        println!("Wrote layer1_attn_out");
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask,
+                None,
+                &self.sdpa_params,
+            )?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bs, q_sq, ()))?;
 
         self.o_proj.forward(&attn_output)
     }
@@ -268,16 +192,16 @@ impl MLlamaVisionAttention {
 
 struct MLlamaMlp {
     act: VisionActivation,
-    fc1: Linear,
-    fc2: Linear,
+    fc1: FusedBiasLinear,
+    fc2: FusedBiasLinear,
 }
 
 impl MLlamaMlp {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?,
-            fc2: linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?,
+            fc1: FusedBiasLinear::try_from(linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?)?,
+            fc2: FusedBiasLinear::try_from(linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?)?,
         })
     }
 
@@ -338,66 +262,18 @@ impl MLlamaVisionEncoderLayer {
         let residual = hidden_state;
         let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        println!("First layer, begin attn");
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_beginattn.npy")?;
-        println!("Wrote layer1_beginattn");
-
         hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
-
-        println!("First layer, after attn");
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_afterattn.npy")?;
-        println!("Wrote layer1_afterattn");
 
         if let Some(gate) = &self.gate_attn {
             hidden_state = gate.tanh()?.broadcast_mul(&hidden_state)?;
         }
         hidden_state = (residual + hidden_state)?;
 
-        println!("First layer, after 1st res");
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_afterres1.npy")?;
-        println!("Wrote layer1_afterres1");
-
         // FF
         let residual = hidden_state.clone();
         hidden_state = self.post_attention_layernorm.forward(&hidden_state)?;
 
-        println!("First layer, begin mlp");
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_beginmlp.npy")?;
-        println!("Wrote layer1_beginmlp");
-
         hidden_state = self.mlp.forward(&hidden_state)?;
-
-        println!("First layer, after mlp");
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/layer1_aftermlp.npy")?;
-        println!("Wrote layer1_aftermlp");
-
-        println!("LOOPING!!");
-        loop {}
 
         if let Some(gate) = &self.gate_ffn {
             hidden_state = gate.tanh()?.broadcast_mul(&hidden_state)?;
@@ -601,14 +477,7 @@ impl MLlamaVisionModel {
         // Patch embedding
         let patch_embeds = self.patch_embedding.forward(&pixel_values)?;
         let mut hidden_state = patch_embeds.flatten_from(2)?.transpose(1, 2)?;
-        // dbg!(&hidden_state);
-        // hidden_state
-        //     .narrow(D::Minus1, 0, 1024)?
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/patch_emb.npy")?;
-        // println!("Wrote patch_emb");
-
+        
         // Tile embeddings
         let (_, mut num_patches, dim) = hidden_state.dims3()?;
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, num_tiles, (), dim))?;
@@ -616,27 +485,11 @@ impl MLlamaVisionModel {
             .pre_tile_positional_embedding
             .forward(&hidden_state, &aspect_ratio_ids)?;
 
-        // dbg!(&hidden_state);
-        // hidden_state
-        //     .narrow(D::Minus1, 0, 1024)?
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/tile_emb.npy")?;
-        // println!("Wrote tile_emb");
-
         // Add cls token
         hidden_state =
             hidden_state.reshape((bs * num_concurrent_media * num_tiles, num_patches, dim))?;
         hidden_state = self.apply_class_embedding(&hidden_state)?;
         num_patches += 1;
-
-        // dbg!(&hidden_state);
-        // hidden_state
-        //     .narrow(D::Minus1, 0, 1024)?
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/cls_emb.npy")?;
-        // println!("Wrote cls_emb");
 
         // Position embeddings
         hidden_state =
@@ -646,14 +499,6 @@ impl MLlamaVisionModel {
             .forward(&hidden_state, &aspect_ratio_ids)?;
 
         hidden_state = self.layernorm_pre.forward(&hidden_state)?;
-
-        // dbg!(&hidden_state);
-        // hidden_state
-        //     .narrow(D::Minus1, 0, 1024)?
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/ln_pre.npy")?;
-        // println!("Wrote ln_pre");
 
         // Compute the number of tokens to pad
         let num_padding_patches = (8 - (hidden_state.dim(D::Minus2)? as isize % 8)) % 8;
@@ -671,14 +516,6 @@ impl MLlamaVisionModel {
             )?;
         }
 
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/pad_hs.npy")?;
-        println!("Wrote pad_hs");
-
         // Prepare attention mask
         let mut attention_mask = aspect_ratio_mask.reshape((bs * num_concurrent_media, ()))?;
         attention_mask = _prepare_aspect_ratio_attention_mask(
@@ -688,13 +525,6 @@ impl MLlamaVisionModel {
             hidden_state.dtype(),
             self.num_attn_heads,
         )?;
-        // dbg!(&attention_mask);
-        // attention_mask
-        //     .narrow(3, 0, 1024)?
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&candle_core::Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/attention_mask.npy")?;
-        // println!("Wrote attn mask");
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
@@ -702,23 +532,7 @@ impl MLlamaVisionModel {
             .transformer
             .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/transformer.npy")?;
-        println!("Wrote transformer");
-
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
-
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/ln_post.npy")?;
-        println!("Wrote ln_post");
 
         // Apply global encoder
         hidden_state = hidden_state.reshape((
@@ -739,14 +553,6 @@ impl MLlamaVisionModel {
             .global_transformer
             .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/global_transformer.npy")?;
-        println!("Wrote global_transformer");
-
         // Remove padding from hidden state
         hidden_state = hidden_state.reshape((
             bs * num_concurrent_media,
@@ -762,13 +568,6 @@ impl MLlamaVisionModel {
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
 
-        dbg!(&hidden_state);
-        hidden_state
-            .narrow(D::Minus1, 0, 1024)?
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/padrm.npy")?;
-        println!("Wrote padrm");
 
         // Collect intermediate layer outputs from encoder output
         let mut intermediate_hidden_states =
@@ -776,13 +575,6 @@ impl MLlamaVisionModel {
         drop(all_intermediate_hidden_states);
         intermediate_hidden_states = intermediate_hidden_states
             .index_select(&self.intermediate_layers_indices, D::Minus1)?;
-
-        dbg!(&hidden_state);
-        intermediate_hidden_states
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/inter_hs_collected.npy")?;
-        println!("Wrote inter_hs_collected");
 
         // Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape((
@@ -803,13 +595,6 @@ impl MLlamaVisionModel {
             num_patches,
             (),
         ))?;
-
-        dbg!(&hidden_state);
-        intermediate_hidden_states
-            .to_dtype(DType::F32)?
-            .to_device(&candle_core::Device::Cpu)?
-            .write_npy("/home/ubuntu/dump/mistralrs/inter_padrm.npy")?;
-        println!("Wrote inter_padrm");
 
         // Concatenate final hidden state and intermediate hidden states
         Tensor::cat(&[hidden_state, intermediate_hidden_states], D::Minus1)

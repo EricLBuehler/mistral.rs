@@ -272,9 +272,9 @@ class MllamaVisionAttention(nn.Module):
 
         attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        print("First layer, after 1st attn qkT")
-        np.save("/home/ubuntu/dump/truth/layer1_qkT.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_qkT")
+        # print("First layer, after 1st attn qkT")
+        # np.save("/home/ubuntu/dump/truth/layer1_qkT.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_qkT")
 
         if attention_mask is not None:  # no matter the length, we just slice it
             print(f"{attention_mask.shape=}")
@@ -282,25 +282,25 @@ class MllamaVisionAttention(nn.Module):
             print(f"{causal_mask.shape=}")
             attn_weights = attn_weights + causal_mask
 
-        print("First layer, after 1st attn maskapply")
-        np.save("/home/ubuntu/dump/truth/layer1_maskapply.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_maskapply")
+        # print("First layer, after 1st attn maskapply")
+        # np.save("/home/ubuntu/dump/truth/layer1_maskapply.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_maskapply")
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
 
-        print("First layer, after 1st attn softmax")
-        np.save("/home/ubuntu/dump/truth/layer1_softmax.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_softmax")
+        # print("First layer, after 1st attn softmax")
+        # np.save("/home/ubuntu/dump/truth/layer1_softmax.npy", attn_weights.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_softmax")
         
         attn_output = torch.matmul(attn_weights, value)
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(batch_size, q_seq_len, -1)
 
-        print("First layer, after 1st attn out")
-        np.save("/home/ubuntu/dump/truth/layer1_attn_out.npy", attn_output.float().cpu().numpy())
-        print("wrote layer1_attn_out")
+        # print("First layer, after 1st attn out")
+        # np.save("/home/ubuntu/dump/truth/layer1_attn_out.npy", attn_output.float().cpu().numpy())
+        # print("wrote layer1_attn_out")
 
         output = self.o_proj(attn_output)
 
@@ -387,41 +387,41 @@ class MllamaVisionEncoderLayer(nn.Module):
         residual = hidden_state
         hidden_state = self.input_layernorm(hidden_state)
         
-        print("First layer, begin attn")
-        np.save("/home/ubuntu/dump/truth/layer1_beginattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_beginattn")
+        # print("First layer, begin attn")
+        # np.save("/home/ubuntu/dump/truth/layer1_beginattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_beginattn")
 
         hidden_state, attn_weights = self.self_attn(hidden_state, attention_mask=attention_mask)
         
-        print("First layer, after attn")
-        np.save("/home/ubuntu/dump/truth/layer1_afterattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_afterattn")
+        # print("First layer, after attn")
+        # np.save("/home/ubuntu/dump/truth/layer1_afterattn.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_afterattn")
 
         if self.is_gated:
             hidden_state = self.gate_attn.tanh() * hidden_state
         hidden_state = residual + hidden_state
 
-        print("First layer, after 1st res")
-        np.save("/home/ubuntu/dump/truth/layer1_afterres1.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_afterres1")
+        # print("First layer, after 1st res")
+        # np.save("/home/ubuntu/dump/truth/layer1_afterres1.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_afterres1")
 
         # Feed forward
         residual = hidden_state
         hidden_state = self.post_attention_layernorm(hidden_state)
         
-        print("First layer, begin mlp")
-        np.save("/home/ubuntu/dump/truth/layer1_beginmlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_beginmlp")
+        # print("First layer, begin mlp")
+        # np.save("/home/ubuntu/dump/truth/layer1_beginmlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_beginmlp")
 
         hidden_state = self.mlp(hidden_state)
         
-        print("First layer, after mlp")
-        np.save("/home/ubuntu/dump/truth/layer1_aftermlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote layer1_aftermlp")
+        # print("First layer, after mlp")
+        # np.save("/home/ubuntu/dump/truth/layer1_aftermlp.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote layer1_aftermlp")
 
-        print("LOOPING")
-        while True:
-            pass
+        # print("LOOPING")
+        # while True:
+        #     pass
 
         if self.is_gated:
             hidden_state = self.gate_ffn.tanh() * hidden_state
@@ -1593,13 +1593,13 @@ class MllamaVisionModel(MllamaPreTrainedModel):
         )
         hidden_state = output[0]
 
-        np.save("/home/ubuntu/dump/truth/transformer.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote transformer")
+        # np.save("/home/ubuntu/dump/truth/transformer.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote transformer")
 
         hidden_state = self.layernorm_post(hidden_state)
 
-        np.save("/home/ubuntu/dump/truth/ln_post.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote ln_post")
+        # np.save("/home/ubuntu/dump/truth/ln_post.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote ln_post")
 
         # Apply global encoder
         hidden_state = hidden_state.reshape(
@@ -1617,8 +1617,8 @@ class MllamaVisionModel(MllamaPreTrainedModel):
         )
         hidden_state = global_output[0]
 
-        np.save("/home/ubuntu/dump/truth/global_transformer.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote global_transformer")
+        # np.save("/home/ubuntu/dump/truth/global_transformer.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote global_transformer")
 
         # Remove padding form hidden state
         hidden_state = hidden_state.reshape(
@@ -1627,16 +1627,16 @@ class MllamaVisionModel(MllamaPreTrainedModel):
         hidden_state = hidden_state[:, :, :slice_index]
         hidden_state = hidden_state.reshape(batch_size, num_concurrent_media, num_tiles, num_patches, dim)
 
-        np.save("/home/ubuntu/dump/truth/padrm.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
-        print("wrote padrm")
+        # np.save("/home/ubuntu/dump/truth/padrm.npy", hidden_state.narrow(dim=-1,start=0,length=1024).float().cpu().numpy())
+        # print("wrote padrm")
 
         # Collect intermediate layer outputs from encoder output
         all_intermediate_hidden_states = output[1]
         intermediate_hidden_states = torch.stack(all_intermediate_hidden_states, dim=-1)
         intermediate_hidden_states = intermediate_hidden_states[..., self.intermediate_layers_indices]
 
-        np.save("/home/ubuntu/dump/truth/inter_hs_collected.npy", intermediate_hidden_states.float().cpu().numpy())
-        print("wrote inter_hs_collected")
+        # np.save("/home/ubuntu/dump/truth/inter_hs_collected.npy", intermediate_hidden_states.float().cpu().numpy())
+        # print("wrote inter_hs_collected")
 
         # Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape(
@@ -1647,8 +1647,8 @@ class MllamaVisionModel(MllamaPreTrainedModel):
             batch_size, num_concurrent_media, num_tiles, num_patches, -1
         )
 
-        np.save("/home/ubuntu/dump/truth/inter_padrm.npy", intermediate_hidden_states.float().cpu().numpy())
-        print("wrote inter_padrm")
+        # np.save("/home/ubuntu/dump/truth/inter_padrm.npy", intermediate_hidden_states.float().cpu().numpy())
+        # print("wrote inter_padrm")
 
 
         # Concatenate final hidden state and intermediate hidden states
@@ -2266,7 +2266,12 @@ class MllamaForConditionalGeneration(MllamaPreTrainedModel, GenerationMixin):
                 return_dict=return_dict,
             )
             cross_attention_states = vision_outputs[0]
+            print("SAVING!!")
             np.save("/home/ubuntu/dump/truth/vision_outputs.npy", cross_attention_states[:,:,:,:,:1024].float().cpu().numpy())
+            cross_attention_states2 = cross_attention_states
+            del cross_attention_states
+            cross_attention_states = torch.from_numpy(np.load("/home/ubuntu/dump/mistralrs/vision_outputs.npy")).to(cross_attention_states2.dtype).to(cross_attention_states2.device)
+            print("loaded mistralrs values")
             cross_attention_states = self.multi_modal_projector(cross_attention_states).reshape(
                 -1, cross_attention_states.shape[-2], self.hidden_size
             )
