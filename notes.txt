@@ -1,0 +1,8 @@
+Testing processor weight comparisons
+resize_image,pad_image,rescale_norm_image,aspect_ratio_ids,aspect_ratio_mask,split_image,packed_images,original_image,cross_attn_mask
+
+confirmed exact ==:
+aspect_ratio_ids,aspect_ratio_mask,cross_attn_mask
+
+Testing vision model with pixel values all 1s:
+vision_outputs

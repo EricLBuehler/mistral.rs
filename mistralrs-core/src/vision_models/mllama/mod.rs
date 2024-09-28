@@ -131,9 +131,21 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
+            println!("reading");
+            let pixel_values = Tensor::read_npy("/home/ubuntu/dump/truth/packed_images.npy")?
+                .to_dtype(pixel_values.dtype())?
+                .to_device(pixel_values.device())?;
+            println!("read");
             let vision_outputs =
                 self.vision_model
-                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+                    .forward(&pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+            vision_outputs
+                .narrow(4, 0, 1024)?
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .write_npy("/home/ubuntu/dump/mistralrs/vision_outputs.npy")?;
+            println!("DONE");
+            loop { }
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?

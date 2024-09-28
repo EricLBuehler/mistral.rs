@@ -469,6 +469,13 @@ impl MLlamaVisionModel {
         // Patch embedding
         let patch_embeds = self.patch_embedding.forward(&pixel_values)?;
         let mut hidden_state = patch_embeds.flatten_from(2)?.transpose(1, 2)?;
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/patch_emb.npy")?;
+        println!("Wrote patch_emb");
 
         // Tile embeddings
         let (_, mut num_patches, dim) = hidden_state.dims3()?;
@@ -477,11 +484,27 @@ impl MLlamaVisionModel {
             .pre_tile_positional_embedding
             .forward(&hidden_state, &aspect_ratio_ids)?;
 
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/tile_emb.npy")?;
+        println!("Wrote tile_emb");
+
         // Add cls token
         hidden_state =
             hidden_state.reshape((bs * num_concurrent_media * num_tiles, num_patches, dim))?;
         hidden_state = self.apply_class_embedding(&hidden_state)?;
         num_patches += 1;
+
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/cls_emb.npy")?;
+        println!("Wrote cls_emb");
 
         // Position embeddings
         hidden_state =
@@ -491,6 +514,14 @@ impl MLlamaVisionModel {
             .forward(&hidden_state, &aspect_ratio_ids)?;
 
         hidden_state = self.layernorm_pre.forward(&hidden_state)?;
+
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/ln_pre.npy")?;
+        println!("Wrote ln_pre");
 
         // Compute the number of tokens to pad
         let num_padding_patches = (8 - (hidden_state.dim(D::Minus2)? as isize % 8)) % 8;
@@ -508,11 +539,13 @@ impl MLlamaVisionModel {
             )?;
         }
 
-        let slice_index = if num_padding_patches > 0 {
-            Some(-num_padding_patches)
-        } else {
-            None
-        };
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/pad_hs.npy")?;
+        println!("Wrote pad_hs");
 
         // Prepare attention mask
         let mut attention_mask = aspect_ratio_mask.reshape((bs * num_concurrent_media, ()))?;
@@ -523,6 +556,13 @@ impl MLlamaVisionModel {
             hidden_state.dtype(),
             self.num_attn_heads,
         )?;
+        dbg!(&attention_mask);
+        attention_mask
+            .narrow(3, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/attention_mask.npy")?;
+        println!("Wrote attn mask");
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
@@ -530,7 +570,23 @@ impl MLlamaVisionModel {
             .transformer
             .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/transformer.npy")?;
+        println!("Wrote transformer");
+        
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
+
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/ln_post.npy")?;
+        println!("Wrote ln_post");
 
         // Apply global encoder
         hidden_state = hidden_state.reshape((
@@ -551,6 +607,14 @@ impl MLlamaVisionModel {
             .global_transformer
             .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/global_transformer.npy")?;
+        println!("Wrote global_transformer");
+
         // Remove padding from hidden state
         hidden_state = hidden_state.reshape((
             bs * num_concurrent_media,
@@ -561,12 +625,18 @@ impl MLlamaVisionModel {
         hidden_state = hidden_state.narrow(
             2,
             0,
-            slice_index
-                .map(|i| (hidden_state.dims()[2] as isize + i) as usize)
-                .unwrap_or(hidden_state.dims()[2]),
+            (hidden_state.dims()[2] as isize - num_padding_patches) as usize,
         )?;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
+
+        dbg!(&hidden_state);
+        hidden_state
+            .narrow(D::Minus1, 0, 1024)?
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/padrm.npy")?;
+        println!("Wrote padrm");
 
         // Collect intermediate layer outputs from encoder output
         let mut intermediate_hidden_states =
@@ -574,6 +644,13 @@ impl MLlamaVisionModel {
         drop(all_intermediate_hidden_states);
         intermediate_hidden_states = intermediate_hidden_states
             .index_select(&self.intermediate_layers_indices, D::Minus1)?;
+
+        dbg!(&hidden_state);
+        intermediate_hidden_states
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/inter_hs_collected.npy")?;
+        println!("Wrote inter_hs_collected");
 
         // Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape((
@@ -585,9 +662,7 @@ impl MLlamaVisionModel {
         intermediate_hidden_states = intermediate_hidden_states.narrow(
             2,
             0,
-            slice_index
-                .map(|i| (intermediate_hidden_states.dims()[2] as isize + i) as usize)
-                .unwrap_or(intermediate_hidden_states.dims()[2]),
+            (intermediate_hidden_states.dims()[2] as isize - num_padding_patches) as usize,
         )?;
         intermediate_hidden_states = intermediate_hidden_states.reshape((
             bs,
@@ -596,6 +671,13 @@ impl MLlamaVisionModel {
             num_patches,
             (),
         ))?;
+
+        dbg!(&hidden_state);
+        intermediate_hidden_states
+            .to_dtype(DType::F32)?
+            .to_device(&candle_core::Device::Cpu)?
+            .write_npy("/home/ubuntu/dump/mistralrs/inter_padrm.npy")?;
+        println!("Wrote inter_padrm");
 
         // Concatenate final hidden state and intermediate hidden states
         Tensor::cat(&[hidden_state, intermediate_hidden_states], D::Minus1)
