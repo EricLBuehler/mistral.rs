@@ -2,7 +2,7 @@ use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
     Constraint, DrySamplingParams, MessageContent, MistralRs, NormalRequest, Request,
-    RequestMessage, Response, SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    RequestMessage, Response, SamplingParams, StopReason, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -150,7 +150,10 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, vision_chat: bool, thro
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
+                        if matches!(
+                            choice.finish_reason.as_ref().unwrap(),
+                            StopReason::Length(_)
+                        ) {
                             print!("...");
                         }
                         break;

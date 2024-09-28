@@ -5,6 +5,7 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use response::{ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -18,20 +19,21 @@ use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
-    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
-    DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    IsqOrganization, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
-    Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
-    StopTokens, TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, Constraint,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
+    DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
+    ImageGenerationResponseFormat, IsqOrganization, Loader, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, Request as _Request, RequestMessage, Response, ResponseOk,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
 mod anymoe;
 mod requests;
+mod response;
 mod stream;
 mod util;
 mod which;
@@ -880,7 +882,24 @@ impl Runner {
                     Response::ValidationError(e) | Response::InternalError(e) => {
                         Err(PyApiErr::from(e.to_string()))
                     }
-                    Response::Done(response) => Ok(Either::Left(response)),
+                    Response::Done(response) => Ok(Either::Left(ChatCompletionResponse {
+                        id: response.id,
+                        created: response.created,
+                        model: response.model,
+                        system_fingerprint: response.system_fingerprint,
+                        object: response.object,
+                        usage: response.usage,
+                        choices: response
+                            .choices
+                            .into_iter()
+                            .map(|choice| Choice {
+                                finish_reason: choice.finish_reason.to_string(),
+                                index: choice.index,
+                                message: choice.message,
+                                logprobs: choice.logprobs,
+                            })
+                            .collect(),
+                    })),
                     Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
@@ -999,7 +1018,24 @@ impl Runner {
                 Response::ValidationError(e) | Response::InternalError(e) => {
                     Err(PyApiErr::from(e.to_string()))
                 }
-                Response::CompletionDone(response) => Ok(response),
+                Response::CompletionDone(response) => Ok(CompletionResponse {
+                    id: response.id,
+                    created: response.created,
+                    model: response.model,
+                    system_fingerprint: response.system_fingerprint,
+                    object: response.object,
+                    usage: response.usage,
+                    choices: response
+                        .choices
+                        .into_iter()
+                        .map(|choice| CompletionChoice {
+                            finish_reason: choice.finish_reason.to_string(),
+                            index: choice.index,
+                            text: choice.text,
+                            logprobs: choice.logprobs,
+                        })
+                        .collect(),
+                }),
                 Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
                 Response::Chunk(_) => unreachable!(),
                 Response::Done(_) => unreachable!(),
@@ -1096,13 +1132,13 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::Delta>()?;
     m.add_class::<mistralrs_core::ResponseLogprob>()?;
     m.add_class::<mistralrs_core::Logprobs>()?;
-    m.add_class::<mistralrs_core::Choice>()?;
-    m.add_class::<mistralrs_core::ChunkChoice>()?;
+    m.add_class::<response::Choice>()?;
+    m.add_class::<response::ChunkChoice>()?;
     m.add_class::<mistralrs_core::Usage>()?;
-    m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
-    m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;
-    m.add_class::<mistralrs_core::CompletionChoice>()?;
-    m.add_class::<mistralrs_core::CompletionResponse>()?;
+    m.add_class::<response::ChatCompletionResponse>()?;
+    m.add_class::<response::ChatCompletionChunkResponse>()?;
+    m.add_class::<response::CompletionChoice>()?;
+    m.add_class::<response::CompletionResponse>()?;
     m.add_class::<mistralrs_core::TopLogprob>()?;
     m.add_class::<mistralrs_core::ModelDType>()?;
     m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
