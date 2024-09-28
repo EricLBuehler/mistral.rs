@@ -172,7 +172,7 @@ impl MLlamaVisionAttention {
         v = v
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        
+
         let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
@@ -200,8 +200,16 @@ impl MLlamaMlp {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: FusedBiasLinear::try_from(linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?)?,
-            fc2: FusedBiasLinear::try_from(linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?)?,
+            fc1: FusedBiasLinear::try_from(linear(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                vb.pp("fc1"),
+            )?)?,
+            fc2: FusedBiasLinear::try_from(linear(
+                cfg.intermediate_size,
+                cfg.hidden_size,
+                vb.pp("fc2"),
+            )?)?,
         })
     }
 
@@ -477,7 +485,7 @@ impl MLlamaVisionModel {
         // Patch embedding
         let patch_embeds = self.patch_embedding.forward(&pixel_values)?;
         let mut hidden_state = patch_embeds.flatten_from(2)?.transpose(1, 2)?;
-        
+
         // Tile embeddings
         let (_, mut num_patches, dim) = hidden_state.dims3()?;
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, num_tiles, (), dim))?;
@@ -567,7 +575,6 @@ impl MLlamaVisionModel {
         )?;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
-
 
         // Collect intermediate layer outputs from encoder output
         let mut intermediate_hidden_states =

@@ -55,17 +55,18 @@ fn prepare_cross_attention_mask(
     let inverted_cross_attn_mask = (1. - cross_attn_mask)?
         .to_dtype(DType::F32)?
         .to_dtype(dtype)?;
+    const NEG_INF_VALUE: f64 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.eq(1.)?,
-        f64::NEG_INFINITY,
+        NEG_INF_VALUE,
     )?;
 
     // Apply full-row bias which return 4d tensor of shape (b, h, s1, 1) where
     // value is 0 if a full row in cross attn mask's last dimension contains
     // negative infinity values, otherwise it's 1
     let full_text_row_masked_out_mask = cross_attn_mask
-        .ne(f64::NEG_INFINITY)?
+        .ne(NEG_INF_VALUE)?
         .sum(D::Minus1)?
         .ge(0.)?
         .unsqueeze(D::Minus1)?;
@@ -131,32 +132,13 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            // println!("reading");
-            // let pixel_values = Tensor::read_npy("/home/ubuntu/dump/truth/packed_images.npy")?
-            //     .to_dtype(pixel_values.dtype())?
-            //     .to_device(pixel_values.device())?;
-            // println!("read");
             let vision_outputs =
                 self.vision_model
-                    .forward(&pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
-            println!("writing vision outputs");
-            dbg!(&vision_outputs);
-            vision_outputs
-                .to_dtype(DType::F32)?
-                .to_device(&Device::Cpu)?
-                .write_npy("/home/ubuntu/dump/mistralrs/vision_outputs.npy")?;
-            println!("DONE");
-            loop {}
+                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?;
-            println!("reading cross_attention_states");
-            let cross_attention_states =
-                Tensor::read_npy("/home/ubuntu/dump/truth/cross_attention_states.npy")?
-                    .to_dtype(cross_attention_states.dtype())?
-                    .to_device(cross_attention_states.device())?;
-            println!("read cross_attention_states");
             Some(cross_attention_states)
         } else {
             None
