@@ -191,6 +191,7 @@ pub trait AnyMoePipelineMixin {
     }
 }
 
+/// Category of the model.
 #[derive(PartialEq, Copy, Clone)]
 pub enum ModelCategory {
     Text,
