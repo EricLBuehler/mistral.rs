@@ -111,12 +111,12 @@ impl InputsProcessor for LLaVAInputProcessor {
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, num_img_tokens) = if is_prompt
-            && input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, num_img_tokens) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
             for seq in input_seqs.iter_mut() {

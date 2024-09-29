@@ -192,7 +192,11 @@ impl InputsProcessor for Idefics2ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let (pixel_values, pixel_attention_mask) = if is_prompt {
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, pixel_attention_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
