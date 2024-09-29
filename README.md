@@ -397,6 +397,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `idefics2`
 - `llava_next`
 - `llava`
+- `vllama`
 
 ### Supported GGUF architectures
 
