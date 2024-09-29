@@ -21,6 +21,8 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 
 Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
 
+https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
+
 1) Start up interactive mode with the Llama 3.2 model
 ```
 cargo run --features ... --release -- -i --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
