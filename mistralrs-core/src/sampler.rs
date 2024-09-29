@@ -548,6 +548,10 @@ impl Sampler {
 
             let mut counts = vec![0.0f32; logits.len()];
             for ctx in context.iter() {
+                // Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
+                if *ctx as usize >= logits.len() {
+                    continue;
+                }
                 counts[*ctx as usize] += 1.0;
             }
 

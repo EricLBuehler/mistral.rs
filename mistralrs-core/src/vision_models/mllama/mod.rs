@@ -58,7 +58,7 @@ fn prepare_cross_attention_mask(
     const NEG_INF_VALUE: f64 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
-        &inverted_cross_attn_mask.eq(1.)?,
+        &inverted_cross_attn_mask.ne(0.)?,
         NEG_INF_VALUE,
     )?;
 
@@ -68,8 +68,9 @@ fn prepare_cross_attention_mask(
     let full_text_row_masked_out_mask = cross_attn_mask
         .ne(NEG_INF_VALUE)?
         .sum(D::Minus1)?
-        .ge(0.)?
+        .ne(0.)?
         .unsqueeze(D::Minus1)?;
+
     cross_attn_mask = cross_attn_mask
         .broadcast_mul(&full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())?)?;
 

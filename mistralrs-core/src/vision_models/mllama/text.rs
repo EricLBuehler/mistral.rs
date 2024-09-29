@@ -504,8 +504,11 @@ impl MLlamaTextModel {
         }
 
         hidden_states = self.norm.forward(&hidden_states)?;
-        hidden_states = self.lm_head.forward(&hidden_states)?;
 
-        extract_logits(&hidden_states, context_lens)
+        hidden_states = self
+            .lm_head
+            .forward(&extract_logits(&hidden_states, context_lens)?)?;
+
+        Ok(hidden_states)
     }
 }
