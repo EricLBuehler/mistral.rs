@@ -303,6 +303,10 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             }
             prompt if prompt.trim().starts_with(IMAGE_CMD) => {
                 let mut parts = prompt.trim().strip_prefix(IMAGE_CMD).unwrap().split(' ');
+                // No space??
+                if !parts.next().unwrap().is_empty() {
+                    println!("Error: Adding an image message should be done with this format: `{IMAGE_CMD} path/to/image.jpg Describe what is in this image.`");
+                }
                 let url = match parts.next() {
                     Some(p) => p.trim(),
                     None => {
@@ -321,7 +325,6 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 user_message.insert("role".to_string(), Either::Left("user".to_string()));
                 user_message.insert("content".to_string(), Either::Left(message));
                 messages.push(user_message);
-                continue;
             }
             message => {
                 let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
