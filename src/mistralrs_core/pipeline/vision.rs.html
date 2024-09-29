@@ -602,12 +602,17 @@
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
 <a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 <span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
@@ -713,6 +718,7 @@
             VisionLoaderType::Idefics2 =&gt; Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext =&gt; Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA =&gt; Box::new(LLaVALoader),
+            VisionLoaderType::VLlama =&gt; Box::new(VLlamaLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -796,6 +802,10 @@
             );
         } <span class="kw">else if </span>paged_attn_config.is_some() {
             <span class="macro">warn!</span>(<span class="string">"Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
+        }
+
+        <span class="kw">if </span>!<span class="self">self</span>.inner.supports_paged_attention() {
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 

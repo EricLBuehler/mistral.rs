@@ -778,6 +778,7 @@
 <a href="#778" id="778">778</a>
 <a href="#779" id="779">779</a>
 <a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -815,7 +816,7 @@
     LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
     Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -971,7 +972,8 @@
     }
 }
 
-<span class="attr">#[derive(PartialEq, Copy, Clone)]
+<span class="doccomment">/// Category of the model.
+</span><span class="attr">#[derive(PartialEq, Copy, Clone)]
 </span><span class="kw">pub enum </span>ModelCategory {
     Text,
     Vision { has_conv2d: bool },

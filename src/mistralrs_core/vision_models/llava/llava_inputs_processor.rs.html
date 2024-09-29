@@ -370,6 +370,13 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
@@ -483,12 +490,12 @@
             .clone()
             .expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">let </span>(pixel_values, num_img_tokens) = <span class="kw">if </span>is_prompt
-            &amp;&amp; input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        <span class="kw">let </span>has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        <span class="kw">let </span>(pixel_values, num_img_tokens) = <span class="kw">if </span>has_images {
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_values_accum = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>num_img_tokens_accum = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter_mut() {
@@ -500,8 +507,11 @@
                     pixel_attention_mask: <span class="kw">_</span>,
                     image_sizes: <span class="kw">_</span>,
                     num_img_tokens,
+                    aspect_ratio_ids: <span class="kw">_</span>,
+                    aspect_ratio_mask: <span class="kw">_</span>,
+                    num_tiles: <span class="kw">_</span>,
                 } = <span class="self">self
-                    </span>.preprocess(imgs.clone(), config, device)
+                    </span>.preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
                     .expect(<span class="string">"Preprocessor failed"</span>);
                 pixel_values_accum.push(pixel_values);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
@@ -695,6 +705,7 @@
         images: Vec&lt;image::DynamicImage&gt;,
         config: <span class="kw-2">&amp;</span>preprocessor_config::PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
+        (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
     ) -&gt; candle_core::Result&lt;image_processor::PreprocessedImages&gt; {
         <span class="kw">if </span>images.len() &gt; <span class="number">1 </span>{
             <span class="macro">candle_core::bail!</span>(<span class="string">"Can only process one image per batch"</span>); <span class="comment">// This is no different from phi3_input_processor
@@ -739,6 +750,9 @@
             pixel_attention_mask: <span class="prelude-val">None</span>,
             image_sizes: <span class="prelude-val">Some</span>((original_size.<span class="number">0 </span><span class="kw">as </span>usize, original_size.<span class="number">1 </span><span class="kw">as </span>usize)),
             num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.get_num_image_tokens()]),
+            aspect_ratio_ids: <span class="prelude-val">None</span>,
+            aspect_ratio_mask: <span class="prelude-val">None</span>,
+            num_tiles: <span class="prelude-val">None</span>,
         })
     }
 }

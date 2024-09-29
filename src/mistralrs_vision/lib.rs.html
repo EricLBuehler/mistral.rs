@@ -57,6 +57,26 @@
 <a href="#57" id="57">57</a>
 <a href="#58" id="58">58</a>
 <a href="#59" id="59">59</a>
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a>
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a>
+<a href="#76" id="76">76</a>
+<a href="#77" id="77">77</a>
+<a href="#78" id="78">78</a>
+<a href="#79" id="79">79</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides vision utilities for mistral.rs inspired by torchvision.
 //! In particular, it represents transformations on some `Self` type which are applied
 //! sequentially.
@@ -102,6 +122,11 @@
     <span class="kw">pub </span>inner_transforms: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[<span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw">dyn </span>ImageTransform&lt;Input = Tensor, Output = Tensor&gt;],
 }
 
+<span class="doccomment">/// Transforms, with each of `inner_transforms` applied sequentially
+</span><span class="kw">pub struct </span>TensorTransforms&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">pub </span>inner_transforms: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>[<span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw">dyn </span>ImageTransform&lt;Input = Tensor, Output = Tensor&gt;],
+}
+
 <span class="doccomment">/// Application of transforms to the Self type.
 </span><span class="kw">pub trait </span>ApplyTransforms&lt;<span class="lifetime">'a</span>&gt; {
     <span class="kw">fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, transforms: Transforms&lt;<span class="lifetime">'a</span>&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
@@ -110,6 +135,21 @@
 <span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; ApplyTransforms&lt;<span class="lifetime">'a</span>&gt; <span class="kw">for </span>DynamicImage {
     <span class="kw">fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, transforms: Transforms&lt;<span class="lifetime">'a</span>&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>res = transforms.input.map(<span class="self">self</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">for </span>transform <span class="kw">in </span>transforms.inner_transforms {
+            res = transform.map(<span class="kw-2">&amp;</span>res, device)<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(res)
+    }
+}
+
+<span class="doccomment">/// Application of transforms to the Self type.
+</span><span class="kw">pub trait </span>ApplyTensorTransforms&lt;<span class="lifetime">'a</span>&gt; {
+    <span class="kw">fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, transforms: TensorTransforms&lt;<span class="lifetime">'a</span>&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
+}
+
+<span class="kw">impl</span>&lt;<span class="lifetime">'a</span>&gt; ApplyTensorTransforms&lt;<span class="lifetime">'a</span>&gt; <span class="kw">for </span>Tensor {
+    <span class="kw">fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, transforms: TensorTransforms&lt;<span class="lifetime">'a</span>&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.clone();
         <span class="kw">for </span>transform <span class="kw">in </span>transforms.inner_transforms {
             res = transform.map(<span class="kw-2">&amp;</span>res, device)<span class="question-mark">?</span>;
         }

@@ -31,6 +31,14 @@
 <a href="#31" id="31">31</a>
 <a href="#32" id="32">32</a>
 <a href="#33" id="33">33</a>
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a>
+<a href="#36" id="36">36</a>
+<a href="#37" id="37">37</a>
+<a href="#38" id="38">38</a>
+<a href="#39" id="39">39</a>
+<a href="#40" id="40">40</a>
+<a href="#41" id="41">41</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -48,6 +56,12 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
+    <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) aspect_ratio_ids: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) aspect_ratio_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    <span class="doccomment">/// Without batch size
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) num_tiles: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
 }
 
 <span class="doccomment">/// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)
@@ -56,12 +70,14 @@
     <span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>];
 
     <span class="doccomment">/// Preprocess the images for a specific batch.
+    /// `(bs, max_num_images)`, max_num_images is the max images per batches.
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>preprocess(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         images: Vec&lt;DynamicImage&gt;,
         config: <span class="kw-2">&amp;</span>PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>Device,
+        batch_info: (usize, usize),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt;;
 }
 </code></pre></div></section></main></body></html>

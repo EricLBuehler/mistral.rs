@@ -295,6 +295,75 @@
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
 <a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
@@ -320,6 +389,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_inputs_processor::LLaVAProcessor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_next::Model <span class="kw">as </span>LLaVANext;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi3::{Config <span class="kw">as </span>Phi3Config, Model <span class="kw">as </span>Phi3};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi3_inputs_processor::Phi3Processor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
@@ -366,6 +436,7 @@
         processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
         preprocessor_config: PreProcessorConfig,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;;
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 }
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass(eq, eq_int))]
@@ -380,6 +451,8 @@
     </span>LLaVANext,
     <span class="attr">#[serde(rename = <span class="string">"llava"</span>)]
     </span>LLaVA,
+    <span class="attr">#[serde(rename = <span class="string">"vllama"</span>)]
+    </span>VLlama,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>VisionLoaderType {
@@ -390,7 +463,8 @@
             <span class="string">"idefics2" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Idefics2),
             <span class="string">"llava_next" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::LLaVANext),
             <span class="string">"llava" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::LLaVA),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`."</span>)),
+            <span class="string">"vllama" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::VLlama),
+            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`."</span>)),
         }
     }
 }
@@ -441,6 +515,9 @@
         <span class="kw">let </span>config: Phi3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(config.num_hidden_layers)
     }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
 }
 
 <span class="comment">// ======================== Idefics 2 loader
@@ -493,6 +570,9 @@
         <span class="comment">// We only apply device mapping to text model
         </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
     }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
 }
 
 <span class="comment">// ======================== LLaVANext Loader
@@ -542,6 +622,9 @@
         <span class="comment">// We only apply device mapping to text model
         </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
     }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
 }
 
 <span class="comment">// ======================== LLaVA Loader
@@ -591,5 +674,60 @@
         <span class="comment">// We only apply device mapping to text model
         </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
     }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+}
+
+<span class="comment">// ======================== MLlama Loader
+
+</span><span class="doccomment">/// [`VisionLoader`] for an Llama Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+</span><span class="kw">pub struct </span>VLlamaLoader;
+
+<span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>VLlamaLoader {
+    <span class="kw">fn </span>load(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: MLlamaConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.text_config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(MLlamaModel::new(
+            <span class="kw-2">&amp;</span>config,
+            vb,
+            <span class="self">self</span>.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )<span class="question-mark">?</span>))
+    }
+    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: MLlamaConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.text_config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(config))
+    }
+    <span class="kw">fn </span>get_processor(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _model_config: <span class="kw-2">&amp;</span>str,
+        _processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        _preprocessor_config: PreProcessorConfig,
+    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+        Arc::new(MLlamaProcessor::new())
+    }
+    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>config: MLlamaConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="comment">// We only apply device mapping to text model
+        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
+    }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">false
+    </span>}
 }
 </code></pre></div></section></main></body></html>

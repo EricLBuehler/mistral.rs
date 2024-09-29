@@ -355,6 +355,18 @@
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
 <a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -549,7 +561,11 @@
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
 
-        <span class="kw">let </span>(pixel_values, pixel_attention_mask) = <span class="kw">if </span>is_prompt {
+        <span class="kw">let </span>has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        <span class="kw">let </span>(pixel_values, pixel_attention_mask) = <span class="kw">if </span>has_images {
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_values_accum = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_attention_mask_accum = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter_mut() {
@@ -558,13 +574,17 @@
                     pixel_attention_mask,
                     image_sizes: <span class="kw">_</span>,
                     num_img_tokens: <span class="kw">_</span>,
+                    aspect_ratio_ids: <span class="kw">_</span>,
+                    aspect_ratio_mask: <span class="kw">_</span>,
+                    num_tiles: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
                             .expect(<span class="string">"Need to have images by this point."</span>),
                         config,
                         device,
-                    )
+                        (usize::MAX, usize::MAX), <span class="comment">// Don't use it here...
+                    </span>)
                     .expect(<span class="string">"Preprocessing failed"</span>);
                 pixel_values_accum.push(pixel_values.unsqueeze(<span class="number">0</span>).unwrap());
                 pixel_attention_mask_accum
@@ -607,6 +627,7 @@
         <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
         config: <span class="kw-2">&amp;</span>PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>Device,
+        (_bs, _max_num_images): (usize, usize),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>patch_masks = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>pixel_values = Vec::new();
@@ -709,6 +730,9 @@
             pixel_attention_mask: <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>patch_masks, <span class="number">0</span>)<span class="question-mark">?</span>),
             image_sizes: <span class="prelude-val">None</span>,
             num_img_tokens: <span class="prelude-val">None</span>,
+            aspect_ratio_ids: <span class="prelude-val">None</span>,
+            aspect_ratio_mask: <span class="prelude-val">None</span>,
+            num_tiles: <span class="prelude-val">None</span>,
         })
     }
 }

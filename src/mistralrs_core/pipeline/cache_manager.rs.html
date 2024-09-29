@@ -319,6 +319,16 @@
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{Tensor, D};
@@ -490,7 +500,7 @@
     src: SeqCache,
 ) {
     <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-    <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+    <span class="lifetime">'outer</span>: <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
         <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
         <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
@@ -500,6 +510,11 @@
                 SeqCache::Draft =&gt; seq.draft_cache(),
             };
             <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
+            <span class="comment">// This case for llama 3.2 vision cross attn
+            </span><span class="kw">if </span>cache.is_none() {
+                new_cache.push(<span class="prelude-val">None</span>);
+                <span class="kw">continue </span><span class="lifetime">'outer</span>;
+            }
             <span class="kw">let </span>cache = cache
                 .as_ref()
                 .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
@@ -530,6 +545,11 @@
 ) {
     <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
         <span class="kw">let </span>cache = cache.get(layer).unwrap();
+        <span class="comment">// This case for llama 3.2 vision cross attn
+        </span><span class="kw">if </span>cache.is_none() {
+            <span class="kw">continue</span>;
+        }
+
         <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
         <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
 

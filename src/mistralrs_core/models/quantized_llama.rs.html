@@ -696,6 +696,10 @@
 <a href="#696" id="696">696</a>
 <a href="#697" id="697">697</a>
 <a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1118,10 +1122,14 @@
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
-        <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>qtok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>tok_embeddings = qtok_embeddings.dequantize(device)<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QRmsNorm::new(ct.tensor(<span class="string">"output_norm.weight"</span>, device)<span class="question-mark">?</span>, rms_norm_eps)<span class="question-mark">?</span>;
-        <span class="kw">let </span>output = ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>output = <span class="kw">if </span>!ct.has_tensor(<span class="string">"output.weight"</span>) {
+            ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?
+        </span>};
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
 
         <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;

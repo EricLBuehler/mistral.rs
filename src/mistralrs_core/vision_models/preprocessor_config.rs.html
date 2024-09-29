@@ -43,6 +43,7 @@
 <a href="#43" id="43">43</a>
 <a href="#44" id="44">44</a>
 <a href="#45" id="45">45</a>
+<a href="#46" id="46">46</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::Result;
@@ -67,6 +68,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) crop_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_crops: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) max_image_tiles: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[allow(dead_code)]

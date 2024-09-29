@@ -482,15 +482,6 @@
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
-<a href="#485" id="485">485</a>
-<a href="#486" id="486">486</a>
-<a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a>
-<a href="#489" id="489">489</a>
-<a href="#490" id="490">490</a>
-<a href="#491" id="491">491</a>
-<a href="#492" id="492">492</a>
-<a href="#493" id="493">493</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
@@ -589,13 +580,9 @@
     </span><span class="attr">#[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     </span>token_source: TokenSource,
 
-    <span class="doccomment">/// Enter interactive mode instead of serving a chat server. Exclusive to `--vi` (vision interactive mode).
+    <span class="doccomment">/// Enter interactive mode instead of serving a chat server.
     </span><span class="attr">#[clap(long, short, action)]
     </span>interactive_mode: bool,
-
-    <span class="doccomment">/// Enter vision interactive mode instead of serving a chat server. Exclusive to `--interactive-mode/-i`.
-    </span><span class="attr">#[clap(long = <span class="string">"vi"</span>, action)]
-    </span>vision_interactive_mode: bool,
 
     <span class="doccomment">/// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
@@ -952,13 +939,8 @@
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n);
 
-    <span class="kw">if </span>args.interactive_mode &amp;&amp; args.vision_interactive_mode {
-        <span class="macro">anyhow::bail!</span>(<span class="string">"Interactive mode and vision interactive mode are exclusive."</span>);
-    } <span class="kw">else if </span>args.interactive_mode {
-        interactive_mode(builder.build(), <span class="bool-val">false</span>, args.throughput_log).<span class="kw">await</span>;
-        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-    } <span class="kw">else if </span>args.vision_interactive_mode {
-        interactive_mode(builder.build(), <span class="bool-val">true</span>, args.throughput_log).<span class="kw">await</span>;
+    <span class="kw">if </span>args.interactive_mode {
+        interactive_mode(builder.build(), args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
 

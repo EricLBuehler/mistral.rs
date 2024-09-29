@@ -475,13 +475,20 @@
 <a href="#475" id="475">475</a>
 <a href="#476" id="476">476</a>
 <a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
 <span class="kw">pub use </span>engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 <span class="kw">pub use </span>lora::Ordering;
-<span class="kw">use </span>pipeline::ModelCategory;
+<span class="kw">pub use </span>pipeline::ModelCategory;
 <span class="kw">pub use </span>pipeline::Pipeline;
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::exceptions::PyValueError;
@@ -595,6 +602,7 @@
     reboot_state: RebootState,
     engine_handler: RwLock&lt;JoinHandle&lt;()&gt;&gt;,
     engine_id: usize,
+    category: ModelCategory,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -764,7 +772,8 @@
             throughput_logging_enabled,
         } = config;
 
-        <span class="kw">let </span>model_supports_reduced_gemm = <span class="kw">match </span>pipeline.try_lock().unwrap().category() {
+        <span class="kw">let </span>category = pipeline.try_lock().unwrap().category();
+        <span class="kw">let </span>model_supports_reduced_gemm = <span class="kw">match </span>category {
             ModelCategory::Text =&gt; <span class="bool-val">true</span>,
             ModelCategory::Vision { has_conv2d } =&gt; !has_conv2d,
             ModelCategory::Diffusion =&gt; <span class="bool-val">true</span>,
@@ -829,6 +838,7 @@
             next_request_id: Mutex::new(RefCell::new(<span class="number">0</span>)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
+            category,
         })
     }
 
@@ -902,6 +912,10 @@
 
     <span class="kw">pub fn </span>get_creation_time(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; u64 {
         <span class="self">self</span>.creation_time
+    }
+
+    <span class="kw">pub fn </span>get_model_category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+        <span class="self">self</span>.category
     }
 
     <span class="kw">pub fn </span>next_request_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {

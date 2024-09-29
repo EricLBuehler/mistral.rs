@@ -768,6 +768,14 @@
 <a href="#768" id="768">768</a>
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -1318,6 +1326,10 @@
 
             </span><span class="kw">let </span><span class="kw-2">mut </span>counts = <span class="macro">vec!</span>[<span class="number">0.0f32</span>; logits.len()];
             <span class="kw">for </span>ctx <span class="kw">in </span>context.iter() {
+                <span class="comment">// Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
+                </span><span class="kw">if </span><span class="kw-2">*</span>ctx <span class="kw">as </span>usize &gt;= logits.len() {
+                    <span class="kw">continue</span>;
+                }
                 counts[<span class="kw-2">*</span>ctx <span class="kw">as </span>usize] += <span class="number">1.0</span>;
             }
 
@@ -1386,6 +1398,10 @@
             <span class="comment">// Actually apply penalties
             </span><span class="kw">for </span>(tok, match_len) <span class="kw">in </span>match_lengths {
                 <span class="kw">if </span>match_len &gt;= params.allowed_length {
+                    <span class="comment">// Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
+                    </span><span class="kw">if </span>tok <span class="kw">as </span>usize &gt;= logits.len() {
+                        <span class="kw">continue</span>;
+                    }
                     <span class="kw">let </span>penalty = params.multiplier
                         * params.base.powf((match_len - params.allowed_length) <span class="kw">as </span>f32);
                     logits[tok <span class="kw">as </span>usize] -= penalty;
