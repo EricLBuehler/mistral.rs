@@ -1,6 +1,8 @@
 # Llama 3.2 Vision Model: [`meta-llama/Llama-3.2-11B-Vision-Instruct`](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct)
 
-Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements, and UQFF quantizations are provided.
+Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+
+UQFF quantizations will be released shortly.
 
 The Python and HTTP APIs support sending images as:
 - URL
