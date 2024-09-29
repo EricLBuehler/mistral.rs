@@ -32,6 +32,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Idefics2`
 - `LLaVaNext`
 - `LLaVa`
+- `VLlama`
 
 ### Architecture for diffusion models
 - `Flux`

@@ -36,7 +36,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 # )
 
 completion = client.chat.completions.create(
-    model="mllama",
+    model="llama-vision",
     messages=[
         {
             "role": "user",
@@ -49,7 +49,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },

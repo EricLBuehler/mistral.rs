@@ -86,6 +86,7 @@ class VisionArchitecture(Enum):
     Idefics2 = "idefics2"
     LLaVANext = "LLaVANext"
     LLaVA = "LLaVA"
+    VLlama = "VLlama"
 
 @dataclass
 class DiffusionArchitecture(Enum):

@@ -43,6 +43,7 @@ pub enum VisionArchitecture {
     Idefics2,
     LLaVANext,
     LLaVA,
+    VLlama,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -52,6 +53,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
             VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
             VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
+            VisionArchitecture::VLlama => VisionLoaderType::VLlama,
         }
     }
 }

@@ -85,8 +85,8 @@ pub enum VisionLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
-    #[serde(rename = "mllama")]
-    MLlama,
+    #[serde(rename = "vllama")]
+    VLlama,
 }
 
 impl FromStr for VisionLoaderType {
@@ -97,8 +97,8 @@ impl FromStr for VisionLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
-            "mllama" => Ok(Self::MLlama),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `mllama`.")),
+            "vllama" => Ok(Self::VLlama),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
         }
     }
 }
@@ -318,9 +318,9 @@ impl VisionModelLoader for LLaVALoader {
 /// [`VisionLoader`] for an Llama Vision model.
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
-pub struct MLlamaLoader;
+pub struct VLlamaLoader;
 
-impl VisionModelLoader for MLlamaLoader {
+impl VisionModelLoader for VLlamaLoader {
     fn load(
         &self,
         config: &str,

@@ -279,7 +279,7 @@ impl InputsProcessor for MLlamaImageProcessor {
 
             if n_images_in_text != n_images_in_images {
                 return Box::new(std::iter::once(Err(anyhow::Error::msg(format!(
-                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch."
+                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
                 )))));
             }
 

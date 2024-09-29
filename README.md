@@ -29,18 +29,20 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
+- 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
+
+    <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
+    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+
+    ```
+    ./mistralrs_server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+    ```
+
 - 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
     ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
     ```
-
-- 🦙 Run the Llama 3.1 model
-
-    ```
-    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
-    ```
-
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
@@ -54,9 +56,6 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
-
-    <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
-    <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
     ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
