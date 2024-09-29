@@ -716,11 +716,7 @@ impl MLlamaImageProcessor {
         for (i, (num_tiles_h, num_tiles_w)) in aspect_ratios.iter().enumerate() {
             aspect_ratio_mask = aspect_ratio_mask.slice_assign(
                 &[&i, &(..*num_tiles_h * *num_tiles_w)],
-                &Tensor::ones(
-                    (1, *num_tiles_h * *num_tiles_w),
-                    DType::I64,
-                    device,
-                )?,
+                &Tensor::ones((1, *num_tiles_h * *num_tiles_w), DType::I64, device)?,
             )?;
         }
 
