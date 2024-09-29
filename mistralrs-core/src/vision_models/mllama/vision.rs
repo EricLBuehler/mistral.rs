@@ -11,7 +11,6 @@ use candle_nn::{
 use crate::{
     attention::SdpaParams,
     layers::{FusedBiasLinear, Sdpa},
-    pipeline::NormalLoadingMetadata,
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -386,11 +385,7 @@ pub(super) struct MLlamaVisionModel {
 }
 
 impl MLlamaVisionModel {
-    pub(super) fn new(
-        cfg: &MLlamaVisionConfig,
-        vb: VarBuilder,
-        _normal_loading_metadata: &NormalLoadingMetadata,
-    ) -> Result<Self> {
+    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,

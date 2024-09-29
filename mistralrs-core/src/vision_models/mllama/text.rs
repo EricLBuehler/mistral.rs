@@ -209,12 +209,12 @@ impl MLlamaSelfAttentionDecoderLayer {
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         let attn = MLlamaTextSelfAttention::new(
             cfg,
@@ -272,7 +272,12 @@ struct MLlamaTextCrossAttention {
 }
 
 impl MLlamaTextCrossAttention {
-    fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &MLlamaTextConfig,
+        vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+    ) -> Result<Self> {
         Ok(Self {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
@@ -298,8 +303,16 @@ impl MLlamaTextCrossAttention {
                 &cfg.quantization_config,
                 vb.pp("o_proj"),
             )?,
-            q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
-            k_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("k_norm"))?,
+            q_norm: RmsNorm::new(
+                cfg.head_dim(),
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("q_norm"), false),
+            )?,
+            k_norm: RmsNorm::new(
+                cfg.head_dim(),
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("k_norm"), false),
+            )?,
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
             head_dim: cfg.head_dim(),
@@ -414,16 +427,18 @@ impl MLlamaCrossAttentionDecoderLayer {
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("input_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("post_attention_layernorm"), false),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         let attn = MLlamaTextCrossAttention::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("cross_attn"), loading_isq),
+            mapper,
+            layer_idx,
         )?;
 
         Ok(Self {
@@ -432,9 +447,15 @@ impl MLlamaCrossAttentionDecoderLayer {
             input_layernorm,
             post_attention_layernorm,
             // NOTE: Preapply the tanh
-            attn_gate: vb.get((1,), "cross_attn_attn_gate")?.tanh()?,
+            attn_gate: mapper
+                .set_device(layer_idx, vb.clone(), false)
+                .get((1,), "cross_attn_attn_gate")?
+                .tanh()?,
             // NOTE: Preapply the tanh
-            mlp_gate: vb.get((1,), "cross_attn_mlp_gate")?.tanh()?,
+            mlp_gate: mapper
+                .set_device(layer_idx, vb.clone(), false)
+                .get((1,), "cross_attn_mlp_gate")?
+                .tanh()?,
         })
     }
 
@@ -533,7 +554,7 @@ impl MLlamaTextModel {
                 Arc::new(Llama3RotaryEmbedding::new_mllama3(
                     vb.dtype(),
                     cfg,
-                    vb.device(),
+                    device,
                     is_gptx,
                 )?),
             );
@@ -548,7 +569,7 @@ impl MLlamaTextModel {
                         vb.pp(format!("layers.{i}")),
                         &*mapper,
                         i,
-                        normal_loading_metadata.loading_isq,
+                        false,
                     )?,
                 ))
             } else {
@@ -585,7 +606,7 @@ impl MLlamaTextModel {
                 head_dim: None,
             },
             self_attn_cache: Cache::new(cfg.num_hidden_layers, false),
-            device: vb.device().clone(),
+            device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
         })
@@ -663,14 +684,15 @@ impl IsqModel for MLlamaTextModel {
         let mut tensors = Vec::new();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             match layer {
-                MLlamaDecoderLayer::CrossAttn(cross) => {
-                    tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.down_proj, Some(i)));
+                MLlamaDecoderLayer::CrossAttn(_cross) => {
+                    // ISQ for cross attn shows poor performance!
+                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
                 }
                 MLlamaDecoderLayer::SelfAttn(self_attn) => {
                     tensors.push((&mut self_attn.attn.q_proj, Some(i)));

@@ -92,11 +92,11 @@ impl MLlamaModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let real_dev = normal_loading_metadata.real_device.clone();
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
-                vb.pp("vision_model"),
-                &normal_loading_metadata,
+                vb.pp("vision_model").set_device(real_dev.clone()),
             )?,
             language_model: MLlamaTextModel::new(
                 &cfg.text_config,
@@ -108,7 +108,7 @@ impl MLlamaModel {
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp("multi_modal_projector"),
+                vb.pp("multi_modal_projector").set_device(real_dev.clone()),
             )?,
             hidden_size: cfg.text_config.hidden_size,
         })
