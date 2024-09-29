@@ -3,7 +3,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module, VarBuilder};
+use candle_nn::{embedding, Activation, Embedding, Linear, Module, VarBuilder};
+use mistralrs_quant::{linear_no_bias, QuantMethod};
 
 use crate::{
     attention::SdpaParams,
@@ -11,43 +12,67 @@ use crate::{
     layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, NormalLoadingMetadata},
+    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
 };
 
 use super::config::MLlamaTextConfig;
 
 struct MLlamaTextMlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act: Activation,
 }
 
 impl MLlamaTextMlp {
     fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            gate_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
-            up_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?,
-            down_proj: linear_no_bias(cfg.intermediate_size, cfg.hidden_size, vb.pp("down_proj"))?,
+            gate_proj: linear_no_bias(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                vb.pp("gate_proj"),
+            )?,
+            up_proj: linear_no_bias(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                vb.pp("up_proj"),
+            )?,
+            down_proj: linear_no_bias(
+                cfg.intermediate_size,
+                cfg.hidden_size,
+                &cfg.quantization_config,
+                vb.pp("down_proj"),
+            )?,
             act: cfg.hidden_act,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward(
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let mut res = self.down_proj.forward(
             &self
                 .act
-                .forward(&self.gate_proj.forward(xs)?)?
-                .broadcast_mul(&self.up_proj.forward(xs)?)?,
-        )
+                .forward(&self.gate_proj.forward(&xs)?)?
+                .broadcast_mul(&self.up_proj.forward(&xs)?)?,
+        )?;
+        if self.gate_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 struct MLlamaTextSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     sdpa_params: SdpaParams,
     rope: Arc<Llama3RotaryEmbedding>,
     num_heads: usize,
@@ -67,21 +92,25 @@ impl MLlamaTextSelfAttention {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("q_proj"),
             )?,
             k_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("k_proj"),
             )?,
             v_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("v_proj"),
             )?,
             o_proj: linear_no_bias(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
+                &cfg.quantization_config,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -108,9 +137,19 @@ impl MLlamaTextSelfAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut q = self.q_proj.forward(hidden_states)?;
-        let mut k = self.k_proj.forward(hidden_states)?;
-        let mut v = self.v_proj.forward(hidden_states)?;
+        let mut hidden_states = hidden_states.clone();
+        let original_dtype = hidden_states.dtype();
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            hidden_states = hidden_states.to_dtype(t)?;
+        }
+        let mut q = self.q_proj.forward(&hidden_states)?;
+        let mut k = self.k_proj.forward(&hidden_states)?;
+        let mut v = self.v_proj.forward(&hidden_states)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         q = q.reshape((bs * q_len, self.num_heads, self.head_dim))?;
         k = k.reshape((bs * q_len, self.num_kv_heads, self.head_dim))?;
@@ -134,12 +173,19 @@ impl MLlamaTextSelfAttention {
 
         (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let attn_output = Sdpa
+        let mut attn_output = Sdpa
             .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
             .transpose(1, 2)?
             .reshape((bs, q_len, ()))?;
 
-        self.o_proj.forward(&attn_output)
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
+        }
+        let mut res = self.o_proj.forward(&attn_output)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -214,10 +260,10 @@ impl MLlamaSelfAttentionDecoderLayer {
 }
 
 struct MLlamaTextCrossAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     num_heads: usize,
@@ -231,21 +277,25 @@ impl MLlamaTextCrossAttention {
             q_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("q_proj"),
             )?,
             k_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("k_proj"),
             )?,
             v_proj: linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
+                &cfg.quantization_config,
                 vb.pp("v_proj"),
             )?,
             o_proj: linear_no_bias(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
+                &cfg.quantization_config,
                 vb.pp("o_proj"),
             )?,
             q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
@@ -265,20 +315,39 @@ impl MLlamaTextCrossAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut q = self.q_proj.forward(hidden_states)?;
+        let mut hidden_states = hidden_states.clone();
+        let original_dtype = hidden_states.dtype();
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            hidden_states = hidden_states.to_dtype(t)?;
+        }
+        let mut q = self.q_proj.forward(&hidden_states)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            q = q.to_dtype(original_dtype)?;
+        }
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let mut k = self.k_proj.forward(cross_attn_states)?;
+            let mut cross_attn_states = cross_attn_states.clone();
+            let original_dtype = cross_attn_states.dtype();
+            if let Some(t) = self.k_proj.quantized_act_type() {
+                cross_attn_states = cross_attn_states.to_dtype(t)?;
+            }
+            let mut k = self.k_proj.forward(&cross_attn_states)?;
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
+            if self.q_proj.quantized_act_type().is_some() {
+                k = k.to_dtype(original_dtype)?;
+            }
             k = self.k_norm.forward(&k)?;
 
-            let mut v = self.v_proj.forward(cross_attn_states)?;
+            let mut v = self.v_proj.forward(&cross_attn_states)?;
+            if self.q_proj.quantized_act_type().is_some() {
+                v = v.to_dtype(original_dtype)?;
+            }
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -294,7 +363,7 @@ impl MLlamaTextCrossAttention {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
-        let attn_output = {
+        let mut attn_output = {
             let att = MatMul.matmul_affine_div(
                 &q.contiguous()?,
                 &k.t()?.contiguous()?,
@@ -313,7 +382,14 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, q_len, ()))?
         };
 
-        self.o_proj.forward(&attn_output)
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
+        }
+        let mut res = self.o_proj.forward(&attn_output)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -432,7 +508,7 @@ impl MLlamaTextModel {
         let lm_head = if cfg.tie_word_embeddings {
             Linear::new(embed_tokens.embeddings().clone(), None)
         } else {
-            linear_no_bias(
+            candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 mapper.set_nm_device(vb.pp("lm_head"), false),
@@ -574,5 +650,39 @@ impl MLlamaTextModel {
             .forward(&extract_logits(&hidden_states, context_lens)?)?;
 
         Ok(hidden_states)
+    }
+}
+
+impl IsqModel for MLlamaTextModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut tensors = Vec::new();
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            match layer {
+                MLlamaDecoderLayer::CrossAttn(cross) => {
+                    tensors.push((&mut cross.attn.q_proj, Some(i)));
+                    tensors.push((&mut cross.attn.k_proj, Some(i)));
+                    tensors.push((&mut cross.attn.v_proj, Some(i)));
+                    tensors.push((&mut cross.attn.o_proj, Some(i)));
+                    tensors.push((&mut cross.mlp.gate_proj, Some(i)));
+                    tensors.push((&mut cross.mlp.up_proj, Some(i)));
+                    tensors.push((&mut cross.mlp.down_proj, Some(i)));
+                }
+                MLlamaDecoderLayer::SelfAttn(self_attn) => {
+                    tensors.push((&mut self_attn.attn.q_proj, Some(i)));
+                    tensors.push((&mut self_attn.attn.k_proj, Some(i)));
+                    tensors.push((&mut self_attn.attn.v_proj, Some(i)));
+                    tensors.push((&mut self_attn.attn.o_proj, Some(i)));
+                    tensors.push((&mut self_attn.mlp.gate_proj, Some(i)));
+                    tensors.push((&mut self_attn.mlp.up_proj, Some(i)));
+                    tensors.push((&mut self_attn.mlp.down_proj, Some(i)));
+                }
+            }
+        }
+        (tensors, &*self.mapper)
     }
 }

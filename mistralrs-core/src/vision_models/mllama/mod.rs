@@ -230,7 +230,7 @@ impl IsqModel for MLlamaModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        todo!()
+        self.language_model.get_layers()
     }
 }
 
