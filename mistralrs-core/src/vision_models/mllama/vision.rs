@@ -29,8 +29,8 @@ impl MLlamaPrecomputedPositionEmbedding {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let num_patches = (cfg.image_size / cfg.patch_size).pow(2) + 1;
         Ok(Self {
-            // TODO: pre tanh?
-            gate: vb.get((1,), "gate")?,
+            // NOTE: Preapply the tanh
+            gate: vb.get((1,), "gate")?.tanh()?,
             embedding: vb.get((num_patches, cfg.hidden_size), "embedding")?,
             tile_embedding: embedding(
                 cfg.max_aspect_ratio_id() + 1,
@@ -46,7 +46,7 @@ impl MLlamaPrecomputedPositionEmbedding {
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L197
     fn forward(&self, hidden_state: &Tensor, aspect_ratio_ids: &Tensor) -> Result<Tensor> {
         // position embeddings
-        let mut gated_pos_embed = (1. - self.gate.tanh()?)?.broadcast_mul(&self.embedding)?;
+        let mut gated_pos_embed = (1. - &self.gate)?.broadcast_mul(&self.embedding)?;
         let hidden_state = hidden_state.broadcast_add(&gated_pos_embed.reshape((
             1,
             1,
@@ -63,7 +63,7 @@ impl MLlamaPrecomputedPositionEmbedding {
             self.num_patches,
             self.hidden_size,
         ))?;
-        gated_pos_embed = self.gate.tanh()?.broadcast_mul(&tile_position_embedding)?;
+        gated_pos_embed = self.gate.broadcast_mul(&tile_position_embedding)?;
 
         hidden_state.broadcast_add(&gated_pos_embed)
     }
@@ -85,8 +85,8 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
                 vb.pp("embedding"),
             )?,
             gate: if GATED {
-                // TODO: pre tanh?
-                Some(vb.get((1,), "gate")?)
+                // NOTE: Preapply the tanh
+                Some(vb.get((1,), "gate")?.tanh()?)
             } else {
                 None
             },
@@ -100,7 +100,7 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
         embeddings = embeddings.reshape(((), self.max_num_tiles, 1, self.hidden_size))?;
 
         if let Some(gate) = &self.gate {
-            embeddings = embeddings.broadcast_mul(&gate.tanh()?)?;
+            embeddings = embeddings.broadcast_mul(gate)?;
         }
 
         hidden_state.broadcast_add(&embeddings)
@@ -247,10 +247,10 @@ impl MLlamaVisionEncoderLayer {
                 mlp,
                 input_layernorm,
                 post_attention_layernorm,
-                // TODO: pre tanh?
-                gate_attn: Some(vb.get((1,), "gate_attn")?),
-                // TODO: pre tanh?
-                gate_ffn: Some(vb.get((1,), "gate_ffn")?),
+                // NOTE: Preapply the tanh
+                gate_attn: Some(vb.get((1,), "gate_attn")?.tanh()?),
+                // NOTE: Preapply the tanh
+                gate_ffn: Some(vb.get((1,), "gate_ffn")?.tanh()?),
             })
         } else {
             Ok(Self {
@@ -273,7 +273,7 @@ impl MLlamaVisionEncoderLayer {
         hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
 
         if let Some(gate) = &self.gate_attn {
-            hidden_state = gate.tanh()?.broadcast_mul(&hidden_state)?;
+            hidden_state = gate.broadcast_mul(&hidden_state)?;
         }
         hidden_state = (residual + hidden_state)?;
 
@@ -284,7 +284,7 @@ impl MLlamaVisionEncoderLayer {
         hidden_state = self.mlp.forward(&hidden_state)?;
 
         if let Some(gate) = &self.gate_ffn {
-            hidden_state = gate.tanh()?.broadcast_mul(&hidden_state)?;
+            hidden_state = gate.broadcast_mul(&hidden_state)?;
         }
         residual + hidden_state
     }

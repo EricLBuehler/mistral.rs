@@ -332,10 +332,10 @@ impl MLlamaCrossAttentionDecoderLayer {
             mlp,
             input_layernorm,
             post_attention_layernorm,
-            // TODO: pre tanh?
-            attn_gate: vb.get((1,), "cross_attn_attn_gate")?,
-            // TODO: pre tanh?
-            mlp_gate: vb.get((1,), "cross_attn_mlp_gate")?,
+            // NOTE: Preapply the tanh
+            attn_gate: vb.get((1,), "cross_attn_attn_gate")?.tanh()?,
+            // NOTE: Preapply the tanh
+            mlp_gate: vb.get((1,), "cross_attn_mlp_gate")?.tanh()?,
         })
     }
 
@@ -354,7 +354,7 @@ impl MLlamaCrossAttentionDecoderLayer {
         hidden_states =
             self.attn
                 .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
-        hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
+        hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate)?)?;
 
         let residual = &hidden_states;
         let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
@@ -366,7 +366,7 @@ impl MLlamaCrossAttentionDecoderLayer {
                 .broadcast_mul(&hidden_states)?;
         }
 
-        residual + hidden_states.broadcast_mul(&self.mlp_gate.tanh()?)?
+        residual + hidden_states.broadcast_mul(&self.mlp_gate)?
     }
 }
 
