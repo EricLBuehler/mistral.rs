@@ -122,12 +122,12 @@ impl InputsProcessor for LLaVANextInputProcessor {
             *config.crop_size.as_ref().unwrap().get("width").unwrap(),
             *config.crop_size.as_ref().unwrap().get("height").unwrap(),
         );
-        let (pixel_values, image_sizes, num_img_tokens, num_image_samples) = if is_prompt
-            && input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, image_sizes, num_img_tokens, num_image_samples) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
@@ -141,8 +141,11 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
-                    .preprocess(imgs.clone(), config, device)
+                    .preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
                     .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
@@ -371,6 +374,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         images: Vec<image::DynamicImage>,
         config: &preprocessor_config::PreProcessorConfig,
         device: &candle_core::Device,
+        (_, _): (usize, usize),
     ) -> candle_core::Result<image_processor::PreprocessedImages> {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
@@ -425,6 +429,9 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             pixel_attention_mask: None,
             image_sizes: Some((original_size.0 as usize, original_size.1 as usize)),
             num_img_tokens: Some(vec![self.get_num_image_tokens(original_size)]),
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

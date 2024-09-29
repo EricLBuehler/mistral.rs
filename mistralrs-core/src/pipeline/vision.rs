@@ -3,7 +3,7 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -109,6 +109,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
+            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -192,6 +193,10 @@ impl Loader for VisionLoader {
             );
         } else if paged_attn_config.is_some() {
             warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
+        if !self.inner.supports_paged_attention() {
             paged_attn_config = None;
         }
 

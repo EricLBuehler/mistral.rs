@@ -169,7 +169,7 @@ fn clone_in_cache(
     src: SeqCache,
 ) {
     let mut new_cache = Vec::new();
-    for layer in 0..num_hidden_layers {
+    'outer: for layer in 0..num_hidden_layers {
         let mut k_vec = Vec::new();
         let mut v_vec = Vec::new();
         for seq in &mut *seqs {
@@ -179,6 +179,11 @@ fn clone_in_cache(
                 SeqCache::Draft => seq.draft_cache(),
             };
             let cache = src_cache.get(layer).unwrap();
+            // This case for llama 3.2 vision cross attn
+            if cache.is_none() {
+                new_cache.push(None);
+                continue 'outer;
+            }
             let cache = cache
                 .as_ref()
                 .expect("Not handling completions in `clone_in_cache`.");
@@ -209,6 +214,11 @@ fn clone_out_cache(
 ) {
     for layer in 0..num_hidden_layers {
         let cache = cache.get(layer).unwrap();
+        // This case for llama 3.2 vision cross attn
+        if cache.is_none() {
+            continue;
+        }
+
         let k_cache = cache.as_ref().unwrap().0.clone();
         let v_cache = cache.as_ref().unwrap().1.clone();
 

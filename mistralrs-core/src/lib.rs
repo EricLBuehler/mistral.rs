@@ -4,7 +4,7 @@ use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
-use pipeline::ModelCategory;
+pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
@@ -118,6 +118,7 @@ pub struct MistralRs {
     reboot_state: RebootState,
     engine_handler: RwLock<JoinHandle<()>>,
     engine_id: usize,
+    category: ModelCategory,
 }
 
 #[derive(Clone)]
@@ -287,7 +288,8 @@ impl MistralRs {
             throughput_logging_enabled,
         } = config;
 
-        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+        let category = pipeline.try_lock().unwrap().category();
+        let model_supports_reduced_gemm = match category {
             ModelCategory::Text => true,
             ModelCategory::Vision { has_conv2d } => !has_conv2d,
             ModelCategory::Diffusion => true,
@@ -352,6 +354,7 @@ impl MistralRs {
             next_request_id: Mutex::new(RefCell::new(0)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
+            category,
         })
     }
 
@@ -425,6 +428,10 @@ impl MistralRs {
 
     pub fn get_creation_time(&self) -> u64 {
         self.creation_time
+    }
+
+    pub fn get_model_category(&self) -> ModelCategory {
+        self.category
     }
 
     pub fn next_request_id(&self) -> usize {
