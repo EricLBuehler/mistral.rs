@@ -102,8 +102,8 @@ impl MLlamaModel {
                 &cfg.text_config,
                 vb.pp("language_model"),
                 is_gptx,
-                &normal_loading_metadata,
-                &attention_mechanism,
+                normal_loading_metadata,
+                attention_mechanism,
             )?,
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
