@@ -116,9 +116,9 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::BF16 => bytes_to_data::<bf16>(&tensor_data, &dims, device),
         DType::F32 => bytes_to_data::<f32>(&tensor_data, &dims, device),
         DType::F64 => bytes_to_data::<f64>(&tensor_data, &dims, device),
+        DType::I16 => bytes_to_data::<i16>(&tensor_data, &dims, device),
         DType::I32 => bytes_to_data::<i32>(&tensor_data, &dims, device),
         DType::I64 => bytes_to_data::<i64>(&tensor_data, &dims, device),
-        DType::I16 => bytes_to_data::<i16>(&tensor_data, &dims, device),
         DType::U32 => bytes_to_data::<u32>(&tensor_data, &dims, device),
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
     }

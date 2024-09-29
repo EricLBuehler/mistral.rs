@@ -119,6 +119,12 @@ impl CustomOp2 for BitWise {
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
             }
+            CpuStorage::I16(vs1) => {
+                let vs2 = s2.as_slice::<i16>().unwrap();
+                let result = self.bitwise(vs1, vs2);
+                let result = CpuStorage::I16(result);
+                Ok((result, l1.shape().clone()))
+            }
             CpuStorage::BF16(_) => Err(Error::UnsupportedDTypeForOp(DType::BF16, "bitwise")),
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise")),
@@ -393,6 +399,7 @@ fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) ->
             candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
             candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
             candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
+            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
             candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
             candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
             candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
@@ -481,6 +488,7 @@ impl CustomOp1 for NonZero {
         let d_in = match storage.dtype() {
             candle_core::DType::U8 => *storage.as_cuda_slice::<u8>()?.device_ptr(),
             candle_core::DType::U32 => *storage.as_cuda_slice::<u32>()?.device_ptr(),
+            candle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
             candle_core::DType::I32 => *storage.as_cuda_slice::<i32>()?.device_ptr(),
             candle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
             candle_core::DType::I64 => *storage.as_cuda_slice::<i64>()?.device_ptr(),

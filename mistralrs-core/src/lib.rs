@@ -39,6 +39,7 @@ mod amoe;
 mod cublaslt;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 mod dummy_paged_attention;
+mod exl2;
 mod gguf;
 pub mod layers;
 mod layers_masker;

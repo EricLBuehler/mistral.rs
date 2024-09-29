@@ -391,4 +391,80 @@ pub enum ModelSelected {
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
     },
+
+    /// Select an EXL2 model
+    EXL2 {
+        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
+        /// removing all remote accesses.
+        #[arg(short, long)]
+        tok_model_id: Option<String>,
+
+        /// Quantized model ID to find the `quantized_filename`.
+        /// This may be a HF hub repo or a local path.
+        #[arg(short = 'm', long)]
+        quantized_model_id: String,
+
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        #[arg(short = 'f', long)]
+        quantized_filename: String,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        // Specific EXL2 args
+        /// "auto", or VRAM allocation per GPU in GB
+        #[arg(short, long)]
+        gpu_split: Option<String>,
+
+        /// Maximum sequence length
+        #[arg(short, long)]
+        length: Option<usize>,
+
+        /// RoPE scaling factor
+        #[arg(short, long)]
+        rope_scale: Option<f32>,
+
+        /// RoPE alpha value (NTK)
+        #[arg(short, long)]
+        rope_alpha: Option<f32>,
+
+        /// Disable Flash Attention
+        #[arg(long, action)]
+        no_flash_attn: bool,
+
+        /// Disable xformers, an alternative plan of flash attn for older devices
+        #[arg(long, action)]
+        no_xformers: bool,
+
+        /// Disable Torch SDPA
+        #[arg(long, action)]
+        no_sdpa: bool,
+
+        /// Enable VRAM optimizations, potentially trading off speed
+        #[arg(short, long, action)]
+        low_mem: bool,
+
+        /// Override MoE model's default number of experts per token
+        #[arg(short, long)]
+        experts_per_token: Option<usize>,
+
+        /// Load weights in Q4 mode
+        #[arg(long, action)]
+        load_q4: bool,
+
+        /// Use alternative safetensors loader (with direct I/O when available)
+        #[arg(long, action)]
+        fast_safetensors: bool,
+
+        /// Do not override model config options in case of compatibility issues
+        #[arg(short, long, action)]
+        ignore_compatibility: bool,
+
+        /// Chunk size ('input length')
+        #[arg(long)]
+        chunk_size: Option<usize>,
+    },
 }

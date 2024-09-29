@@ -2,6 +2,7 @@ mod amoe;
 mod cache_manager;
 pub mod chat_template;
 mod diffusion;
+mod exl2;
 mod ggml;
 mod gguf;
 mod inputs_processor;
@@ -16,6 +17,7 @@ mod speculative;
 mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
+
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::diffusion_models::response::send_responses;

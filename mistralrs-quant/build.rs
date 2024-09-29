@@ -8,6 +8,8 @@ fn main() {
         println!("cargo:rerun-if-changed=build.rs");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let lib_files = vec![
+            "kernels/exl2/q_gemm_exl2.cu",
+            "kernels/exl2/q_matrix.cu",
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
@@ -32,6 +34,7 @@ fn main() {
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
             builder = builder.arg("--compiler-options");
+            //builder = builder.arg("-fPIC -fPIE");
             builder = builder.arg(cuda_nvcc_flags_env);
         }
 

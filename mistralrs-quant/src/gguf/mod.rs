@@ -34,7 +34,8 @@ impl QuantMethod for GgufMatMul {
                 w: QMatMul::from_arc(q_weight)?,
                 b,
             }),
-            QuantMethodConfig::Gptq { .. }
+            QuantMethodConfig::Exl2 { .. }
+            | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. } => unreachable!(),
         }

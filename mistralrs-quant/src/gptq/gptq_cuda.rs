@@ -237,7 +237,8 @@ impl QuantMethod for GptqLayer {
                     bias,
                 })
             }
-            QuantMethodConfig::Gguf { .. }
+            QuantMethodConfig::Exl2 { .. }
+            | QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. } => {
                 unreachable!()

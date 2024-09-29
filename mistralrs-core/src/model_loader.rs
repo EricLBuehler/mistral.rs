@@ -3,7 +3,9 @@ use std::{
     num::NonZeroUsize,
 };
 
+use crate::exl2::{EXL2LoaderBuilder, EXL2SpecificConfig};
 use crate::{
+    exl2::EXL2_MULTI_FILE_DELIMITER,
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig, Loader, ModelDType,
@@ -57,6 +59,7 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
     match model {
         ModelSelected::Plain { .. }
         | ModelSelected::Lora { .. }
+        | ModelSelected::EXL2 { .. }
         | ModelSelected::GGUF { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
@@ -87,6 +90,7 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::VisionPlain { dtype, .. }
         | ModelSelected::DiffusionPlain { dtype, .. } => Ok(*dtype),
         ModelSelected::GGUF { .. }
+        | ModelSelected::EXL2 { .. }
         | ModelSelected::LoraGGUF { .. }
         | ModelSelected::GGML { .. }
         | ModelSelected::LoraGGML { .. }
@@ -228,6 +232,52 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             },
         )
         .build(),
+        ModelSelected::EXL2 {
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename,
+            topology,
+
+            // Specific EXL2 args
+            gpu_split,
+            length,
+            rope_scale,
+            rope_alpha,
+            no_flash_attn,
+            no_xformers,
+            no_sdpa,
+            low_mem,
+            experts_per_token,
+            load_q4,
+            fast_safetensors,
+            ignore_compatibility,
+            chunk_size,
+        } => EXL2LoaderBuilder::new(
+            args.chat_template,
+            tok_model_id,
+            quantized_model_id,
+            quantized_filename
+                .split(EXL2_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            EXL2SpecificConfig {
+                topology: Topology::from_option_path(topology)?,
+                gpu_split,
+                length,
+                rope_scale,
+                rope_alpha,
+                no_flash_attn,
+                no_xformers,
+                no_sdpa,
+                low_mem,
+                experts_per_token,
+                load_q4,
+                fast_safetensors,
+                ignore_compatibility,
+                chunk_size,
+            },
+        )
+        .build()?,
         ModelSelected::XLoraGGUF {
             tok_model_id,
             quantized_model_id,
