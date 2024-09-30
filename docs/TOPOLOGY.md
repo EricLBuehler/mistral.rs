@@ -43,11 +43,19 @@ Note that:
 Model topologies may be applied to all model types.
 
 ## CLI example
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3 --topology topologies/isq.yml   
 ```
 
 ## HTTP server example
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... -- --port 1234 plain -m microsoft/Phi-3-mini-128k-instruct -a phi3 --topology topologies/isq.yml   
 ```

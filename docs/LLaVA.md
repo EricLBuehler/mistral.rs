@@ -43,6 +43,11 @@ Text: The image shows a steep, snow-covered hillside with a pine tree on the rig
 ---
 
 1) Start the server
+
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf -a llava_next
 //or 

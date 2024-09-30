@@ -36,6 +36,10 @@ The image depicts a group of orange ants climbing over a black pole. The ants ar
 ---
 
 1) Start the server
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m HuggingFaceM4/idefics2-8b-chatty -a idefics2
 ```
