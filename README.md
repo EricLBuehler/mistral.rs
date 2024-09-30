@@ -131,7 +131,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
 |Phi 3.5 MoE|✅| |✅| |
-|Qwen 2|✅| |✅|✅|
+|Qwen 2.5|✅| |✅|✅|
 |Phi 3 Vision|✅| |✅|✅|
 |Idefics 2|✅| |✅|✅|
 |Gemma 2|✅|✅|✅|✅|
@@ -483,7 +483,7 @@ Please submit more benchmarks via raising an issue!
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
 |Phi 3.5 MoE| | |✅|
-|Qwen 2| | |✅|
+|Qwen 2.5| | |✅|
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
@@ -510,7 +510,7 @@ Please submit more benchmarks via raising an issue!
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
 |Phi 3.5 MoE| | | |
-|Qwen 2| | | |
+|Qwen 2.5| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
@@ -529,7 +529,7 @@ Please submit more benchmarks via raising an issue!
 |Phi 2|✅|
 |Phi 3|✅|
 |Phi 3.5 MoE| |
-|Qwen 2|✅|
+|Qwen 2.5|✅|
 |Phi 3 Vision| |
 |Idefics 2| |
 |Gemma 2|✅|

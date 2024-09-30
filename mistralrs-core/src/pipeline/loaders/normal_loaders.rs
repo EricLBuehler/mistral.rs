@@ -903,6 +903,7 @@ struct Qwen2BasicConfig {
     rms_norm_eps: f64,
     hidden_act: Activation,
     quantization_config: Option<QuantizedConfig>,
+    tie_word_embeddings: bool,
 }
 
 impl Qwen2BasicConfig {
@@ -922,6 +923,7 @@ impl Qwen2BasicConfig {
             sliding_window: basic_config.sliding_window,
             use_flash_attn,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
