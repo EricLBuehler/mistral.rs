@@ -87,12 +87,12 @@ CLI usage is via the [TOML selector](TOML_SELECTOR.md#anymoe) where you can also
 
 For example, to use the demo fine-tuned expert:
 ```
-./mistralrs_server -i toml -f toml-selectors/anymoe.toml
+./mistralrs-server -i toml -f toml-selectors/anymoe.toml
 ```
 
 To use the demo LoRA expert:
 ```
-./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
+./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
 ```
 
 ## Python example

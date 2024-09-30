@@ -20,7 +20,7 @@ Some models do not provide a `tokenizer.json` file although mistral.rs expects o
 ```bash
 $ python3 scripts/get_tokenizers_json.py
 Enter model ID: microsoft/Orca-2-13b
-$ ./mistralrs_server --port 1234 --log output.log plain -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json
+$ ./mistralrs-server --port 1234 --log output.log plain -m microsoft/Orca-2-13b --tokenizer-json tokenizer.json
 ```
 
 Putting it all together, to run, for example, an [Orca](https://huggingface.co/microsoft/Orca-2-13b) model (which does not come with a `tokenizer.json` or chat template):

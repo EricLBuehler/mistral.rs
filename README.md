@@ -33,30 +33,30 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
-    ./mistralrs_server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+    ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
     ```
 
 - 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
-    ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
+    ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
     ```
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
-    ./mistralrs_server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
+    ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
 - 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
 
     ```
-    ./mistralrs_server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+    ./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
 
     ```
-    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
+    ./mistralrs-server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
     ```
 
 - 🌲📷 Run the FLUX.1 diffusion model: [documentation and guide here](docs/FLUX.md)
@@ -64,7 +64,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     <img src="https://github.com/user-attachments/assets/82bf5009-e3e9-402b-acf9-c48a52c7721b" width = "400" height = "267">
 
     ```
-    ./mistralrs_server --port 1234 diffusion-plain diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+    ./mistralrs-server --port 1234 diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
     ```
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
@@ -260,7 +260,7 @@ Enabling features is done by passing `--features ...` to the build system. When 
     
     *Example on Ubuntu:*
     ```
-    cp ./target/release/mistralrs-server ./mistralrs_server
+    cp ./target/release/mistralrs-server ./mistralrs-server
     ```
 
 7) Use our APIs and integrations 
@@ -287,7 +287,7 @@ Mistral.rs can automatically download models from HF Hub. To access gated models
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs_server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 - Python:
 
@@ -299,7 +299,7 @@ If token cannot be loaded, no token will be used (i.e. effectively using `none`)
 
 You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
-./mistralrs_server --port 1234 plain -m . -a mistral
+./mistralrs-server --port 1234 plain -m . -a mistral
 ```
 
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
@@ -374,7 +374,7 @@ please consider using the method demonstrated in examples below, where the token
 
 ## Run with the CLI
 
-Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs_server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
 
@@ -424,7 +424,27 @@ If you do not specify the architecture, an attempt will be made to use the model
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+```
+
+Vision models work too:
+
+```bash
+./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+```
+
+And even diffusion models:
+
+```bash
+./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+```
+
+### OpenAI HTTP server
+
+You can an HTTP server
+
+```bash
+./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
 ```
 
 ### Structured selection with a `.toml` file
@@ -433,7 +453,7 @@ We provide a method to select models with a `.toml` file. The keys are the same 
 
 Example:
 ```bash
-./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
+./mistralrs-server --port 1234 toml -f toml-selectors/gguf.toml
 ```
 
 ---
@@ -537,7 +557,7 @@ It is also important to check the chat template style of the model. If the HF hu
 
 For example, when using a Zephyr model:
 
-`./mistralrs_server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 
