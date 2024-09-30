@@ -190,7 +190,10 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
+                        if matches!(
+                            choice.finish_reason.as_ref().unwrap(),
+                            StopReason::Length(_)
+                        ) {
                             print!("...");
                         }
                         break;
