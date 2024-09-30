@@ -244,6 +244,7 @@ impl Loader for VisionLoader {
                 silent,
                 mapper,
                 loading_isq,
+                self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism
             ),
@@ -539,8 +540,14 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb =
-                from_mmaped_safetensors(filenames, vec![], Some(dtype), dev, silent, move |key| {
+            let vb = from_mmaped_safetensors(
+                filenames,
+                vec![],
+                Some(dtype),
+                dev,
+                silent,
+                None,
+                move |key| {
                     if regex.is_match(&key) {
                         // Idx of the last char of the layer id, +1
                         // Assumes N.MLP
@@ -553,7 +560,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                     } else {
                         false
                     }
-                })?;
+                },
+            )?;
             vbs.push(vb);
         }
 
@@ -589,6 +597,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 Some(dtype),
                 dev,
                 silent,
+                None,
                 |_| true,
             )?;
             info!(

@@ -9,11 +9,13 @@ use candle_nn::VarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use regex::Regex;
 use serde::Deserialize;
 
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
@@ -51,7 +53,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn config(&self) -> &ModelConfigMetadata;
 }
 
-pub trait VisionModelLoader {
+pub trait VisionModelLoader: IsqModelLoader {
     fn load(
         &self,
         config: &str,
@@ -154,6 +156,28 @@ impl VisionModelLoader for Phi3VLoader {
     }
 }
 
+impl IsqModelLoader for Phi3VLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Idefics 2 loader
 
 /// [`VisionLoader`] for an Idefics 2 Vision model.
@@ -209,6 +233,35 @@ impl VisionModelLoader for Idefics2Loader {
     }
 }
 
+impl IsqModelLoader for Idefics2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== LLaVANext Loader
 
 /// [`VisionLoader`] for an LLaVANext Vision model.
@@ -258,6 +311,35 @@ impl VisionModelLoader for LLaVANextLoader {
     }
     fn supports_paged_attention(&self) -> bool {
         true
+    }
+}
+
+impl IsqModelLoader for LLaVANextLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }
 
@@ -313,6 +395,35 @@ impl VisionModelLoader for LLaVALoader {
     }
 }
 
+impl IsqModelLoader for LLaVALoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== MLlama Loader
 
 /// [`VisionLoader`] for an Llama Vision model.
@@ -362,5 +473,34 @@ impl VisionModelLoader for VLlamaLoader {
     }
     fn supports_paged_attention(&self) -> bool {
         false
+    }
+}
+
+impl IsqModelLoader for VLlamaLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }

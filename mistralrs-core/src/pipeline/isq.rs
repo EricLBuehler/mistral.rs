@@ -7,6 +7,7 @@ use std::{
     time::Instant,
 };
 
+use anyhow::Result;
 use candle_core::{Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
@@ -16,6 +17,7 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
     IntoParallelRefMutIterator, ParallelIterator,
 };
+use regex::Regex;
 use serde::Deserialize;
 use tracing::info;
 
@@ -493,5 +495,18 @@ pub trait IsqModel {
         info!("Loaded in-situ quantization artifacts into {total_tensors} total tensors. Took {delta:.2}s", );
 
         Ok(())
+    }
+}
+
+/// Trait for loading models with ISQ.
+pub(crate) trait IsqModelLoader {
+    /// Regex to match layers which will have standard ISQ applied.
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(Vec::new())
+    }
+
+    /// Regex to match layers which will have standard MoQE ISQ applied.
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
     }
 }

@@ -11,6 +11,7 @@ use crate::{
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
+        isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel,
     },
@@ -25,6 +26,7 @@ use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::{
@@ -83,7 +85,7 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
 }
 
-pub trait NormalModelLoader {
+pub trait NormalModelLoader: IsqModelLoader {
     fn load(
         &self,
         config: &str,
@@ -279,6 +281,13 @@ impl NormalModelLoader for AutoLoader {
         Self::get_loader(config)?.is_gptx(config)
     }
 }
+
+impl IsqModelLoader for AutoLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes(config)
+    }
+}
+
 // ======================== Mistral loader
 
 #[derive(Deserialize, Debug)]
@@ -372,6 +381,35 @@ impl NormalModelLoader for MistralLoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(MistralBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for MistralLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }
 
@@ -483,6 +521,35 @@ impl NormalModelLoader for GemmaLoader {
     }
 }
 
+impl IsqModelLoader for GemmaLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Llama loader
 
 #[derive(Deserialize)]
@@ -585,6 +652,35 @@ impl NormalModelLoader for LlamaLoader {
     }
 }
 
+impl IsqModelLoader for LlamaLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Mixtral loader
 
 #[derive(Deserialize)]
@@ -680,6 +776,40 @@ impl NormalModelLoader for MixtralLoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(MixtralBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for MixtralLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // Experts
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.gate\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }
 
@@ -779,6 +909,30 @@ impl NormalModelLoader for Phi2Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(Phi2BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Phi2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?);
+        Ok(regexes)
     }
 }
 
@@ -887,6 +1041,28 @@ impl NormalModelLoader for Phi3Loader {
     }
 }
 
+impl IsqModelLoader for Phi3Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Qwen2 loader
 
 #[derive(Deserialize)]
@@ -972,6 +1148,35 @@ impl NormalModelLoader for Qwen2Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(Qwen2BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Qwen2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        Ok(regexes)
     }
 }
 
@@ -1088,6 +1293,35 @@ impl NormalModelLoader for Gemma2Loader {
     }
 }
 
+impl IsqModelLoader for Gemma2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Starcoder2 loader
 
 #[derive(Deserialize, Debug)]
@@ -1183,6 +1417,30 @@ impl NormalModelLoader for Starcoder2Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Starcoder2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.c_fc\.(weight|bias)$")?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?);
+        Ok(regexes)
     }
 }
 
@@ -1292,5 +1550,52 @@ impl NormalModelLoader for Phi3_5MoELoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Phi3_5MoELoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }

@@ -74,6 +74,22 @@ impl From<DiffusionArchitecture> for DiffusionLoaderType {
     }
 }
 
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsqOrganization {
+    Default,
+    MoQE,
+}
+
+impl From<IsqOrganization> for mistralrs_core::IsqOrganization {
+    fn from(value: IsqOrganization) -> Self {
+        match value {
+            IsqOrganization::Default => mistralrs_core::IsqOrganization::Default,
+            IsqOrganization::MoQE => mistralrs_core::IsqOrganization::MoeExpertsOnly,
+        }
+    }
+}
+
 #[pyclass]
 #[derive(Clone)]
 pub enum Which {
@@ -92,7 +108,7 @@ pub enum Which {
         arch: Option<Architecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
-        organization: Option<String>,
+        organization: Option<IsqOrganization>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,

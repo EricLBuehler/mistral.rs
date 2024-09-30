@@ -137,7 +137,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |--|--|--|--|--|
 |Mistral v0.1/v0.2/v0.3|✅|✅|✅|✅|
 |Gemma|✅|✅|✅|✅|
-|Llama 2/3|✅|✅|✅|✅|
+|Llama 3.1/3.2|✅|✅|✅|✅|
 |Mixtral|✅|✅|✅| |
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
@@ -149,6 +149,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Starcoder 2|✅|✅|✅|✅|
 |LLaVa Next|✅| |✅|✅|
 |LLaVa|✅| |✅|✅|
+|Llama 3.2 Vision|✅| |✅| |
 
 ## APIs and Integrations
 
