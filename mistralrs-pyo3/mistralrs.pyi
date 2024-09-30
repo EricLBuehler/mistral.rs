@@ -247,6 +247,7 @@ class Runner:
         pa_gpu_mem: int | float | None = None,
         pa_blk_size: int | None = None,
         no_paged_attn: bool = False,
+        prompt_batchsize: int | None = None,
         seed: int | None = None,
     ) -> None:
         """
@@ -283,6 +284,7 @@ class Runner:
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
         - `no_paged_attn` disables PagedAttention on CUDA
+        - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
         """
         ...
