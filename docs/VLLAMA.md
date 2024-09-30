@@ -26,6 +26,10 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
 
 1) Start up interactive mode with the Llama 3.2 model
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... --release -- -i --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
@@ -37,6 +41,11 @@ How can I assist you today?
 ```
 
 3) Pass the model an image and ask a question.
+
+> [!NOTE]
+> In interactive mode, the Llama 3.2 vision models do not automatically add the image token!
+> It should be added to messages manually, and is of the formatt `<|image|>`.
+
 ```
 > Hello!
 How can I assist you today?
@@ -92,6 +101,10 @@ Overall, the image showcases the diverse geological and ecological features of M
 ---
 
 1) Start the server
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
@@ -118,7 +131,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -218,7 +231,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }

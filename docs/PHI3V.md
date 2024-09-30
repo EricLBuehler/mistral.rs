@@ -14,6 +14,10 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
 
+> [!NOTE]
+> The Phi 3 vision model does not automatically add the image tokens!
+> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
+
 ## HTTP server
 You can find this example [here](../examples/server/phi3v.py).
 
@@ -42,6 +46,10 @@ The perspective from which this photo is taken offers an expansive view of the m
 ---
 
 1) Start the server
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
 ```
