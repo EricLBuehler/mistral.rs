@@ -15,7 +15,7 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Aspect ratio is not preserved in that case.
 
 > [!NOTE]
-> The Phi 3 vision model does not automatically add the image tokens.
+> The Phi 3 vision model does not automatically add the image tokens!
 > They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
 
 ## HTTP server

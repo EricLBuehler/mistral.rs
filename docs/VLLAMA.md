@@ -41,6 +41,11 @@ How can I assist you today?
 ```
 
 3) Pass the model an image and ask a question.
+
+> [!NOTE]
+> In interactive mode, the Llama 3.2 vision models do not automatically add the image token!
+> It should be added to messages manually, and is of the formatt `<|image|>`.
+
 ```
 > Hello!
 How can I assist you today?
@@ -226,7 +231,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
