@@ -94,6 +94,12 @@ class DiffusionArchitecture(Enum):
     FluxOffloaded = "flux-offloaded"
 
 @dataclass
+class IsqOrganization(Enum):
+    Default = "default"
+    MoQE = "moqe"
+
+
+@dataclass
 class ModelDType(Enum):
     Auto = "auto"
     BF16 = "bf16"
