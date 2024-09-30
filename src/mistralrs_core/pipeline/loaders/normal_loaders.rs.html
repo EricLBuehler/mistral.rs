@@ -1294,6 +1294,8 @@
 <a href="#1294" id="1294">1294</a>
 <a href="#1295" id="1295">1295</a>
 <a href="#1296" id="1296">1296</a>
+<a href="#1297" id="1297">1297</a>
+<a href="#1298" id="1298">1298</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
@@ -2199,6 +2201,7 @@
     rms_norm_eps: f64,
     hidden_act: Activation,
     quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+    tie_word_embeddings: bool,
 }
 
 <span class="kw">impl </span>Qwen2BasicConfig {
@@ -2218,6 +2221,7 @@
             sliding_window: basic_config.sliding_window,
             use_flash_attn,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
