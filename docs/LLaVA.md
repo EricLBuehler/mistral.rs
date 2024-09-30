@@ -17,6 +17,10 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
+> [!NOTE]
+> The Idefics 2 vision model does not automatically add the image tokens.
+> They should be added to messages manually, and are of the format `<image>`.
+
 ## HTTP server
 You can find this example [here](../examples/server/llava_next.py).
 

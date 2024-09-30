@@ -321,10 +321,19 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                     .expect("Failed to read image from URL/path");
                 images.push(image);
 
-                let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
-                user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                user_message.insert("content".to_string(), Either::Left(message));
-                messages.push(user_message);
+                messages.push(IndexMap::from([
+                    ("role".to_string(), Either::Left("user".to_string())),
+                    (
+                        "content".to_string(),
+                        Either::Right(vec![
+                            IndexMap::from([("type".to_string(), "image".to_string())]),
+                            IndexMap::from([
+                                ("type".to_string(), "text".to_string()),
+                                ("content".to_string(), message),
+                            ]),
+                        ]),
+                    ),
+                ]));
             }
             message => {
                 let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
