@@ -76,40 +76,38 @@ print(res.usage)
 You can find this example [here](../mistralrs/examples/phi3_5_moe/main.rs).
 
 ```rust
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-            prompt_batchsize: None,
-            topology: None,
-            organization: Default::default(),
-            write_uqff: None,
-            from_uqff: None,
-        },
-        None,
-        None,
-        Some("microsoft/Phi-3.5-MoE-instruct".to_string()),
-    )
-    .build(NormalLoaderType::Phi3_5MoE)?;
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        Some(IsqType::Q4K),
-        None, // No PagedAttention.
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
-    )
-    .build())
+use anyhow::Result;
+use mistralrs::{
+    IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-MoE-instruct")
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::System,
+            "You are an AI agent with a specialty in programming.",
+        )
+        .add_message(
+            TextMessageRole::User,
+            "Hello! How are you? Please write generic binary search function in Rust.",
+        );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
 }
 ```
