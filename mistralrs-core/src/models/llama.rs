@@ -485,7 +485,7 @@ impl Llama {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
-                Arc::new(Llama3RotaryEmbedding::new(
+                Arc::new(Llama3RotaryEmbedding::new_llama3(
                     vb.dtype(),
                     cfg,
                     device,

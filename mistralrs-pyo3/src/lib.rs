@@ -97,10 +97,7 @@ fn parse_which(
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
-                organization: organization
-                    .as_deref()
-                    .map(IsqOrganization::from_str)
-                    .unwrap_or(Ok(Default::default()))?,
+                organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
                 from_uqff,
             },

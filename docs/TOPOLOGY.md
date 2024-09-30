@@ -2,6 +2,8 @@
 
 <h3>Quantization and device mapping in one file.</h3>
 
+Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
+
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:
 
 1) Top-level keys are either:

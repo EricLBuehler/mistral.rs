@@ -23,6 +23,7 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::LLaVAProcessor;
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
+use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -69,6 +70,7 @@ pub trait VisionModelLoader {
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
+    fn supports_paged_attention(&self) -> bool;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -83,6 +85,8 @@ pub enum VisionLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
+    #[serde(rename = "vllama")]
+    VLlama,
 }
 
 impl FromStr for VisionLoaderType {
@@ -93,7 +97,8 @@ impl FromStr for VisionLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`.")),
+            "vllama" => Ok(Self::VLlama),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
         }
     }
 }
@@ -143,6 +148,9 @@ impl VisionModelLoader for Phi3VLoader {
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: Phi3Config = serde_json::from_str(config)?;
         Ok(config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
     }
 }
 
@@ -196,6 +204,9 @@ impl VisionModelLoader for Idefics2Loader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -245,6 +256,9 @@ impl VisionModelLoader for LLaVANextLoader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
 }
 
 // ======================== LLaVA Loader
@@ -293,5 +307,60 @@ impl VisionModelLoader for LLaVALoader {
         let config: LLaVAConfig = serde_json::from_str(config)?;
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+// ======================== MLlama Loader
+
+/// [`VisionLoader`] for an Llama Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct VLlamaLoader;
+
+impl VisionModelLoader for VLlamaLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(MLlamaModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(MLlamaProcessor::new())
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: MLlamaConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
     }
 }

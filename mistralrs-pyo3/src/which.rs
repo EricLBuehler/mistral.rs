@@ -43,6 +43,7 @@ pub enum VisionArchitecture {
     Idefics2,
     LLaVANext,
     LLaVA,
+    VLlama,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -52,6 +53,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
             VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
             VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
+            VisionArchitecture::VLlama => VisionLoaderType::VLlama,
         }
     }
 }
@@ -68,6 +70,22 @@ impl From<DiffusionArchitecture> for DiffusionLoaderType {
         match value {
             DiffusionArchitecture::Flux => DiffusionLoaderType::Flux,
             DiffusionArchitecture::FluxOffloaded => DiffusionLoaderType::FluxOffloaded,
+        }
+    }
+}
+
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsqOrganization {
+    Default,
+    MoQE,
+}
+
+impl From<IsqOrganization> for mistralrs_core::IsqOrganization {
+    fn from(value: IsqOrganization) -> Self {
+        match value {
+            IsqOrganization::Default => mistralrs_core::IsqOrganization::Default,
+            IsqOrganization::MoQE => mistralrs_core::IsqOrganization::MoeExpertsOnly,
         }
     }
 }
@@ -90,7 +108,7 @@ pub enum Which {
         arch: Option<Architecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
-        organization: Option<String>,
+        organization: Option<IsqOrganization>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,

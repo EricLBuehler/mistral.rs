@@ -155,6 +155,24 @@ impl VisionMessages {
         self
     }
 
+    /// This handles adding the `<|image|>` prefix to the prompt.
+    pub fn add_vllama_image_message(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        image: DynamicImage,
+    ) -> Self {
+        self.images.push(image);
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            (
+                "content".to_string(),
+                Either::Left(format!("<|image|>{}", text.to_string())),
+            ),
+        ]));
+        self
+    }
+
     /// This handles adding the `<image>` prefix to the prompt.
     pub fn add_llava_image_message(
         mut self,

@@ -35,7 +35,7 @@ pub use loaders::{
     LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
     Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -191,6 +191,7 @@ pub trait AnyMoePipelineMixin {
     }
 }
 
+/// Category of the model.
 #[derive(PartialEq, Copy, Clone)]
 pub enum ModelCategory {
     Text,

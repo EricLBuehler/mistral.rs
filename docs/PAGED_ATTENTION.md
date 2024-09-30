@@ -39,68 +39,45 @@ cargo run --release --features cuda -- -i --pa-gpu-mem-usage .95 --pa-blk-size 3
 You can find this example [here](../mistralrs/examples/paged_attn/main.rs).
 
 ```rust
-use either::Either;
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
-
+use anyhow::Result;
 use mistralrs::{
-    Constraint, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource,
+    IsqType, MemoryGpuConfig, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+    TextModelBuilder,
 };
 
-/// Gets the best device, cpu, cuda if compiled with CUDA
-pub(crate) fn best_device() -> Result<Device> {
-    #[cfg(not(feature = "metal"))]
-    {
-        Device::cuda_if_available(0)
-    }
-    #[cfg(feature = "metal")]
-    {
-        Device::new_metal(0)
-    }
-}
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+        .with_isq(IsqType::Q8_0)
+        .with_logging()
+        .with_paged_attn(|| {
+            PagedAttentionMetaBuilder::default()
+                .with_block_size(32)
+                .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
+                .build()
+        })?
+        .build()
+        .await?;
 
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-        },
-        None,
-        None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-    )
-    .build(NormalLoaderType::Mistral);
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-        Some(PagedAttentionConfig::new(Some(32), 1024, 4096)?),
-    )?;
-    let config = pipeline
-        .blocking_lock()
-        .get_metadata()
-        .cache_config
-        .as_ref()
-        .unwrap()
-        .clone();
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::PagedAttentionMeta {
-            max_num_seqs: 5,
-            config,
-        },
-    )
-    .build())
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::System,
+            "You are an AI agent with a specialty in programming.",
+        )
+        .add_message(
+            TextMessageRole::User,
+            "Hello! How are you? Please write generic binary search function in Rust.",
+        );
+
+    let response = model.send_chat_request(messages).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    Ok(())
 }
 ```
 
