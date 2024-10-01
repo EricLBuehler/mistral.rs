@@ -17,6 +17,12 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
+## Interactive mode
+
+> [!NOTE]
+> In interactive mode, the LLaVA vision models do not automatically add the image token!
+> It should be added to messages manually, and is of the format `<image>`.
+
 ## HTTP server
 You can find this example [here](../examples/server/llava_next.py).
 
@@ -43,6 +49,11 @@ Text: The image shows a steep, snow-covered hillside with a pine tree on the rig
 ---
 
 1) Start the server
+
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m llava-hf/llava-v1.6-mistral-7b-hf -a llava_next
 //or 

@@ -43,11 +43,11 @@ You can find this example [here](../mistralrs/examples/isq/main.rs).
 
 ```rust
 let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
-        .with_isq(IsqType::Q8_0)
-        .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-        .build()
-        .await?;
+    .with_isq(IsqType::Q8_0)
+    .with_logging()
+    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .build()
+    .await?;
 ```
 
 ## Server example

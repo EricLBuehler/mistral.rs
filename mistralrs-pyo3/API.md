@@ -42,6 +42,10 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Flux`
 - `FluxOffloaded`
 
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+
 ```py
 class Which(Enum):
     @dataclass

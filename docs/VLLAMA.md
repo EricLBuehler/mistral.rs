@@ -2,7 +2,7 @@
 
 Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
 
-UQFF quantizations will be released shortly.
+UQFF quantizations are also available.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -13,11 +13,14 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 
 > Note: Some examples use the [Cephalo Llama 3.2 model](lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k), a member of the [Cephalo](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) model collection. This model is finetune of Llama 3.2 with enhanced capabilities in scientific images. To use the base Llama 3.2 Vision model, simply use the [associated model ID](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct).
 
+> Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 40 layers*.
+
 ## ToC
 - [Interactive mode](#interactive-mode)
 - [HTTP server](#http-server)
 - [Rust API](#rust)
 - [Python API](#python)
+- [UQFF models](#uqff-models)
 
 ## Interactive mode
 
@@ -26,6 +29,10 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
 
 1) Start up interactive mode with the Llama 3.2 model
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... --release -- -i --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
@@ -37,6 +44,11 @@ How can I assist you today?
 ```
 
 3) Pass the model an image and ask a question.
+
+> [!NOTE]
+> In interactive mode, the Llama 3.2 vision models do not automatically add the image token!
+> It should be added to messages manually, and is of the formatt `<|image|>`.
+
 ```
 > Hello!
 How can I assist you today?
@@ -92,6 +104,10 @@ Overall, the image showcases the diverse geological and ecological features of M
 ---
 
 1) Start the server
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
@@ -118,7 +134,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -218,7 +234,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -235,3 +251,15 @@ print(res.usage)
 
 - You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
 - You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
+
+## UQFF models
+[UQFF](UQFF.md) is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations! The key advantage over GGUF is the flexibility to store multiple quantizations in one file.
+
+We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF)) for this Llama 3.2 Vision model.
+
+You can use these UQFF files to easily use quantized versions of Llama 3.2 Vision.
+
+For example:
+```
+./mistralrs-server -i vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct -a vllama --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
+```

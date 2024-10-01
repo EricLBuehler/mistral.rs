@@ -2,6 +2,8 @@
 
 <h3>Quantization and device mapping in one file.</h3>
 
+Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
+
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:
 
 1) Top-level keys are either:
@@ -41,11 +43,19 @@ Note that:
 Model topologies may be applied to all model types.
 
 ## CLI example
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... -- -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3 --topology topologies/isq.yml   
 ```
 
 ## HTTP server example
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --features ... -- --port 1234 plain -m microsoft/Phi-3-mini-128k-instruct -a phi3 --topology topologies/isq.yml   
 ```

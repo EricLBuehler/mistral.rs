@@ -52,9 +52,7 @@ fn prepare_cross_attention_mask(
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
     // Invert the mask
-    let inverted_cross_attn_mask = (1. - cross_attn_mask)?
-        .to_dtype(DType::F32)?
-        .to_dtype(dtype)?;
+    let inverted_cross_attn_mask = (1. - cross_attn_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
     const NEG_INF_VALUE: f64 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
