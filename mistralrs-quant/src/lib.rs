@@ -229,7 +229,6 @@ pub fn linear_no_bias(
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
-        dbg!(&vb.prefix());
         if !vb.contains_tensor("weight") {
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
