@@ -52,18 +52,18 @@ How can I assist you today?
 ```
 > Hello!
 How can I assist you today?
-> \image https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg <|image|>What type of flower is this?        
-The flower shown in the image appears to be a Gaillardia x grandiflora, commonly known as the blanket flower. It is characterized by its daisy-like appearance with a prominent yellow center and petals that range in color from white to pink to red.
+> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg <|image|>What is this image?
+The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
 ```
 
 4) Continue the chat by passing another image.
 ```
 > Hello!
 How can I assist you today?
-> \image https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg <|image|>What type of flower is this?        
-The flower shown in the image appears to be a Gaillardia x grandiflora, commonly known as the blanket flower. It is characterized by its daisy-like appearance with a prominent yellow center and petals that range in color from white to pink to red.
+> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg <|image|>What is this image?
+The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
 > \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg <|image|>What mountain is this?
-The image appears to be of Mount Washington, the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures.
+The image appears to be of Mount Washington, which is the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures. The mountain's summit reaches an elevation of approximately 6,288 feet (1,917 meters) above sea level.
 ```
 
 ## HTTP server
