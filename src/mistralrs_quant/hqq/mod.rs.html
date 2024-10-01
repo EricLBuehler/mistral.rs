@@ -777,6 +777,7 @@
 <a href="#777" id="777">777</a>
 <a href="#778" id="778">778</a>
 <a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Shape, Tensor};
 
@@ -1306,7 +1307,8 @@
         <span class="kw">match </span>method {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(<span class="kw">_</span>)
-            | QuantMethodConfig::Gptq { .. } =&gt; {
+            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Dummy =&gt; {
                 <span class="macro">unreachable!</span>()
             }
             QuantMethodConfig::Hqq {

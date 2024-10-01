@@ -1153,6 +1153,7 @@
 <a href="#1153" id="1153">1153</a>
 <a href="#1154" id="1154">1154</a>
 <a href="#1155" id="1155">1155</a>
+<a href="#1156" id="1156">1156</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -1344,6 +1345,7 @@
             use_flash_attn: val.use_flash_attn,
             head_dim: <span class="prelude-val">None</span>,
             quantization_config: <span class="prelude-val">None</span>,
+            tie_word_embeddings: <span class="bool-val">false</span>,
         }
     }
 }

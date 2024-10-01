@@ -779,13 +779,23 @@
 <a href="#779" id="779">779</a>
 <a href="#780" id="780">780</a>
 <a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 </span><span class="kw">use </span>candle_core::{Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{layer_norm, LayerNorm, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantizedConfig};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
@@ -801,8 +811,11 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+<span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="comment">// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 </span><span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -826,6 +839,8 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) attention_bias: bool,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_local_experts: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) router_jitter_noise: f64,
+    <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) tie_word_embeddings: bool,
 }
 
 <span class="kw">impl </span>From&lt;Config&gt; <span class="kw">for </span>PhiRopeConfig {
@@ -1389,17 +1404,22 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = candle_nn::linear_b(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            cfg.lm_head_bias,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+            mistralrs_quant::linear_b(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                cfg.lm_head_bias,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
+            )<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            <span class="macro">unreachable!</span>()
+        };
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))<span class="question-mark">?</span>),
+            lm_head,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,

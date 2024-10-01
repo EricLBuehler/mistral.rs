@@ -303,6 +303,7 @@
 <a href="#303" id="303">303</a>
 <a href="#304" id="304">304</a>
 <a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
@@ -341,7 +342,8 @@
             }),
             QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Unquantized(<span class="kw">_</span>)
-            | QuantMethodConfig::Hqq { .. } =&gt; <span class="macro">unreachable!</span>(),
+            | QuantMethodConfig::Hqq { .. }
+            | QuantMethodConfig::Dummy =&gt; <span class="macro">unreachable!</span>(),
         }
     }
 

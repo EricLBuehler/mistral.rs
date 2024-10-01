@@ -1207,6 +1207,22 @@
 <a href="#1207" id="1207">1207</a>
 <a href="#1208" id="1208">1208</a>
 <a href="#1209" id="1209">1209</a>
+<a href="#1210" id="1210">1210</a>
+<a href="#1211" id="1211">1211</a>
+<a href="#1212" id="1212">1212</a>
+<a href="#1213" id="1213">1213</a>
+<a href="#1214" id="1214">1214</a>
+<a href="#1215" id="1215">1215</a>
+<a href="#1216" id="1216">1216</a>
+<a href="#1217" id="1217">1217</a>
+<a href="#1218" id="1218">1218</a>
+<a href="#1219" id="1219">1219</a>
+<a href="#1220" id="1220">1220</a>
+<a href="#1221" id="1221">1221</a>
+<a href="#1222" id="1222">1222</a>
+<a href="#1223" id="1223">1223</a>
+<a href="#1224" id="1224">1224</a>
+<a href="#1225" id="1225">1225</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1214,7 +1230,7 @@
 </span><span class="kw">use </span>candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Shape, Tensor, D,
 };
-<span class="kw">use </span>candle_nn::{linear_b, linear_no_bias, VarBuilder};
+<span class="kw">use </span>candle_nn::{linear_b, VarBuilder};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -1260,6 +1276,7 @@
 }
 
 <span class="macro">serde_default_fn!</span>(bool, d_flash_attn, <span class="bool-val">false</span>);
+<span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
 </span><span class="kw">pub struct </span>Config {
@@ -1283,6 +1300,8 @@
     <span class="kw">pub </span>embd_layer: EmbedLayerConfig,
     <span class="kw">pub </span>img_processor: ImageProcessorConfig,
     <span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+    <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
+    </span><span class="kw">pub </span>tie_word_embeddings: bool,
 }
 
 <span class="kw">impl </span>From&lt;Config&gt; <span class="kw">for </span>PhiRopeConfig {
@@ -2150,16 +2169,29 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
+            )<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )<span class="question-mark">?</span>,
+                    <span class="prelude-val">None</span>,
+                ),
+            ))<span class="question-mark">?</span>)
+        };
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             vision_embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))<span class="question-mark">?</span>),
+            lm_head,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             max_seq_len: cfg.max_position_embeddings,

@@ -786,6 +786,12 @@
 <a href="#786" id="786">786</a>
 <a href="#787" id="787">787</a>
 <a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -810,12 +816,15 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
 
 <span class="kw">fn </span>default_max_position_embeddings() -&gt; usize {
     <span class="number">4096
 </span>}
+
+<span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="attr">#[derive(serde::Deserialize, Debug, Clone, Default)]
 </span><span class="kw">pub struct </span>Config {
@@ -837,6 +846,9 @@
     </span><span class="kw">pub </span>max_position_embeddings: usize,
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+    <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
+    #[allow(dead_code)]
+    </span><span class="kw">pub </span>tie_word_embeddings: bool,
 }
 
 <span class="kw">impl </span>Config {

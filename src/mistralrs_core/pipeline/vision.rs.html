@@ -607,6 +607,15 @@
 <a href="#607" id="607">607</a>
 <a href="#608" id="608">608</a>
 <a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
@@ -853,6 +862,7 @@
                 silent,
                 mapper,
                 loading_isq,
+                <span class="self">self</span>.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism
             ),
@@ -1148,8 +1158,14 @@
             <span class="kw">let </span>regex = regex.clone();
             <span class="kw">let </span>match_regex_clone = match_regex.to_string();
             <span class="kw">let </span>layers_clone = layers.clone();
-            <span class="kw">let </span>vb =
-                from_mmaped_safetensors(filenames, <span class="macro">vec!</span>[], <span class="prelude-val">Some</span>(dtype), dev, silent, <span class="kw">move </span>|key| {
+            <span class="kw">let </span>vb = from_mmaped_safetensors(
+                filenames,
+                <span class="macro">vec!</span>[],
+                <span class="prelude-val">Some</span>(dtype),
+                dev,
+                silent,
+                <span class="prelude-val">None</span>,
+                <span class="kw">move </span>|key| {
                     <span class="kw">if </span>regex.is_match(<span class="kw-2">&amp;</span>key) {
                         <span class="comment">// Idx of the last char of the layer id, +1
                         // Assumes N.MLP
@@ -1162,7 +1178,8 @@
                     } <span class="kw">else </span>{
                         <span class="bool-val">false
                     </span>}
-                })<span class="question-mark">?</span>;
+                },
+            )<span class="question-mark">?</span>;
             vbs.push(vb);
         }
 
@@ -1198,6 +1215,7 @@
                 <span class="prelude-val">Some</span>(dtype),
                 dev,
                 silent,
+                <span class="prelude-val">None</span>,
                 |<span class="kw">_</span>| <span class="bool-val">true</span>,
             )<span class="question-mark">?</span>;
             <span class="macro">info!</span>(

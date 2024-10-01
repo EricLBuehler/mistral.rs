@@ -116,6 +116,8 @@
 <a href="#116" id="116">116</a>
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_nn::Activation;
 <span class="kw">use </span>serde::Deserialize;
 
@@ -199,6 +201,7 @@
             max_position_embeddings: <span class="self">self</span>.text_config.max_position_embeddings,
             rope_scaling: <span class="self">self</span>.text_config.rope_scaling.clone(),
             quantization_config: <span class="prelude-val">None</span>,
+            tie_word_embeddings: <span class="bool-val">false</span>,
         }
     }
 
@@ -218,6 +221,7 @@
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
             head_dim: <span class="prelude-val">None</span>,
             quantization_config: <span class="prelude-val">None</span>,
+            tie_word_embeddings: <span class="bool-val">false</span>,
         }
     }
 

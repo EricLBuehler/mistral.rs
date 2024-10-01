@@ -278,6 +278,9 @@
 <a href="#278" id="278">278</a>
 <a href="#279" id="279">279</a>
 <a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{cmp::Ordering, fs::File};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
@@ -385,6 +388,7 @@
         <span class="prelude-val">Some</span>(dtype),
         device,
         silent,
+        <span class="prelude-val">None</span>,
         |<span class="kw">_</span>| <span class="bool-val">true</span>,
     )<span class="question-mark">?</span>;
     <span class="kw">let </span>config_filename = repo.get(<span class="string">"config.json"</span>).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
@@ -404,7 +408,9 @@
     ));
 
     <span class="kw">let </span>model_file = repo.get(<span class="string">"model.safetensors"</span>)<span class="question-mark">?</span>;
-    <span class="kw">let </span>vb = from_mmaped_safetensors(<span class="macro">vec!</span>[model_file], <span class="macro">vec!</span>[], <span class="prelude-val">None</span>, device, silent, |<span class="kw">_</span>| <span class="bool-val">true</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>vb = from_mmaped_safetensors(<span class="macro">vec!</span>[model_file], <span class="macro">vec!</span>[], <span class="prelude-val">None</span>, device, silent, <span class="prelude-val">None</span>, |<span class="kw">_</span>| {
+        <span class="bool-val">true
+    </span>})<span class="question-mark">?</span>;
     <span class="kw">let </span>config_file = repo.get(<span class="string">"config.json"</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>config: ClipConfig = serde_json::from_reader(File::open(config_file)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>config = config.text_config;

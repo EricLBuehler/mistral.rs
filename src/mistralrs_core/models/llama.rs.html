@@ -754,10 +754,18 @@
 <a href="#754" id="754">754</a>
 <a href="#755" id="755">755</a>
 <a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
+<span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -778,8 +786,11 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+<span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Default)]
 </span><span class="kw">pub struct </span>Config {
@@ -795,6 +806,8 @@
     <span class="kw">pub </span>max_position_embeddings: usize,
     <span class="kw">pub </span>rope_scaling: <span class="prelude-ty">Option</span>&lt;Llama3RopeConfig&gt;,
     <span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+    <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
+    </span><span class="kw">pub </span>tie_word_embeddings: bool,
 }
 
 <span class="kw">struct </span>CausalSelfAttention {
@@ -1216,17 +1229,20 @@
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = <span class="kw">if </span>vb.contains_tensor(<span class="string">"lm_head.weight"</span>) {
-            candle_nn::linear_no_bias(
+        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
                 mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            Linear::new(
-                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)<span class="question-mark">?</span>,
-                <span class="prelude-val">None</span>,
-            )
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)<span class="question-mark">?</span>,
+                    <span class="prelude-val">None</span>,
+                ),
+            ))<span class="question-mark">?</span>)
         };
         <span class="kw">let </span>ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -1292,7 +1308,7 @@
             wte,
             blocks,
             ln_f,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))<span class="question-mark">?</span>),
+            lm_head,
             kv_cache: <span class="kw">crate</span>::pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
             device: normal_loading_metadata.real_device,
             mapper,

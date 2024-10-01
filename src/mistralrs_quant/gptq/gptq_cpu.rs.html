@@ -70,6 +70,7 @@
 <a href="#70" id="70">70</a>
 <a href="#71" id="71">71</a>
 <a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
 </pre></div><pre class="rust"><code><span class="kw">use crate</span>::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>std::{
@@ -97,7 +98,8 @@
             } =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"GPTQ is only supported on CUDA."</span>),
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(<span class="kw">_</span>)
-            | QuantMethodConfig::Hqq { .. } =&gt; {
+            | QuantMethodConfig::Hqq { .. }
+            | QuantMethodConfig::Dummy =&gt; {
                 <span class="macro">unreachable!</span>()
             }
         }

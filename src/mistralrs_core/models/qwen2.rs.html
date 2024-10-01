@@ -769,6 +769,13 @@
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
 <a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -792,8 +799,11 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+<span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
 </span><span class="kw">pub struct </span>Config {
@@ -810,7 +820,8 @@
     <span class="kw">pub </span>hidden_act: Activation,
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-    <span class="kw">pub </span>tie_word_embeddings: bool,
+    <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
+    </span><span class="kw">pub </span>tie_word_embeddings: bool,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -1255,26 +1266,29 @@
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>lm_head = <span class="kw">if </span>cfg.tie_word_embeddings {
-            candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )<span class="question-mark">?</span>,
-                <span class="prelude-val">None</span>,
-            )
-        } <span class="kw">else </span>{
-            candle_nn::linear_no_bias(
+        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
                 mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
             )<span class="question-mark">?
-        </span>};
+        </span>} <span class="kw">else </span>{
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )<span class="question-mark">?</span>,
+                    <span class="prelude-val">None</span>,
+                ),
+            ))<span class="question-mark">?</span>)
+        };
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))<span class="question-mark">?</span>),
+            lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),

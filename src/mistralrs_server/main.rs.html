@@ -951,7 +951,7 @@
     };
     <span class="kw">let </span>mistralrs = builder.build();
 
-    <span class="kw">let </span>port = args.port.expect(<span class="string">"Expected port to be specified."</span>);
+    <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
 
     <span class="kw">let </span>app = get_router(mistralrs);
 

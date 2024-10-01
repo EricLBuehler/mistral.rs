@@ -326,6 +326,7 @@
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
@@ -516,6 +517,7 @@
                             <span class="prelude-val">Some</span>(dtype),
                             <span class="kw">if </span>force_cpu { <span class="kw-2">&amp;</span>Device::Cpu } <span class="kw">else </span>{ device },
                             silent,
+                            <span class="prelude-val">None</span>,
                             |<span class="kw">_</span>| <span class="bool-val">true</span>,
                         )
                     })
