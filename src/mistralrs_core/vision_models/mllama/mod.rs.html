@@ -253,6 +253,18 @@
 <a href="#253" id="253">253</a>
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -285,6 +297,8 @@
 };
 
 <span class="kw">fn </span>repeat_interleave(xs: <span class="kw-2">&amp;</span>Tensor, repeats: usize, dim: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="comment">// For metal
+    </span><span class="macro">assert!</span>(xs.dtype().is_float());
     <span class="kw">let </span>indices = Tensor::new(
         (<span class="number">0</span>..xs.dim(dim)<span class="question-mark">?</span>)
             .flat_map(|i| <span class="macro">vec!</span>[i <span class="kw">as </span>u32; repeats])
@@ -302,7 +316,11 @@
 ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
     <span class="kw">let </span>bs = cross_attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>text_total_length = cross_attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
-    <span class="kw">let </span><span class="kw-2">mut </span>cross_attn_mask = repeat_interleave(cross_attention_mask, num_vision_tokens, <span class="number">3</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>cross_attn_mask = repeat_interleave(
+        <span class="kw-2">&amp;</span>cross_attention_mask.to_dtype(DType::F32)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>,
+        num_vision_tokens,
+        <span class="number">3</span>,
+    )<span class="question-mark">?</span>;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))<span class="question-mark">?</span>;
     cross_attn_mask = cross_attn_mask.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
 
@@ -497,12 +515,18 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_repeat_interleave() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">let </span>input = Tensor::new(<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1u32</span>, <span class="number">2</span>, <span class="number">3</span>], <span class="macro">vec!</span>[<span class="number">4u32</span>, <span class="number">5</span>, <span class="number">6</span>]]], <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+        <span class="kw">let </span>input = Tensor::new(
+            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1f32</span>, <span class="number">2.</span>, <span class="number">3.</span>], <span class="macro">vec!</span>[<span class="number">4f32</span>, <span class="number">5.</span>, <span class="number">6.</span>]]],
+            <span class="kw-2">&amp;</span>Device::Cpu,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>repeat_interleaved = repeat_interleave(<span class="kw-2">&amp;</span>input, <span class="number">2</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
         <span class="macro">assert_eq!</span>(
-            repeat_interleaved.to_vec3::&lt;u32&gt;()<span class="question-mark">?</span>,
-            <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">3</span>], <span class="macro">vec!</span>[<span class="number">4</span>, <span class="number">4</span>, <span class="number">5</span>, <span class="number">5</span>, <span class="number">6</span>, <span class="number">6</span>]]]
+            repeat_interleaved.to_vec3::&lt;f32&gt;()<span class="question-mark">?</span>,
+            <span class="macro">vec!</span>[<span class="macro">vec!</span>[
+                <span class="macro">vec!</span>[<span class="number">1.</span>, <span class="number">1.</span>, <span class="number">2.</span>, <span class="number">2.</span>, <span class="number">3.</span>, <span class="number">3.</span>],
+                <span class="macro">vec!</span>[<span class="number">4.</span>, <span class="number">4.</span>, <span class="number">5.</span>, <span class="number">5.</span>, <span class="number">6.</span>, <span class="number">6.</span>]
+            ]]
         );
 
         <span class="prelude-val">Ok</span>(())
