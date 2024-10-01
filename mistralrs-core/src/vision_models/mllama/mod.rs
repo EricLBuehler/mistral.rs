@@ -5,7 +5,6 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-use core::f64;
 use std::{any::Any, sync::Arc};
 
 pub(crate) use config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
@@ -53,7 +52,7 @@ fn prepare_cross_attention_mask(
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
-    const NEG_INF_VALUE: f64 = -1e15;
+    const NEG_INF_VALUE: f32 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
