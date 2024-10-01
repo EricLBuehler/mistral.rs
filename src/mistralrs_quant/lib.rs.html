@@ -330,7 +330,6 @@
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
-<a href="#333" id="333">333</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -562,8 +561,7 @@
         }
     } <span class="kw">else </span>{
         <span class="comment">// Handle the case where the layer is dummy (no tensors)
-        </span><span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>vb.prefix());
-        <span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
+        </span><span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
             <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
             Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
         } <span class="kw">else </span>{

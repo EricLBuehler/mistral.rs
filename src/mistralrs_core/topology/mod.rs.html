@@ -170,7 +170,6 @@
 <a href="#170" id="170">170</a>
 <a href="#171" id="171">171</a>
 <a href="#172" id="172">172</a>
-<a href="#173" id="173">173</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
 
 <span class="kw">use </span>candle_core::Device;
@@ -302,7 +301,6 @@
                 } <span class="kw">else </span>{
                     Device::Cpu
                 };
-                <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>device, <span class="kw-2">&amp;</span>range);
 
                 <span class="prelude-val">Some</span>(device)
             } <span class="kw">else </span>{
