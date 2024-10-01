@@ -264,7 +264,6 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
-<a href="#267" id="267">267</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -272,7 +271,6 @@
 <span class="kw">mod </span>text;
 <span class="kw">mod </span>vision;
 
-<span class="kw">use </span>core::f64;
 <span class="kw">use </span>std::{any::Any, sync::Arc};
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
@@ -326,7 +324,7 @@
 
     <span class="comment">// Invert the mask
     </span><span class="kw">let </span>inverted_cross_attn_mask = (<span class="number">1. </span>- cross_attn_mask.to_dtype(DType::F32)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-    <span class="kw">const </span>NEG_INF_VALUE: f64 = -<span class="number">1e15</span>;
+    <span class="kw">const </span>NEG_INF_VALUE: f32 = -<span class="number">1e15</span>;
     cross_attn_mask = masked_fill(
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask,
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask.ne(<span class="number">0.</span>)<span class="question-mark">?</span>,
