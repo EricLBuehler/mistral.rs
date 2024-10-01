@@ -30,6 +30,8 @@ use crate::{
 };
 
 fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    // For metal
+    assert!(xs.dtype().is_float());
     let indices = Tensor::new(
         (0..xs.dim(dim)?)
             .flat_map(|i| vec![i as u32; repeats])
@@ -47,7 +49,11 @@ fn prepare_cross_attention_mask(
 ) -> Result<(Tensor, Tensor)> {
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
-    let mut cross_attn_mask = repeat_interleave(cross_attention_mask, num_vision_tokens, 3)?;
+    let mut cross_attn_mask = repeat_interleave(
+        &cross_attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?,
+        num_vision_tokens,
+        3,
+    )?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
