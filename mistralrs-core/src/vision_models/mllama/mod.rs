@@ -30,6 +30,8 @@ use crate::{
 };
 
 fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    // For metal
+    assert!(xs.dtype().is_float());
     let indices = Tensor::new(
         (0..xs.dim(dim)?)
             .flat_map(|i| vec![i as u32; repeats])
@@ -47,7 +49,11 @@ fn prepare_cross_attention_mask(
 ) -> Result<(Tensor, Tensor)> {
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
-    let mut cross_attn_mask = repeat_interleave(cross_attention_mask, num_vision_tokens, 3)?;
+    let mut cross_attn_mask = repeat_interleave(
+        &cross_attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?,
+        num_vision_tokens,
+        3,
+    )?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
@@ -242,12 +248,18 @@ mod tests {
 
     #[test]
     fn test_repeat_interleave() -> Result<()> {
-        let input = Tensor::new(vec![vec![vec![1u32, 2, 3], vec![4u32, 5, 6]]], &Device::Cpu)?;
+        let input = Tensor::new(
+            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
+            &Device::Cpu,
+        )?;
 
         let repeat_interleaved = repeat_interleave(&input, 2, 2)?;
         assert_eq!(
-            repeat_interleaved.to_vec3::<u32>()?,
-            vec![vec![vec![1, 1, 2, 2, 3, 3], vec![4, 4, 5, 5, 6, 6]]]
+            repeat_interleaved.to_vec3::<f32>()?,
+            vec![vec![
+                vec![1., 1., 2., 2., 3., 3.],
+                vec![4., 4., 5., 5., 6., 6.]
+            ]]
         );
 
         Ok(())
