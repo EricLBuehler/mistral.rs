@@ -248,12 +248,18 @@ mod tests {
 
     #[test]
     fn test_repeat_interleave() -> Result<()> {
-        let input = Tensor::new(vec![vec![vec![1u32, 2, 3], vec![4u32, 5, 6]]], &Device::Cpu)?;
+        let input = Tensor::new(
+            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
+            &Device::Cpu,
+        )?;
 
         let repeat_interleaved = repeat_interleave(&input, 2, 2)?;
         assert_eq!(
-            repeat_interleaved.to_vec3::<u32>()?,
-            vec![vec![vec![1, 1, 2, 2, 3, 3], vec![4, 4, 5, 5, 6, 6]]]
+            repeat_interleaved.to_vec3::<f32>()?,
+            vec![vec![
+                vec![1., 1., 2., 2., 3., 3.],
+                vec![4., 4., 5., 5., 6., 6.]
+            ]]
         );
 
         Ok(())
