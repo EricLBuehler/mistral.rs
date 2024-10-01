@@ -10,7 +10,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use serde::Deserialize;
 
 use crate::{
@@ -500,9 +500,10 @@ impl Model {
             layers.push(layer)
         }
         let lm_head = if !cfg.tie_word_embeddings {
-            candle_nn::linear(
+            mistralrs_quant::linear(
                 cfg.hidden_size,
                 cfg.vocab_size,
+                &None,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
@@ -512,7 +513,7 @@ impl Model {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,

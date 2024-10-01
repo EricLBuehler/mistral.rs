@@ -222,15 +222,12 @@ trait LoadTensors {
         let mut loaded_tensors = HashMap::new();
         if !iter.is_empty() {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
-                let dtype = if make_dummy_predicate(&load_name) {
-                    // As small as possible if making a dummy.
-                    Some(DType::U8)
-                } else {
-                    dtype
-                };
-                let tensor = tensors.load_name(&load_name, device, dtype)?;
+                if !make_dummy_predicate(&load_name) {
+                    // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
+                    let tensor = tensors.load_name(&load_name, device, dtype)?;
 
-                loaded_tensors.insert(key_name, tensor);
+                    loaded_tensors.insert(key_name, tensor);
+                }
             }
         }
 

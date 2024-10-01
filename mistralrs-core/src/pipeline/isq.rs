@@ -501,11 +501,15 @@ pub trait IsqModel {
 /// Trait for loading models with ISQ.
 pub(crate) trait IsqModelLoader {
     /// Regex to match layers which will have standard ISQ applied.
+    ///
+    /// Only called on non-adapter models!
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(Vec::new())
     }
 
     /// Regex to match layers which will have standard MoQE ISQ applied.
+    ///
+    /// Only called on non-adapter models!
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
