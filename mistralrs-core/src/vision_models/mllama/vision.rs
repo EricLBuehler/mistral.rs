@@ -353,14 +353,11 @@ fn _prepare_aspect_ratio_attention_mask(
     )?;
 
     // Invert the mask
-    attention_mask = (1. - attention_mask)?;
+    attention_mask = (1. - attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
 
     // Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
-    attention_mask = attention_mask
-        .reshape((bs, max_num_tiles * target_length, 1))?
-        .to_dtype(DType::F32)?
-        .to_dtype(dtype)?;
+    attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, 1))?;
     attention_mask =
         attention_mask.matmul(&attention_mask.transpose(D::Minus1, D::Minus2)?.mul(-1e15)?)?;
     attention_mask
