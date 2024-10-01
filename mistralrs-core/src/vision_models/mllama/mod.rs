@@ -5,7 +5,6 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-use core::f64;
 use std::{any::Any, sync::Arc};
 
 pub(crate) use config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
@@ -30,6 +29,8 @@ use crate::{
 };
 
 fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    // For metal
+    assert!(xs.dtype().is_float());
     let indices = Tensor::new(
         (0..xs.dim(dim)?)
             .flat_map(|i| vec![i as u32; repeats])
@@ -47,13 +48,17 @@ fn prepare_cross_attention_mask(
 ) -> Result<(Tensor, Tensor)> {
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
-    let mut cross_attn_mask = repeat_interleave(cross_attention_mask, num_vision_tokens, 3)?;
+    let mut cross_attn_mask = repeat_interleave(
+        &cross_attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?,
+        num_vision_tokens,
+        3,
+    )?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
-    const NEG_INF_VALUE: f64 = -1e15;
+    const NEG_INF_VALUE: f32 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
@@ -242,12 +247,18 @@ mod tests {
 
     #[test]
     fn test_repeat_interleave() -> Result<()> {
-        let input = Tensor::new(vec![vec![vec![1u32, 2, 3], vec![4u32, 5, 6]]], &Device::Cpu)?;
+        let input = Tensor::new(
+            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
+            &Device::Cpu,
+        )?;
 
         let repeat_interleaved = repeat_interleave(&input, 2, 2)?;
         assert_eq!(
-            repeat_interleaved.to_vec3::<u32>()?,
-            vec![vec![vec![1, 1, 2, 2, 3, 3], vec![4, 4, 5, 5, 6, 6]]]
+            repeat_interleaved.to_vec3::<f32>()?,
+            vec![vec![
+                vec![1., 1., 2., 2., 3., 3.],
+                vec![4., 4., 5., 5., 6., 6.]
+            ]]
         );
 
         Ok(())
