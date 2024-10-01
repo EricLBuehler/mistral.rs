@@ -4,7 +4,7 @@
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -20,8 +20,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -45,6 +48,8 @@ pub struct Config {
     pub(crate) attention_bias: bool,
     pub(crate) num_local_experts: usize,
     pub(crate) router_jitter_noise: f64,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -608,17 +613,22 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_b(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            cfg.lm_head_bias,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_b(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                cfg.lm_head_bias,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            unreachable!()
+        };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,

@@ -3,8 +3,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, Activation, Embedding, Linear, Module, VarBuilder};
-use mistralrs_quant::{linear_no_bias, QuantMethod};
+use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
+use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     attention::SdpaParams,
@@ -497,7 +497,7 @@ enum MLlamaDecoderLayer {
 
 pub(super) struct MLlamaTextModel {
     embed_tokens: Embedding,
-    lm_head: Linear,
+    lm_head: Arc<dyn QuantMethod>,
     norm: RmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
     pub(crate) cfg: ModelConfigMetadata,
@@ -526,14 +526,20 @@ impl MLlamaTextModel {
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
 
-        let lm_head = if cfg.tie_word_embeddings {
-            Linear::new(embed_tokens.embeddings().clone(), None)
-        } else {
-            candle_nn::linear_no_bias(
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
+                &None,
                 mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
+        } else {
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
+                    None,
+                ),
+            ))?)
         };
 
         let vb = vb.pp("model");

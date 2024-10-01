@@ -7,6 +7,7 @@ use std::{
     time::Instant,
 };
 
+use anyhow::Result;
 use candle_core::{Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
@@ -16,10 +17,11 @@ use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
     IntoParallelRefMutIterator, ParallelIterator,
 };
+use regex::Regex;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
+use crate::{device_map::DeviceMapper, serde_default_fn, topology::LayerTopology, Topology};
 
 /// Parse ISQ value: one of
 /// - `Q4_0`
@@ -494,4 +496,29 @@ pub trait IsqModel {
 
         Ok(())
     }
+}
+
+/// Trait for loading models with ISQ.
+pub(crate) trait IsqModelLoader {
+    /// Regex to match layers which will have standard ISQ applied.
+    ///
+    /// Only called on non-adapter models!
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(Vec::new())
+    }
+
+    /// Regex to match layers which will have standard MoQE ISQ applied.
+    ///
+    /// Only called on non-adapter models!
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+serde_default_fn!(bool, word_emb_default, false);
+
+#[derive(Deserialize)]
+pub(crate) struct WordEmbeddingsShim {
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }

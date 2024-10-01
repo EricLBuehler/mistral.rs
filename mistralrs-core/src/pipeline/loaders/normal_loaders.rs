@@ -11,9 +11,11 @@ use crate::{
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
+        isq::{IsqModelLoader, WordEmbeddingsShim},
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel,
     },
+    serde_default_fn,
     utils::log::once_log_info,
     xlora_models::NonGranularState,
 };
@@ -25,6 +27,7 @@ use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use regex::Regex;
 use serde::Deserialize;
 
 use crate::{
@@ -83,7 +86,7 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
 }
 
-pub trait NormalModelLoader {
+pub trait NormalModelLoader: IsqModelLoader {
     fn load(
         &self,
         config: &str,
@@ -279,6 +282,15 @@ impl NormalModelLoader for AutoLoader {
         Self::get_loader(config)?.is_gptx(config)
     }
 }
+
+impl IsqModelLoader for AutoLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.isq_layer_regexes(config)
+    }
+}
+
+serde_default_fn!(bool, word_emb_default, false);
+
 // ======================== Mistral loader
 
 #[derive(Deserialize, Debug)]
@@ -296,6 +308,8 @@ struct MistralBasicConfig {
     sliding_window: Option<usize>,
     head_dim: Option<usize>,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl MistralBasicConfig {
@@ -316,6 +330,7 @@ impl MistralBasicConfig {
             use_flash_attn,
             head_dim: basic_config.head_dim,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -375,6 +390,39 @@ impl NormalModelLoader for MistralLoader {
     }
 }
 
+impl IsqModelLoader for MistralLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Gemma loader
 
 fn default_max_position_embeddings() -> usize {
@@ -400,6 +448,8 @@ struct GemmaBasicConfig {
     #[serde(default = "default_max_position_embeddings")]
     max_position_embeddings: usize,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl GemmaBasicConfig {
@@ -421,6 +471,7 @@ impl GemmaBasicConfig {
             head_dim: basic_config.head_dim,
             use_flash_attn,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -483,6 +534,39 @@ impl NormalModelLoader for GemmaLoader {
     }
 }
 
+impl IsqModelLoader for GemmaLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Llama loader
 
 #[derive(Deserialize)]
@@ -499,6 +583,8 @@ struct LlamaBasicConfig {
     max_position_embeddings: usize,
     rope_scaling: Option<Llama3RopeConfig>,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 fn default_rope() -> f32 {
@@ -523,6 +609,7 @@ impl LlamaBasicConfig {
             max_position_embeddings: basic_config.max_position_embeddings,
             rope_scaling: basic_config.rope_scaling,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -585,6 +672,39 @@ impl NormalModelLoader for LlamaLoader {
     }
 }
 
+impl IsqModelLoader for LlamaLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Mixtral loader
 
 #[derive(Deserialize)]
@@ -603,6 +723,8 @@ struct MixtralBasicConfig {
     num_experts_per_tok: usize,
     num_local_experts: usize,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl MixtralBasicConfig {
@@ -624,6 +746,7 @@ impl MixtralBasicConfig {
             num_experts_per_tok: basic_config.num_experts_per_tok,
             num_local_experts: basic_config.num_local_experts,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -683,6 +806,44 @@ impl NormalModelLoader for MixtralLoader {
     }
 }
 
+impl IsqModelLoader for MixtralLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // Experts
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.gate\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Phi2 loader
 
 #[derive(Deserialize)]
@@ -700,6 +861,8 @@ struct Phi2BasicConfig {
     partial_rotary_factor: f64,
     qk_layernorm: bool,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl Phi2BasicConfig {
@@ -720,6 +883,7 @@ impl Phi2BasicConfig {
             qk_layernorm: basic_config.qk_layernorm,
             use_flash_attn,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -782,6 +946,34 @@ impl NormalModelLoader for Phi2Loader {
     }
 }
 
+impl IsqModelLoader for Phi2Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Phi3 loader
 
 #[derive(Deserialize)]
@@ -802,6 +994,8 @@ struct Phi3BasicConfig {
     original_max_position_embeddings: usize,
     sliding_window: Option<usize>,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl Phi3BasicConfig {
@@ -825,6 +1019,7 @@ impl Phi3BasicConfig {
             use_flash_attn,
             sliding_window: basic_config.sliding_window,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -884,6 +1079,32 @@ impl NormalModelLoader for Phi3Loader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(Phi3BasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Phi3Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }
 
@@ -977,6 +1198,39 @@ impl NormalModelLoader for Qwen2Loader {
     }
 }
 
+impl IsqModelLoader for Qwen2Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Gemma2 loader
 
 #[derive(Deserialize)]
@@ -1002,6 +1256,8 @@ struct Gemma2BasicConfig {
     #[serde(default = "default_max_position_embeddings")]
     max_position_embeddings: usize,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl Gemma2BasicConfig {
@@ -1027,6 +1283,7 @@ impl Gemma2BasicConfig {
             attn_logit_softcapping: basic_config.attn_logit_softcapping,
             final_logit_softcapping: basic_config.final_logit_softcapping,
             query_pre_attn_scalar: basic_config.query_pre_attn_scalar,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -1090,6 +1347,39 @@ impl NormalModelLoader for Gemma2Loader {
     }
 }
 
+impl IsqModelLoader for Gemma2Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Starcoder2 loader
 
 #[derive(Deserialize, Debug)]
@@ -1107,6 +1397,8 @@ struct Starcoder2BasicConfig {
     use_bias: bool,
     sliding_window: Option<usize>,
     quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl Starcoder2BasicConfig {
@@ -1127,6 +1419,7 @@ impl Starcoder2BasicConfig {
             norm_epsilon: basic_config.norm_epsilon,
             use_bias: basic_config.use_bias,
             quantization_config: basic_config.quantization_config,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -1188,6 +1481,34 @@ impl NormalModelLoader for Starcoder2Loader {
     }
 }
 
+impl IsqModelLoader for Starcoder2Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.c_fc\.(weight|bias)$")?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?);
+        Ok(regexes)
+    }
+}
+
 // ======================== Phi3 loader
 
 #[derive(Deserialize)]
@@ -1210,6 +1531,8 @@ struct Phi3_5MoEBasicConfig {
     attention_bias: bool,
     num_local_experts: usize,
     router_jitter_noise: f64,
+    #[serde(default = "word_emb_default")]
+    tie_word_embeddings: bool,
 }
 
 impl Phi3_5MoEBasicConfig {
@@ -1235,6 +1558,7 @@ impl Phi3_5MoEBasicConfig {
             attention_bias: basic_config.attention_bias,
             num_local_experts: basic_config.num_local_experts,
             router_jitter_noise: basic_config.router_jitter_noise,
+            tie_word_embeddings: basic_config.tie_word_embeddings,
         })
     }
 }
@@ -1294,5 +1618,60 @@ impl NormalModelLoader for Phi3_5MoELoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for Phi3_5MoELoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }

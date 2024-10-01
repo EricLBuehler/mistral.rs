@@ -188,6 +188,7 @@ impl Loader for DiffusionLoader {
                             Some(dtype),
                             if force_cpu { &Device::Cpu } else { device },
                             silent,
+                            None,
                             |_| true,
                         )
                     })

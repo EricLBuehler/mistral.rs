@@ -27,6 +27,10 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Starcoder2`
 - `Phi3_5MoE`
 
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+
 ### Architecture for vision models
 - `Phi3V`
 - `Idefics2`

@@ -467,7 +467,7 @@ async fn main() -> Result<()> {
     };
     let mistralrs = builder.build();
 
-    let port = args.port.expect("Expected port to be specified.");
+    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
 
     let app = get_router(mistralrs);
 

@@ -105,6 +105,7 @@ fn get_t5_model(
         Some(dtype),
         device,
         silent,
+        None,
         |_| true,
     )?;
     let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
@@ -124,7 +125,9 @@ fn get_clip_model_and_tokenizer(
     ));
 
     let model_file = repo.get("model.safetensors")?;
-    let vb = from_mmaped_safetensors(vec![model_file], vec![], None, device, silent, |_| true)?;
+    let vb = from_mmaped_safetensors(vec![model_file], vec![], None, device, silent, None, |_| {
+        true
+    })?;
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;

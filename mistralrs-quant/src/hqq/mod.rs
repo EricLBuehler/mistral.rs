@@ -527,7 +527,8 @@ impl QuantMethod for HqqLayer {
         match method {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Gptq { .. } => {
+            | QuantMethodConfig::Gptq { .. }
+            | QuantMethodConfig::Dummy => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {
