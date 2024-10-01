@@ -22,8 +22,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
@@ -39,6 +42,8 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub rope_scaling: Option<Llama3RopeConfig>,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub tie_word_embeddings: bool,
 }
 
 struct CausalSelfAttention {
@@ -460,7 +465,7 @@ impl Llama {
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = if vb.contains_tensor("lm_head.weight") {
+        let lm_head = if !cfg.tie_word_embeddings {
             candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,

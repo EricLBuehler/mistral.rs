@@ -20,8 +20,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -45,6 +48,8 @@ pub struct Config {
     pub(crate) attention_bias: bool,
     pub(crate) num_local_experts: usize,
     pub(crate) router_jitter_noise: f64,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -608,12 +613,16 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_b(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            cfg.lm_head_bias,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            candle_nn::linear_b(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                cfg.lm_head_bias,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            unreachable!()
+        };
         Ok(Self {
             embed_tokens,
             layers,

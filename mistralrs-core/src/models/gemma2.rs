@@ -46,6 +46,8 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
     pub use_flash_attn: bool,
+    #[allow(dead_code)]
+    pub tie_word_embeddings: bool,
 }
 
 impl Config {

@@ -21,8 +21,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
@@ -39,6 +42,7 @@ pub struct Config {
     pub hidden_act: Activation,
     pub use_flash_attn: bool,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
 }
 

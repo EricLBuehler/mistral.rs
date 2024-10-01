@@ -106,7 +106,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             handles.push(Parellelize::spawn(Box::new(move || {
                 let loader = Common::new();
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(&key))
+                    regexes.iter().any(|r| r.is_match(key))
                 })
             })));
         } else {
@@ -124,7 +124,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             handles.push(Parellelize::spawn(Box::new(move || {
                 let loader = XLora::new(i + 1);
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(&key))
+                    regexes.iter().any(|r| r.is_match(key))
                 })
             })));
         } else {
@@ -226,7 +226,7 @@ trait LoadTensors {
                     // As small as possible if making a dummy.
                     Some(DType::U8)
                 } else {
-                    dtype.clone()
+                    dtype
                 };
                 let tensor = tensors.load_name(&load_name, device, dtype)?;
 

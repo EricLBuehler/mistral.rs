@@ -41,6 +41,7 @@ pub struct Config {
     pub(crate) use_flash_attn: bool,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    pub(crate) tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -520,11 +521,21 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            candle_nn::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            )
+        };
         Ok(Self {
             embed_tokens,
             layers,

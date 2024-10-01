@@ -29,8 +29,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -49,6 +52,8 @@ pub struct Config {
     pub(crate) qk_layernorm: bool,
     pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -494,11 +499,15 @@ impl Model {
             )?;
             layers.push(layer)
         }
-        let lm_head = candle_nn::linear(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            candle_nn::linear(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            unreachable!()
+        };
         Ok(Self {
             embed_tokens,
             layers,
