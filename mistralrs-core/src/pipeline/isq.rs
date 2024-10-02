@@ -350,7 +350,7 @@ pub trait IsqModel {
                     );
                 } else {
                     tensors
-                        .iter()
+                        .iter_mut()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
