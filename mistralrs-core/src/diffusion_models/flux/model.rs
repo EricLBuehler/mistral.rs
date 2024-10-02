@@ -1,8 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use serde::Deserialize;
+
+use crate::{device_map::DeviceMapper, pipeline::IsqModel, DeviceMapMetadata};
 
 const MLP_RATIO: f64 = 4.;
 const HIDDEN_SIZE: usize = 3072;
@@ -134,16 +139,17 @@ impl candle_core::Module for EmbedNd {
     }
 }
 
+// Don't ISQ, so remember to do ISQ device map outside of here!
 #[derive(Debug, Clone)]
 pub struct MlpEmbedder {
-    in_layer: Linear,
-    out_layer: Linear,
+    in_layer: Arc<dyn QuantMethod>,
+    out_layer: Arc<dyn QuantMethod>,
 }
 
 impl MlpEmbedder {
     fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let in_layer = candle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
-        let out_layer = candle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
+        let in_layer = mistralrs_quant::linear(in_sz, h_sz, &None, vb.pp("in_layer"))?;
+        let out_layer = mistralrs_quant::linear(h_sz, h_sz, &None, vb.pp("out_layer"))?;
         Ok(Self {
             in_layer,
             out_layer,
@@ -153,7 +159,7 @@ impl MlpEmbedder {
 
 impl candle_core::Module for MlpEmbedder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.in_layer)?.silu()?.apply(&self.out_layer)
+        self.out_layer.forward(&self.in_layer.forward(xs)?.silu()?)
     }
 }
 
@@ -195,19 +201,19 @@ impl ModulationOut {
 
 #[derive(Debug, Clone)]
 struct Modulation1 {
-    lin: Linear,
+    lin: Arc<dyn QuantMethod>,
 }
 
 impl Modulation1 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
+        let lin = mistralrs_quant::linear(dim, 3 * dim, &None, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<ModulationOut> {
-        let ys = vec_
-            .silu()?
-            .apply(&self.lin)?
+        let ys = self
+            .lin
+            .forward(&vec_.silu()?)?
             .unsqueeze(1)?
             .chunk(3, D::Minus1)?;
         if ys.len() != 3 {
@@ -223,19 +229,19 @@ impl Modulation1 {
 
 #[derive(Debug, Clone)]
 struct Modulation2 {
-    lin: Linear,
+    lin: Arc<dyn QuantMethod>,
 }
 
 impl Modulation2 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
+        let lin = mistralrs_quant::linear(dim, 6 * dim, &None, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
     fn forward(&self, vec_: &Tensor) -> Result<(ModulationOut, ModulationOut)> {
-        let ys = vec_
-            .silu()?
-            .apply(&self.lin)?
+        let ys = self
+            .lin
+            .forward(&vec_.silu()?)?
             .unsqueeze(1)?
             .chunk(6, D::Minus1)?;
         if ys.len() != 6 {
@@ -257,18 +263,18 @@ impl Modulation2 {
 
 #[derive(Debug, Clone)]
 pub struct SelfAttention {
-    qkv: Linear,
+    qkv: Arc<dyn QuantMethod>,
     norm: QkNorm,
-    proj: Linear,
+    proj: Arc<dyn QuantMethod>,
     num_attention_heads: usize,
 }
 
 impl SelfAttention {
     fn new(dim: usize, num_attention_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
         let head_dim = dim / num_attention_heads;
-        let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
+        let qkv = mistralrs_quant::linear_b(dim, dim * 3, qkv_bias, &None, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
-        let proj = candle_nn::linear(dim, dim, vb.pp("proj"))?;
+        let proj = mistralrs_quant::linear(dim, dim, &None, vb.pp("proj"))?;
         Ok(Self {
             qkv,
             norm,
@@ -278,7 +284,7 @@ impl SelfAttention {
     }
 
     fn qkv(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
-        let qkv = xs.apply(&self.qkv)?;
+        let qkv = self.qkv.forward(xs)?;
         let (b, l, _khd) = qkv.dims3()?;
         let qkv = qkv.reshape((b, l, 3, self.num_attention_heads, ()))?;
         let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
@@ -292,61 +298,61 @@ impl SelfAttention {
     #[allow(unused)]
     fn forward(&self, xs: &Tensor, pe: &Tensor) -> Result<Tensor> {
         let (q, k, v) = self.qkv(xs)?;
-        attention(&q, &k, &v, pe)?.apply(&self.proj)
+        self.proj.forward(&attention(&q, &k, &v, pe)?)
     }
 
     fn cast_to(&mut self, device: &Device) -> Result<()> {
-        self.qkv = Linear::new(
-            self.qkv.weight().to_device(device)?,
-            self.qkv.bias().map(|x| x.to_device(device).unwrap()),
-        );
-        self.proj = Linear::new(
-            self.proj.weight().to_device(device)?,
-            self.proj.bias().map(|x| x.to_device(device).unwrap()),
-        );
-        self.norm = QkNorm {
-            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
-                1e-6,
-            ),
-            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.key_norm.inner().weight().to_device(device)?,
-                1e-6,
-            ),
-        };
+        // self.qkv = Linear::new(
+        //     self.qkv.weight().to_device(device)?,
+        //     self.qkv.bias().map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.proj = Linear::new(
+        //     self.proj.weight().to_device(device)?,
+        //     self.proj.bias().map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.norm = QkNorm {
+        //     query_norm: RmsNorm::<RmsNormNonQuantized>::new(
+        //         self.norm.query_norm.inner().weight().to_device(device)?,
+        //         1e-6,
+        //     ),
+        //     key_norm: RmsNorm::<RmsNormNonQuantized>::new(
+        //         self.norm.key_norm.inner().weight().to_device(device)?,
+        //         1e-6,
+        //     ),
+        // };
         Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    lin1: Linear,
-    lin2: Linear,
+    lin1: Arc<dyn QuantMethod>,
+    lin2: Arc<dyn QuantMethod>,
 }
 
 impl Mlp {
     fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
-        let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
+        let lin1 = mistralrs_quant::linear(in_sz, mlp_sz, &None, vb.pp("0"))?;
+        let lin2 = mistralrs_quant::linear(mlp_sz, in_sz, &None, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 
     fn cast_to(&mut self, device: &Device) -> Result<()> {
-        self.lin1 = Linear::new(
-            self.lin1.weight().to_device(device)?,
-            self.lin1.bias().map(|x| x.to_device(device).unwrap()),
-        );
-        self.lin2 = Linear::new(
-            self.lin2.weight().to_device(device)?,
-            self.lin2.bias().map(|x| x.to_device(device).unwrap()),
-        );
+        // self.lin1 = Linear::new(
+        //     self.lin1.weight().to_device(device)?,
+        //     self.lin1.bias().map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.lin2 = Linear::new(
+        //     self.lin2.weight().to_device(device)?,
+        //     self.lin2.bias().map(|x| x.to_device(device).unwrap()),
+        // );
         Ok(())
     }
 }
 
 impl candle_core::Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
+        self.lin2.forward(&self.lin1.forward(xs)?.gelu()?)
     }
 }
 
@@ -417,7 +423,7 @@ impl DoubleStreamBlock {
         let txt_attn = attn.narrow(1, 0, txt.dim(1)?)?;
         let img_attn = attn.narrow(1, txt.dim(1)?, attn.dim(1)? - txt.dim(1)?)?;
 
-        let img = (img + img_mod1.gate(&img_attn.apply(&self.img_attn.proj)?))?;
+        let img = (img + img_mod1.gate(&self.img_attn.proj.forward(&img_attn)?))?;
         let img = (&img
             + img_mod2.gate(
                 &img_mod2
@@ -425,7 +431,7 @@ impl DoubleStreamBlock {
                     .apply(&self.img_mlp)?,
             )?)?;
 
-        let txt = (txt + txt_mod1.gate(&txt_attn.apply(&self.txt_attn.proj)?))?;
+        let txt = (txt + txt_mod1.gate(&self.txt_attn.proj.forward(&txt_attn)?))?;
         let txt = (&txt
             + txt_mod2.gate(
                 &txt_mod2
@@ -437,45 +443,45 @@ impl DoubleStreamBlock {
     }
 
     fn cast_to(&mut self, device: &Device) -> Result<()> {
-        self.img_mod.lin = Linear::new(
-            self.img_mod.lin.weight().to_device(device)?,
-            self.img_mod
-                .lin
-                .bias()
-                .map(|x| x.to_device(device).unwrap()),
-        );
-        self.img_norm1 = LayerNorm::new(
-            self.img_norm1.weight().to_device(device)?,
-            self.img_norm1.bias().to_device(device)?,
-            1e-6,
-        );
-        self.img_attn.cast_to(device)?;
-        self.img_norm2 = LayerNorm::new(
-            self.img_norm2.weight().to_device(device)?,
-            self.img_norm2.bias().to_device(device)?,
-            1e-6,
-        );
-        self.img_mlp.cast_to(device)?;
+        // self.img_mod.lin = Linear::new(
+        //     self.img_mod.lin.weight().to_device(device)?,
+        //     self.img_mod
+        //         .lin
+        //         .bias()
+        //         .map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.img_norm1 = LayerNorm::new(
+        //     self.img_norm1.weight().to_device(device)?,
+        //     self.img_norm1.bias().to_device(device)?,
+        //     1e-6,
+        // );
+        // self.img_attn.cast_to(device)?;
+        // self.img_norm2 = LayerNorm::new(
+        //     self.img_norm2.weight().to_device(device)?,
+        //     self.img_norm2.bias().to_device(device)?,
+        //     1e-6,
+        // );
+        // self.img_mlp.cast_to(device)?;
 
-        self.txt_mod.lin = Linear::new(
-            self.txt_mod.lin.weight().to_device(device)?,
-            self.txt_mod
-                .lin
-                .bias()
-                .map(|x| x.to_device(device).unwrap()),
-        );
-        self.txt_norm1 = LayerNorm::new(
-            self.txt_norm1.weight().to_device(device)?,
-            self.txt_norm1.bias().to_device(device)?,
-            1e-6,
-        );
-        self.txt_attn.cast_to(device)?;
-        self.txt_norm2 = LayerNorm::new(
-            self.txt_norm2.weight().to_device(device)?,
-            self.txt_norm2.bias().to_device(device)?,
-            1e-6,
-        );
-        self.txt_mlp.cast_to(device)?;
+        // self.txt_mod.lin = Linear::new(
+        //     self.txt_mod.lin.weight().to_device(device)?,
+        //     self.txt_mod
+        //         .lin
+        //         .bias()
+        //         .map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.txt_norm1 = LayerNorm::new(
+        //     self.txt_norm1.weight().to_device(device)?,
+        //     self.txt_norm1.bias().to_device(device)?,
+        //     1e-6,
+        // );
+        // self.txt_attn.cast_to(device)?;
+        // self.txt_norm2 = LayerNorm::new(
+        //     self.txt_norm2.weight().to_device(device)?,
+        //     self.txt_norm2.bias().to_device(device)?,
+        //     1e-6,
+        // );
+        // self.txt_mlp.cast_to(device)?;
 
         Ok(())
     }
@@ -483,8 +489,8 @@ impl DoubleStreamBlock {
 
 #[derive(Debug, Clone)]
 pub struct SingleStreamBlock {
-    linear1: Linear,
-    linear2: Linear,
+    linear1: Arc<dyn QuantMethod>,
+    linear2: Arc<dyn QuantMethod>,
     norm: QkNorm,
     pre_norm: LayerNorm,
     modulation: Modulation1,
@@ -498,8 +504,8 @@ impl SingleStreamBlock {
         let h_sz = HIDDEN_SIZE;
         let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
         let head_dim = h_sz / cfg.num_attention_heads;
-        let linear1 = candle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
-        let linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
+        let linear1 = mistralrs_quant::linear(h_sz, h_sz * 3 + mlp_sz, &None, vb.pp("linear1"))?;
+        let linear2 = mistralrs_quant::linear(h_sz + mlp_sz, h_sz, &None, vb.pp("linear2"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
         let pre_norm = layer_norm(h_sz, vb.pp("pre_norm"))?;
         let modulation = Modulation1::new(h_sz, vb.pp("modulation"))?;
@@ -518,7 +524,7 @@ impl SingleStreamBlock {
     fn forward(&self, xs: &Tensor, vec_: &Tensor, pe: &Tensor) -> Result<Tensor> {
         let mod_ = self.modulation.forward(vec_)?;
         let x_mod = mod_.scale_shift(&xs.apply(&self.pre_norm)?)?;
-        let x_mod = x_mod.apply(&self.linear1)?;
+        let x_mod = self.linear1.forward(&x_mod)?;
         let qkv = x_mod.narrow(D::Minus1, 0, 3 * self.h_sz)?;
         let (b, l, _khd) = qkv.dims3()?;
         let qkv = qkv.reshape((b, l, 3, self.num_attention_heads, ()))?;
@@ -529,41 +535,43 @@ impl SingleStreamBlock {
         let q = q.apply(&self.norm.query_norm)?;
         let k = k.apply(&self.norm.key_norm)?;
         let attn = attention(&q, &k, &v, pe)?;
-        let output = Tensor::cat(&[attn, mlp.gelu()?], 2)?.apply(&self.linear2)?;
+        let output = self
+            .linear2
+            .forward(&Tensor::cat(&[attn, mlp.gelu()?], 2)?)?;
         xs + mod_.gate(&output)
     }
 
     fn cast_to(&mut self, device: &Device) -> Result<()> {
-        self.linear1 = Linear::new(
-            self.linear1.weight().to_device(device)?,
-            self.linear1.bias().map(|x| x.to_device(device).unwrap()),
-        );
-        self.linear2 = Linear::new(
-            self.linear2.weight().to_device(device)?,
-            self.linear2.bias().map(|x| x.to_device(device).unwrap()),
-        );
-        self.norm = QkNorm {
-            query_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.query_norm.inner().weight().to_device(device)?,
-                1e-6,
-            ),
-            key_norm: RmsNorm::<RmsNormNonQuantized>::new(
-                self.norm.key_norm.inner().weight().to_device(device)?,
-                1e-6,
-            ),
-        };
-        self.pre_norm = LayerNorm::new(
-            self.pre_norm.weight().to_device(device)?,
-            self.pre_norm.bias().to_device(device)?,
-            1e-6,
-        );
-        self.modulation.lin = Linear::new(
-            self.modulation.lin.weight().to_device(device)?,
-            self.modulation
-                .lin
-                .bias()
-                .map(|x| x.to_device(device).unwrap()),
-        );
+        // self.linear1 = Linear::new(
+        //     self.linear1.weight().to_device(device)?,
+        //     self.linear1.bias().map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.linear2 = Linear::new(
+        //     self.linear2.weight().to_device(device)?,
+        //     self.linear2.bias().map(|x| x.to_device(device).unwrap()),
+        // );
+        // self.norm = QkNorm {
+        //     query_norm: RmsNorm::<RmsNormNonQuantized>::new(
+        //         self.norm.query_norm.inner().weight().to_device(device)?,
+        //         1e-6,
+        //     ),
+        //     key_norm: RmsNorm::<RmsNormNonQuantized>::new(
+        //         self.norm.key_norm.inner().weight().to_device(device)?,
+        //         1e-6,
+        //     ),
+        // };
+        // self.pre_norm = LayerNorm::new(
+        //     self.pre_norm.weight().to_device(device)?,
+        //     self.pre_norm.bias().to_device(device)?,
+        //     1e-6,
+        // );
+        // self.modulation.lin = Linear::new(
+        //     self.modulation.lin.weight().to_device(device)?,
+        //     self.modulation
+        //         .lin
+        //         .bias()
+        //         .map(|x| x.to_device(device).unwrap()),
+        // );
         Ok(())
     }
 }
@@ -571,15 +579,16 @@ impl SingleStreamBlock {
 #[derive(Debug, Clone)]
 pub struct LastLayer {
     norm_final: LayerNorm,
-    linear: Linear,
-    ada_ln_modulation: Linear,
+    linear: Arc<dyn QuantMethod>,
+    ada_ln_modulation: Arc<dyn QuantMethod>,
 }
 
 impl LastLayer {
     fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
-        let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
-        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
+        let linear = mistralrs_quant::linear(h_sz, p_sz * p_sz * out_c, &None, vb.pp("linear"))?;
+        let ada_ln_modulation =
+            mistralrs_quant::linear(h_sz, 2 * h_sz, &None, vb.pp("adaLN_modulation.1"))?;
         Ok(Self {
             norm_final,
             linear,
@@ -588,20 +597,20 @@ impl LastLayer {
     }
 
     fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
-        let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
+        let chunks = self.ada_ln_modulation.forward(&vec.silu()?)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
         let xs = xs
             .apply(&self.norm_final)?
             .broadcast_mul(&(scale.unsqueeze(1)? + 1.0)?)?
             .broadcast_add(&shift.unsqueeze(1)?)?;
-        xs.apply(&self.linear)
+        self.linear.forward(&xs)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Flux {
-    img_in: Linear,
-    txt_in: Linear,
+    img_in: Arc<dyn QuantMethod>,
+    txt_in: Arc<dyn QuantMethod>,
     time_in: MlpEmbedder,
     vector_in: MlpEmbedder,
     guidance_in: Option<MlpEmbedder>,
@@ -611,18 +620,21 @@ pub struct Flux {
     final_layer: LastLayer,
     device: Device,
     offloaded: bool,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl Flux {
     pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
-        let img_in = candle_nn::linear(
+        let img_in = mistralrs_quant::linear(
             cfg.in_channels,
             HIDDEN_SIZE,
+            &None,
             vb.pp("img_in").set_device(device.clone()),
         )?;
-        let txt_in = candle_nn::linear(
+        let txt_in = mistralrs_quant::linear(
             cfg.joint_attention_dim,
             HIDDEN_SIZE,
+            &None,
             vb.pp("txt_in").set_device(device.clone()),
         )?;
         let mut double_blocks = Vec::with_capacity(cfg.num_layers);
@@ -677,6 +689,7 @@ impl Flux {
             final_layer,
             device: device.clone(),
             offloaded,
+            mapper: DeviceMapMetadata::dummy().into_mapper(0, vb.device(), None)?,
         })
     }
 
@@ -702,8 +715,8 @@ impl Flux {
             let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
             ids.apply(&self.pe_embedder)?
         };
-        let mut txt = txt.apply(&self.txt_in)?;
-        let mut img = img.apply(&self.img_in)?;
+        let mut txt = self.txt_in.forward(&txt)?;
+        let mut img = self.img_in.forward(&img)?;
         let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
@@ -736,5 +749,48 @@ impl Flux {
         }
         let img = img.i((.., txt.dim(1)?..))?;
         self.final_layer.forward(&img, &vec_)
+    }
+}
+
+impl IsqModel for Flux {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut layers = vec![
+            &mut self.img_in,
+            &mut self.txt_in,
+            &mut self.time_in.in_layer,
+            &mut self.time_in.out_layer,
+            &mut self.vector_in.in_layer,
+            &mut self.vector_in.out_layer,
+            &mut self.final_layer.linear,
+            &mut self.final_layer.ada_ln_modulation,
+        ];
+
+        for double_layer in &mut self.double_blocks {
+            layers.push(&mut double_layer.img_attn.proj);
+            layers.push(&mut double_layer.img_attn.qkv);
+            layers.push(&mut double_layer.img_mlp.lin1);
+            layers.push(&mut double_layer.img_mlp.lin2);
+
+            layers.push(&mut double_layer.txt_attn.proj);
+            layers.push(&mut double_layer.txt_attn.qkv);
+            layers.push(&mut double_layer.txt_mlp.lin1);
+            layers.push(&mut double_layer.txt_mlp.lin2);
+        }
+
+        for single_layer in &mut self.single_blocks {
+            layers.push(&mut single_layer.linear1);
+            layers.push(&mut single_layer.linear2);
+            layers.push(&mut single_layer.modulation.lin);
+        }
+
+        (
+            layers.into_iter().map(|l| (l, None)).collect(),
+            &*self.mapper,
+        )
     }
 }
