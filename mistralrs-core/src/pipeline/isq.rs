@@ -339,7 +339,7 @@ pub trait IsqModel {
             {
                 use indicatif::ProgressIterator;
                 if silent {
-                    tensors.into_iter().zip(devices_and_dtypes).for_each(
+                    tensors.iter_mut().zip(devices_and_dtypes).for_each(
                         |((tensor, _), (device, dtype))| {
                             *tensor = tensor
                                 .clone()
@@ -350,7 +350,7 @@ pub trait IsqModel {
                     );
                 } else {
                     tensors
-                        .into_iter()
+                        .iter()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
