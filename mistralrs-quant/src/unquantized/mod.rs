@@ -27,7 +27,8 @@ impl QuantMethod for UnquantLinear {
         match method {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Gptq { .. }
-            | QuantMethodConfig::Hqq { .. } => unreachable!(),
+            | QuantMethodConfig::Hqq { .. }
+            | QuantMethodConfig::Dummy => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }

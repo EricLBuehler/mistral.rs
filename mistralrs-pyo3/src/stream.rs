@@ -39,6 +39,7 @@ impl ChatCompletionStreamer {
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
             },
             None => Some(Err(PyValueError::new_err(
                 "Received none in ChatCompletionStreamer".to_string(),

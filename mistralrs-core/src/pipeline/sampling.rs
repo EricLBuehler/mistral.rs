@@ -24,7 +24,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     seq.add_token(
         logprobs.clone(),
-        this.get_metadata().tok_trie.decode(&[logprobs.token]),
+        this.get_metadata()
+            .tok_trie
+            .as_ref()
+            .ok_or(candle_core::Error::Msg(
+                "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
+                    .to_string(),
+            ))?
+            .decode(&[logprobs.token]),
         &is_done,
     );
     // Handle streaming requests
@@ -47,7 +54,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         logprobs: if seq.return_logprobs() {
                             Some(crate::ResponseLogprob {
                                 token: delta,
-                                bytes: logprobs.bytes.clone().into_bytes(),
+                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
                                 logprob: logprobs.logprob,
                                 top_logprobs: logprobs.top_logprobs.unwrap().clone(),
                             })
@@ -64,7 +71,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             logprobs: if seq.return_logprobs() {
                                 Some(crate::ResponseLogprob {
                                     token: delta,
-                                    bytes: logprobs.bytes.clone().into_bytes(),
+                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
                                     logprob: logprobs.logprob,
                                     top_logprobs: logprobs.top_logprobs.unwrap().clone(),
                                 })
@@ -117,10 +124,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 for logprob in seq.logprobs() {
                     let resp_logprob = crate::ResponseLogprob {
                         token: crate::handle_seq_error_ok!(
-                            tokenizer.decode(&[logprob.token], false),
+                            tokenizer
+                            .as_ref()
+                            .ok_or(candle_core::Error::Msg(
+                                "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
+                                    .to_string(),
+                            ))?.decode(&[logprob.token], false),
                             seq.responder()
                         ),
-                        bytes: logprob.bytes.clone().into_bytes(),
+                        bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
                         top_logprobs: logprob.top_logprobs.clone().unwrap(),
                     };
@@ -147,6 +159,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 } => {
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
                     txt[..completion_bytes_pos].trim_start().to_string()
+                }
+                crate::sequence::StopReason::GeneratedImage => {
+                    candle_core::bail!("Stop reason was `GeneratedImage`.")
                 }
             };
 
@@ -331,7 +346,15 @@ pub async fn sample_sequence(
             };
             let second_logprobs_response = match bias_if_not_allowed {
                 Some(token_set) => {
-                    let mut acc = vec![-f32::INFINITY; seq.tok_trie.vocab_size()];
+                    let mut acc = vec![
+                -f32::INFINITY;
+                seq.tok_trie
+                    .as_ref()
+                    .ok_or(candle_core::Error::Msg(
+                        "TokTrie must be present in pipeline if bias is calculated".to_string()
+                    ))?
+                    .vocab_size()
+            ];
                     token_set.apply_to(&mut acc);
                     let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
@@ -362,15 +385,19 @@ pub async fn sample_sequence(
                 None => first_lobprobs_response,
             };
 
-            if add_to_trie {
+            if add_to_trie && seq.tok_trie.is_some() {
                 match seq.recognizer {
                     SequenceRecognizer::Regex(ref mut rx) => {
                         seq.tok_trie
+                    .as_ref()
+                    .unwrap()
                             .append_token(rx.as_mut(), second_logprobs_response.token)
                             .map_err(candle_core::Error::msg)?;
                     }
                     SequenceRecognizer::Cfg(ref mut cfg) => {
                         seq.tok_trie
+                    .as_ref()
+                    .unwrap()
                             .append_token(cfg.as_mut(), second_logprobs_response.token)
                             .map_err(candle_core::Error::msg)?;
                     }

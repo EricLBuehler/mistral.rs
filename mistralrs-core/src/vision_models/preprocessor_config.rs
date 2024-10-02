@@ -22,6 +22,7 @@ pub struct PreProcessorConfig {
     pub(crate) crop_size: Option<HashMap<String, u32>>,
     pub(crate) num_img_tokens: Option<usize>,
     pub(crate) num_crops: Option<usize>,
+    pub(crate) max_image_tiles: Option<usize>,
 }
 
 #[allow(dead_code)]

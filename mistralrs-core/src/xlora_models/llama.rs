@@ -629,21 +629,32 @@ impl XLoraLlama {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for i in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(Llama3RotaryEmbedding::new_llama3(
+                    vb.dtype(),
+                    cfg,
+                    device,
+                    is_gptx,
+                )?),
+            );
+        }
         let mut blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
-                    let rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(
-                            vb.dtype(),
-                            cfg,
-                            mapper
-                                .device_for(i, false)
-                                .unwrap_or(&normal_loading_metadata.real_device),
-                            is_gptx,
-                        )
-                        .expect("Failed to create RoPE"),
-                    );
+                    let device = mapper
+                        .device_for(i, false)
+                        .unwrap_or(&normal_loading_metadata.real_device);
+                    let rotary_emb = ropes
+                        .get(&device.location())
+                        .expect("No RoPE for device location!")
+                        .clone();
                     Block::load(
                         vb.pp(format!("model.layers.{i}")),
                         cfg,

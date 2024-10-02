@@ -43,6 +43,11 @@ pub struct Transforms<'a> {
     pub inner_transforms: &'a [&'a dyn ImageTransform<Input = Tensor, Output = Tensor>],
 }
 
+/// Transforms, with each of `inner_transforms` applied sequentially
+pub struct TensorTransforms<'a> {
+    pub inner_transforms: &'a [&'a dyn ImageTransform<Input = Tensor, Output = Tensor>],
+}
+
 /// Application of transforms to the Self type.
 pub trait ApplyTransforms<'a> {
     fn apply(&self, transforms: Transforms<'a>, device: &Device) -> Result<Tensor>;
@@ -51,6 +56,21 @@ pub trait ApplyTransforms<'a> {
 impl<'a> ApplyTransforms<'a> for DynamicImage {
     fn apply(&self, transforms: Transforms<'a>, device: &Device) -> Result<Tensor> {
         let mut res = transforms.input.map(self, device)?;
+        for transform in transforms.inner_transforms {
+            res = transform.map(&res, device)?;
+        }
+        Ok(res)
+    }
+}
+
+/// Application of transforms to the Self type.
+pub trait ApplyTensorTransforms<'a> {
+    fn apply(&self, transforms: TensorTransforms<'a>, device: &Device) -> Result<Tensor>;
+}
+
+impl<'a> ApplyTensorTransforms<'a> for Tensor {
+    fn apply(&self, transforms: TensorTransforms<'a>, device: &Device) -> Result<Tensor> {
+        let mut res = self.clone();
         for transform in transforms.inner_transforms {
             res = transform.map(&res, device)?;
         }

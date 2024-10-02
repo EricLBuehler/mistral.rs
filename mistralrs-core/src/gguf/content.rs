@@ -123,6 +123,16 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         candle_core::bail!("Cannot find tensor info for {name}")
     }
 
+    /// Check for a tensor, searching through each content.
+    pub fn has_tensor(&mut self, name: &str) -> bool {
+        for ct in self.contents.iter() {
+            if ct.tensor_infos.contains_key(name) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Print metadata for these contents.
     /// This will also log tensor name, shape and dtype to `mistralrs_gguf_tensors.txt` is DEBUG is enabled.
     pub fn print_metadata(&self) -> anyhow::Result<()> {

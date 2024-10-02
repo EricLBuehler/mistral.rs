@@ -1,12 +1,13 @@
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
-    CustomLogitsProcessor,
+    CustomLogitsProcessor, DiffusionGenerationParams,
 };
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
@@ -18,6 +19,14 @@ pub enum Constraint {
     Yacc(String),
     Kbnf(String),
     None,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+/// Image generation response format
+pub enum ImageGenerationResponseFormat {
+    Url,
+    B64Json,
 }
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, String>>>;
@@ -35,6 +44,11 @@ pub enum RequestMessage {
     VisionChat {
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
+    },
+    ImageGeneration {
+        prompt: String,
+        format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
     },
 }
 

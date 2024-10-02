@@ -239,7 +239,8 @@ impl QuantMethod for GptqLayer {
             }
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Hqq { .. } => {
+            | QuantMethodConfig::Hqq { .. }
+            | QuantMethodConfig::Dummy => {
                 unreachable!()
             }
         }

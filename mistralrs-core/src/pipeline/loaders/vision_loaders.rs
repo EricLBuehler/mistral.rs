@@ -9,11 +9,13 @@ use candle_nn::VarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use regex::Regex;
 use serde::Deserialize;
 
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::pipeline::isq::{IsqModelLoader, WordEmbeddingsShim};
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
@@ -23,6 +25,7 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::LLaVAProcessor;
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
+use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
@@ -50,7 +53,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn config(&self) -> &ModelConfigMetadata;
 }
 
-pub trait VisionModelLoader {
+pub trait VisionModelLoader: IsqModelLoader {
     fn load(
         &self,
         config: &str,
@@ -69,6 +72,7 @@ pub trait VisionModelLoader {
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
+    fn supports_paged_attention(&self) -> bool;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -83,6 +87,8 @@ pub enum VisionLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
+    #[serde(rename = "vllama")]
+    VLlama,
 }
 
 impl FromStr for VisionLoaderType {
@@ -93,7 +99,8 @@ impl FromStr for VisionLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`.")),
+            "vllama" => Ok(Self::VLlama),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
         }
     }
 }
@@ -143,6 +150,35 @@ impl VisionModelLoader for Phi3VLoader {
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: Phi3Config = serde_json::from_str(config)?;
         Ok(config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+impl IsqModelLoader for Phi3VLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }
 
@@ -196,6 +232,27 @@ impl VisionModelLoader for Idefics2Loader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+impl IsqModelLoader for Idefics2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // Tie weights is unsupported for this model
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -245,6 +302,27 @@ impl VisionModelLoader for LLaVANextLoader {
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
     }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+impl IsqModelLoader for LLaVANextLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // Tie weights is unsupported for this model
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
 }
 
 // ======================== LLaVA Loader
@@ -293,5 +371,114 @@ impl VisionModelLoader for LLaVALoader {
         let config: LLaVAConfig = serde_json::from_str(config)?;
         // We only apply device mapping to text model
         Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+impl IsqModelLoader for LLaVALoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            // Tie weights is unsupported for this model
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+// ======================== MLlama Loader
+
+/// [`VisionLoader`] for an Llama Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct VLlamaLoader;
+
+impl VisionModelLoader for VLlamaLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(MLlamaModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: MLlamaConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(MLlamaProcessor::new())
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: MLlamaConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
+    }
+}
+
+impl IsqModelLoader for VLlamaLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<MLlamaConfig>(config)?
+            .text_config
+            .tie_word_embeddings
+        {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
     }
 }

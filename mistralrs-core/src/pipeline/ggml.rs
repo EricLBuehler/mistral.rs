@@ -376,7 +376,7 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: Some(tok_trie),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -436,8 +436,8 @@ impl Loader for GGMLLoader {
 }
 
 impl PreProcessingMixin for GGMLPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        Some(self.chat_template.clone())
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
@@ -496,8 +496,8 @@ impl MetadataMixin for GGMLPipeline {
             Model::XLoraLlama(ref model) => model.device.clone(),
         }
     }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        Some(self.tokenizer.clone())
     }
     fn name(&self) -> String {
         self.model_id.clone()
@@ -516,7 +516,7 @@ impl MetadataMixin for GGMLPipeline {
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {

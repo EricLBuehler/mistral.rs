@@ -6,6 +6,7 @@ pub(crate) mod clip;
 pub(crate) mod idefics2;
 pub(crate) mod idefics2_input_processor;
 pub(crate) mod image_processor;
+pub(crate) mod mllama;
 
 pub(crate) mod llava;
 pub(crate) mod phi3;

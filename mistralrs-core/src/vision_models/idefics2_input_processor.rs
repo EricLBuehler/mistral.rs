@@ -56,7 +56,7 @@ impl Processor for Idefics2Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         tools: Vec<Tool>,
-    ) -> anyhow::Result<Vec<u32>> {
+    ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
@@ -91,11 +91,13 @@ impl Processor for Idefics2Processor {
             self.fake_image_token,
         );
 
-        let encoding = pipeline
-            .tokenizer()
-            .encode(prompt, true)
+        let Some(tokenizer) = &pipeline.tokenizer() else {
+            anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
+        };
+        let encoding = tokenizer
+            .encode(prompt.clone(), true)
             .map_err(anyhow::Error::msg)?;
-        Ok(encoding.get_ids().to_vec())
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
 
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
@@ -117,7 +119,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
     }
     fn process_inputs(
         &self,
-        _: Arc<Tokenizer>,
+        _: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -190,7 +192,11 @@ impl InputsProcessor for Idefics2ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let (pixel_values, pixel_attention_mask) = if is_prompt {
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, pixel_attention_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
@@ -199,12 +205,16 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     pixel_attention_mask,
                     image_sizes: _,
                     num_img_tokens: _,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
                     .preprocess(
                         seq.take_images()
                             .expect("Need to have images by this point."),
                         config,
                         device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
                     )
                     .expect("Preprocessing failed");
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
@@ -248,6 +258,7 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
@@ -350,6 +361,9 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             pixel_attention_mask: Some(Tensor::cat(&patch_masks, 0)?),
             image_sizes: None,
             num_img_tokens: None,
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

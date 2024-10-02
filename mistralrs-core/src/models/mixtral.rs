@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -21,8 +21,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 /// https://github.com/huggingface/transformers/blob/1a585c1222a56bcaecc070966d558d4a9d862e83/src/transformers/models/mixtral/configuration_mixtral.py#L113
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +45,8 @@ pub struct Config {
     pub(crate) num_local_experts: usize,
     pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 struct Attention {
@@ -492,6 +497,23 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta as f32,
+                    head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
@@ -500,14 +522,10 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb_m.dtype(),
-            )?);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -536,16 +554,29 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
+        };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),

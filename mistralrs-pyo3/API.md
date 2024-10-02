@@ -27,21 +27,36 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Starcoder2`
 - `Phi3_5MoE`
 
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+
 ### Architecture for vision models
 - `Phi3V`
 - `Idefics2`
 - `LLaVaNext`
 - `LLaVa`
+- `VLlama`
+
+### Architecture for diffusion models
+- `Flux`
+- `FluxOffloaded`
+
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
 
 ```py
-@dataclass
+class Which(Enum):
+    @dataclass
     class Plain:
         model_id: str
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        organization: str | None = None
+        organization: IsqOrganization | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLora:
@@ -53,6 +68,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class Lora:
@@ -63,6 +79,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class GGUF:
@@ -70,6 +87,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         quantized_filename: str | list[str]
         tok_model_id: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLoraGGUF:
@@ -80,6 +98,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class LoraGGUF:
@@ -89,6 +108,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         order: str
         tok_model_id: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class GGML:
@@ -98,6 +118,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         gqa: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLoraGGML:
@@ -110,6 +131,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         gqa: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class LoraGGML:
@@ -120,6 +142,7 @@ If you do not specify the architecture, an attempt will be made to use the model
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class VisionPlain:
@@ -128,6 +151,13 @@ If you do not specify the architecture, an attempt will be made to use the model
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+
+    @dataclass
+    class DiffusionPlain:
+        model_id: str
+        arch: DiffusionArchitecture
+        dtype: ModelDType = ModelDType.Auto
 ```
 
 

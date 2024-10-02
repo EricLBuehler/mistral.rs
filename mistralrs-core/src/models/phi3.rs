@@ -5,7 +5,7 @@
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{
@@ -26,8 +26,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -49,6 +52,8 @@ pub struct Config {
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub tie_word_embeddings: bool,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -432,6 +437,16 @@ impl Model {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
@@ -440,7 +455,10 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -469,16 +487,29 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = candle_nn::linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
+        };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,

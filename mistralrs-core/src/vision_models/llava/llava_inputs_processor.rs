@@ -76,7 +76,7 @@ impl InputsProcessor for LLaVAInputProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -101,17 +101,22 @@ impl InputsProcessor for LLaVAInputProcessor {
         if prompt_batchsize.is_some() {
             warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
+        let Some(tokenizer) = tokenizer else {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "LLaVAInputProcessor requires a specified tokenizer.",
+            ))));
+        };
 
         let config = other_config
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, num_img_tokens) = if is_prompt
-            && input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, num_img_tokens) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
@@ -123,8 +128,11 @@ impl InputsProcessor for LLaVAInputProcessor {
                     pixel_attention_mask: _,
                     image_sizes: _,
                     num_img_tokens,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
-                    .preprocess(imgs.clone(), config, device)
+                    .preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
                     .expect("Preprocessor failed");
                 pixel_values_accum.push(pixel_values);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
@@ -137,7 +145,7 @@ impl InputsProcessor for LLaVAInputProcessor {
             return Box::new(
                 text_models_inputs_processor::TextInputsProcessor
                     .process_inputs(
-                        tokenizer,
+                        Some(tokenizer),
                         input_seqs,
                         is_prompt,
                         is_xlora,
@@ -318,6 +326,7 @@ impl ImagePreProcessor for LLaVAInputProcessor {
         images: Vec<image::DynamicImage>,
         config: &preprocessor_config::PreProcessorConfig,
         device: &candle_core::Device,
+        (_, _): (usize, usize),
     ) -> candle_core::Result<image_processor::PreprocessedImages> {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
@@ -362,6 +371,9 @@ impl ImagePreProcessor for LLaVAInputProcessor {
             pixel_attention_mask: None,
             image_sizes: Some((original_size.0 as usize, original_size.1 as usize)),
             num_img_tokens: Some(vec![self.get_num_image_tokens()]),
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

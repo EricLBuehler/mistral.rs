@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -10,7 +10,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
 };
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use serde::Deserialize;
 
 use crate::{
@@ -29,8 +29,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/phi-2/blob/main/configuration_phi.py
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -49,6 +52,8 @@ pub struct Config {
     pub(crate) qk_layernorm: bool,
     pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -155,7 +160,7 @@ struct Attention {
     dense: Arc<dyn QuantMethod>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -167,7 +172,7 @@ impl Attention {
     fn new(
         cfg: &Config,
         vb: VarBuilder,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
@@ -351,7 +356,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rotary_emb: RotaryEmbedding,
+        rotary_emb: Arc<RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -440,6 +445,25 @@ impl Model {
             cfg.layer_norm_eps,
             mapper.set_nm_device(vb_m.pp("final_layernorm"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            // Alternative rope scalings are not supported
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
         for layer_idx in
@@ -448,16 +472,10 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            // Alternative rope scalings are not supported.
-            let rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-                cfg.max_position_embeddings,
-                device,
-                is_gptx,
-                vb.dtype(),
-            )?;
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -481,16 +499,21 @@ impl Model {
             )?;
             layers.push(layer)
         }
-        let lm_head = candle_nn::linear(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            unreachable!()
+        };
         Ok(Self {
             embed_tokens,
             layers,
             final_layernorm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,

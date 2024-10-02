@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use either::Either;
-use mistralrs_core::{NormalLoaderType, VisionLoaderType};
+use mistralrs_core::{DiffusionLoaderType, ModelDType, NormalLoaderType, VisionLoaderType};
 use pyo3::pyclass;
 
 #[pyclass(eq, eq_int)]
@@ -43,6 +43,7 @@ pub enum VisionArchitecture {
     Idefics2,
     LLaVANext,
     LLaVA,
+    VLlama,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -52,6 +53,39 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Idefics2 => VisionLoaderType::Idefics2,
             VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
             VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
+            VisionArchitecture::VLlama => VisionLoaderType::VLlama,
+        }
+    }
+}
+
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiffusionArchitecture {
+    Flux,
+    FluxOffloaded,
+}
+
+impl From<DiffusionArchitecture> for DiffusionLoaderType {
+    fn from(value: DiffusionArchitecture) -> Self {
+        match value {
+            DiffusionArchitecture::Flux => DiffusionLoaderType::Flux,
+            DiffusionArchitecture::FluxOffloaded => DiffusionLoaderType::FluxOffloaded,
+        }
+    }
+}
+
+#[pyclass(eq, eq_int)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsqOrganization {
+    Default,
+    MoQE,
+}
+
+impl From<IsqOrganization> for mistralrs_core::IsqOrganization {
+    fn from(value: IsqOrganization) -> Self {
+        match value {
+            IsqOrganization::Default => mistralrs_core::IsqOrganization::Default,
+            IsqOrganization::MoQE => mistralrs_core::IsqOrganization::MoeExpertsOnly,
         }
     }
 }
@@ -67,15 +101,17 @@ pub enum Which {
         organization = None,
         write_uqff = None,
         from_uqff = None,
+        dtype = ModelDType::Auto,
     ))]
     Plain {
         model_id: String,
         arch: Option<Architecture>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
-        organization: Option<String>,
+        organization: Option<IsqOrganization>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -88,6 +124,7 @@ pub enum Which {
         topology = None,
         write_uqff = None,
         from_uqff = None,
+        dtype = ModelDType::Auto,
     ))]
     XLora {
         xlora_model_id: String,
@@ -99,6 +136,7 @@ pub enum Which {
         topology: Option<String>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -110,6 +148,7 @@ pub enum Which {
         topology = None,
         write_uqff = None,
         from_uqff = None,
+        dtype = ModelDType::Auto,
     ))]
     Lora {
         adapters_model_id: String,
@@ -120,13 +159,15 @@ pub enum Which {
         topology: Option<String>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
         quantized_model_id,
         quantized_filename,
         tok_model_id = None,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
@@ -134,6 +175,7 @@ pub enum Which {
         quantized_filename: Either<String, Vec<String>>,
         tok_model_id: Option<String>,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -143,7 +185,8 @@ pub enum Which {
         order,
         tok_model_id = None,
         tgt_non_granular_index = None,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     XLoraGGUF {
         quantized_model_id: String,
@@ -153,6 +196,7 @@ pub enum Which {
         tok_model_id: Option<String>,
         tgt_non_granular_index: Option<usize>,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -161,7 +205,8 @@ pub enum Which {
         adapters_model_id,
         order,
         tok_model_id = None,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     LoraGGUF {
         quantized_model_id: String,
@@ -170,6 +215,7 @@ pub enum Which {
         order: String,
         tok_model_id: Option<String>,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -178,7 +224,8 @@ pub enum Which {
         tok_model_id,
         tokenizer_json = None,
         gqa = 1,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGML {
@@ -188,6 +235,7 @@ pub enum Which {
         tokenizer_json: Option<String>,
         gqa: usize,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -199,7 +247,8 @@ pub enum Which {
         tokenizer_json = None,
         tgt_non_granular_index = None,
         gqa = 1,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     XLoraGGML {
         quantized_model_id: String,
@@ -211,6 +260,7 @@ pub enum Which {
         tgt_non_granular_index: Option<usize>,
         gqa: usize,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -221,7 +271,8 @@ pub enum Which {
         tok_model_id = None,
         tokenizer_json = None,
         gqa = 1,
-        topology = None
+        topology = None,
+        dtype = ModelDType::Auto,
     ))]
     LoraGGML {
         quantized_model_id: String,
@@ -232,6 +283,7 @@ pub enum Which {
         tokenizer_json: Option<String>,
         gqa: usize,
         topology: Option<String>,
+        dtype: ModelDType,
     },
 
     #[pyo3(constructor = (
@@ -241,6 +293,7 @@ pub enum Which {
         topology = None,
         write_uqff = None,
         from_uqff = None,
+        dtype = ModelDType::Auto,
     ))]
     VisionPlain {
         model_id: String,
@@ -249,5 +302,17 @@ pub enum Which {
         topology: Option<String>,
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
+        dtype: ModelDType,
+    },
+
+    #[pyo3(constructor = (
+        model_id,
+        arch,
+        dtype = ModelDType::Auto,
+    ))]
+    DiffusionPlain {
+        model_id: String,
+        arch: DiffusionArchitecture,
+        dtype: ModelDType,
     },
 }

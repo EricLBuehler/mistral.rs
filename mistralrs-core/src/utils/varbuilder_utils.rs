@@ -1,6 +1,6 @@
 //! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-use std::{collections::HashMap, path::PathBuf, thread::JoinHandle};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, thread::JoinHandle};
 
 use candle_core::{
     pickle::PthTensors, safetensors::MmapedSafetensors, DType, Device, Result, Tensor,
@@ -10,6 +10,7 @@ use candle_nn::{
     VarBuilder,
 };
 use either::Either;
+use regex::Regex;
 
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
@@ -74,13 +75,17 @@ impl TensorLoaderBackend for PickleBackend {
 
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
-/// Only include keys for which predicate evaluates to true
+///
+/// # Predicate semantics:
+/// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
+/// - Otherwise, only include keys for which predicate evaluates to true.
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
     dtype: Option<DType>,
     device: &Device,
     silent: bool,
+    make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     #[allow(clippy::type_complexity)]
@@ -96,19 +101,39 @@ pub(crate) fn from_mmaped_safetensors<'a>(
 
     for path in paths {
         let device = device.clone();
-        let predicate = predicate.clone();
-        handles.push(Parellelize::spawn(Box::new(move || {
-            let loader = Common::new();
-            loader.load_tensors_from_path(&path, &device, dtype, silent, predicate)
-        })));
+        if let Some(regexes) = make_dummy_regexes.clone() {
+            let predicate = predicate.clone();
+            handles.push(Parellelize::spawn(Box::new(move || {
+                let loader = Common::new();
+                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
+                    regexes.iter().any(|r| r.is_match(key))
+                })
+            })));
+        } else {
+            let predicate = predicate.clone();
+            handles.push(Parellelize::spawn(Box::new(move || {
+                let loader = Common::new();
+                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
+            })));
+        }
     }
     for (i, path) in xlora_paths.into_iter().enumerate() {
         let device = device.clone();
-        let predicate = predicate.clone();
-        handles.push(Parellelize::spawn(Box::new(move || {
-            let loader = XLora::new(i + 1);
-            loader.load_tensors_from_path(&path, &device, dtype, silent, predicate)
-        })));
+        if let Some(regexes) = make_dummy_regexes.clone() {
+            let predicate = predicate.clone();
+            handles.push(Parellelize::spawn(Box::new(move || {
+                let loader = XLora::new(i + 1);
+                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
+                    regexes.iter().any(|r| r.is_match(key))
+                })
+            })));
+        } else {
+            let predicate = predicate.clone();
+            handles.push(Parellelize::spawn(Box::new(move || {
+                let loader = XLora::new(i + 1);
+                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
+            })));
+        }
     }
 
     let mut ws = HashMap::new();
@@ -137,8 +162,14 @@ pub(crate) fn load_preload_adapters<'a>(
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
             let loader = Common::new();
-            let loaded_tensors =
-                loader.load_tensors_from_path(path, device, Some(dtype), silent, |_| true)?;
+            let loaded_tensors = loader.load_tensors_from_path(
+                path,
+                device,
+                Some(dtype),
+                silent,
+                |_| true,
+                |_| false,
+            )?;
 
             map.insert(
                 name.clone(),
@@ -163,6 +194,7 @@ trait LoadTensors {
         dtype: Option<DType>,
         is_silent: bool,
         predicate: impl Fn(String) -> bool,
+        make_dummy_predicate: impl Fn(&str) -> bool,
     ) -> Result<HashMap<String, Tensor>> {
         let tensors: Box<dyn TensorLoaderBackend> = match path
             .extension()
@@ -190,9 +222,12 @@ trait LoadTensors {
         let mut loaded_tensors = HashMap::new();
         if !iter.is_empty() {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
-                let tensor = tensors.load_name(&load_name, device, dtype)?;
+                if !make_dummy_predicate(&load_name) {
+                    // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
+                    let tensor = tensors.load_name(&load_name, device, dtype)?;
 
-                loaded_tensors.insert(key_name, tensor);
+                    loaded_tensors.insert(key_name, tensor);
+                }
             }
         }
 

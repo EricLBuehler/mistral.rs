@@ -86,6 +86,30 @@ class VisionArchitecture(Enum):
     Idefics2 = "idefics2"
     LLaVANext = "LLaVANext"
     LLaVA = "LLaVA"
+    VLlama = "VLlama"
+
+@dataclass
+class DiffusionArchitecture(Enum):
+    Flux = "flux"
+    FluxOffloaded = "flux-offloaded"
+
+@dataclass
+class IsqOrganization(Enum):
+    Default = "default"
+    MoQE = "moqe"
+
+
+@dataclass
+class ModelDType(Enum):
+    Auto = "auto"
+    BF16 = "bf16"
+    F16 = "f16"
+    F32 = "f32"
+
+@dataclass
+class ImageGenerationResponseFormat(Enum):
+    Url = "url"
+    B64Json = "b64json"
 
 class Which(Enum):
     """
@@ -103,6 +127,7 @@ class Which(Enum):
         topology: str | None = None
         organization: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLora:
@@ -114,6 +139,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class Lora:
@@ -124,6 +150,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class GGUF:
@@ -131,6 +158,7 @@ class Which(Enum):
         quantized_filename: str | list[str]
         tok_model_id: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLoraGGUF:
@@ -141,6 +169,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class LoraGGUF:
@@ -150,6 +179,7 @@ class Which(Enum):
         order: str
         tok_model_id: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class GGML:
@@ -159,6 +189,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         gqa: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class XLoraGGML:
@@ -171,6 +202,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         gqa: int | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class LoraGGML:
@@ -181,6 +213,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class VisionPlain:
@@ -189,6 +222,13 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
+        dtype: ModelDType = ModelDType.Auto
+
+    @dataclass
+    class DiffusionPlain:
+        model_id: str
+        arch: DiffusionArchitecture
+        dtype: ModelDType = ModelDType.Auto
 
 class Runner:
     def __init__(
@@ -207,6 +247,7 @@ class Runner:
         pa_gpu_mem: int | float | None = None,
         pa_blk_size: int | None = None,
         no_paged_attn: bool = False,
+        prompt_batchsize: int | None = None,
         seed: int | None = None,
     ) -> None:
         """
@@ -243,6 +284,7 @@ class Runner:
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
         - `no_paged_attn` disables PagedAttention on CUDA
+        - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
         """
         ...
@@ -258,6 +300,17 @@ class Runner:
     def send_completion_request(self, request: CompletionRequest) -> CompletionResponse:
         """
         Send a chat completion request to the mistral.rs engine, returning the response object.
+        """
+
+    def generate_image(
+        self,
+        prompt: str,
+        response_format: ImageGenerationResponseFormat,
+        height: int = 720,
+        width: int = 1280,
+    ) -> ImageGenerationResponse:
+        """
+        Generate an image.
         """
 
     def send_re_isq(self, dtype: str) -> CompletionResponse:
@@ -425,3 +478,13 @@ class CompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+
+@dataclass
+class ImageChoice:
+    url: str | None
+    b64_json: str | None
+
+@dataclass
+class ImageGenerationResponse:
+    choices: list[ImageChoice]
+    created: int

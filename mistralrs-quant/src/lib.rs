@@ -10,12 +10,14 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+mod dummy;
 mod gguf;
 mod gptq;
 mod hqq;
 mod unquantized;
 mod utils;
 
+pub use dummy::DummyLayer;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -72,6 +74,7 @@ pub enum QuantMethodConfig {
         channel_wise: Option<bool>,
         bias: Option<Tensor>,
     },
+    Dummy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -225,10 +228,16 @@ pub fn linear_no_bias(
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
         }
     } else {
-        let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
+        // Handle the case where the layer is dummy (no tensors)
+        if !vb.contains_tensor("weight") {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
 
-        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
-        Arc::new(layer) as Arc<dyn QuantMethod>
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        }
     };
     Ok(layer)
 }
@@ -244,10 +253,16 @@ pub fn linear(
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
         }
     } else {
-        let layer = candle_nn::linear(in_dim, out_dim, vb)?;
+        // Handle the case where the layer is dummy (no tensors)
+        if !(vb.contains_tensor("weight") && vb.contains_tensor("bias")) {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let layer = candle_nn::linear(in_dim, out_dim, vb)?;
 
-        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
-        Arc::new(layer) as Arc<dyn QuantMethod>
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        }
     };
     Ok(layer)
 }
@@ -272,6 +287,16 @@ pub fn gptq_linear(
     config: &QuantizedConfig,
     vb: VarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    // Handle the case where the layer is dummy (no tensors)
+    if !(vb.contains_tensor("qweight")
+        && vb.contains_tensor("qzeros")
+        && vb.contains_tensor("g_idx")
+        && vb.contains_tensor("scales"))
+    {
+        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    }
+
     let qweight = vb.get_with_hints_dtype(
         (in_dim / pack_factor!(config.bits), out_dim),
         "qweight",

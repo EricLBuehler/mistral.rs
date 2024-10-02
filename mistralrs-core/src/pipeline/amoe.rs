@@ -18,12 +18,11 @@ use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
-    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
@@ -207,7 +206,7 @@ impl IsqPipelineMixin for AnyMoePipeline {
 }
 
 impl PreProcessingMixin for AnyMoePipeline {
-    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
+    fn get_chat_template(&self) -> Option<Arc<crate::ChatTemplate>> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
@@ -231,7 +230,7 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
-    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
+    fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
 }
@@ -239,7 +238,7 @@ impl MetadataMixin for AnyMoePipeline {
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
     fn forward_inputs(
-        &self,
+        &mut self,
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)
@@ -440,7 +439,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
-                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -540,15 +538,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 /// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
 /// has no information other than the input tokens (and maybe images).
 fn new_dummy_seq(
-    tokens: Vec<u32>,
+    (tokens, prompt): (Vec<u32>, String),
     dummy_sender: tokio::sync::mpsc::Sender<Response>,
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
-    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
+        prompt,
         0,
         0,
         1,
@@ -568,7 +566,10 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
-        trie,
+        None,
+        None,
+        None,
+        SeqStepType::PromptAndDecode,
         None,
     )
 }

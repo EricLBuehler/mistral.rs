@@ -70,7 +70,7 @@ impl InputsProcessor for Phi3InputsProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -95,17 +95,22 @@ impl InputsProcessor for Phi3InputsProcessor {
         if prompt_batchsize.is_some() {
             warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
         }
+        let Some(tokenizer) = tokenizer else {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Phi3InputProcessor requires a specified tokenizer.",
+            ))));
+        };
 
         let config = other_config
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, image_sizes, num_img_tokens, n_images) = if is_prompt
-            && input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, image_sizes, num_img_tokens, n_images) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
@@ -121,8 +126,16 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
                 } = self
-                    .preprocess(imgs, config, device)
+                    .preprocess(
+                        imgs,
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
                     .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
@@ -139,7 +152,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             return Box::new(
                 text_models_inputs_processor::TextInputsProcessor
                     .process_inputs(
-                        tokenizer,
+                        Some(tokenizer),
                         input_seqs,
                         is_prompt,
                         is_xlora,
@@ -450,6 +463,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
         mut images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        (_, _): (usize, usize),
     ) -> Result<PreprocessedImages> {
         // If no images, will not call this.
         assert!(!images.is_empty());
@@ -533,6 +547,9 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             image_sizes: Some((image_sizes.0, image_sizes.1)),
             pixel_attention_mask: None,
             num_img_tokens: Some(num_img_tokens),
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
         })
     }
 }

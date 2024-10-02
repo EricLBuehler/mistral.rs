@@ -4,7 +4,7 @@ use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
-use pipeline::ModelCategory;
+pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
@@ -50,6 +50,7 @@ mod paged_attention;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -71,17 +72,20 @@ pub use kbnf::{KbnfGrammar, KbnfGrammarBias};
 pub use mistralrs_quant::IsqType;
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
-    chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline, GGMLLoader,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
-    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
-    Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
+    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
+    DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
+    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
+    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
+    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };
-pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
-pub use response::Response;
+pub use request::{
+    Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
+    RequestMessage,
+};
 pub use response::*;
 pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
@@ -116,6 +120,7 @@ pub struct MistralRs {
     reboot_state: RebootState,
     engine_handler: RwLock<JoinHandle<()>>,
     engine_id: usize,
+    category: ModelCategory,
 }
 
 #[derive(Clone)]
@@ -285,9 +290,11 @@ impl MistralRs {
             throughput_logging_enabled,
         } = config;
 
-        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+        let category = pipeline.try_lock().unwrap().category();
+        let model_supports_reduced_gemm = match category {
             ModelCategory::Text => true,
             ModelCategory::Vision { has_conv2d } => !has_conv2d,
+            ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
@@ -349,6 +356,7 @@ impl MistralRs {
             next_request_id: Mutex::new(RefCell::new(0)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
+            category,
         })
     }
 
@@ -422,6 +430,10 @@ impl MistralRs {
 
     pub fn get_creation_time(&self) -> u64 {
         self.creation_time
+    }
+
+    pub fn get_model_category(&self) -> ModelCategory {
+        self.category
     }
 
     pub fn next_request_id(&self) -> usize {

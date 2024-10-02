@@ -3,7 +3,7 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VisionModel, VisionModelLoader, XLoraPaths,
+    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -109,6 +109,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
+            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -195,6 +196,10 @@ impl Loader for VisionLoader {
             paged_attn_config = None;
         }
 
+        if !self.inner.supports_paged_attention() {
+            paged_attn_config = None;
+        }
+
         info!(
             "Model config: {:?}",
             self.inner
@@ -239,6 +244,7 @@ impl Loader for VisionLoader {
                 silent,
                 mapper,
                 loading_isq,
+                self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism
             ),
@@ -325,7 +331,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: Some(tok_trie),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -354,8 +360,8 @@ impl Loader for VisionLoader {
 }
 
 impl PreProcessingMixin for VisionPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        Some(self.chat_template.clone())
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         Some(self.preprocessor_config.clone())
@@ -416,14 +422,14 @@ impl MetadataMixin for VisionPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        Some(self.tokenizer.clone())
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -534,8 +540,14 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb =
-                from_mmaped_safetensors(filenames, vec![], Some(dtype), dev, silent, move |key| {
+            let vb = from_mmaped_safetensors(
+                filenames,
+                vec![],
+                Some(dtype),
+                dev,
+                silent,
+                None,
+                move |key| {
                     if regex.is_match(&key) {
                         // Idx of the last char of the layer id, +1
                         // Assumes N.MLP
@@ -548,7 +560,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
                     } else {
                         false
                     }
-                })?;
+                },
+            )?;
             vbs.push(vb);
         }
 
@@ -584,6 +597,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 Some(dtype),
                 dev,
                 silent,
+                None,
                 |_| true,
             )?;
             info!(

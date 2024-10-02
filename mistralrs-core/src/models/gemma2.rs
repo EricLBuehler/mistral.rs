@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
@@ -46,6 +46,8 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
     pub use_flash_attn: bool,
+    #[allow(dead_code)]
+    pub tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -502,21 +504,35 @@ impl Model {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta as f32,
+                    cfg.head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                cfg.head_dim,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )?);
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let head_dim = cfg.head_dim;
             let sliding_window = if layer_idx % 2 == 0 {
                 // ^ Order is SWA, global, SWA
@@ -532,7 +548,7 @@ impl Model {
                     (1.0 / (cfg.query_pre_attn_scalar as f64).sqrt()) as f32,
                     Some(cfg.num_key_value_heads),
                     sliding_window,
-                    &normal_loading_metadata.real_device,
+                    device,
                     None,
                 )?),
             };
