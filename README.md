@@ -105,7 +105,7 @@ Mistal.rs supports several model categories:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
-- [UQFF](docs/UQFF.md): The uniquely powerful quantized file format
+- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, see some [models](docs/UQFF.md#list-of-models) which have already been converted.
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 

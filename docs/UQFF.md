@@ -176,3 +176,4 @@ Have you created a UQFF model on Hugging Face? If so, please [create an issue](h
 | -- | -- | -- |
 | Phi 3.5 Mini Instruct | microsoft/Phi-3.5-mini-instruct | [EricB/Phi-3.5-mini-instruct-UQFF](EricB/Phi-3.5-mini-instruct-UQFF) |
 | Llama 3.2 Vision | meta-llama/Llama-3.2-11B-Vision-Instruct | [EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF) |
+| Mistral Nemo 2407 | mistralai/Mistral-Nemo-Instruct-2407 | [EricB/Mistral-Nemo-Instruct-2407-UQFF](https://huggingface.co/EricB/Mistral-Nemo-Instruct-2407-UQFF) |
