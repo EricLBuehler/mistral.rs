@@ -341,7 +341,7 @@ pub trait IsqModel {
                 if silent {
                     tensors.iter_mut().zip(devices_and_dtypes).for_each(
                         |((tensor, _), (device, dtype))| {
-                            *tensor = tensor
+                            **tensor = tensor
                                 .clone()
                                 .apply_isq(dtype, device.clone(), &n_quantized)
                                 .unwrap();
@@ -354,7 +354,7 @@ pub trait IsqModel {
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
-                            *tensor = tensor
+                            **tensor = tensor
                                 .clone()
                                 .apply_isq(dtype, device.clone(), &n_quantized)
                                 .unwrap();
