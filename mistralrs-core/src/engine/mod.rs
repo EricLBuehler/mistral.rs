@@ -1,3 +1,4 @@
+use anyhow::Context;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -458,14 +459,18 @@ impl Engine {
 
     fn build_sequence_recognizer(
         constraint: &Constraint,
-        tokenizer: &Tokenizer,
+        tokenizer: Option<Arc<Tokenizer>>,
     ) -> anyhow::Result<SequenceRecognizer> {
         let recognizer = match constraint {
             Constraint::Regex(rx) => {
                 SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, None)?).into())
             }
             Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
-            Constraint::Kbnf(cfg) => SequenceRecognizer::Kbnf(KbnfGrammar::new(cfg, tokenizer)?),
+            Constraint::Kbnf(cfg) => SequenceRecognizer::Kbnf(KbnfGrammar::new(
+                cfg,
+                &*tokenizer
+                    .context("Expected model to have a tokenizer, but using a KBNF grammar.")?,
+            )?),
             Constraint::None => SequenceRecognizer::None,
         };
         Ok(recognizer)
@@ -773,7 +778,7 @@ impl Engine {
         for response_index in 0..request.sampling_params.n_choices {
             let recognizer = match Self::build_sequence_recognizer(
                 &request.constraint,
-                &get_mut_arcmutex!(self.pipeline).tokenizer(),
+                get_mut_arcmutex!(self.pipeline).tokenizer(),
             ) {
                 Ok(recognizer) => recognizer,
                 Err(err) => {

@@ -347,14 +347,15 @@ pub async fn sample_sequence(
             let second_logprobs_response = match bias_if_not_allowed {
                 Some(token_set) => {
                     let mut acc = vec![
-                -f32::INFINITY;
-                seq.tok_trie
-                    .as_ref()
-                    .ok_or(candle_core::Error::Msg(
-                        "TokTrie must be present in pipeline if bias is calculated".to_string()
-                    ))?
-                    .vocab_size()
-            ];
+                        -f32::INFINITY;
+                        seq.tok_trie
+                            .as_ref()
+                            .ok_or(candle_core::Error::Msg(
+                                "TokTrie must be present in pipeline if bias is calculated"
+                                    .to_string()
+                            ))?
+                            .vocab_size()
+                    ];
                     token_set.apply_to(&mut acc);
                     let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
@@ -389,15 +390,15 @@ pub async fn sample_sequence(
                 match seq.recognizer {
                     SequenceRecognizer::Regex(ref mut rx) => {
                         seq.tok_trie
-                    .as_ref()
-                    .unwrap()
+                            .as_ref()
+                            .unwrap()
                             .append_token(rx.as_mut(), second_logprobs_response.token)
                             .map_err(candle_core::Error::msg)?;
                     }
                     SequenceRecognizer::Cfg(ref mut cfg) => {
                         seq.tok_trie
-                    .as_ref()
-                    .unwrap()
+                            .as_ref()
+                            .unwrap()
                             .append_token(cfg.as_mut(), second_logprobs_response.token)
                             .map_err(candle_core::Error::msg)?;
                     }

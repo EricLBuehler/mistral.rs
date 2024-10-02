@@ -1892,9 +1892,9 @@ dependencies = [
 
 [[package]]
 name = "kbnf"
-version = "0.5.1"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e3497fd94eb2036ad24f57151e8d41eaa71fc6d7c221269a10d7bac8586299d"
+checksum = "b8f8f3801253bf69215a17e0b509d813561ff113ab32506d0624391ca38e8511"
 dependencies = [
  "ahash",
  "displaydoc",
@@ -1923,21 +1923,21 @@ checksum = "50a900e0a0e795744f6b18fe493500a1d773633972251f84f4be909edfb0d0f2"
 dependencies = [
  "aho-corasick",
  "memchr",
- "regex-syntax 0.8.4",
+ "regex-syntax 0.8.5",
 ]
 
 [[package]]
 name = "kbnf-syntax"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea0b88eecab605c33f9881740161f00185eccbae1f95886b09930d93b80d2f74"
+checksum = "abf70e6972a0f91801c1d8362527ea4a1449326a882a73186af16e47e2994c13"
 dependencies = [
  "general-sam",
  "kbnf-regex-automata",
  "nom",
  "parse-hyperlinks",
  "regex-lite",
- "regex-syntax 0.8.4",
+ "regex-syntax 0.8.5",
  "rustc-hash",
  "serde",
  "string-interner",
