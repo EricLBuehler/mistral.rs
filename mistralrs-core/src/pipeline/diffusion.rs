@@ -150,10 +150,6 @@ impl Loader for DiffusionLoader {
             anyhow::bail!("Device mapping is not supported for Diffusion models.");
         }
 
-        if in_situ_quant.is_some() {
-            anyhow::bail!("ISQ is not supported for Diffusion models.");
-        }
-
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for Diffusion models, disabling it.");
 
@@ -180,7 +176,7 @@ impl Loader for DiffusionLoader {
                 let vbs = paths
                     .filenames
                     .iter()
-                    .zip(self.inner.force_cpu_vb())
+                    .zip(self.inner.force_cpu_vb(in_situ_quant.is_some()))
                     .map(|(path, force_cpu)| {
                         from_mmaped_safetensors(
                             vec![path.clone()],
@@ -200,7 +196,7 @@ impl Loader for DiffusionLoader {
                     vbs,
                     crate::pipeline::NormalLoadingMetadata {
                         mapper,
-                        loading_isq: false,
+                        loading_isq: in_situ_quant.is_some(),
                         real_device: device.clone(),
                     },
                     attention_mechanism,
