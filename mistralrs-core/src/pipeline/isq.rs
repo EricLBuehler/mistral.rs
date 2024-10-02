@@ -13,10 +13,7 @@ use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
     GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
-};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
 use tracing::info;
@@ -216,6 +213,8 @@ pub trait IsqModel {
             let t_start = Instant::now();
             #[cfg(not(feature = "metal"))]
             {
+                use rayon::iter::IntoParallelRefIterator;
+
                 let current_rayon_threads = rayon::current_num_threads();
                 // Get the MINIMUM of the max isq threads the quant method allows
                 let minimum_max_threads = tensors
@@ -241,7 +240,9 @@ pub trait IsqModel {
 
                 pool.install(|| {
                     use indicatif::ParallelProgressIterator;
-                    use rayon::iter::{IndexedParallelIterator, ParallelIterator};
+                    use rayon::iter::{
+                        IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+                    };
                     if silent {
                         tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
                             |((tensor, _), (device, dtype))| {
@@ -359,6 +360,59 @@ pub trait IsqModel {
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
+                }
+
+                if let Some(serialized) = write_artifacts {
+                    info!(
+                        "Serializing {total_tensors} ISQ tensors to `{}`.",
+                        serialized.display()
+                    );
+
+                    if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                        candle_core::bail!(
+                            "UQFF output path extension must be {:?}",
+                            serialized.extension().as_ref().unwrap()
+                        );
+                    }
+
+                    let bar = ProgressBar::new(total_tensors as u64);
+                    bar.set_style(
+                        ProgressStyle::default_bar()
+                            .template(
+                                "[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})",
+                            )
+                            .unwrap()
+                            .progress_chars("#>-"),
+                    );
+
+                    let quantized_values = if silent {
+                        tensors
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                            .map(|(i, (layer, _))| {
+                                Ok((
+                                    i.to_string(),
+                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
+                                ))
+                            })
+                            .collect::<candle_core::Result<Vec<_>>>()
+                    } else {
+                        tensors
+                            .iter()
+                            .enumerate()
+                            .progress_with(bar)
+                            .filter(|(_, (layer, _))| layer.isq_serde_supported())
+                            .map(|(i, (layer, _))| {
+                                Ok((
+                                    i.to_string(),
+                                    Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
+                                ))
+                            })
+                            .collect::<candle_core::Result<Vec<_>>>()
+                    };
+
+                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();

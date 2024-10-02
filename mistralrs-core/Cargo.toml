@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.6.0", rev = "9c62368", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "d08212c", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -61,7 +61,7 @@ akin = "0.4.0"
 variantly = "0.4.0"
 buildstructor.workspace = true
 tracing-subscriber.workspace = true
-derive-new = "0.6.0"
+derive-new = "0.7.0"
 itertools = "0.13.0"
 sysinfo = "0.30.12"
 mistralrs-vision = { version = "0.3.1", path = "../mistralrs-vision" }
