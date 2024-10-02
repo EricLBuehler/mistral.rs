@@ -201,6 +201,7 @@ impl DiffusionModelLoader for FluxLoader {
             &normal_loading_metadata.real_device,
             silent,
             self.offload,
+            normal_loading_metadata.loading_isq,
         )?))
     }
 }

@@ -624,19 +624,13 @@ pub struct Flux {
 }
 
 impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
-        let img_in = mistralrs_quant::linear(
-            cfg.in_channels,
-            HIDDEN_SIZE,
-            &None,
-            vb.pp("img_in").set_device(device.clone()),
-        )?;
-        let txt_in = mistralrs_quant::linear(
-            cfg.joint_attention_dim,
-            HIDDEN_SIZE,
-            &None,
-            vb.pp("txt_in").set_device(device.clone()),
-        )?;
+    pub fn new(cfg: &Config, vb: VarBuilder, device: Device, loading_isq: bool) -> Result<Self> {
+        let mapper = DeviceMapMetadata::dummy().into_mapper(0, &device, None)?;
+        let vb = mapper.set_nm_device(vb, loading_isq);
+
+        let img_in = mistralrs_quant::linear(cfg.in_channels, HIDDEN_SIZE, &None, vb.pp("img_in"))?;
+        let txt_in =
+            mistralrs_quant::linear(cfg.joint_attention_dim, HIDDEN_SIZE, &None, vb.pp("txt_in"))?;
         let mut double_blocks = Vec::with_capacity(cfg.num_layers);
         let vb_d = vb.pp("double_blocks");
         for idx in 0..cfg.num_layers {
@@ -652,18 +646,18 @@ impl Flux {
         let time_in = MlpEmbedder::new(
             256,
             HIDDEN_SIZE,
-            vb.pp("time_in").set_device(device.clone()),
+            vb.pp("time_in"), //.set_device(device.clone()),
         )?;
         let vector_in = MlpEmbedder::new(
             cfg.pooled_projection_dim,
             HIDDEN_SIZE,
-            vb.pp("vector_in").set_device(device.clone()),
+            vb.pp("vector_in"), //.set_device(device.clone()),
         )?;
         let guidance_in = if cfg.guidance_embeds {
             let mlp = MlpEmbedder::new(
                 256,
                 HIDDEN_SIZE,
-                vb.pp("guidance_in").set_device(device.clone()),
+                vb.pp("guidance_in"), //.set_device(device.clone()),
             )?;
             Some(mlp)
         } else {
@@ -673,7 +667,7 @@ impl Flux {
             HIDDEN_SIZE,
             1,
             cfg.in_channels,
-            vb.pp("final_layer").set_device(device.clone()),
+            vb.pp("final_layer"), //.set_device(device.clone()),
         )?;
         let pe_dim = HIDDEN_SIZE / cfg.num_attention_heads;
         let pe_embedder = EmbedNd::new(pe_dim, THETA, AXES_DIM.to_vec());
@@ -688,8 +682,8 @@ impl Flux {
             single_blocks,
             final_layer,
             device: device.clone(),
-            offloaded,
-            mapper: DeviceMapMetadata::dummy().into_mapper(0, vb.device(), None)?,
+            offloaded: false,
+            mapper,
         })
     }
 
