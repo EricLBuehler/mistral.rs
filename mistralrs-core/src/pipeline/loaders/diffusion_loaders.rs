@@ -30,11 +30,12 @@ use crate::{
     },
     lora::LoraConfig,
     paged_attention::AttentionImplementation,
+    pipeline::IsqModel,
     xlora_models::XLoraConfig,
     Ordering,
 };
 
-pub trait DiffusionModel {
+pub trait DiffusionModel: IsqModel {
     /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
     fn forward(
         &mut self,

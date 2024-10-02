@@ -13,7 +13,7 @@ use crate::{
         t5::{self, T5EncoderModel},
         DiffusionGenerationParams,
     },
-    pipeline::DiffusionModel,
+    pipeline::{DiffusionModel, IsqModel},
     utils::varbuilder_utils::from_mmaped_safetensors,
 };
 
@@ -279,5 +279,19 @@ impl DiffusionModel for FluxStepper {
         } else {
             256
         }
+    }
+}
+
+impl IsqModel for FluxStepper {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn crate::device_map::DeviceMapper,
+    ) {
+        self.flux_model.get_layers()
     }
 }

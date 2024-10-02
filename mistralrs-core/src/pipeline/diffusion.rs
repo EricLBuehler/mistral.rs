@@ -2,7 +2,7 @@ use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    IsqOrganization, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -171,7 +171,7 @@ impl Loader for DiffusionLoader {
             AttentionImplementation::Eager
         };
 
-        let model = match self.kind {
+        let mut model = match self.kind {
             ModelKind::Normal => {
                 let vbs = paths
                     .filenames
@@ -205,6 +205,17 @@ impl Loader for DiffusionLoader {
             }
             _ => unreachable!(),
         };
+
+        if in_situ_quant.is_some() {
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                None,
+                silent,
+                IsqOrganization::Default,
+                None, // self.config.write_uqff.as_ref(),
+            )?;
+        }
 
         let max_seq_len = model.max_seq_len();
         Ok(Arc::new(Mutex::new(DiffusionPipeline {
