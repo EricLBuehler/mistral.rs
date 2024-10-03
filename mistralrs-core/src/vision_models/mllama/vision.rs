@@ -174,16 +174,17 @@ impl MLlamaVisionAttention {
 
         let attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
+                &q.contiguous()?.to_dtype(DType::F32)?,
+                &k.contiguous()?.to_dtype(DType::F32)?,
+                &v.contiguous()?.to_dtype(DType::F32)?,
                 attention_mask,
                 None,
                 &self.sdpa_params,
             )?
             .transpose(1, 2)?
             .contiguous()?
-            .reshape((bs, q_sq, ()))?;
+            .reshape((bs, q_sq, ()))?
+            .to_dtype(q.dtype())?;
 
         self.o_proj.forward(&attn_output)
     }
@@ -328,11 +329,11 @@ impl MLlamaVisionEncoder {
     }
 }
 
+// Apsect ratio mask is in f32
 fn _prepare_aspect_ratio_attention_mask(
     aspect_ratio_mask: &Tensor,
     num_patches: usize,
     target_length: usize,
-    dtype: DType,
     num_attn_heads: usize,
 ) -> Result<Tensor> {
     let (bs, max_num_tiles) = aspect_ratio_mask.dims2()?;
@@ -353,7 +354,7 @@ fn _prepare_aspect_ratio_attention_mask(
     )?;
 
     // Invert the mask
-    attention_mask = (1. - attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
+    attention_mask = (1. - attention_mask.to_dtype(DType::F32)?)?;
 
     // Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
@@ -522,7 +523,6 @@ impl MLlamaVisionModel {
             &attention_mask,
             self.num_patches,
             hidden_state.dim(2)?,
-            hidden_state.dtype(),
             self.num_attn_heads,
         )?;
 
