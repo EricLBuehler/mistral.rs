@@ -522,6 +522,60 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -537,10 +591,7 @@
 <span class="kw">use </span>mistralrs_quant::{
     GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
-<span class="kw">use </span>rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
-};
+<span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 <span class="kw">use </span>regex::Regex;
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>tracing::info;
@@ -740,6 +791,8 @@
             <span class="kw">let </span>t_start = Instant::now();
             <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
             </span>{
+                <span class="kw">use </span>rayon::iter::IntoParallelRefIterator;
+
                 <span class="kw">let </span>current_rayon_threads = rayon::current_num_threads();
                 <span class="comment">// Get the MINIMUM of the max isq threads the quant method allows
                 </span><span class="kw">let </span>minimum_max_threads = tensors
@@ -765,7 +818,9 @@
 
                 pool.install(|| {
                     <span class="kw">use </span>indicatif::ParallelProgressIterator;
-                    <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, ParallelIterator};
+                    <span class="kw">use </span>rayon::iter::{
+                        IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+                    };
                     <span class="kw">if </span>silent {
                         tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
                             |((tensor, <span class="kw">_</span>), (device, dtype))| {
@@ -862,9 +917,9 @@
             </span>{
                 <span class="kw">use </span>indicatif::ProgressIterator;
                 <span class="kw">if </span>silent {
-                    tensors.into_iter().zip(devices_and_dtypes).for_each(
+                    tensors.iter_mut().zip(devices_and_dtypes).for_each(
                         |((tensor, <span class="kw">_</span>), (device, dtype))| {
-                            <span class="kw-2">*</span>tensor = tensor
+                            <span class="kw-2">**</span>tensor = tensor
                                 .clone()
                                 .apply_isq(dtype, device.clone(), <span class="kw-2">&amp;</span>n_quantized)
                                 .unwrap();
@@ -873,16 +928,69 @@
                     );
                 } <span class="kw">else </span>{
                     tensors
-                        .into_iter()
+                        .iter_mut()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, <span class="kw">_</span>), (device, dtype))| {
-                            <span class="kw-2">*</span>tensor = tensor
+                            <span class="kw-2">**</span>tensor = tensor
                                 .clone()
                                 .apply_isq(dtype, device.clone(), <span class="kw-2">&amp;</span>n_quantized)
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
+                }
+
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = write_artifacts {
+                    <span class="macro">info!</span>(
+                        <span class="string">"Serializing {total_tensors} ISQ tensors to `{}`."</span>,
+                        serialized.display()
+                    );
+
+                    <span class="kw">if </span>!serialized.extension().is_some_and(|ext| ext == <span class="string">"uqff"</span>) {
+                        <span class="macro">candle_core::bail!</span>(
+                            <span class="string">"UQFF output path extension must be {:?}"</span>,
+                            serialized.extension().as_ref().unwrap()
+                        );
+                    }
+
+                    <span class="kw">let </span>bar = ProgressBar::new(total_tensors <span class="kw">as </span>u64);
+                    bar.set_style(
+                        ProgressStyle::default_bar()
+                            .template(
+                                <span class="string">"[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})"</span>,
+                            )
+                            .unwrap()
+                            .progress_chars(<span class="string">"#&gt;-"</span>),
+                    );
+
+                    <span class="kw">let </span>quantized_values = <span class="kw">if </span>silent {
+                        tensors
+                            .iter()
+                            .enumerate()
+                            .filter(|(<span class="kw">_</span>, (layer, <span class="kw">_</span>))| layer.isq_serde_supported())
+                            .map(|(i, (layer, <span class="kw">_</span>))| {
+                                <span class="prelude-val">Ok</span>((
+                                    i.to_string(),
+                                    Tensor::new(Cow::into_owned(layer.serialize()<span class="question-mark">?</span>), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>,
+                                ))
+                            })
+                            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
+                    } <span class="kw">else </span>{
+                        tensors
+                            .iter()
+                            .enumerate()
+                            .progress_with(bar)
+                            .filter(|(<span class="kw">_</span>, (layer, <span class="kw">_</span>))| layer.isq_serde_supported())
+                            .map(|(i, (layer, <span class="kw">_</span>))| {
+                                <span class="prelude-val">Ok</span>((
+                                    i.to_string(),
+                                    Tensor::new(Cow::into_owned(layer.serialize()<span class="question-mark">?</span>), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>,
+                                ))
+                            })
+                            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()
+                    };
+
+                    safetensors::serialize_to_file(quantized_values<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, serialized)<span class="question-mark">?</span>;
                 }
             }
             <span class="kw">let </span>delta = Instant::now().duration_since(t_start).as_secs_f32();
