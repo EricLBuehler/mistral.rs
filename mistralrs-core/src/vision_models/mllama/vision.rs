@@ -10,7 +10,7 @@ use candle_nn::{
 
 use crate::{
     attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
+    layers::{FusedBiasLinear, MatMul, Sdpa},
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -172,19 +172,30 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_output = Sdpa
-            .run_attention(
+        let attn_output = {
+            let att = MatMul.matmul_affine_div(
                 &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
-                attention_mask,
-                None,
-                &self.sdpa_params,
-            )?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((bs, q_sq, ()))?
-            .to_dtype(q.dtype())?;
+                &k.t()?.contiguous()?.to_dtype(DType::F32)?,
+                (self.head_dim as f64).sqrt(),
+            )?;
+            dbg!(&att.mean_all());
+
+            let att = match attention_mask {
+                Some(m) => att.broadcast_add(m)?,
+                None => att,
+            };
+            dbg!(&att.mean_all());
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            dbg!(&att.mean_all());
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            MatMul
+                .matmul(&att, &v.contiguous()?.to_dtype(DType::F32)?)?
+                .transpose(1, 2)?
+                .reshape((bs, q_sq, ()))?
+                .to_dtype(q.dtype())?
+        };
+        dbg!(&attn_output.mean_all());
+        println!();
 
         self.o_proj.forward(&attn_output)
     }
