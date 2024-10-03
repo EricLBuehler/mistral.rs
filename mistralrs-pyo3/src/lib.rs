@@ -23,10 +23,10 @@ use mistralrs_core::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
     DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    IsqOrganization, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
-    Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
-    StopTokens, TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -95,10 +95,7 @@ fn parse_which(
                 use_flash_attn,
                 prompt_batchsize,
                 topology: Topology::from_option_path(topology)?,
-                organization: organization
-                    .as_deref()
-                    .map(IsqOrganization::from_str)
-                    .unwrap_or(Ok(Default::default()))?,
+                organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
                 from_uqff,
             },

@@ -18,9 +18,12 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
@@ -38,6 +41,9 @@ pub struct Config {
     pub(crate) sliding_window: Option<usize>,
     pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    #[allow(dead_code)]
+    pub(crate) tie_word_embeddings: bool,
 }
 
 #[derive(Clone)]

@@ -24,10 +24,7 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 
-**Fallback rules for GGUF quantization**
-If a tensor cannot be quantized, the fallback process is as follows:
-1) If using a `K` quant, fallback to a similar `Q` quant.
-2) If that is not possible, use `F32` as the data type.
+For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ organization parameter in all APIs.
 
 ## Python Example
 ```python
@@ -45,16 +42,12 @@ runner = Runner(
 You can find this example [here](../mistralrs/examples/isq/main.rs).
 
 ```rust
-let pipeline = loader.load_model_from_hf(
-    None,
-    TokenSource::CacheToken,
-    None,
-    &Device::cuda_if_available(0)?,
-    false,
-    DeviceMapMetadata::dummy(),
-    Some(GgmlDType::Q4K),
-    None, // No PagedAttention yet
-)?;
+let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    .with_isq(IsqType::Q8_0)
+    .with_logging()
+    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .build()
+    .await?;
 ```
 
 ## Server example

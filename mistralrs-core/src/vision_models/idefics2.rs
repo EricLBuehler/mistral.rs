@@ -189,6 +189,7 @@ impl From<TextConfig> for mistral::Config {
             use_flash_attn: val.use_flash_attn,
             head_dim: None,
             quantization_config: None,
+            tie_word_embeddings: false,
         }
     }
 }

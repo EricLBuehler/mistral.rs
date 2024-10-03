@@ -27,15 +27,24 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Starcoder2`
 - `Phi3_5MoE`
 
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
+
 ### Architecture for vision models
 - `Phi3V`
 - `Idefics2`
 - `LLaVaNext`
 - `LLaVa`
+- `VLlama`
 
 ### Architecture for diffusion models
 - `Flux`
 - `FluxOffloaded`
+
+### ISQ Organization
+- `Default`
+- `MoQE`: if applicable, only quantize MoE experts. https://arxiv.org/abs/2310.02410
 
 ```py
 class Which(Enum):
@@ -45,7 +54,7 @@ class Which(Enum):
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
-        organization: str | None = None
+        organization: IsqOrganization | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
 

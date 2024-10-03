@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc};
@@ -22,8 +22,11 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
+
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
@@ -39,6 +42,8 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub rope_scaling: Option<Llama3RopeConfig>,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub tie_word_embeddings: bool,
 }
 
 struct CausalSelfAttention {
@@ -460,17 +465,20 @@ impl Llama {
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
         )?;
-        let lm_head = if vb.contains_tensor("lm_head.weight") {
-            candle_nn::linear_no_bias(
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
+                &None,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Linear::new(
-                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                None,
-            )
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
+                    None,
+                ),
+            ))?)
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -485,7 +493,7 @@ impl Llama {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
-                Arc::new(Llama3RotaryEmbedding::new(
+                Arc::new(Llama3RotaryEmbedding::new_llama3(
                     vb.dtype(),
                     cfg,
                     device,
@@ -536,7 +544,7 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,

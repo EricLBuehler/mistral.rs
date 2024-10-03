@@ -12,7 +12,7 @@ use std::{
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    DType, Device, IndexOp, Result, Shape, Tensor, D,
+    Context, DType, Device, IndexOp, Result, Shape, Tensor, D,
 };
 use candle_nn::{
     Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Linear, Module, VarBuilder,
@@ -23,7 +23,13 @@ use serde::Deserialize;
 pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
-use crate::{cublaslt::CUBLASLT_HANDLE, gguf::Content, models::llama, INHIBIT_GEMM_F16};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE,
+    gguf::Content,
+    models::llama,
+    vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
+    INHIBIT_GEMM_F16,
+};
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -417,7 +423,12 @@ fn calculate_default_inv_freq(cfg: &llama::Config) -> Vec<f32> {
 
 // https://github.com/huggingface/transformers/blob/1392a6867f40a55dfabaf306745c67627598b1af/src/transformers/modeling_rope_utils.py#L298
 impl Llama3RotaryEmbedding {
-    pub fn new(dtype: DType, cfg: &llama::Config, dev: &Device, is_gpt_neox: bool) -> Result<Self> {
+    pub fn new_llama3(
+        dtype: DType,
+        cfg: &llama::Config,
+        dev: &Device,
+        is_gpt_neox: bool,
+    ) -> Result<Self> {
         match &cfg.rope_scaling {
             None
             | Some(Llama3RopeConfig {
@@ -468,6 +479,90 @@ impl Llama3RotaryEmbedding {
                     cos,
                     is_gptx: is_gpt_neox,
                 })
+            }
+        }
+    }
+
+    pub fn new_mllama3(
+        dtype: DType,
+        cfg: &MLlamaTextConfig,
+        dev: &Device,
+        is_gpt_neox: bool,
+    ) -> Result<Self> {
+        match &cfg.rope_scaling {
+            None
+            | Some(MLlamaRopeScaling {
+                rope_type: MLlamaRopeType::Default,
+                ..
+            }) => Ok(Self::Default(RotaryEmbedding::new(
+                cfg.rope_theta,
+                cfg.hidden_size / cfg.num_attention_heads,
+                cfg.max_position_embeddings,
+                dev,
+                is_gpt_neox,
+                dtype,
+            )?)),
+            Some(MLlamaRopeScaling {
+                rope_type: MLlamaRopeType::Llama3,
+                original_max_position_embeddings,
+                factor,
+                attention_factor: _,
+                beta_fast: _,
+                beta_slow: _,
+                short_factor: _,
+                long_factor: _,
+                low_freq_factor,
+                high_freq_factor,
+            }) => {
+                let factor = factor.context("MLlama Llama3 RoPE needs `factor` parameter.")?;
+                let low_freq_factor = low_freq_factor
+                    .context("MLlama Llama3 RoPE needs `low_freq_factor` parameter.")?;
+                let high_freq_factor = high_freq_factor
+                    .context("MLlama Llama3 RoPE needs `high_freq_factor` parameter.")?;
+
+                let low_freq_wavelen = *original_max_position_embeddings as f32 / low_freq_factor;
+                let high_freq_wavelen = *original_max_position_embeddings as f32 / high_freq_factor;
+
+                let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+
+                let inv_freq = (0..head_dim)
+                    .step_by(2)
+                    .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / head_dim as f32))
+                    .map(|freq| {
+                        let wavelen = 2. * PI / freq;
+                        if wavelen < high_freq_wavelen {
+                            freq
+                        } else if wavelen > low_freq_wavelen {
+                            freq / factor
+                        } else {
+                            let smooth = (*original_max_position_embeddings as f32 / wavelen
+                                - low_freq_factor)
+                                / (high_freq_factor - low_freq_factor);
+                            (1. - smooth) * freq / factor + smooth * freq
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let inv_freq_len = inv_freq.len();
+                let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+
+                let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+                    .to_dtype(DType::F32)?
+                    .reshape((cfg.max_position_embeddings, 1))?;
+                let freqs = t.matmul(&inv_freq)?;
+                let sin = freqs.sin()?.to_dtype(dtype)?;
+                let cos = freqs.cos()?.to_dtype(dtype)?;
+                Ok(Self::Llama3 {
+                    sin,
+                    cos,
+                    is_gptx: is_gpt_neox,
+                })
+            }
+            Some(MLlamaRopeScaling {
+                rope_type: other, ..
+            }) => {
+                candle_core::bail!(
+                    "MLlama doesn't support any other RoPE type than `llama3`, got {other:?}"
+                )
             }
         }
     }

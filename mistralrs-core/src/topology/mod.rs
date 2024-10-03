@@ -129,7 +129,6 @@ impl Topology {
                 } else {
                     Device::Cpu
                 };
-                dbg!(&device, &range);
 
                 Some(device)
             } else {

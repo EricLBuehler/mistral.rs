@@ -96,13 +96,9 @@ struct Args {
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
 
-    /// Enter interactive mode instead of serving a chat server. Exclusive to `--vi` (vision interactive mode).
+    /// Enter interactive mode instead of serving a chat server.
     #[clap(long, short, action)]
     interactive_mode: bool,
-
-    /// Enter vision interactive mode instead of serving a chat server. Exclusive to `--interactive-mode/-i`.
-    #[clap(long = "vi", action)]
-    vision_interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
@@ -459,13 +455,8 @@ async fn main() -> Result<()> {
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n);
 
-    if args.interactive_mode && args.vision_interactive_mode {
-        anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
-    } else if args.interactive_mode {
-        interactive_mode(builder.build(), false, args.throughput_log).await;
-        return Ok(());
-    } else if args.vision_interactive_mode {
-        interactive_mode(builder.build(), true, args.throughput_log).await;
+    if args.interactive_mode {
+        interactive_mode(builder.build(), args.throughput_log).await;
         return Ok(());
     }
 
@@ -476,7 +467,7 @@ async fn main() -> Result<()> {
     };
     let mistralrs = builder.build();
 
-    let port = args.port.expect("Expected port to be specified.");
+    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
 
     let app = get_router(mistralrs);
 

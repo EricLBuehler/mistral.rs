@@ -2,6 +2,9 @@
 
 This is our official benchmarking application, which allows you to collect structured information about the speed of `mistral.rs`.
 
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 To run: `cargo run --release --features ... --package mistralrs-bench`
 
 ```bash

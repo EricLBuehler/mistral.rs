@@ -15,6 +15,12 @@ pub(crate) struct PreprocessedImages {
     pub(crate) pixel_attention_mask: Option<Tensor>,
     pub(crate) image_sizes: Option<(usize, usize)>,
     pub(crate) num_img_tokens: Option<Vec<usize>>,
+    /// Without batch size, safe to unsqueeze & concat in dim0
+    pub(crate) aspect_ratio_ids: Option<Tensor>,
+    /// Without batch size, safe to unsqueeze & concat in dim0
+    pub(crate) aspect_ratio_mask: Option<Tensor>,
+    /// Without batch size
+    pub(crate) num_tiles: Option<Vec<usize>>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)
@@ -23,11 +29,13 @@ pub trait ImagePreProcessor: InputsProcessor {
     const DEFAULT_STD: [f64; 3];
 
     /// Preprocess the images for a specific batch.
+    /// `(bs, max_num_images)`, max_num_images is the max images per batches.
     #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        batch_info: (usize, usize),
     ) -> Result<PreprocessedImages>;
 }

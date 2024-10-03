@@ -77,6 +77,7 @@ impl<'a> Adapter<'a> {
             Some(candle_core::DType::F32),
             device,
             silent,
+            None,
             |_| true,
         )?;
 

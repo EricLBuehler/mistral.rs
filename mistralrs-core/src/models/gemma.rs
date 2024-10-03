@@ -22,12 +22,15 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
 
 fn default_max_position_embeddings() -> usize {
     4096
 }
+
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(serde::Deserialize, Debug, Clone, Default)]
 pub struct Config {
@@ -49,6 +52,9 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub use_flash_attn: bool,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    #[allow(dead_code)]
+    pub tie_word_embeddings: bool,
 }
 
 impl Config {

@@ -14,6 +14,10 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: when sending multiple images, they will be resized to the minimum dimension by which all will fit without cropping.
 > Aspect ratio is not preserved in that case.
 
+> [!NOTE]
+> The Phi 3 vision model does not automatically add the image tokens!
+> They should be added to messages manually, and are of the format `<|image_{N}|>` where N starts from 1.
+
 ## HTTP server
 You can find this example [here](../examples/server/phi3v.py).
 
@@ -42,6 +46,10 @@ The perspective from which this photo is taken offers an expansive view of the m
 ---
 
 1) Start the server
+
+> [!NOTE]
+> You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
+
 ```
 cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
 ```
@@ -94,95 +102,40 @@ You can find this example [here](../mistralrs/examples/phi3v/main.rs).
 This is a minimal example of running the Phi 3 Vision model with a dummy image.
 
 ```rust
-use either::Either;
-use image::{ColorType, DynamicImage};
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
+use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
-use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, Request, RequestMessage, Response, Result, SamplingParams,
-    SchedulerConfig, TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-};
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model =
+        VisionModelBuilder::new("microsoft/Phi-3.5-vision-instruct", VisionLoaderType::Phi3V)
+            .with_isq(IsqType::Q4K)
+            .with_logging()
+            .build()
+            .await?;
 
-/// Gets the best device, cpu, cuda if compiled with CUDA
-pub(crate) fn best_device() -> Result<Device> {
-    #[cfg(not(feature = "metal"))]
-    {
-        Device::cuda_if_available(0)
-    }
-    #[cfg(feature = "metal")]
-    {
-        Device::new_metal(0)
-    }
-}
+    let bytes = match reqwest::blocking::get(
+        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+    ) {
+        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+        Err(e) => anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&bytes)?;
 
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = VisionLoaderBuilder::new(
-        VisionSpecificConfig {
-            use_flash_attn: false,
-        },
-        None,
-        None,
-        Some("microsoft/Phi-3.5-vision-instruct".to_string()),
-    )
-    .build(VisionLoaderType::Phi3V);
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-        None, // No PagedAttention.
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
-    )
-    .build())
-}
+    let messages = VisionMessages::new().add_phiv_image_message(
+        TextMessageRole::User,
+        "What is depicted here? Please describe the scene in detail.",
+        image,
+    );
 
-fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let response = model.send_chat_request(messages).await?;
 
-    let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::VisionChat {
-            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
-            messages: vec![IndexMap::from([
-                ("role".to_string(), Either::Left("user".to_string())),
-                (
-                    "content".to_string(),
-                    Either::Left("<|image_1|>\nWhat is shown in this image? Write a detailed response analyzing the scene.".to_string()),
-                ),
-            ])],
-        },
-        sampling_params: SamplingParams::default(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: None,
-        tool_choice: None,
-    });
-    mistralrs.get_sender()?.blocking_send(request)?;
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
 
-    let response = rx.blocking_recv().unwrap();
-    match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content),
-        _ => unreachable!(),
-    }
     Ok(())
 }
 ```

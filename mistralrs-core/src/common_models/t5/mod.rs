@@ -589,6 +589,7 @@ impl TensorInfExtend for Tensor {
         match self.dtype() {
             DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
             DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
+            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
             DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
             DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
             DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
@@ -603,6 +604,7 @@ fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
     let mut max = match xs.dtype() {
         DType::U8 => u8::MAX as f64 - 1000.,
         DType::U32 => u32::MAX as f64 - 1000.,
+        DType::I16 => i16::MAX as f64 - 1000.,
         DType::I32 => i32::MAX as f64 - 1000.,
         DType::I64 => i64::MAX as f64 - 1000.,
         DType::F16 => half::f16::MAX.to_f64_const() - 1000.,
