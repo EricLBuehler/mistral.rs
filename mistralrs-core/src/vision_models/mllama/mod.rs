@@ -49,7 +49,7 @@ fn prepare_cross_attention_mask(
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
     let mut cross_attn_mask = repeat_interleave(
-        &cross_attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?,
+        &cross_attention_mask.to_dtype(DType::F32)?,
         num_vision_tokens,
         3,
     )?;
@@ -57,7 +57,7 @@ fn prepare_cross_attention_mask(
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
     // Invert the mask
-    let inverted_cross_attn_mask = (1. - cross_attn_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
+    let inverted_cross_attn_mask = (1. - cross_attn_mask)?;
     const NEG_INF_VALUE: f32 = -1e15;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
@@ -75,7 +75,9 @@ fn prepare_cross_attention_mask(
         .unsqueeze(D::Minus1)?;
 
     cross_attn_mask = cross_attn_mask
-        .broadcast_mul(&full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())?)?;
+        .broadcast_mul(&full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())?)?
+        .to_dtype(DType::F32)?
+        .to_dtype(dtype)?;
 
     Ok((cross_attn_mask, full_text_row_masked_out_mask))
 }
@@ -97,6 +99,7 @@ impl MLlamaModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
+        // This vision model is very sensitive.
         let vision_model_dtype = if vb.dtype() == DType::F16 {
             DType::F32
         } else {
@@ -119,7 +122,9 @@ impl MLlamaModel {
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp("multi_modal_projector").set_device(real_dev.clone()),
+                vb.pp("multi_modal_projector")
+                    .set_device(real_dev.clone())
+                    .set_dtype(vision_model_dtype),
             )?,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
@@ -145,14 +150,14 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            let vision_outputs = self
-                .vision_model
-                .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?
-                .to_dtype(self.dtype)?;
+            let vision_outputs =
+                self.vision_model
+                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?
-                .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?;
+                .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
+                .to_dtype(self.dtype)?;
             Some(cross_attention_states)
         } else {
             None
@@ -163,7 +168,7 @@ impl MLlamaModel {
                 let (cmask, fmask) = prepare_cross_attention_mask(
                     cross_attn_mask,
                     self.vision_model.num_patches,
-                    self.multi_modal_projector.weight().dtype(),
+                    self.dtype,
                 )?;
                 (Some(cmask), Some(fmask))
             } else {
