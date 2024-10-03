@@ -264,6 +264,21 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -315,7 +330,7 @@
     <span class="kw">let </span>bs = cross_attention_mask.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span>text_total_length = cross_attention_mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
     <span class="kw">let </span><span class="kw-2">mut </span>cross_attn_mask = repeat_interleave(
-        <span class="kw-2">&amp;</span>cross_attention_mask.to_dtype(DType::F32)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>,
+        <span class="kw-2">&amp;</span>cross_attention_mask.to_dtype(DType::F32)<span class="question-mark">?</span>,
         num_vision_tokens,
         <span class="number">3</span>,
     )<span class="question-mark">?</span>;
@@ -323,7 +338,7 @@
     cross_attn_mask = cross_attn_mask.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
 
     <span class="comment">// Invert the mask
-    </span><span class="kw">let </span>inverted_cross_attn_mask = (<span class="number">1. </span>- cross_attn_mask.to_dtype(DType::F32)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+    </span><span class="kw">let </span>inverted_cross_attn_mask = (<span class="number">1. </span>- cross_attn_mask)<span class="question-mark">?</span>;
     <span class="kw">const </span>NEG_INF_VALUE: f32 = -<span class="number">1e15</span>;
     cross_attn_mask = masked_fill(
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask,
@@ -341,7 +356,9 @@
         </span>.unsqueeze(D::Minus1)<span class="question-mark">?</span>;
 
     cross_attn_mask = cross_attn_mask
-        .broadcast_mul(<span class="kw-2">&amp;</span>full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        .broadcast_mul(<span class="kw-2">&amp;</span>full_text_row_masked_out_mask.to_dtype(cross_attn_mask.dtype())<span class="question-mark">?</span>)<span class="question-mark">?
+        </span>.to_dtype(DType::F32)<span class="question-mark">?
+        </span>.to_dtype(dtype)<span class="question-mark">?</span>;
 
     <span class="prelude-val">Ok</span>((cross_attn_mask, full_text_row_masked_out_mask))
 }
@@ -351,6 +368,7 @@
     language_model: MLlamaTextModel,
     multi_modal_projector: Linear,
     hidden_size: usize,
+    dtype: DType,
 }
 
 <span class="kw">impl </span>MLlamaModel {
@@ -362,10 +380,18 @@
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>real_dev = normal_loading_metadata.real_device.clone();
+        <span class="comment">// This vision model is very sensitive.
+        </span><span class="kw">let </span>vision_model_dtype = <span class="kw">if </span>vb.dtype() == DType::F16 {
+            DType::F32
+        } <span class="kw">else </span>{
+            vb.dtype()
+        };
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             vision_model: MLlamaVisionModel::new(
                 <span class="kw-2">&amp;</span>cfg.vision_config,
-                vb.pp(<span class="string">"vision_model"</span>).set_device(real_dev.clone()),
+                vb.pp(<span class="string">"vision_model"</span>)
+                    .set_device(real_dev.clone())
+                    .set_dtype(vision_model_dtype),
             )<span class="question-mark">?</span>,
             language_model: MLlamaTextModel::new(
                 <span class="kw-2">&amp;</span>cfg.text_config,
@@ -377,9 +403,12 @@
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp(<span class="string">"multi_modal_projector"</span>).set_device(real_dev.clone()),
+                vb.pp(<span class="string">"multi_modal_projector"</span>)
+                    .set_device(real_dev.clone())
+                    .set_dtype(vision_model_dtype),
             )<span class="question-mark">?</span>,
             hidden_size: cfg.text_config.hidden_size,
+            dtype: vb.dtype(),
         })
     }
 
@@ -408,7 +437,8 @@
             <span class="kw">let </span>cross_attention_states = <span class="self">self
                 </span>.multi_modal_projector
                 .forward(<span class="kw-2">&amp;</span>vision_outputs.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.reshape(((), vision_outputs.dim(D::Minus2)<span class="question-mark">?</span>, <span class="self">self</span>.hidden_size))<span class="question-mark">?</span>;
+                </span>.reshape(((), vision_outputs.dim(D::Minus2)<span class="question-mark">?</span>, <span class="self">self</span>.hidden_size))<span class="question-mark">?
+                </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
             <span class="prelude-val">Some</span>(cross_attention_states)
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -419,7 +449,7 @@
                 <span class="kw">let </span>(cmask, fmask) = prepare_cross_attention_mask(
                     cross_attn_mask,
                     <span class="self">self</span>.vision_model.num_patches,
-                    <span class="self">self</span>.multi_modal_projector.weight().dtype(),
+                    <span class="self">self</span>.dtype,
                 )<span class="question-mark">?</span>;
                 (<span class="prelude-val">Some</span>(cmask), <span class="prelude-val">Some</span>(fmask))
             } <span class="kw">else </span>{
