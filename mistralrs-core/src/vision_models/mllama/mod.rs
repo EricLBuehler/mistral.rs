@@ -85,6 +85,7 @@ pub(crate) struct MLlamaModel {
     language_model: MLlamaTextModel,
     multi_modal_projector: Linear,
     hidden_size: usize,
+    dtype: DType,
 }
 
 impl MLlamaModel {
@@ -96,10 +97,17 @@ impl MLlamaModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
+        let vision_model_dtype = if vb.dtype() == DType::F16 {
+            DType::F32
+        } else {
+            vb.dtype()
+        };
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
-                vb.pp("vision_model").set_device(real_dev.clone()),
+                vb.pp("vision_model")
+                    .set_device(real_dev.clone())
+                    .set_dtype(vision_model_dtype),
             )?,
             language_model: MLlamaTextModel::new(
                 &cfg.text_config,
@@ -114,6 +122,7 @@ impl MLlamaModel {
                 vb.pp("multi_modal_projector").set_device(real_dev.clone()),
             )?,
             hidden_size: cfg.text_config.hidden_size,
+            dtype: vb.dtype(),
         })
     }
 
@@ -136,9 +145,10 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            let vision_outputs =
-                self.vision_model
-                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+            let vision_outputs = self
+                .vision_model
+                .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?
+                .to_dtype(self.dtype)?;
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?
