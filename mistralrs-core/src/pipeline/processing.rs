@@ -85,10 +85,12 @@ pub(crate) fn apply_chat_template(
                                     for (content_k, content_v) in content_row {
                                         if content_k == "text" {
                                             if let Some(content_str) = content_v.as_str() {
-                                                new_message.insert(k, Either::Left(content_str.to_string()));
+                                                new_message.insert(
+                                                    k,
+                                                    Either::Left(content_str.to_string()),
+                                                );
                                                 break 'outer;
                                             }
-                                                
                                         }
                                     }
                                 }

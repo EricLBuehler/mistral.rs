@@ -1,3 +1,4 @@
+use serde_json::Value;
 use std::{
     collections::HashMap,
     env,
@@ -8,7 +9,6 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use serde_json::Value;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
@@ -246,10 +246,12 @@ async fn parse_request(
 
                         let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
                         let mut content_image_map = IndexMap::new();
-                        content_image_map.insert("type".to_string(), Value::String("image".to_string()));
+                        content_image_map
+                            .insert("type".to_string(), Value::String("image".to_string()));
                         content_map.push(content_image_map);
                         let mut content_text_map = IndexMap::new();
-                        content_text_map.insert("type".to_string(), Value::String("text".to_string()));
+                        content_text_map
+                            .insert("type".to_string(), Value::String("text".to_string()));
                         content_text_map.insert("text".to_string(), Value::String(content));
                         content_map.push(content_text_map);
 
