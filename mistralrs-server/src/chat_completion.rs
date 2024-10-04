@@ -8,6 +8,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use serde_json::Value;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
@@ -173,7 +174,7 @@ async fn parse_request(
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
-                            Either<String, Vec<IndexMap<String, String>>>,
+                            Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         message_map
@@ -234,7 +235,7 @@ async fn parse_request(
                         }
                         let mut message_map: IndexMap<
                             String,
-                            Either<String, Vec<IndexMap<String, String>>>,
+                            Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         let (content, url) = if items[0] == "text" {
@@ -243,13 +244,13 @@ async fn parse_request(
                             get_content_and_url(1, 0, image_messages)?
                         };
 
-                        let mut content_map = Vec::new();
+                        let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
                         let mut content_image_map = IndexMap::new();
-                        content_image_map.insert("type".to_string(), "image".to_string());
+                        content_image_map.insert("type".to_string(), Value::String("image".to_string()));
                         content_map.push(content_image_map);
                         let mut content_text_map = IndexMap::new();
-                        content_text_map.insert("type".to_string(), "text".to_string());
-                        content_text_map.insert("text".to_string(), content);
+                        content_text_map.insert("type".to_string(), Value::String("text".to_string()));
+                        content_text_map.insert("text".to_string(), Value::String(content));
                         content_map.push(content_text_map);
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
@@ -276,7 +277,7 @@ async fn parse_request(
         }
         Either::Right(prompt) => {
             let mut messages = Vec::new();
-            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
                 IndexMap::new();
             message_map.insert("role".to_string(), Either::Left("user".to_string()));
             message_map.insert("content".to_string(), Either::Left(prompt));

@@ -84,8 +84,11 @@ pub(crate) fn apply_chat_template(
                                 'outer: for content_row in rv {
                                     for (content_k, content_v) in content_row {
                                         if content_k == "text" {
-                                            new_message.insert(k, Either::Left(content_v));
-                                            break 'outer;
+                                            if let Some(content_str) = content_v.as_str() {
+                                                new_message.insert(k, Either::Left(content_str.to_string()));
+                                                break 'outer;
+                                            }
+                                                
                                         }
                                     }
                                 }
@@ -149,6 +152,6 @@ impl Processor for BasicProcessor {
         &[]
     }
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }
