@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
                 ("role".to_string(), Either::Left("asistant".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left(
+                    Either::Right(
                         json!({
                             "name": called.function.name,
                             "parameters": called.function.arguments,

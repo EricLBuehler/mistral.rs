@@ -539,6 +539,7 @@ mod tests {
     use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
+    use serde_json::Value;
 
     macro_rules! hashmap {
         (@single $($x:tt)*) => (());
@@ -550,7 +551,7 @@ mod tests {
                 let _cap = hashmap!(@count $($key),*);
                 let mut _map = ::indexmap::IndexMap::with_capacity(_cap);
                 $(
-                    let _ = _map.insert($key, $value);
+                    let _ = _map.insert($key, Value::String($value));
                 )*
                 _map
             }
@@ -655,7 +656,7 @@ mod tests {
         ];
         let mut inputs = Vec::new();
         for [role, content] in messages {
-            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
                 IndexMap::new();
             message.insert("role".to_string(), Either::Left(role.to_string()));
             message.insert("content".to_string(), Either::Left(content.to_string()));
@@ -689,7 +690,7 @@ mod tests {
 
         let mut inputs = Vec::new();
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("system".to_string()));
         message.insert(
@@ -701,7 +702,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -718,7 +719,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -730,7 +731,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -747,7 +748,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -759,7 +760,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(

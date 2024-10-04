@@ -6,6 +6,7 @@ use mistralrs_core::{
     ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
+use serde_json::Value;
 use std::{
     io::{self, Write},
     sync::{atomic::Ordering, Arc, Mutex},
@@ -220,7 +221,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             println!();
             info!("Average T/s: {}", toks as f64 / time);
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
         assistant_message.insert("content".to_string(), Either::Left(assistant_output));
@@ -402,7 +403,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             println!();
             info!("Average T/s: {}", toks as f64 / time);
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
         assistant_message.insert("content".to_string(), Either::Left(assistant_output));
