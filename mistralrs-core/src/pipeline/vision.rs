@@ -5,7 +5,7 @@ use super::{
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
     TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
-use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
+use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Phi3_5VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -106,6 +106,7 @@ impl VisionLoaderBuilder {
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
         let loader: Box<dyn VisionModelLoader> = match loader {
             VisionLoaderType::Phi3V => Box::new(Phi3VLoader),
+            VisionLoaderType::Phi3_5V => Box::new(Phi3_5VLoader),
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),

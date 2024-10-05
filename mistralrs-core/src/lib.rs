@@ -76,7 +76,7 @@ pub use pipeline::{
     GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
     LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
     MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
     VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
 };

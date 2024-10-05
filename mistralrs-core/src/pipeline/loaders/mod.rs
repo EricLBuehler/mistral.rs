@@ -23,7 +23,7 @@ pub use normal_loaders::{
 };
 
 pub use vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VLlamaLoader, VisionLoaderType,
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Phi3_5VLoader, VLlamaLoader, VisionLoaderType,
     VisionModel, VisionModelLoader,
 };
 

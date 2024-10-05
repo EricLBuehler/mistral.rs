@@ -11,6 +11,8 @@ pub(crate) mod mllama;
 pub(crate) mod llava;
 pub(crate) mod phi3;
 pub(crate) mod phi3_inputs_processor;
+pub(crate) mod phi3_5;
+pub(crate) mod phi3_5_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
 pub(crate) use llava::llava15;

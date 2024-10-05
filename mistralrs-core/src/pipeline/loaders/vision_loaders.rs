@@ -28,6 +28,8 @@ use crate::vision_models::llava_next_inputs_processor::LLaVANextProcessor;
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
+use crate::vision_models::phi3_5::{Config as Phi3_5Config, Model as Phi3_5};
+use crate::vision_models::phi3_5_inputs_processor::Phi3_5Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 
@@ -81,6 +83,8 @@ pub trait VisionModelLoader: IsqModelLoader {
 pub enum VisionLoaderType {
     #[serde(rename = "phi3v")]
     Phi3V,
+    #[serde(rename = "phi3_5v")]
+    Phi3_5V,
     #[serde(rename = "idefics2")]
     Idefics2,
     #[serde(rename = "llava_next")]
@@ -96,11 +100,12 @@ impl FromStr for VisionLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "phi3v" => Ok(Self::Phi3V),
+            "phi3_5v" => Ok(Self::Phi3_5V),
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
             "vllama" => Ok(Self::VLlama),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`,`phi3_5v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
         }
     }
 }
@@ -157,6 +162,84 @@ impl VisionModelLoader for Phi3VLoader {
 }
 
 impl IsqModelLoader for Phi3VLoader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Vec::new();
+        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
+            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
+        } else {
+            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
+        }
+        // Attention
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+        )?);
+        // MLP
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
+        )?);
+        regexes.push(Regex::new(
+            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+        )?);
+        Ok(regexes)
+    }
+}
+
+
+// ======================== Phi 3.5 loader
+
+/// [`VisionLoader`] for a Phi 3.5 Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct Phi3_5VLoader;
+
+impl VisionModelLoader for Phi3_5VLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: Phi3_5Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Phi3_5::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: Phi3_5Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Phi3_5Processor::new_processor(processor_config, preprocessor_config)
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Phi3_5Config = serde_json::from_str(config)?;
+        Ok(config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+}
+
+impl IsqModelLoader for Phi3_5VLoader {
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
         if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
