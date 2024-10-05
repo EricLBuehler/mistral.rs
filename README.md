@@ -1,5 +1,5 @@
 <h1 align="center">
-  mistral.rs
+  Mistral.rs
 </h1>
 
 <h3 align="center">
@@ -7,7 +7,7 @@ Blazingly fast LLM inference.
 </h3>
 
 <p align="center">
-| <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
+<a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a>
 </p>
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
@@ -18,7 +18,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 2) [Get models](#getting-models)
 
-3) Deploy with our easy to use APIs
+3) Deploy with our easy-to-use APIs
     - [Python](examples/python)
     - [Rust](mistralrs/examples)
     - [OpenAI compatible HTTP server](docs/HTTP.md)
@@ -41,7 +41,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
     ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
     ```
-- φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
+- φ³ Run the new Phi 3.5/3.1/3 model with a 128K context window
 
     ```
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
@@ -76,7 +76,7 @@ Mistal.rs supports several model categories:
 
 ## Description
 **Easy**:
-- Lightweight OpenAI API compatible HTTP server
+- Lightweight OpenAI API-compatible HTTP server
 - Python API
 - Grammar support with Regex and Yacc
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
@@ -91,11 +91,11 @@ Mistal.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
-- HQQ: 4-bit and 8 bit, with ISQ support
+- HQQ: 4-bit and 8-bit, with ISQ support
 
 **Powerful**:
 - LoRA support with weight merging
-- First X-LoRA inference platform with first class support
+- First X-LoRA inference platform with first-class support
 - [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
 - Various [sampling and penalty](docs/SAMPLING.mds) methods
 - Tool calling: [docs](docs/TOOL_CALLING.md)
@@ -293,7 +293,7 @@ This is passed in the following ways:
 
 [Here](examples/python/token_source.py) is an example of setting the token source.
 
-If token cannot be loaded, no token will be used (i.e. effectively using `none`).
+If a token cannot be loaded, no token will be used (i.e. effectively using `none`).
 
 ### Loading models from local files:
 
@@ -321,7 +321,7 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 
 ### Running GGUF models
 
-To run GGUF models, the only mandatory arguments are the quantized model ID and the quantized filename. The quantized model ID can be a HF model ID.
+To run GGUF models, the only mandatory arguments are the quantized model ID and the quantized filename. The quantized model ID can be an HF model ID.
 
 GGUF models contain a tokenizer. However, mistral.rs allows you to run the model with a tokenizer from a specified model, typically the official one. This means there are two options:
 1) [With a specified tokenizer](#with-a-specified-tokenizer)
@@ -339,7 +339,7 @@ If the specified tokenizer model ID contains a `tokenizer.json`, then it will be
 
 #### With the builtin tokenizer
 
-Using the builtin tokenizer:
+Using the built-in tokenizer:
 
 ```bash
 ./mistralrs-server gguf -m bartowski/Phi-3.5-mini-instruct-GGUF -f Phi-3.5-mini-instruct-Q4_K_M.gguf
@@ -357,7 +357,7 @@ There are a few more ways to configure:
 
 The chat template can be automatically detected and loaded from the GGUF file if no other chat template source is specified including the tokenizer model ID.
 
-If that does not work, you can either [provide a tokenizer](#with-a-specified-tokenizer) (recommended), or specify a custom chat template.
+If that does not work, you can either [provide a tokenizer](#with-a-specified-tokenizer) (recommended) or specify a custom chat template.
 
 ```bash
 ./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3.5-mini-instruct-Q4_K_M.gguf
@@ -366,10 +366,10 @@ If that does not work, you can either [provide a tokenizer](#with-a-specified-to
 **Tokenizer**
 
 The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
-please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
+please consider using the method demonstrated in the examples below, where the tokenizer is sourced from Hugging Face.
 
 **Supported GGUF tokenizer types**
-- `llama` (sentencepiece)
+- `llama` (sentence piece)
 - `gpt2` (BPE)
 
 ## Run with the CLI
@@ -380,7 +380,7 @@ Additionally, for models without quantization, the model architecture should be 
 
 ### Architecture for plain models
 
-> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16`, or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
 
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
@@ -397,7 +397,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 
 ### Architecture for vision models
 
-> Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
+> Note: for vision models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16`, or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`vision-plain`).
 
 - `phi3v`
 - `idefics2`
@@ -421,7 +421,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 
 ### Interactive mode
 
-You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
+You can launch interactive mode, a simple chat application running in the terminal, bypassing `-i`:
 
 ```bash
 ./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
@@ -469,7 +469,7 @@ Example:
 
 > Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
 
-Please submit more benchmarks via raising an issue!
+Please submit more benchmarks by raising an issue!
 
 ## Supported models
 
@@ -539,21 +539,21 @@ Please submit more benchmarks via raising an issue!
 |Llama 3.2 Vision| |
 
 
-### Using derivative model
+### Using the derivative model
 
 To use a derivative model, select the model architecture using the correct subcommand. To see what can be passed for the architecture, pass `--help` after the subcommand. For example, when using a different model than the default, specify the following for the following types of models:
 
 - **Plain**: Model id
-- **Quantized**: Quantized model id, quantized filename, and tokenizer id
+- **Quantized**: Quantized model ID, quantized filename, and tokenizer ID
 - **X-LoRA**: Model id, X-LoRA ordering
-- **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
+- **X-LoRA quantized**: Quantized model ID, quantized filename, tokenizer ID, and X-LoRA ordering
 - **LoRA**: Model id, LoRA ordering
-- **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
+- **LoRA quantized**: Quantized model ID, quantized filename, tokenizer ID, and LoRA ordering
 - **Vision Plain**: Model id
 
 See [this](#adapter-ordering-file) section to determine if it is necessary to prepare an X-LoRA/LoRA ordering file, it is always necessary if the target modules or architecture changed, or if the adapter order changed.
 
-It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand. If the model is not instruction tuned, no chat template will be found and the APIs will only accept a prompt, no messages.
+It is also important to check the chat template style of the model. If the HF hub repo has a `tokenizer_config.json` file, it is not necessary to specify. Otherwise, templates can be found in `chat_templates` and should be passed before the subcommand. If the model is not instruction-tuned, no chat template will be found and the APIs will only accept a prompt, no messages.
 
 For example, when using a Zephyr model:
 
@@ -568,7 +568,7 @@ Mistral.rs will attempt to automatically load a chat template and tokenizer. Thi
 
 ## Contributing
 
-Thank you for contributing! If you have any problems or want to contribute something, please raise an issue or pull request.
+Thank you for contributing! If you have any problems or want to contribute something, please raise an issue or pull a request.
 If you want to add a new model, please contact us via an issue and we can coordinate how to do this.
 
 ## FAQ
@@ -581,7 +581,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
-- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
+- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vision model:
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 
 ## Credits
