@@ -155,6 +155,30 @@ impl VisionMessages {
         self
     }
 
+    pub fn add_phiv_images_message(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        images: Vec<DynamicImage>,
+    ) -> Self {
+        let start_index = self.images.len() + 1;
+        let num_images = images.len();
+        self.images.extend(images);
+
+        let image_placeholders = (start_index..start_index + num_images)
+            .map(|i| format!("<|image_{}|>", i))
+            .collect::<String>();
+
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            (
+                "content".to_string(),
+                Either::Left(format!("{}{}", image_placeholders, text.to_string())),
+            ),
+        ]));
+        self
+    }
+
     /// This handles adding the `<|image|>` prefix to the prompt.
     pub fn add_vllama_image_message(
         mut self,
