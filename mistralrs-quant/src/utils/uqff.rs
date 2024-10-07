@@ -1,11 +1,16 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use half::{bf16, f16};
+
+// v0.1.0: initial release
+// v0.1.1: add i16 dtype
+// v0.1.2: add F8E4M3
 
 const HQFF_VERSION_MAJOR: u32 = 0;
 const HQFF_VERSION_MINOR: u32 = 1;
-const HQFF_VERSION_PATCH: u32 = 1;
+const HQFF_VERSION_PATCH: u32 = 2;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 pub(crate) const HQFF_VERSION: u32 =
@@ -54,6 +59,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::BF16 => data_to_bytes::<half::bf16>(tensor.to_vec1()?),
         DType::F32 => data_to_bytes::<f32>(tensor.to_vec1()?),
         DType::F64 => data_to_bytes::<f64>(tensor.to_vec1()?),
+        DType::F8E4M3 => data_to_bytes::<F8E4M3>(tensor.to_vec1()?),
     };
     buffer.extend(&(bias.len() as u32).to_le_bytes());
 
@@ -67,6 +73,7 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::F32 => 6,
         DType::F64 => 7,
         DType::I16 => 8,
+        DType::F8E4M3 => 9,
     };
     buffer.extend(&dtype.to_le_bytes());
 
@@ -121,6 +128,7 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::I16 => bytes_to_data::<i16>(&tensor_data, &dims, device),
         DType::U32 => bytes_to_data::<u32>(&tensor_data, &dims, device),
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
+        DType::F8E4M3 => bytes_to_data::<u8>(&tensor_data, &dims, device),
     }
 }
 
