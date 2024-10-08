@@ -28,7 +28,8 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
-            | QuantMethodConfig::Dummy => unreachable!(),
+            | QuantMethodConfig::Dummy
+            | QuantMethodConfig::FP8(_) => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }
@@ -117,6 +118,9 @@ impl QuantMethod for UnquantLinear {
                         .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
                 })?))
             }
+            Some(IsqType::F8E4M3) => {
+                todo!()
+            }
             None => {
                 let w = self.0.weight().to_device(&device)?;
                 let b = if let Some(b) = self.0.bias() {
@@ -138,6 +142,7 @@ impl QuantMethod for UnquantLinear {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
+            IsqType::F8E4M3 => todo!(),
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K

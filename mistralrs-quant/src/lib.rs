@@ -11,6 +11,7 @@ use candle_core::{
 };
 
 mod dummy;
+mod fp8;
 mod gguf;
 mod gptq;
 mod hqq;
@@ -75,6 +76,7 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
     },
     Dummy,
+    FP8(Linear),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -96,6 +98,7 @@ pub enum IsqType {
     // HQQ3,
     // HQQ2,
     // HQQ1,
+    F8E4M3,
 }
 
 impl TryFrom<IsqType> for GgmlDType {
