@@ -176,6 +176,25 @@ impl MatmulDesc {
         Ok(())
     }
 
+    fn set_scale_ptr(&self, device_ptr: &CUdeviceptr, matrix: Matrix) -> Result<(), CublasError> {
+        let attr = match matrix {
+            Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+            Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_POINTER,
+            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_POINTER,
+        };
+
+        unsafe {
+            result::set_matmul_desc_attribute(
+                self.handle,
+                attr,
+                device_ptr as *const CUdeviceptr as *const _,
+                mem::size_of::<CUdeviceptr>(),
+            )?;
+        }
+        Ok(())
+    }
+
     // Epilogue system can be leveraged to fuse add and activation operations
     fn set_epilogue(
         &self,
@@ -406,6 +425,146 @@ pub trait Matmul<T>: MatmulShared {
             *self.stream() as *mut _,
         )
     }
+
+    /// Matrix matrix multiplication. See
+    /// [nvidia docs](https://docs.nvidia.com/cuda/cublas/index.html#cublasltmatmul)
+    ///
+    /// https://docs.nvidia.com/cuda/cublas/#cublasltmatmul
+    /// There are a few requirements:
+    /// - Compute type must be f32  (upheld)
+    /// - `transa && !transb` (upheld)
+    /// - Scale type must be  (upheld)
+    /// - A and B must be f8e4m3, but C must be bf16  (upheld)
+    ///
+    /// # Safety
+    /// This is unsafe because improper arguments may lead to invalid
+    /// memory accesses.
+    unsafe fn matmul_fp8_like<
+        I: DevicePtr<T>,
+        O: DevicePtrMut<bf16>,
+        // A: DevicePtrMut<f32>,
+        S: DevicePtr<f32>,
+        B: DevicePtr<bf16>,
+    >(
+        &self,
+        cfg: MatmulConfig,
+        a: &I,
+        b: &I,
+        scale_a: &S,
+        scale_b: &S,
+        scale_d: &S,
+        c: &mut O,
+        // amax_d: &mut A,
+        bias: Option<&B>,
+        act: Option<&Activation>,
+    ) -> Result<(), CublasError> {
+        let (a_rows, a_cols) = (cfg.k, cfg.m);
+        let (b_rows, b_cols) = (cfg.n, cfg.k);
+        assert!(cfg.transa);
+        assert!(!cfg.transb);
+
+        // Matmul description
+        let matmul_desc = MatmulDesc::new(
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cudaDataType_t::CUDA_R_32F,
+        )
+        .unwrap();
+
+        // Set transa
+        matmul_desc.set_transpose(cfg.transa, Matrix::A).unwrap();
+        // Set transb
+        matmul_desc.set_transpose(cfg.transb, Matrix::B).unwrap();
+
+        // Creates matrix layouts
+        // Creates matrix layouts
+        let a_layout = MatrixLayout::new(Self::matrix_type(), a_rows, a_cols, cfg.lda).unwrap();
+        if let (Some(batch_size), Some(stride_a)) = (cfg.batch_size, cfg.stride_a) {
+            a_layout.set_batch(batch_size, stride_a)?;
+        }
+
+        let b_layout = MatrixLayout::new(Self::matrix_type(), b_rows, b_cols, cfg.ldb).unwrap();
+        if let (Some(batch_size), Some(stride_b)) = (cfg.batch_size, cfg.stride_b) {
+            b_layout.set_batch(batch_size, stride_b)?;
+        }
+
+        let c_layout =
+            MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc).unwrap();
+        if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
+            c_layout.set_batch(batch_size, stride_c)?;
+        }
+
+        let d_layout = MatrixLayout::new(Self::matrix_type(), cfg.m, cfg.n, cfg.ldc).unwrap();
+        if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
+            d_layout.set_batch(batch_size, stride_c)?;
+        }
+
+        // Set scale factors
+        matmul_desc
+            .set_scale_ptr(scale_a.device_ptr(), Matrix::A)
+            .unwrap();
+        matmul_desc
+            .set_scale_ptr(scale_b.device_ptr(), Matrix::B)
+            .unwrap();
+        matmul_desc
+            .set_scale_ptr(scale_d.device_ptr(), Matrix::D)
+            .unwrap();
+
+        // Pass amaxd ptr
+        // unsafe {
+        //     result::set_matmul_desc_attribute(
+        //         matmul_desc.handle,
+        //         sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_AMAX_D_POINTER,
+        //         amax_d.device_ptr_mut() as *const CUdeviceptr as *const _,
+        //         mem::size_of::<CUdeviceptr>(),
+        //     )
+        //     .unwrap();
+        // }
+
+        // // Epilogue system can be leveraged to fuse add and activation operations
+        matmul_desc
+            .set_epilogue(act, bias.map(|b| b.device_ptr()), cfg.stride_bias)
+            .unwrap();
+
+        // Create matmul heuristic search preferences
+        let matmul_pref = MatmulPref::new().unwrap();
+
+        // Set workspace size
+        matmul_pref
+            .set_workspace_size(self.workspace().size)
+            .unwrap();
+
+        // Get heuristic given Config, bias, act and workspace size
+        let heuristic = result::get_matmul_algo_heuristic(
+            *self.handle(),
+            matmul_desc.handle,
+            a_layout.handle,
+            b_layout.handle,
+            c_layout.handle,
+            d_layout.handle,
+            matmul_pref.handle,
+        )
+        .unwrap();
+
+        // Launch matmul kernel
+        result::matmul(
+            *self.handle(),
+            matmul_desc.handle,
+            (&cfg.alpha) as *const _ as *const _,
+            (&cfg.beta) as *const _ as *const _,
+            *a.device_ptr() as *const _,
+            a_layout.handle,
+            *b.device_ptr() as *const _,
+            b_layout.handle,
+            *c.device_ptr_mut() as *const _,
+            c_layout.handle,
+            *c.device_ptr_mut() as *mut _,
+            c_layout.handle,
+            (&heuristic.algo) as *const _,
+            *self.workspace().buffer.device_ptr() as *const CUdeviceptr as *mut _,
+            self.workspace().size,
+            *self.stream() as *mut _,
+        )
+    }
 }
 
 impl MatmulShared for CudaBlasLT {
@@ -445,6 +604,16 @@ impl Matmul<half::f16> for CudaBlasLT {
 impl Matmul<half::bf16> for CudaBlasLT {
     fn matrix_type() -> sys::cudaDataType {
         sys::cudaDataType_t::CUDA_R_16BF
+    }
+
+    fn compute_type() -> sys::cublasComputeType_t {
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
+    }
+}
+
+impl Matmul<F8E4M3> for CudaBlasLT {
+    fn matrix_type() -> sys::cudaDataType {
+        sys::cudaDataType_t::CUDA_R_8F_E4M3
     }
 
     fn compute_type() -> sys::cublasComputeType_t {

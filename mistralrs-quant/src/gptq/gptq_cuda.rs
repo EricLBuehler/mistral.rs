@@ -241,7 +241,7 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8(_) => {
+            | QuantMethodConfig::FP8 { .. } => {
                 unreachable!()
             }
         }

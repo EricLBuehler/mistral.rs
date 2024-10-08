@@ -529,7 +529,7 @@ impl QuantMethod for HqqLayer {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8(_) => {
+            | QuantMethodConfig::FP8 { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {

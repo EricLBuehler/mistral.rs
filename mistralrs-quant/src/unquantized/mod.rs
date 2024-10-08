@@ -29,7 +29,7 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8(_) => unreachable!(),
+            | QuantMethodConfig::FP8 { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }

@@ -10,6 +10,7 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+mod cublaslt;
 mod dummy;
 mod fp8;
 mod gguf;
@@ -76,7 +77,10 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
     },
     Dummy,
-    FP8(Linear),
+    FP8 {
+        lin: Linear,
+        dtype: DType,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]

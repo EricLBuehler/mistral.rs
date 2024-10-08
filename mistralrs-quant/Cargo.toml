@@ -22,6 +22,7 @@ tracing.workspace = true
 rayon.workspace = true
 byteorder = "1.5.0"
 float8.workspace = true
+once_cell.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
