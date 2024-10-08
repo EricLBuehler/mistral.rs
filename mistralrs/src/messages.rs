@@ -4,6 +4,7 @@ use super::*;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use serde_json::Value;
 
 /// A type which can be used as a request.
 pub trait RequestLike {
@@ -203,10 +204,10 @@ impl VisionMessages {
             (
                 "content".to_string(),
                 Either::Right(vec![
-                    IndexMap::from([("type".to_string(), "image".to_string())]),
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
                     IndexMap::from([
-                        ("type".to_string(), "text".to_string()),
-                        ("content".to_string(), text.to_string()),
+                        ("type".to_string(), Value::String("text".to_string())),
+                        ("content".to_string(), Value::String(text.to_string())),
                     ]),
                 ]),
             ),

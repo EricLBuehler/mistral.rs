@@ -2,6 +2,7 @@ use either::Either;
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     response::Response,
@@ -28,7 +29,7 @@ pub enum ImageGenerationResponseFormat {
     B64Json,
 }
 
-pub type MessageContent = Either<String, Vec<IndexMap<String, String>>>;
+pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
 #[derive(Clone, Debug)]
 /// Message or messages for a [`Request`].
