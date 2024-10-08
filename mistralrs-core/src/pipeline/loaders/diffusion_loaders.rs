@@ -30,11 +30,12 @@ use crate::{
     },
     lora::LoraConfig,
     paged_attention::AttentionImplementation,
+    pipeline::IsqModel,
     xlora_models::XLoraConfig,
     Ordering,
 };
 
-pub trait DiffusionModel {
+pub trait DiffusionModel: IsqModel {
     /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
     fn forward(
         &mut self,
@@ -50,7 +51,7 @@ pub trait DiffusionModelLoader {
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     fn get_config_filenames(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
-    fn force_cpu_vb(&self) -> Vec<bool>;
+    fn force_cpu_vb(&self, loading_isq: bool) -> Vec<bool>;
     // `configs` and `vbs` should be corresponding. It is up to the implementer to maintain this invaraint.
     fn load(
         &self,
@@ -166,8 +167,8 @@ impl DiffusionModelLoader for FluxLoader {
         // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
         Ok(vec![flux_file, ae_file])
     }
-    fn force_cpu_vb(&self) -> Vec<bool> {
-        vec![self.offload, false]
+    fn force_cpu_vb(&self, loading_isq: bool) -> Vec<bool> {
+        vec![self.offload || loading_isq, false]
     }
     fn load(
         &self,
@@ -200,6 +201,7 @@ impl DiffusionModelLoader for FluxLoader {
             &normal_loading_metadata.real_device,
             silent,
             self.offload,
+            normal_loading_metadata.loading_isq,
         )?))
     }
 }
