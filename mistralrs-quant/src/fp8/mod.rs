@@ -6,28 +6,18 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
+mod quantize;
+
 use crate::{
-    generate_isq,
-    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
 pub struct FP8Linear(Linear);
-
-impl FP8Linear {
-    fn quantize(&self, w: &Tensor) -> candle_core::Result<Tensor> {
-        let mut w = w.to_dtype(DType::F32)?.mean_all()?;
-        while !w.dims().is_empty() {
-            w = w.min(0)?;
-        }
-        todo!()
-    }
-}
 
 impl QuantMethod for FP8Linear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>

@@ -459,25 +459,26 @@ pub trait Matmul<T>: MatmulShared {
         // Creates matrix layouts
         // Creates matrix layouts
         let a_layout = MatrixLayout::new(Self::matrix_type(), a_rows, a_cols, cfg.lda).unwrap();
-        // if let (Some(batch_size), Some(stride_a)) = (cfg.batch_size, cfg.stride_a) {
-        //     a_layout.set_batch(batch_size, stride_a)?;
-        // }
+        dbg!((cfg.batch_size, cfg.stride_a, cfg.stride_b, cfg.stride_c));
+        if let (Some(batch_size), Some(stride_a)) = (cfg.batch_size, cfg.stride_a) {
+            a_layout.set_batch(batch_size, stride_a)?;
+        }
 
         let b_layout = MatrixLayout::new(Self::matrix_type(), b_rows, b_cols, cfg.ldb).unwrap();
-        // if let (Some(batch_size), Some(stride_b)) = (cfg.batch_size, cfg.stride_b) {
-        //     b_layout.set_batch(batch_size, stride_b)?;
-        // }
+        if let (Some(batch_size), Some(stride_b)) = (cfg.batch_size, cfg.stride_b) {
+            b_layout.set_batch(batch_size, stride_b)?;
+        }
 
         let c_layout =
             MatrixLayout::new(sys::cudaDataType_t::CUDA_R_16BF, cfg.m, cfg.n, cfg.ldc).unwrap();
-        // if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
-        //     c_layout.set_batch(batch_size, stride_c)?;
-        // }
+        if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
+            c_layout.set_batch(batch_size, stride_c)?;
+        }
 
         let d_layout = MatrixLayout::new(Self::matrix_type(), cfg.m, cfg.n, cfg.ldc).unwrap();
-        // if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
-        //     d_layout.set_batch(batch_size, stride_c)?;
-        // }
+        if let (Some(batch_size), Some(stride_c)) = (cfg.batch_size, cfg.stride_c) {
+            d_layout.set_batch(batch_size, stride_c)?;
+        }
 
         // Set scale factors
         // matmul_desc
