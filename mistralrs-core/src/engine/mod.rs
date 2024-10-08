@@ -1,3 +1,4 @@
+use anyhow::Context;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -7,6 +8,7 @@ use std::{
     },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
+use tokenizers::Tokenizer;
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
@@ -20,7 +22,7 @@ use crate::{
     scheduler::{Scheduler, SchedulerOutput},
     sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
-    CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
+    CompletionResponse, KbnfGrammar, RequestMessage, Response, SchedulerConfig, DEBUG,
 };
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
@@ -455,12 +457,20 @@ impl Engine {
         }
     }
 
-    fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
+    fn build_sequence_recognizer(
+        constraint: &Constraint,
+        tokenizer: Option<Arc<Tokenizer>>,
+    ) -> anyhow::Result<SequenceRecognizer> {
         let recognizer = match constraint {
             Constraint::Regex(rx) => {
                 SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, None)?).into())
             }
             Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
+            Constraint::Kbnf(cfg) => SequenceRecognizer::Kbnf(KbnfGrammar::new(
+                cfg,
+                &*tokenizer
+                    .context("Expected model to have a tokenizer, but using a KBNF grammar.")?,
+            )?),
             Constraint::None => SequenceRecognizer::None,
         };
         Ok(recognizer)
@@ -766,7 +776,10 @@ impl Engine {
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
-            let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
+            let recognizer = match Self::build_sequence_recognizer(
+                &request.constraint,
+                get_mut_arcmutex!(self.pipeline).tokenizer(),
+            ) {
                 Ok(recognizer) => recognizer,
                 Err(err) => {
                     request

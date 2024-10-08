@@ -202,6 +202,7 @@ fn parse_request(
             constraint: match oairequest.grammar {
                 Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
                 Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+                Some(Grammar::Kbnf(kbnf)) => Constraint::Kbnf(kbnf),
                 None => Constraint::None,
             },
             adapters: oairequest.adapters,

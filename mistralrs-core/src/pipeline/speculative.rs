@@ -601,6 +601,9 @@ impl Pipeline for SpeculativePipeline {
                                 .append_token(cfg.as_mut(), accepted.token)
                                 .map_err(candle_core::Error::msg)?;
                         }
+                        SequenceRecognizer::Kbnf(ref mut kbnf) => {
+                            kbnf.add_token(accepted.token)?;
+                        }
                         SequenceRecognizer::None => {}
                     }
                 }

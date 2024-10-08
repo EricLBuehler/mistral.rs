@@ -653,6 +653,13 @@ impl Runner {
                     ));
                 }
                 Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type == Some("kbnf".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyApiErr::from(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Kbnf(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
                 return Err(PyApiErr::from(
                     "Grammar type is specified but is not `regex` or `yacc`",
@@ -915,6 +922,13 @@ impl Runner {
                     ));
                 }
                 Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+            } else if request.grammar_type == Some("kbnf".to_string()) {
+                if request.grammar.is_none() {
+                    return Err(PyApiErr::from(
+                        "Grammar type is specified but not grammar text",
+                    ));
+                }
+                Constraint::Kbnf(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
                 return Err(PyApiErr::from(
                     "Grammar type is specified but is not `regex` or `yacc`",
