@@ -1,9 +1,11 @@
 use std::{
     borrow::Cow,
+    io::Cursor,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use quantize::QuantizationResult;
@@ -12,15 +14,21 @@ mod quantize;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
+    utils::{
+        deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
+        HQFF_VERSION,
+    },
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
 pub struct FP8Linear {
     lin: Linear,
-    dequant_a_scale: Tensor,
-    dequant_b_scale: Tensor,
+    dequant_w_scale: Tensor,
+    dequant_x_scale: Tensor,
     quant_scale: Tensor,
+    /// Quantized type
+    dtype: DType,
 }
 
 impl QuantMethod for FP8Linear {
@@ -42,9 +50,10 @@ impl QuantMethod for FP8Linear {
                 } = Self::quantize(lin.weight(), dtype)?;
                 Ok(Self {
                     lin: Linear::new(qw, lin.bias().cloned()),
-                    dequant_b_scale: dequantize_scale.clone(), // This is probably wrong!
-                    dequant_a_scale: dequantize_scale,
+                    dequant_x_scale: dequantize_scale.clone(), // This is probably wrong!
+                    dequant_w_scale: dequantize_scale,
                     quant_scale: quantize_scale,
+                    dtype,
                 })
             }
         }
@@ -70,7 +79,7 @@ impl QuantMethod for FP8Linear {
                 let mut x = x.flatten_to(D::Minus(3))?;
 
                 // Prepare the b tensor. If it is not quantized, quantize it
-                let mut dequant_b_scale = self.dequant_b_scale.clone();
+                let mut dequant_x_scale = self.dequant_x_scale.clone();
                 if !matches!(x.dtype(), DType::F8E4M3) {
                     let QuantizationResult {
                         qw,
@@ -78,7 +87,7 @@ impl QuantMethod for FP8Linear {
                         dequantize_scale,
                     } = Self::quantize(&x, DType::F8E4M3)?;
                     x = qw;
-                    dequant_b_scale = dequantize_scale;
+                    dequant_x_scale = dequantize_scale;
                 }
 
                 // Handle bias
@@ -95,8 +104,8 @@ impl QuantMethod for FP8Linear {
                     .batch_matmul(
                         &a,
                         &b,
-                        &self.dequant_a_scale,
-                        &dequant_b_scale,
+                        &self.dequant_w_scale,
+                        &dequant_x_scale,
                         &self.quant_scale,
                         self.lin.bias(),
                         None,
@@ -109,13 +118,8 @@ impl QuantMethod for FP8Linear {
             }
             None => {
                 // Dequantize matmul
-                let dequant_w = self
-                    .lin
-                    .weight()
-                    .to_dtype(x.dtype())?
-                    .broadcast_mul(&self.dequant_a_scale.to_dtype(x.dtype())?)?;
                 let dequant_x = x.clone();
-                let lin = Linear::new(dequant_w, self.lin.bias().cloned());
+                let lin = self.dequantize(x.dtype())?;
                 lin.forward(&dequant_x)
             }
         }
@@ -125,8 +129,13 @@ impl QuantMethod for FP8Linear {
         None
     }
 
-    fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+    fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
+        let dequant = self.dequantize(delta.dtype())?;
+        let new = Linear::new((dequant.weight() + delta)?, dequant.bias().cloned());
+        Ok(Arc::new(Self::new(QuantMethodConfig::FP8 {
+            lin: new,
+            dtype: self.dtype,
+        })?))
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
@@ -148,9 +157,7 @@ impl QuantMethod for FP8Linear {
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
         match dtype {
-            IsqType::F8E4M3 => {
-                todo!()
-            }
+            IsqType::F8E4M3 => None,
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K
@@ -191,13 +198,79 @@ impl QuantizedSerde for FP8Linear {
         "fp8-linear"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
-        todo!()
+        let mut buffer = Vec::new();
+
+        buffer.extend(&HQFF_VERSION.to_le_bytes());
+
+        // ISQ type for unquant is 1
+        buffer.push(QuantizedSerdeType::Fp8 as u8);
+
+        // Has bias
+        buffer.push(self.lin.bias().is_some() as u8);
+
+        // Weight
+        serialize_tensor(&mut buffer, self.lin.weight())?;
+
+        // Dequant a scale
+        buffer.extend(self.dequant_w_scale.to_scalar::<f32>()?.to_le_bytes());
+        // Dequant b scale
+        buffer.extend(self.dequant_x_scale.to_scalar::<f32>()?.to_le_bytes());
+        // Quant scale
+        buffer.extend(self.quant_scale.to_scalar::<f32>()?.to_le_bytes());
+
+        // DType
+        write_dtype(self.dtype, &mut buffer);
+
+        if let Some(bias) = self.lin.bias() {
+            // Bias
+            serialize_tensor(&mut buffer, bias)?;
+        }
+
+        Ok(Cow::from(buffer))
     }
 
-    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
-        todo!()
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Fp8 as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Fp8 as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let w = deserialize_tensor(&mut buffer, device)?;
+
+        let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+
+        // DType
+        let dtype = read_dtype(&mut buffer)?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(Self {
+            lin: Linear::new(w, b),
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        }))
     }
 }

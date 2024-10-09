@@ -11,7 +11,8 @@ use anyhow::Result;
 use candle_core::{Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
-    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
+    FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -513,6 +514,9 @@ pub trait IsqModel {
                             QuantizedSerdeType::Hqq => {
                                 HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
                             }
+                            QuantizedSerdeType::Fp8 => {
+                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
                         };
                         *tensor = deserialized;
                     }
@@ -538,6 +542,9 @@ pub trait IsqModel {
                             }
                             QuantizedSerdeType::Hqq => {
                                 HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Fp8 => {
+                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
                             }
                         };
                         *tensor = deserialized;

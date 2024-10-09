@@ -1,4 +1,5 @@
 use candle_core::{DType, Result, Tensor};
+use candle_nn::Linear;
 use float8::F8E4M3;
 
 use super::FP8Linear;
@@ -19,7 +20,6 @@ pub(super) struct QuantizationResult {
 }
 
 impl FP8Linear {
-    /// Returns (quantized f8e4m3, scale)
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
         let data = data.to_dtype(DType::BF16)?;
         let mut absmax = data.clone();
@@ -34,6 +34,15 @@ impl FP8Linear {
             quantize_scale: scale.clone().to_dtype(DType::F32)?,
             dequantize_scale: scale.recip()?.to_dtype(DType::F32)?,
         })
+    }
+
+    pub(super) fn dequantize(&self, dtype: DType) -> Result<Linear> {
+        let dequant_w = self
+            .lin
+            .weight()
+            .to_dtype(dtype)?
+            .broadcast_mul(&self.dequant_w_scale.to_dtype(dtype)?)?;
+        Ok(Linear::new(dequant_w, self.lin.bias().cloned()))
     }
 }
 

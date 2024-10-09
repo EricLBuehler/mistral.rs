@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fused_batch_matmul_f8e4m3_determinstic() -> Result<()> {
+    fn test_fused_batch_matmul_f8e4m3_nobias() -> Result<()> {
         let device = Device::new_cuda(0)?;
 
         let a = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;
