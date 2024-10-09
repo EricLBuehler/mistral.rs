@@ -62,8 +62,20 @@ impl QuantMethod for FP8Linear {
                         "FP8Linear `matmul` via cuBLASlt expects `x` to have at least 3 dimensions"
                     );
                 }
-                let original_shape = x.shape();
-                let x = x.flatten_to(D::Minus(3))?;
+                let mut tgt_shape = x.dims().to_vec();
+                *tgt_shape.last_mut().unwrap() = self.lin.weight().dim(0)?;
+
+                let mut x = x.flatten_to(D::Minus(3))?;
+                let mut dequant_b_scale = self.dequant_b_scale.clone();
+                if !matches!(x.dtype(), DType::F8E4M3) {
+                    let QuantizationResult {
+                        qw,
+                        quantize_scale: _,
+                        dequantize_scale,
+                    } = Self::quantize(&x, DType::F8E4M3)?;
+                    x = qw;
+                    dequant_b_scale = dequantize_scale;
+                }
 
                 // If attention_bias is set, we fuse the add by giving it as the output matrix
                 // and setting beta to 1.0
@@ -72,13 +84,17 @@ impl QuantMethod for FP8Linear {
                     false => None,
                 };
 
+                let a = self.lin.weight().unsqueeze(0)?;
+                let b = x;
+
+                dbg!(&b.to_dtype(DType::F32)?.mean_all()?);
                 // FP8 quantized matmul
-                handle
+                let res = handle
                     .batch_matmul(
-                        self.lin.weight(),
-                        &x,
+                        &a,
+                        &b,
                         &self.dequant_a_scale,
-                        &self.dequant_b_scale,
+                        &dequant_b_scale,
                         &self.quant_scale,
                         self.lin.bias(),
                         None,
@@ -86,17 +102,26 @@ impl QuantMethod for FP8Linear {
                         None,
                         None,
                     )?
-                    .reshape(original_shape)
+                    .reshape(tgt_shape)?;
+                dbg!(&res.to_dtype(DType::F32)?.mean_all()?);
+                Ok(res)
             }
             None => {
                 // Dequantize matmul
                 let dequant_w = self
                     .lin
                     .weight()
+                    .to_dtype(DType::BF16)?
                     .broadcast_mul(&self.dequant_a_scale.to_dtype(DType::BF16)?)?;
-                let dequant_x = x.broadcast_mul(&self.dequant_b_scale.to_dtype(DType::BF16)?)?;
-                let res = Linear::new(dequant_w, self.lin.bias().cloned()).forward(&dequant_x)?;
-                res.broadcast_mul(&self.quant_scale)
+                // let dequant_x = if matches!(x.dtype(), DType::F8E4M3) {
+                //     x.to_dtype(DType::BF16)?.broadcast_mul(&self.dequant_b_scale.to_dtype(DType::BF16)?)?
+                // } else {
+                //     x.clone()
+                // };
+                let dequant_x = x.clone();
+                let lin = Linear::new(dequant_w, self.lin.bias().cloned());
+                let res = lin.forward(&dequant_x)?;
+                res.broadcast_mul(&self.quant_scale.to_dtype(DType::BF16)?) //?.to_dtype(DType::F8E4M3)
             }
         }
     }

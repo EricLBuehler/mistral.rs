@@ -441,7 +441,8 @@ pub trait Matmul<T>: MatmulShared {
     /// memory accesses.
     unsafe fn matmul_fp8_like<
         I: DevicePtr<T>,
-        O: DevicePtrMut<bf16>,
+        C: DevicePtr<bf16>,
+        O: DevicePtrMut<F8E4M3>,
         // A: DevicePtrMut<f32>,
         S: DevicePtr<f32>,
         B: DevicePtr<bf16>,
@@ -453,13 +454,14 @@ pub trait Matmul<T>: MatmulShared {
         scale_a: &S,
         scale_b: &S,
         scale_d: &S,
-        c: &mut O,
+        c: &C,
+        out: &mut O,
         // amax_d: &mut A,
         bias: Option<&B>,
         act: Option<&Activation>,
     ) -> Result<(), CublasError> {
         let (a_rows, a_cols) = (cfg.k, cfg.m);
-        let (b_rows, b_cols) = (cfg.n, cfg.k);
+        let (b_rows, b_cols) = (cfg.k, cfg.n);
         assert!(cfg.transa);
         assert!(!cfg.transb);
 
@@ -475,7 +477,6 @@ pub trait Matmul<T>: MatmulShared {
         // Set transb
         matmul_desc.set_transpose(cfg.transb, Matrix::B).unwrap();
 
-        // Creates matrix layouts
         // Creates matrix layouts
         let a_layout = MatrixLayout::new(Self::matrix_type(), a_rows, a_cols, cfg.lda).unwrap();
         if let (Some(batch_size), Some(stride_a)) = (cfg.batch_size, cfg.stride_a) {
@@ -520,7 +521,7 @@ pub trait Matmul<T>: MatmulShared {
         //     .unwrap();
         // }
 
-        // // Epilogue system can be leveraged to fuse add and activation operations
+        // Epilogue system can be leveraged to fuse add and activation operations
         matmul_desc
             .set_epilogue(act, bias.map(|b| b.device_ptr()), cfg.stride_bias)
             .unwrap();
@@ -555,10 +556,10 @@ pub trait Matmul<T>: MatmulShared {
             a_layout.handle,
             *b.device_ptr() as *const _,
             b_layout.handle,
-            *c.device_ptr_mut() as *const _,
+            *c.device_ptr() as *const _,
             c_layout.handle,
-            *c.device_ptr_mut() as *mut _,
-            c_layout.handle,
+            *out.device_ptr_mut() as *mut _,
+            d_layout.handle,
             (&heuristic.algo) as *const _,
             *self.workspace().buffer.device_ptr() as *const CUdeviceptr as *mut _,
             self.workspace().size,

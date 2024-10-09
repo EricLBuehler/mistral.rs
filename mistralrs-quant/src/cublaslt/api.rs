@@ -124,7 +124,7 @@ impl CublasLTBatchMatmulF8 {
             (None, None)
         };
 
-        let (mut out, stride_c) = if let Some(c) = &self.c {
+        let (c, stride_c) = if let Some(c) = &self.c {
             let (c, c_l) = c.storage_and_layout();
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<bf16>()?,
@@ -155,17 +155,24 @@ impl CublasLTBatchMatmulF8 {
                 (n * m),
             )
         };
+        let (mut out, stride_c) = (
+            unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count()).w()? },
+            (n * m),
+        );
 
         let cases = [
-            m * std::mem::size_of::<F8E4M3>(),
             k * std::mem::size_of::<F8E4M3>(),
-            m * std::mem::size_of::<bf16>(),     // C type size
+            k * std::mem::size_of::<F8E4M3>(),
+            m * std::mem::size_of::<F8E4M3>(),   // C type size
             lda * std::mem::size_of::<F8E4M3>(), // A type size
             ldb * std::mem::size_of::<F8E4M3>(), // B type size
-            ldc * std::mem::size_of::<bf16>(),   // C type size
+            ldc * std::mem::size_of::<F8E4M3>(), // C type size
             *a.device_ptr() as usize,
             *b.device_ptr() as usize,
-            *out.device_ptr() as usize,
+            *c.device_ptr() as usize,
+            *a_scale.device_ptr() as usize,
+            *b_scale.device_ptr() as usize,
+            *d_scale.device_ptr() as usize,
         ];
 
         for case in cases {
@@ -203,6 +210,7 @@ impl CublasLTBatchMatmulF8 {
                     a_scale,
                     b_scale,
                     d_scale,
+                    &c,
                     &mut out,
                     // &mut amaxd,
                     bias.as_ref(),
@@ -382,8 +390,6 @@ mod tests {
     #[test]
     fn test_fused_batch_matmul_f8e4m3_determinstic() -> Result<()> {
         let device = Device::new_cuda(0)?;
-
-        let data = [[[2f32; 16]; 16]; 16];
 
         let a = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;
         let b = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;

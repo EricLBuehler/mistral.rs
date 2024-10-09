@@ -13,7 +13,7 @@ mod api;
 mod matmul;
 
 #[cfg(feature = "cuda")]
-use api::{fused_batch_matmul_f8, CublasLt};
+pub use api::{fused_batch_matmul_f8, CublasLt};
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
