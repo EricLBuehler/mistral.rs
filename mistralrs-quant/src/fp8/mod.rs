@@ -62,10 +62,14 @@ impl QuantMethod for FP8Linear {
                         "FP8Linear `matmul` via cuBLASlt expects `x` to have at least 3 dimensions"
                     );
                 }
+                // Set up target shape
                 let mut tgt_shape = x.dims().to_vec();
                 *tgt_shape.last_mut().unwrap() = self.lin.weight().dim(0)?;
 
+                // Flatten for correct dims
                 let mut x = x.flatten_to(D::Minus(3))?;
+
+                // Prepare the b tensor. If it is not quantized, quantize it
                 let mut dequant_b_scale = self.dequant_b_scale.clone();
                 if !matches!(x.dtype(), DType::F8E4M3) {
                     let QuantizationResult {
@@ -77,13 +81,13 @@ impl QuantMethod for FP8Linear {
                     dequant_b_scale = dequantize_scale;
                 }
 
-                // If attention_bias is set, we fuse the add by giving it as the output matrix
-                // and setting beta to 1.0
+                // Handle bias
                 let beta = match self.lin.bias().is_some() {
                     true => Some(1.0),
                     false => None,
                 };
 
+                // Naming
                 let a = self.lin.weight().unsqueeze(0)?;
                 let b = x;
 
@@ -99,7 +103,7 @@ impl QuantMethod for FP8Linear {
                         beta,
                         None,
                         None,
-                        F8MatmulOutType::BF16,
+                        F8MatmulOutType::BF16, // Output in bf16 to avoid manual dequant
                     )?
                     .reshape(tgt_shape)
             }
@@ -108,17 +112,11 @@ impl QuantMethod for FP8Linear {
                 let dequant_w = self
                     .lin
                     .weight()
-                    .to_dtype(DType::BF16)?
-                    .broadcast_mul(&self.dequant_a_scale.to_dtype(DType::BF16)?)?;
-                // let dequant_x = if matches!(x.dtype(), DType::F8E4M3) {
-                //     x.to_dtype(DType::BF16)?.broadcast_mul(&self.dequant_b_scale.to_dtype(DType::BF16)?)?
-                // } else {
-                //     x.clone()
-                // };
+                    .to_dtype(x.dtype())?
+                    .broadcast_mul(&self.dequant_a_scale.to_dtype(x.dtype())?)?;
                 let dequant_x = x.clone();
                 let lin = Linear::new(dequant_w, self.lin.bias().cloned());
-                let res = lin.forward(&dequant_x)?;
-                res.broadcast_mul(&self.quant_scale.to_dtype(DType::BF16)?) //?.to_dtype(DType::F8E4M3)
+                lin.forward(&dequant_x)
             }
         }
     }

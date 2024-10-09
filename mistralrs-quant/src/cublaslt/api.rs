@@ -65,13 +65,13 @@ impl CublasLTBatchMatmulF8 {
             candle_core::bail!("`b` must have the same batch size as `a`")
         }
 
-        if self.a_scale.dims().len() != 0 || self.a_scale.dtype() != DType::F32 {
+        if !self.a_scale.dims().is_empty() || self.a_scale.dtype() != DType::F32 {
             candle_core::bail!("`a_scale` must be a f32 scalar.");
         }
-        if self.b_scale.dims().len() != 0 || self.b_scale.dtype() != DType::F32 {
+        if !self.b_scale.dims().is_empty() || self.b_scale.dtype() != DType::F32 {
             candle_core::bail!("`b_scale` must be a f32 scalar.");
         }
-        if self.d_scale.dims().len() != 0 || self.d_scale.dtype() != DType::F32 {
+        if !self.d_scale.dims().is_empty() || self.d_scale.dtype() != DType::F32 {
             candle_core::bail!("`d_scale` must be a f32 scalar.");
         }
         let (a_s, _) = self.a_scale.storage_and_layout();

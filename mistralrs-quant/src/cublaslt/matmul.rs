@@ -353,6 +353,7 @@ pub trait Matmul<T>: MatmulShared {
     /// # Safety
     /// This is unsafe because improper arguments may lead to invalid
     /// memory accesses.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn matmul_fp8_like<
         I: DevicePtr<T>,
         C: DevicePtr<bf16>,
@@ -501,7 +502,7 @@ impl MatmulShared for CudaBlasLT {
     }
 
     fn stream(&self) -> &CUstream {
-        &self.device.cu_stream()
+        self.device.cu_stream()
     }
 }
 

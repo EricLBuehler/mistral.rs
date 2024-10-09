@@ -418,7 +418,7 @@ impl MatmulShared for CudaBlasLT {
     }
 
     fn stream(&self) -> &CUstream {
-        &self.device.cu_stream()
+        self.device.cu_stream()
     }
 }
 
