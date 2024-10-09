@@ -8,7 +8,8 @@ use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Ten
 use half::{bf16, f16};
 use std::sync::Arc;
 
-use super::matmul::{Activation, CudaBlasLT, Matmul, MatmulConfig};
+use super::matmul::{Activation, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
+use super::F8MatmulOutType;
 
 #[derive(Debug, Clone)]
 pub struct CublasLt(Arc<CudaBlasLT>);
@@ -37,6 +38,7 @@ pub struct CublasLTBatchMatmulF8 {
     pub b_scale: Tensor,
     // Quantize
     pub d_scale: Tensor,
+    pub out_dtype: F8MatmulOutType,
 }
 
 impl CublasLTBatchMatmulF8 {
@@ -155,10 +157,16 @@ impl CublasLTBatchMatmulF8 {
                 (n * m),
             )
         };
-        let (mut out, stride_c) = (
-            unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count()).w()? },
-            (n * m),
-        );
+        let (mut out, stride_c) = match self.out_dtype {
+            F8MatmulOutType::BF16 => (
+                OutSlice::BF16(unsafe { dev.alloc::<bf16>(out_shape.elem_count()).w()? }),
+                (n * m),
+            ),
+            F8MatmulOutType::F8 => (
+                OutSlice::F8(unsafe { dev.alloc::<F8E4M3>(out_shape.elem_count()).w()? }),
+                (n * m),
+            ),
+        };
 
         let cases = [
             k * std::mem::size_of::<F8E4M3>(),
@@ -219,7 +227,10 @@ impl CublasLTBatchMatmulF8 {
                 .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
         }
 
-        let out = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
+        let out = match out {
+            OutSlice::BF16(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
+            OutSlice::F8(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
+        };
 
         Ok((out, out_shape))
     }
@@ -255,6 +266,7 @@ pub fn fused_batch_matmul_f8(
     beta: Option<f32>,
     bias: Option<&Tensor>,
     act: Option<Activation>,
+    out_dtype: F8MatmulOutType,
     cublaslt: CublasLt,
 ) -> Result<Tensor> {
     let op = CublasLTBatchMatmulF8 {
@@ -266,6 +278,7 @@ pub fn fused_batch_matmul_f8(
         a_scale: dequant_a_scale.clone(),
         b_scale: dequant_b_scale.clone(),
         d_scale: quantize_scale.clone(),
+        out_dtype,
     };
 
     if let Some(bias) = bias {
@@ -373,6 +386,7 @@ mod tests {
             Some(1.),
             Some(&bias.to_dtype(DType::BF16)?),
             None,
+            F8MatmulOutType::F8,
             cublaslt,
         )?;
         let expected = b.matmul(&a.t()?)?.add(&c)?.broadcast_add(&bias)?;
@@ -422,6 +436,59 @@ mod tests {
             Some(1.),
             None,
             None,
+            F8MatmulOutType::F8,
+            cublaslt,
+        )?
+        .i((0..2, 0..2, 0..2))?;
+        let expected = b.matmul(&a.t()?)?.add(&c)?.i((0..2, 0..2, 0..2))?;
+
+        let abs_diff = (res.to_dtype(DType::F32)? - expected)?.abs()?;
+        let absmax = abs_diff.max(0)?.max(0)?.max(0)?.to_scalar::<f32>()?;
+        let abs_diff = abs_diff.to_vec3::<f32>()?;
+
+        let range = 3e-01;
+        assert!(abs_diff
+            .iter()
+            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fused_batch_matmul_f8e4m3_out_bf16() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+
+        let a = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;
+        let b = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;
+        let c = Tensor::randn(0., 1., (16, 16, 16), &device)?.to_dtype(DType::F32)?;
+
+        fn quantize(data: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
+            let data = data.to_dtype(DType::F32)?;
+            let mut absmax = data.clone();
+            while !absmax.dims().is_empty() {
+                absmax = absmax.max(0)?;
+            }
+            let max_v = F8E4M3::MAX.to_f64().round();
+            let scale = (max_v / absmax)?.clamp(1e-12, f64::INFINITY)?;
+            let qw = data.broadcast_mul(&scale)?.to_dtype(DType::F8E4M3)?;
+            Ok((qw, scale))
+        }
+        let (qa, a_scale) = quantize(&a, DType::F8E4M3)?;
+        let (qb, b_scale) = quantize(&b, DType::F8E4M3)?;
+
+        let cublaslt = CublasLt::new(&device)?;
+
+        let res = fused_batch_matmul_f8(
+            &qa,
+            &qb,
+            &a_scale.recip()?,
+            &b_scale.recip()?,
+            &a_scale,
+            Some(&c.to_dtype(DType::BF16)?),
+            None,
+            Some(1.),
+            None,
+            None,
+            F8MatmulOutType::BF16,
             cublaslt,
         )?
         .i((0..2, 0..2, 0..2))?;

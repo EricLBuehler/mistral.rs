@@ -11,7 +11,7 @@ use quantize::QuantizationResult;
 mod quantize;
 
 use crate::{
-    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
+    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
 };
 
@@ -87,9 +87,7 @@ impl QuantMethod for FP8Linear {
                 let a = self.lin.weight().unsqueeze(0)?;
                 let b = x;
 
-                dbg!(&b.to_dtype(DType::F32)?.mean_all()?);
-                // FP8 quantized matmul
-                let res = handle
+                handle
                     .batch_matmul(
                         &a,
                         &b,
@@ -101,10 +99,9 @@ impl QuantMethod for FP8Linear {
                         beta,
                         None,
                         None,
+                        F8MatmulOutType::BF16,
                     )?
-                    .reshape(tgt_shape)?;
-                dbg!(&res.to_dtype(DType::F32)?.mean_all()?);
-                Ok(res)
+                    .reshape(tgt_shape)
             }
             None => {
                 // Dequantize matmul

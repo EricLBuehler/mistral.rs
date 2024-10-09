@@ -42,7 +42,7 @@ mod tests {
     use candle_core::{DType, Device, Result, Tensor};
 
     use crate::{
-        cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
+        cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
         fp8::FP8Linear,
     };
 
@@ -112,6 +112,7 @@ mod tests {
                 None,
                 None,
                 None,
+                F8MatmulOutType::BF16,
             )?
             .reshape(original_shape)?;
         dbg!(&res);
