@@ -50,16 +50,13 @@ impl FP8Linear {
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
 
-    use crate::{
-        cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
-        fp8::FP8Linear,
-    };
+    use crate::fp8::FP8Linear;
 
     use super::QuantizationResult;
 
     #[test]
     fn test_roundtrip_f8e4m3() -> Result<()> {
-        let dev = Device::new_cuda(0)?;
+        let dev = Device::cuda_if_available(0)?;
 
         let data = Tensor::rand(0., 1., (32, 32), &dev)?.to_dtype(DType::F32)?;
 
@@ -69,14 +66,16 @@ mod tests {
             dequantize_scale,
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
-        let dequant = qw.broadcast_mul(&dequantize_scale)?;
+        let dequant = qw.to_dtype(DType::F32)?.broadcast_mul(&dequantize_scale)?;
 
         let _diff = (&data - dequant)?.abs()?.mean_all()?;
         Ok(())
     }
 
     #[test]
+    #[cfg(feature = "cuda")]
     fn test_cublaslt_matmul() -> Result<()> {
+        use crate::cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE};
         let dev = Device::new_cuda(0)?;
 
         let w = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
@@ -93,7 +92,6 @@ mod tests {
             dequantize_scale: dequant_a_scale,
         } = FP8Linear::quantize(&w, DType::F8E4M3)?;
 
-        let original_shape = x.shape().clone();
         let mut dequant_b_scale = dequant_a_scale.clone();
         if !matches!(x.dtype(), DType::F8E4M3) {
             let QuantizationResult {
@@ -109,22 +107,19 @@ mod tests {
         let b = x;
 
         // FP8 quantized matmul
-        let res = handle
-            .batch_matmul(
-                &a,
-                &b,
-                &dequant_a_scale,
-                &dequant_b_scale,
-                &quant_scale,
-                None,
-                None,
-                None,
-                None,
-                None,
-                F8MatmulOutType::BF16,
-            )?
-            .reshape(original_shape)?;
-        dbg!(&res);
+        let _res = handle.batch_matmul(
+            &a,
+            &b,
+            &dequant_a_scale,
+            &dequant_b_scale,
+            &quant_scale,
+            None,
+            None,
+            None,
+            None,
+            None,
+            F8MatmulOutType::BF16,
+        )?;
 
         Ok(())
     }

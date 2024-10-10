@@ -422,6 +422,7 @@ mod tests {
         }
         let (qa, a_scale) = quantize(&a, DType::F8E4M3)?;
         let (qb, b_scale) = quantize(&b, DType::F8E4M3)?;
+        println!("{a_scale}");
 
         let cublaslt = CublasLt::new(&device)?;
 
@@ -436,7 +437,7 @@ mod tests {
             Some(1.),
             None,
             None,
-            F8MatmulOutType::F8,
+            F8MatmulOutType::BF16,
             cublaslt,
         )?
         .i((0..2, 0..2, 0..2))?;
@@ -445,7 +446,6 @@ mod tests {
         let abs_diff = (res.to_dtype(DType::F32)? - expected)?.abs()?;
         let absmax = abs_diff.max(0)?.max(0)?.max(0)?.to_scalar::<f32>()?;
         let abs_diff = abs_diff.to_vec3::<f32>()?;
-
         let range = 3e-01;
         assert!(abs_diff
             .iter()
