@@ -21,6 +21,7 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 - Q8K  (*not available on CUDA*)
 - HQQ4
 - HQQ8
+- FP8
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 
