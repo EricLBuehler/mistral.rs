@@ -12,7 +12,7 @@ Paper: https://arxiv.org/abs/2405.19076
 
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/33593903-d907-4c08-a0ac-d349d7bf33de
 
-> Note: By default, this has the capability to create an csv loss image. When building from source (for Python or CLI), you may use `--no-default-features` command line to disable this. This may be necessary if networking is unavailable.
+> Note: By default, this has the capability to create a csv loss image. When building from source (for Python or CLI), you may use `--no-default-features` command line to disable this. This may be necessary if networking is unavailable.
 
 ## Dataset
 Currently, AnyMoE expects a JSON dataset with one top-level key `row`, which is an array of objects with keys `prompt` (string), `expert` (integer), and `image_urls` (optional array of strings). For example:
@@ -35,7 +35,7 @@ Currently, AnyMoE expects a JSON dataset with one top-level key `row`, which is 
 For a vision model, `image_urls` may contain an array of image URLs/local paths or Base64 encoded images.
 
 ## Experts
-AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapter. Additionally, certain layers can be specified to apply AnyMoE.
+AnyMoE experts can be either fine-tuned models or LoRA adapter models. Only the mlp layers will be loaded from each. The experts must be homogeneous: they must be all fine-tuned or all adapters. Additionally, certain layers can be specified to apply AnyMoE.
 
 > Note: When using LoRA adapter experts, it may not be necessary to set the layers where AnyMoE will be applied due to the lower memory usage.
 
@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
     let messages = TextMessages::new()
         .add_message(
             TextMessageRole::System,
-            "You are an AI agent with a specialty in programming.",
+            "You are an AI agent with a speciality in programming.",
         )
         .add_message(
             TextMessageRole::User,
