@@ -13,15 +13,32 @@ homepage.workspace = true
 default-run = "mistralrs-server"
 
 [dependencies]
+opentelemetry = "0.22"
+opentelemetry_sdk = "0.22"
+opentelemetry-http = "0.22"
+opentelemetry-otlp = { version = "0.14.0", features = [
+    "default",
+    "reqwest-client",
+    "reqwest-rustls",
+    "http-proto",
+    "tls",
+] }
+opentelemetry-semantic-conventions = "0.22"
+axum-tracing-opentelemetry = { version = "*" }
+init-tracing-opentelemetry = { version = "*", features = [
+    "otlp",
+    "tracing_subscriber_ext",
+] }
+tracing-opentelemetry-instrumentation-sdk = { version = "*" }
 anyhow.workspace = true
 ctrlc = "3.4.4"
 candle-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum = { version = "0.7.4", features = ["tokio"] }
-tower-http = { version = "0.5.1", features = ["cors"]}
+tower-http = { version = "0.5.1", features = ["cors"] }
 utoipa = { version = "4.2", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "7.1.0", features = ["axum"]}
+utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
 mistralrs-core = { version = "0.3.1", path = "../mistralrs-core" }
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
@@ -31,7 +48,7 @@ tracing.workspace = true
 tokio.workspace = true
 either.workspace = true
 clap.workspace = true
-once_cell.workspace=true
+once_cell.workspace = true
 reqwest.workspace = true
 image.workspace = true
 url.workspace = true

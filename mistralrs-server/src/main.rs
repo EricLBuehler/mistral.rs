@@ -7,6 +7,18 @@ use axum::{
 };
 use candle_core::Device;
 use clap::Parser;
+
+use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
+use opentelemetry::{
+    global,
+    trace::{FutureExt, Span, SpanKind, TraceContextExt, Tracer},
+    Context, KeyValue,
+};
+use opentelemetry_http::{Bytes, HeaderExtractor};
+use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::TracerProvider};
+use opentelemetry_semantic_conventions::trace;
+use opentelemetry_stdout::SpanExporter;
+
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
     parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
@@ -254,6 +266,8 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .allow_origin(allow_origin);
 
     Router::new()
+        .layer(OtelInResponseLayer::default())
+        .layer(OtelAxumLayer::default())
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
@@ -268,10 +282,24 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .with_state(state)
 }
 
+fn initialize_tracer() {
+    match SpanExporter::new_tonic(ExportConfig::default(), TonicConfig::default()) {
+        Ok(exporter) => {
+            global::set_text_map_propagator(TraceContextPropagator::new());
+            let provider = TracerProvider::builder()
+                .with_simple_exporter(exporter)
+                .build();
+            global::set_tracer_provider(provider);
+        }
+        Err(why) => panic!("{:?}", why),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
+    initialize_tracer();
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -478,7 +506,15 @@ async fn main() -> Result<()> {
     };
     let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
     info!("Serving on http://{ip}:{}.", port);
-    axum::serve(listener, app).await?;
+
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    //...
+    opentelemetry::global::shutdown_tracer_provider();
 }
