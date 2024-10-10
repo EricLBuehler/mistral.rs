@@ -70,6 +70,7 @@ impl CustomOp2 for BitWiseOr {
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise-or")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise-or")),
             CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise-or")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise-or")),
         }
     }
     #[cfg(feature = "cuda")]
@@ -140,6 +141,9 @@ impl CustomOp2 for BitWiseOr {
             }
             DType::F64 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise-or"));
+            }
+            DType::F8E4M3 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise-or"));
             }
         };
         let dst = match s1.dtype() {
@@ -226,6 +230,7 @@ impl CustomOp1 for Leftshift {
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "leftshifr")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "leftshifr")),
             CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshifr")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshifr")),
         }
     }
     #[cfg(feature = "cuda")]
@@ -268,6 +273,9 @@ impl CustomOp1 for Leftshift {
             }
             DType::F64 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshift"));
+            }
+            DType::F8E4M3 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshift"));
             }
         };
         let dst = match s1.dtype() {

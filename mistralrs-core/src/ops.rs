@@ -123,6 +123,7 @@ impl CustomOp2 for BitWise {
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise")),
             CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise")),
         }
     }
     #[cfg(feature = "cuda")]
@@ -190,6 +191,9 @@ impl CustomOp2 for BitWise {
             }
             DType::F64 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise"));
+            }
+            DType::F8E4M3 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise"));
             }
         };
         let dst = match s1.dtype() {
@@ -397,6 +401,7 @@ fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) ->
             candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
             candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
             candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n),
+            candle_core::DType::F8E4M3 => todo!(),
         }
     }
 }
@@ -438,6 +443,7 @@ fn nonzero_cuda(
             candle_core::DType::F64 => {
                 ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
+            candle_core::DType::F8E4M3 => todo!(),
         }
     }
 }
@@ -461,6 +467,7 @@ impl CustomOp1 for NonZero {
             candle_core::CpuStorage::F16(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::F32(vs) => self.nonzero(vs, layout),
             candle_core::CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            candle_core::CpuStorage::F8E4M3(_vs) => todo!(),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
@@ -488,6 +495,7 @@ impl CustomOp1 for NonZero {
             candle_core::DType::F16 => *storage.as_cuda_slice::<f16>()?.device_ptr(),
             candle_core::DType::F32 => *storage.as_cuda_slice::<f32>()?.device_ptr(),
             candle_core::DType::F64 => *storage.as_cuda_slice::<f64>()?.device_ptr(),
+            candle_core::DType::F8E4M3 => todo!(),
         } as *const c_void;
         let n = layout.shape().elem_count();
         let num_nonzero = count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?);

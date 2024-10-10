@@ -393,13 +393,14 @@ checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 [[package]]
 name = "candle-core"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=20a57c4#20a57c4bcf300e4bc6c1e48f7f3702668ae8cb80"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=60eb251#60eb251fb52c743b935ac110aaab4f9be4e47f58"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
  "cudarc",
+ "float8",
  "gemm",
  "half",
  "intel-mkl-src",
@@ -420,7 +421,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=20a57c4#20a57c4bcf300e4bc6c1e48f7f3702668ae8cb80"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=60eb251#60eb251fb52c743b935ac110aaab4f9be4e47f58"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -431,7 +432,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=20a57c4#20a57c4bcf300e4bc6c1e48f7f3702668ae8cb80"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=60eb251#60eb251fb52c743b935ac110aaab4f9be4e47f58"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -439,7 +440,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=20a57c4#20a57c4bcf300e4bc6c1e48f7f3702668ae8cb80"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=60eb251#60eb251fb52c743b935ac110aaab4f9be4e47f58"
 dependencies = [
  "metal",
  "once_cell",
@@ -450,7 +451,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=20a57c4#20a57c4bcf300e4bc6c1e48f7f3702668ae8cb80"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=60eb251#60eb251fb52c743b935ac110aaab4f9be4e47f58"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1117,6 +1118,19 @@ checksum = "a1b589b4dc103969ad3cf85c950899926ec64300a1a46d76c03a6072957036f0"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.8.0",
+]
+
+[[package]]
+name = "float8"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c3475274d374d263c4c40c43ad854c5bdf733c7db775bbd3c1ca2ad7427978"
+dependencies = [
+ "cudarc",
+ "half",
+ "num-traits",
+ "rand",
+ "rand_distr",
 ]
 
 [[package]]
@@ -2155,6 +2169,7 @@ dependencies = [
  "derive_more",
  "dirs",
  "either",
+ "float8",
  "futures",
  "galil-seiferas",
  "half",
@@ -2208,6 +2223,7 @@ dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
  "candle-core",
+ "float8",
  "half",
 ]
 
@@ -2243,8 +2259,10 @@ dependencies = [
  "byteorder",
  "candle-core",
  "candle-nn",
+ "float8",
  "half",
  "lazy_static",
+ "once_cell",
  "paste",
  "rayon",
  "serde",

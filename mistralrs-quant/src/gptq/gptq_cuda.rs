@@ -240,7 +240,8 @@ impl QuantMethod for GptqLayer {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
-            | QuantMethodConfig::Dummy => {
+            | QuantMethodConfig::Dummy
+            | QuantMethodConfig::FP8 { .. } => {
                 unreachable!()
             }
         }

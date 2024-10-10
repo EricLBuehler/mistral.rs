@@ -5,6 +5,7 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
+use float8::F8E4M3;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -626,6 +627,7 @@ impl TensorInfExtend for Tensor {
             DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
             DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
             DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
+            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
         }
     }
 }
@@ -641,6 +643,7 @@ fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
         DType::BF16 => half::bf16::MAX.to_f64_const() - 1000.,
         DType::F32 => f32::MAX as f64 - 1000.,
         DType::F64 => f64::MAX - 1000.,
+        DType::F8E4M3 => F8E4M3::MAX.to_f64() - 1000.,
     };
     if xs.is_inf()?.any()? {
         max -= 1000.;

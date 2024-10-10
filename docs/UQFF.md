@@ -51,6 +51,9 @@ The following quantization formats are supported in UQFF. One can, of course, be
     - HQQ4
     - HQQ8
 
+- FP8:
+    - FP8 E4M3 (4-bit exponent, 3-bit mantissa)
+
 ## Loading a UQFF model
 
 To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
