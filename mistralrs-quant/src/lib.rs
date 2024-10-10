@@ -20,7 +20,7 @@ mod unquantized;
 mod utils;
 
 pub use dummy::DummyLayer;
-pub use fp8::FP8Linear;
+pub use fp8::{FP8Linear, FP8QuantizationResult};
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};

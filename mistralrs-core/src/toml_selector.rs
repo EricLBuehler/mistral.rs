@@ -3,11 +3,11 @@ use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 use serde::Deserialize;
 
 use crate::{
-    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
-    SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
+    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, DiffusionLoaderBuilder,
+    DiffusionLoaderType, DiffusionSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, KVCacheType, Loader, ModelDType, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, SpeculativeConfig, SpeculativeLoader, Topology,
+    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -48,6 +48,9 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        kv_cache_type: Option<KVCacheType>,
     },
 
     /// Select an X-LoRA architecture
@@ -281,6 +284,21 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        kv_cache_type: Option<KVCacheType>,
+    },
+
+    /// Select a diffusion plain model, without quantization or adapters
+    DiffusionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        model_id: String,
+
+        /// The architecture of the model.
+        arch: DiffusionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        dtype: ModelDType,
     },
 }
 
@@ -351,7 +369,8 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         TomlModelSelected::Plain { dtype, .. }
         | TomlModelSelected::Lora { dtype, .. }
         | TomlModelSelected::XLora { dtype, .. }
-        | TomlModelSelected::VisionPlain { dtype, .. } => dtype,
+        | TomlModelSelected::VisionPlain { dtype, .. }
+        | TomlModelSelected::DiffusionPlain { dtype, .. } => dtype,
         TomlModelSelected::GGUF { .. }
         | TomlModelSelected::LoraGGUF { .. }
         | TomlModelSelected::GGML { .. }
@@ -375,6 +394,7 @@ fn loader_from_selected(
             organization,
             write_uqff,
             from_uqff,
+            kv_cache_type,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -383,6 +403,7 @@ fn loader_from_selected(
                 organization: organization.unwrap_or_default(),
                 write_uqff,
                 from_uqff,
+                cache_type: kv_cache_type,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -407,6 +428,7 @@ fn loader_from_selected(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                cache_type: None,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -439,6 +461,7 @@ fn loader_from_selected(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                cache_type: None,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -615,6 +638,7 @@ fn loader_from_selected(
             topology,
             write_uqff,
             from_uqff,
+            kv_cache_type,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -622,12 +646,21 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                cache_type: kv_cache_type,
             },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
         )
         .build(arch),
+        TomlModelSelected::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => {
+            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
+                .build(arch)
+        }
     };
     Ok(loader)
 }

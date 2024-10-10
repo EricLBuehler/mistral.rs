@@ -429,6 +429,7 @@ impl Model {
                     cfg.sliding_window,
                     &normal_loading_metadata.real_device,
                     None,
+                    normal_loading_metadata.cache_type.unwrap_or_default(),
                 )?),
             };
             let layer = DecoderLayer::new(

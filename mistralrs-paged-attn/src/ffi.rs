@@ -16,7 +16,11 @@ extern "C" {
         key_stride: c_int,
         value_stride: c_int,
 
+        key_scale: *const f32,
+        value_scale: *const f32,
+
         dtype: u32,
+        cache_type: u32,
     );
 
     pub fn paged_attention_v1(
@@ -40,7 +44,11 @@ extern "C" {
         kv_block_stride: c_int,
         kv_head_stride: c_int,
 
+        key_scale: *const f32,
+        value_scale: *const f32,
+
         dtype: u32,
+        cache_type: u32,
     );
 
     pub fn paged_attention_v2(
@@ -67,6 +75,10 @@ extern "C" {
         kv_block_stride: c_int,
         kv_head_stride: c_int,
 
+        key_scale: *const f32,
+        value_scale: *const f32,
+
         dtype: u32,
+        cache_type: u32,
     );
 }

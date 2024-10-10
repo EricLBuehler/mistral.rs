@@ -5,6 +5,7 @@ use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
+use float8::F8E4M3;
 use half::{bf16, f16};
 use std::ffi::c_int;
 
@@ -17,11 +18,15 @@ struct PagedAttention {
     block_tables: Tensor,
     context_lens: Tensor,
     max_context_len: usize,
+
+    key_scale: Tensor,
+    value_scale: Tensor,
 }
 
 impl PagedAttention {
     fn cuda_fwd_t<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        CacheT: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         q: &CudaStorage,
@@ -32,6 +37,12 @@ impl PagedAttention {
             DType::F16 => 0,
             DType::BF16 => 1,
             DType::F32 => 2,
+            dtype => candle::bail!("dtype {dtype:?} is not supported"),
+        };
+
+        let cache_type = match self.key_cache.dtype() {
+            DType::F16 | DType::BF16 | DType::F32 => 0,
+            DType::F8E4M3 => 1,
             dtype => candle::bail!("dtype {dtype:?} is not supported"),
         };
 
@@ -62,6 +73,24 @@ impl PagedAttention {
             _ => candle::bail!("context_lens must be a cuda tensor"),
         };
 
+        let (k_sc, k_sc_l) = self.key_scale.storage_and_layout();
+        let k_scale = match &*k_sc {
+            Storage::Cuda(s) => s,
+            _ => candle::bail!("key_scale must be a cuda tensor"),
+        };
+        if !k_sc_l.dims().is_empty() {
+            candle::bail!("Expected scalar key scale");
+        }
+
+        let (v_sc, v_sc_l) = self.value_scale.storage_and_layout();
+        let v_scale = match &*v_sc {
+            Storage::Cuda(s) => s,
+            _ => candle::bail!("value_scale must be a cuda tensor"),
+        };
+        if !v_sc_l.dims().is_empty() {
+            candle::bail!("Expected scalar value scale");
+        }
+
         let q_rank = q_l.stride().len();
         let kc_rank = kc_l.stride().len();
         let vc_rank = vc_l.stride().len();
@@ -89,10 +118,12 @@ impl PagedAttention {
 
         // Get cuda slices for all tensors
         let q = q.as_cuda_slice::<T>()?;
-        let kc = kc.as_cuda_slice::<T>()?;
-        let vc = vc.as_cuda_slice::<T>()?;
+        let kc = kc.as_cuda_slice::<CacheT>()?;
+        let vc = vc.as_cuda_slice::<CacheT>()?;
         let cl = cl.as_cuda_slice::<u32>()?; // Should be i32!
         let bt = bt.as_cuda_slice::<u32>()?; // Should be i32!
+        let k_s = k_scale.as_cuda_slice::<f32>()?;
+        let v_s = v_scale.as_cuda_slice::<f32>()?;
 
         // Get cuda views for all tensors
         let q = q.slice(q_l.start_offset()..);
@@ -165,6 +196,8 @@ impl PagedAttention {
         let vc_ptr = *vc.device_ptr() as *const core::ffi::c_void;
         let bt_ptr = *bt.device_ptr() as *const core::ffi::c_int;
         let cl_ptr = *cl.device_ptr() as *const core::ffi::c_int;
+        let ks_ptr = *k_s.device_ptr() as *const f32;
+        let vs_ptr = *v_s.device_ptr() as *const f32;
 
         if use_v1 {
             unsafe {
@@ -187,7 +220,10 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
+                    ks_ptr,
+                    vs_ptr,
                     internal_type,
+                    cache_type,
                 )
             }
         } else {
@@ -224,7 +260,10 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
+                    ks_ptr,
+                    vs_ptr,
                     internal_type,
+                    cache_type,
                 )
             }
         }
@@ -244,11 +283,14 @@ impl candle::CustomOp1 for PagedAttention {
     }
 
     fn cuda_fwd(&self, q: &CudaStorage, q_l: &Layout) -> Result<(CudaStorage, Shape)> {
-        match q.dtype() {
-            DType::F32 => self.cuda_fwd_t::<f32>(q, q_l),
-            DType::F16 => self.cuda_fwd_t::<f16>(q, q_l),
-            DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l),
-            dt => candle::bail!("paged-attention is only supported for f32/f16/bf16 ({dt:?})"),
+        match (q.dtype(), self.key_cache.dtype()) {
+            (DType::F32, DType::F8E4M3) => self.cuda_fwd_t::<f32, F8E4M3>(q, q_l),
+            (DType::F16, DType::F8E4M3) => self.cuda_fwd_t::<f16, F8E4M3>(q, q_l),
+            (DType::BF16, DType::F8E4M3) => self.cuda_fwd_t::<bf16, F8E4M3>(q, q_l),
+            (DType::F32, DType::F32) => self.cuda_fwd_t::<f32, f32>(q, q_l),
+            (DType::F16, DType::F16) => self.cuda_fwd_t::<f16, f16>(q, q_l),
+            (DType::BF16, DType::BF16) => self.cuda_fwd_t::<bf16, bf16>(q, q_l),
+            (dt, cache_dt) => candle::bail!("paged-attention is only supported for query f32/f16/bf16 ({dt:?}), cache = same or fp8e4m3 ({cache_dt:?})"),
         }
     }
 }
@@ -270,6 +312,8 @@ impl candle::CustomOp1 for PagedAttention {
 /// * `max_context_len` - Max of `context_len`
 /// * `softmax_scale` - scaling factor
 /// * `softcapping`- Softcapping value as in Gemma 2. Using 1.0 means do nothing.
+/// * `key_scale` - f32 scalar device tensor. This should be the same one which could be used for f8 quantization
+/// * `value_scale` - f32 scalar device tensor. This should be the same one which could be used for f8 quantization
 ///
 /// The resulting tensor has dimensions `(num_sequences, num_heads_q, head_size)`.
 #[allow(clippy::too_many_arguments)]
@@ -282,6 +326,8 @@ pub fn paged_attention(
     max_context_len: usize,
     softmax_scale: f32,
     softcapping: f32,
+    key_scale: &Tensor,
+    value_scale: &Tensor,
 ) -> Result<Tensor> {
     let op = PagedAttention {
         softmax_scale,
@@ -291,18 +337,23 @@ pub fn paged_attention(
         context_lens: context_lens.clone(),
         max_context_len,
         softcapping,
+        key_scale: key_scale.clone(),
+        value_scale: value_scale.clone(),
     };
     q.apply_op1(op)
 }
 
 fn update_cache<
     T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    CacheT: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
 >(
     key: &Tensor,
     value: &Tensor,
     key_cache: &Tensor,
     value_cache: &Tensor,
     slot_mapping: &Tensor,
+    key_scale: &Tensor,
+    value_scale: &Tensor,
 ) -> Result<()> {
     let dtype = key.dtype();
 
@@ -310,6 +361,12 @@ fn update_cache<
         DType::F16 => 0,
         DType::BF16 => 1,
         DType::F32 => 2,
+        dtype => candle::bail!("dtype {dtype:?} is not supported"),
+    };
+
+    let cache_type = match key_cache.dtype() {
+        DType::F16 | DType::BF16 | DType::F32 => 0,
+        DType::F8E4M3 => 1,
         dtype => candle::bail!("dtype {dtype:?} is not supported"),
     };
 
@@ -343,6 +400,24 @@ fn update_cache<
         _ => candle::bail!("slot_mapping must be a cuda tensor"),
     };
 
+    let (k_sc, k_sc_l) = key_scale.storage_and_layout();
+    let k_scale = match &*k_sc {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("key_scale must be a cuda tensor"),
+    };
+    if !k_sc_l.dims().is_empty() {
+        candle::bail!("Expected scalar key scale");
+    }
+
+    let (v_sc, v_sc_l) = value_scale.storage_and_layout();
+    let v_scale = match &*v_sc {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("value_scale must be a cuda tensor"),
+    };
+    if !v_sc_l.dims().is_empty() {
+        candle::bail!("Expected scalar value scale");
+    }
+
     let k_rank = k_l.stride().len();
     let v_rank = v_l.stride().len();
     let kc_rank = kc_l.stride().len();
@@ -369,9 +444,11 @@ fn update_cache<
     // Get cuda slices for all tensors
     let k = k.as_cuda_slice::<T>()?;
     let v = v.as_cuda_slice::<T>()?;
-    let kc = kc.as_cuda_slice::<T>()?;
-    let vc = vc.as_cuda_slice::<T>()?;
+    let kc = kc.as_cuda_slice::<CacheT>()?;
+    let vc = vc.as_cuda_slice::<CacheT>()?;
     let s = s.as_cuda_slice::<i64>()?;
+    let k_s = k_scale.as_cuda_slice::<f32>()?;
+    let v_s = v_scale.as_cuda_slice::<f32>()?;
 
     // Get cuda views for all tensors
     let k = k.slice(k_l.start_offset()..);
@@ -418,6 +495,8 @@ fn update_cache<
     let kc_ptr = *kc.device_ptr() as *const core::ffi::c_void;
     let vc_ptr = *vc.device_ptr() as *const core::ffi::c_void;
     let s_ptr = *s.device_ptr() as *const core::ffi::c_long;
+    let ks_ptr = *k_s.device_ptr() as *const f32;
+    let vs_ptr = *v_s.device_ptr() as *const f32;
 
     unsafe {
         ffi::reshape_and_cache(
@@ -433,7 +512,10 @@ fn update_cache<
             x as c_int,
             key_stride,
             value_stride,
+            ks_ptr,
+            vs_ptr,
             internal_type,
+            cache_type,
         )
     }
     Ok(())
@@ -449,19 +531,74 @@ fn update_cache<
 ///   with `x` being the size of an element in bytes.
 /// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads, head_size, block_size)`.
 /// * `slot_mapping` - Mapping associating a slot to each token of shape `(num_tokens)`.
+/// * `key_scale` - f32 scalar device tensor. This should be the same one which could be used for f8 quantization
+/// * `value_scale` - f32 scalar device tensor. This should be the same one which could be used for f8 quantization
 pub fn reshape_and_cache(
     key: &Tensor,
     value: &Tensor,
     key_cache: &Tensor,
     value_cache: &Tensor,
     slot_mapping: &Tensor,
+    key_scale: &Tensor,
+    value_scale: &Tensor,
 ) -> Result<()> {
-    match key.dtype() {
-        DType::F16 => update_cache::<f16>(key, value, key_cache, value_cache, slot_mapping),
-        DType::BF16 => update_cache::<bf16>(key, value, key_cache, value_cache, slot_mapping),
-        DType::F32 => update_cache::<f32>(key, value, key_cache, value_cache, slot_mapping),
-        dt => {
-            candle::bail!("reshape_and_cache is only supported for f32, f16 and bf16 ({dt:?})")
+    match (key.dtype(), key_cache.dtype()) {
+        (DType::F16, DType::F8E4M3) => update_cache::<f16, F8E4M3>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (DType::BF16, DType::F8E4M3) => update_cache::<bf16, F8E4M3>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (DType::F32, DType::F8E4M3) => update_cache::<f32, F8E4M3>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (DType::F16, DType::F16) => update_cache::<f16, f16>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (DType::BF16, DType::BF16) => update_cache::<bf16, bf16>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (DType::F32, DType::F32) => update_cache::<f32, f32>(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            slot_mapping,
+            key_scale,
+            value_scale,
+        ),
+        (dt, cache_dt) => {
+            candle::bail!("reshape_and_cache is only supported for key = f32, f16 and bf16 ({dt:?}), cache = same or fp8e4m3 ({cache_dt:?})")
         }
     }
 }

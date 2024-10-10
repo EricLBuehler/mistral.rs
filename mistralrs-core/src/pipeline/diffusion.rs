@@ -202,6 +202,7 @@ impl Loader for DiffusionLoader {
                         mapper,
                         loading_isq: false,
                         real_device: device.clone(),
+                        cache_type: None,
                     },
                     attention_mechanism,
                     silent,

@@ -112,6 +112,7 @@ fn naive_sdpa(
     MatMul.matmul(&att, &v.contiguous()?)
 }
 
+#[derive(Copy, Clone)]
 pub struct SdpaParams {
     pub n_kv_groups: usize,
     pub use_flash_attn: bool,

@@ -22,11 +22,11 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
-    TryIntoDType,
+    AnyMoeExpertType, DeviceMapMetadata, KVCacheType, Ordering, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -85,6 +85,7 @@ pub struct VisionSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub cache_type: Option<KVCacheType>,
 }
 
 impl VisionLoaderBuilder {
@@ -246,7 +247,8 @@ impl Loader for VisionLoader {
                 loading_isq,
                 self.config.from_uqff.is_some(),
                 device.clone(),
-                attention_mechanism
+                attention_mechanism,
+                self.config.cache_type
             ),
             _ => unreachable!(),
         };
@@ -305,6 +307,10 @@ impl Loader for VisionLoader {
                 !matches!(self.kind, ModelKind::Adapter { .. }),
                 "PagedAttention does not support adapter models."
             );
+            let dtype = match self.config.cache_type {
+                Some(KVCacheType::F8E4M3) => DType::F8E4M3,
+                Some(KVCacheType::FullPrecision) | None => dtype,
+            };
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,

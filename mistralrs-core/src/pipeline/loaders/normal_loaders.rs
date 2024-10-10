@@ -18,6 +18,7 @@ use crate::{
     serde_default_fn,
     utils::log::once_log_info,
     xlora_models::NonGranularState,
+    KVCacheType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
@@ -84,6 +85,8 @@ pub struct NormalLoadingMetadata {
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
     pub real_device: Device,
+    // PagedAttention cache type
+    pub cache_type: Option<KVCacheType>,
 }
 
 pub trait NormalModelLoader: IsqModelLoader {

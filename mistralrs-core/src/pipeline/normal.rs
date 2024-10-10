@@ -29,11 +29,11 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_write_uqff_paths,
-    lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata,
+    lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata, KVCacheType,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -100,6 +100,7 @@ pub struct NormalSpecificConfig {
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub cache_type: Option<KVCacheType>,
 }
 
 impl NormalLoaderBuilder {
@@ -325,7 +326,8 @@ impl Loader for NormalLoader {
                 self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism,
-                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
+                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                self.config.cache_type
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -393,6 +395,10 @@ impl Loader for NormalLoader {
         };
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+            let dtype = match self.config.cache_type {
+                Some(KVCacheType::F8E4M3) => DType::F8E4M3,
+                Some(KVCacheType::FullPrecision) | None => dtype,
+            };
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,

@@ -24,6 +24,38 @@ pub use scheduler::{
 use crate::MemoryUsage;
 use tracing::info;
 
+#[derive(Clone, Copy, Default, serde::Deserialize, Debug)]
+pub enum KVCacheType {
+    #[default]
+    #[serde(rename = "full-precision")]
+    FullPrecision,
+    #[serde(rename = "fp8")]
+    F8E4M3,
+}
+
+impl std::str::FromStr for KVCacheType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "fp8" => Ok(Self::F8E4M3),
+            "full-precision" => Ok(Self::FullPrecision),
+            other => Err(format!(
+                "KV cache type must be one of `fp8`, `full-precision`, got `{other}`"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for KVCacheType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::F8E4M3 => write!(f, "fp8"),
+            Self::FullPrecision => write!(f, "full-precision"),
+        }
+    }
+}
+
 /// All memory counts in MB. Default for block size is 32.
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {

@@ -1,6 +1,9 @@
 use candle_core::{Device, Result, Tensor};
 
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::{
+    paged_attention::KVCacheType,
+    pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
+};
 
 const _PARTITION_SIZE: usize = 512;
 
@@ -13,9 +16,11 @@ pub struct PagedAttention {
     sliding_window: Option<usize>,
     num_queries_per_kv: usize,
     alibi_slopes: Option<Tensor>,
+    cache_dtype: KVCacheType,
 }
 
 impl PagedAttention {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         num_attention_heads: usize,
         head_dim: usize,
@@ -24,6 +29,7 @@ impl PagedAttention {
         sliding_window: Option<usize>,
         device: &Device,
         alibi_slopes: Option<Vec<f64>>,
+        cache_dtype: KVCacheType,
     ) -> Result<Self> {
         let num_key_value_heads = num_key_value_heads.unwrap_or(num_attention_heads);
         let num_queries_per_kv = num_attention_heads / num_key_value_heads;
@@ -40,6 +46,7 @@ impl PagedAttention {
             sliding_window,
             num_queries_per_kv,
             alibi_slopes,
+            cache_dtype,
         })
     }
 

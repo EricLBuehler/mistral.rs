@@ -523,6 +523,7 @@ impl Llama {
                                 None,
                                 device,
                                 None,
+                                normal_loading_metadata.cache_type.unwrap_or_default(),
                             )
                             .expect("Failed to create PagedAttention"),
                         ),

@@ -345,7 +345,7 @@ macro_rules! get_paths_gguf {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $loading_uqff:expr, $real_device:expr, $attention_mechanism:expr, $is_moqe:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $loading_uqff:expr, $real_device:expr, $attention_mechanism:expr, $is_moqe:expr, $cache_type:expr) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
             Some(std::sync::Arc::new(if $is_moqe {
@@ -375,6 +375,7 @@ macro_rules! normal_model_loader {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
+                cache_type: $cache_type,
             },
             $attention_mechanism,
         )?
@@ -384,7 +385,7 @@ macro_rules! normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vision_normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $loading_uqff:expr, $real_device:expr, $attention_mechanism:expr) => {{
+    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $loading_uqff:expr, $real_device:expr, $attention_mechanism:expr, $cache_type:expr) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
             Some(std::sync::Arc::new($loader.isq_layer_regexes(&$config)?))
@@ -410,6 +411,7 @@ macro_rules! vision_normal_model_loader {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
+                cache_type: $cache_type,
             },
             $attention_mechanism,
         )?
@@ -452,6 +454,7 @@ macro_rules! xlora_model_loader {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
+                cache_type: None,
             },
             &None,
         )?
@@ -493,6 +496,7 @@ macro_rules! lora_model_loader {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
                 real_device: $real_device,
+                cache_type: None,
             },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
                 $paths.get_lora_preload_adapter_info(),

@@ -13,7 +13,7 @@ use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::{DeviceMapMetadata, Topology};
+use crate::{DeviceMapMetadata, KVCacheType, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -310,6 +310,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     Some(context_window), // TODO
                     device,
                     None,
+                    KVCacheType::FullPrecision, // TODO: no paged attn quant for gguf models
                 )?),
             };
             let qkv =

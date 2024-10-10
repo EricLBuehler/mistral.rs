@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::{
     pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
-    DiffusionLoaderType, ModelDType,
+    DiffusionLoaderType, KVCacheType, ModelDType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -66,6 +66,10 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        #[arg(short, long)]
+        kv_cache_type: Option<KVCacheType>,
     },
 
     /// Select an X-LoRA architecture
@@ -375,6 +379,10 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        #[arg(short, long)]
+        kv_cache_type: Option<KVCacheType>,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

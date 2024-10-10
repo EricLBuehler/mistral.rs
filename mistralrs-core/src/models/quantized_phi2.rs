@@ -24,6 +24,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::KVCacheType;
 use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -288,6 +289,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None, // TODO
                     device,
                     None,
+                    KVCacheType::FullPrecision, // TODO: no paged attn quant for gguf models
                 )?),
             };
             let qkv = QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?;

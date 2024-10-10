@@ -21,6 +21,7 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::KVCacheType;
 use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
@@ -592,6 +593,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                     device,
                     None,
+                    KVCacheType::FullPrecision, // TODO: no paged attn quant for gguf models
                 )?),
             };
             layers.push(LayerWeights {

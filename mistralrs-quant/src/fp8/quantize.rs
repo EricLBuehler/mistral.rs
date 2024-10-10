@@ -4,23 +4,23 @@ use float8::F8E4M3;
 
 use super::FP8Linear;
 
-pub(super) struct QuantizationResult {
+pub struct FP8QuantizationResult {
     /// Quantized tensor (f8)
-    pub(super) qw: Tensor,
+    pub qw: Tensor,
     /// Scalar, f32 tensor.
     ///
-    /// Convert unquantized to quantized tensor as follows:
+    /// Convert unquantized (bf16) to quantized tensor (fp8) as follows:
     /// `q = x * qs`
-    pub(super) quantize_scale: Tensor,
+    pub quantize_scale: Tensor,
     /// Scalar, f32 tensor. Reciprocal of `quantize_scale`.
     ///
-    /// Convert unquantized to quantized tensor as follows:
+    /// Convert quantized (fp8) to unquantized (bf16) tensor as follows:
     /// `x = q * dqs`
-    pub(super) dequantize_scale: Tensor,
+    pub dequantize_scale: Tensor,
 }
 
 impl FP8Linear {
-    pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
+    pub fn quantize(data: &Tensor, dtype: DType) -> Result<FP8QuantizationResult> {
         let data = data.to_dtype(DType::BF16)?;
         let mut absmax = data.clone();
         let mut absmin = data.clone();
@@ -39,7 +39,7 @@ impl FP8Linear {
         let qw = data
             .broadcast_mul(&scale.to_dtype(data.dtype())?)?
             .to_dtype(dtype)?;
-        Ok(QuantizationResult {
+        Ok(FP8QuantizationResult {
             qw,
             quantize_scale: scale.clone(),
             dequantize_scale: scale.recip()?,
@@ -65,7 +65,7 @@ mod tests {
 
     use crate::fp8::FP8Linear;
 
-    use super::QuantizationResult;
+    use super::FP8QuantizationResult;
 
     #[test]
     fn test_roundtrip_f8e4m3() -> Result<()> {
@@ -73,7 +73,7 @@ mod tests {
 
         let data = Tensor::rand(0., 1., (32, 32), &dev)?.to_dtype(DType::F32)?;
 
-        let QuantizationResult {
+        let FP8QuantizationResult {
             qw,
             quantize_scale: _,
             dequantize_scale,
@@ -106,7 +106,7 @@ mod tests {
 
         let handle = CUBLASLT_HANDLE.lock().unwrap().unwrap();
 
-        let QuantizationResult {
+        let FP8QuantizationResult {
             qw,
             quantize_scale: quant_scale,
             dequantize_scale: dequant_a_scale,
@@ -114,7 +114,7 @@ mod tests {
 
         let mut dequant_b_scale = dequant_a_scale.clone();
         if !matches!(x.dtype(), DType::F8E4M3) {
-            let QuantizationResult {
+            let FP8QuantizationResult {
                 qw,
                 quantize_scale: _,
                 dequantize_scale,

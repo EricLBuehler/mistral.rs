@@ -8,9 +8,10 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use quantize::QuantizationResult;
 
 mod quantize;
+
+pub use quantize::FP8QuantizationResult;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
@@ -43,7 +44,7 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_) => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
-                let QuantizationResult {
+                let FP8QuantizationResult {
                     qw,
                     quantize_scale,
                     dequantize_scale,
@@ -81,7 +82,7 @@ impl QuantMethod for FP8Linear {
                 // Prepare the b tensor. If it is not quantized, quantize it
                 let mut dequant_x_scale = self.dequant_x_scale.clone();
                 if !matches!(x.dtype(), DType::F8E4M3) {
-                    let QuantizationResult {
+                    let FP8QuantizationResult {
                         qw,
                         quantize_scale: _,
                         dequantize_scale,
