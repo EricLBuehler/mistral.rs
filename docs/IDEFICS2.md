@@ -2,7 +2,7 @@
 
 The Idefics 2 Model has support in the Rust, Python, and HTTP APIs. The Idefics 2 Model also supports ISQ for increased performance. 
 
-> Note: Some of examples use our [Cephalo model series](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) but could be used with any model ID.
+> Note: Some of the examples use our [Cephalo model series](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) but could be used with any model ID.
 
 The Python and HTTP APIs support sending images as:
 - URL
