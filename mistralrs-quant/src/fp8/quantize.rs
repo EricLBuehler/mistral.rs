@@ -23,16 +23,26 @@ impl FP8Linear {
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
         let data = data.to_dtype(DType::BF16)?;
         let mut absmax = data.clone();
+        let mut absmin = data.clone();
         while !absmax.dims().is_empty() {
             absmax = absmax.max(0)?;
+            absmin = absmin.min(0)?;
         }
-        let max_v = F8E4M3::MAX.to_f64().round();
-        let scale = (max_v / absmax)?.clamp(1e-12, f64::INFINITY)?;
-        let qw = data.broadcast_mul(&scale)?.to_dtype(dtype)?;
+
+        let absmax = absmax.to_dtype(DType::F32)?.to_scalar::<f32>()?;
+        let absmin = absmin.to_dtype(DType::F32)?.to_scalar::<f32>()?;
+        let amax = f32::max(absmax.abs(), absmin.abs());
+
+        let max_v = F8E4M3::MAX.to_f32();
+        let scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
+        let scale = Tensor::new(scale, data.device())?;
+        let qw = data
+            .broadcast_mul(&scale.to_dtype(data.dtype())?)?
+            .to_dtype(dtype)?;
         Ok(QuantizationResult {
             qw,
-            quantize_scale: scale.clone().to_dtype(DType::F32)?,
-            dequantize_scale: scale.recip()?.to_dtype(DType::F32)?,
+            quantize_scale: scale.clone(),
+            dequantize_scale: scale.recip()?,
         })
     }
 
@@ -48,7 +58,10 @@ impl FP8Linear {
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{DType, Device, Result, Tensor};
+    use candle_core::{
+        quantized::{GgmlDType, QTensor},
+        DType, Device, Result, Tensor,
+    };
 
     use crate::fp8::FP8Linear;
 
@@ -68,7 +81,14 @@ mod tests {
 
         let dequant = qw.to_dtype(DType::F32)?.broadcast_mul(&dequantize_scale)?;
 
-        let _diff = (&data - dequant)?.abs()?.mean_all()?;
+        let diff1 = (&data - dequant)?.abs()?.mean_all()?;
+
+        println!("{diff1}");
+
+        let q8_0 = QTensor::quantize(&data, GgmlDType::Q8_0)?.dequantize(&dev)?;
+        let diff2 = (&data - q8_0)?.abs()?.mean_all()?;
+
+        println!("{diff2}");
         Ok(())
     }
 
