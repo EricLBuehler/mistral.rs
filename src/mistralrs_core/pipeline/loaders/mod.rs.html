@@ -644,17 +644,17 @@
 </span><span class="attr">#[derive(Clone, Default, derive_more::From, strum::Display)]
 </span><span class="kw">pub enum </span>ModelKind {
     <span class="attr">#[default]
-    #[strum(to_string = <span class="string">"normal (no quant, no adapters)"</span>)]
+    #[strum(to_string = <span class="string">"normal (no adapters)"</span>)]
     </span>Normal,
 
-    <span class="attr">#[strum(to_string = <span class="string">"quantized from {quant} (no adapters)"</span>)]
-    </span>Quantized { quant: QuantizationKind },
+    <span class="attr">#[strum(to_string = <span class="string">"gguf quantized from {quant} (no adapters)"</span>)]
+    </span>GgufQuantized { quant: QuantizationKind },
 
-    <span class="attr">#[strum(to_string = <span class="string">"{adapter}, (no quant)"</span>)]
+    <span class="attr">#[strum(to_string = <span class="string">"{adapter}"</span>)]
     </span>Adapter { adapter: AdapterKind },
 
-    <span class="attr">#[strum(to_string = <span class="string">"{adapter}, quantized from {quant}"</span>)]
-    </span>AdapterQuantized {
+    <span class="attr">#[strum(to_string = <span class="string">"{adapter}, gguf quantized from {quant}"</span>)]
+    </span>GgufAdapter {
         adapter: AdapterKind,
         quant: QuantizationKind,
     },
@@ -719,7 +719,7 @@
 
         <span class="kw">match </span><span class="self">self </span>{
             Normal | Adapter { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-            Quantized { quant } | AdapterQuantized { quant, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>quant)],
+            GgufQuantized { quant } | GgufAdapter { quant, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>quant)],
             Speculative { target, draft } =&gt; {
                 <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
                 <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();
@@ -743,8 +743,8 @@
         <span class="kw">use </span>ModelKind::<span class="kw-2">*</span>;
 
         <span class="kw">match </span><span class="self">self </span>{
-            Normal | Quantized { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-            Adapter { adapter } | AdapterQuantized { adapter, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>adapter)],
+            Normal | GgufQuantized { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+            Adapter { adapter } | GgufAdapter { adapter, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>adapter)],
             Speculative { target, draft } =&gt; {
                 <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
                 <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();

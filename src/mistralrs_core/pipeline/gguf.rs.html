@@ -860,7 +860,7 @@
         quantized_filenames: Vec&lt;String&gt;,
         config: GGUFSpecificConfig,
     ) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>kind = ModelKind::Quantized {
+        <span class="kw">let </span>kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Gguf,
         };
 
@@ -1130,7 +1130,7 @@
         <span class="kw">let </span>has_adapter = <span class="self">self</span>.kind.is_adapted();
         <span class="kw">let </span>is_xlora = <span class="self">self</span>.kind.is_adapted_and(|a| a.is_x_lora());
 
-        <span class="kw">let </span>paged_attn_config = <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::AdapterQuantized { .. }) {
+        <span class="kw">let </span>paged_attn_config = <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::GgufAdapter { .. }) {
             <span class="macro">warn!</span>(<span class="string">"Adapter models do not currently support PagedAttention, running without"</span>);
             <span class="prelude-val">None
         </span>} <span class="kw">else </span>{
@@ -1167,7 +1167,7 @@
 
         <span class="comment">// Config into model:
         </span><span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
-            ModelKind::Quantized { .. } =&gt; <span class="kw">match </span>arch {
+            ModelKind::GgufQuantized { .. } =&gt; <span class="kw">match </span>arch {
                 GGUFArchitecture::Llama =&gt; Model::Llama(QLlama::try_from(model_config)<span class="question-mark">?</span>),
                 GGUFArchitecture::Phi2 =&gt; Model::Phi2(QPhi::try_from(model_config)<span class="question-mark">?</span>),
                 GGUFArchitecture::Phi3 =&gt; Model::Phi3(QPhi3::try_from(model_config)<span class="question-mark">?</span>),
@@ -1176,7 +1176,7 @@
                 }
                 a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture `{a:?}` for GGUF"</span>),
             },
-            ModelKind::AdapterQuantized { adapter, .. } =&gt; <span class="kw">match </span>arch {
+            ModelKind::GgufAdapter { adapter, .. } =&gt; <span class="kw">match </span>arch {
                 GGUFArchitecture::Llama =&gt; Model::XLoraLlama(XLoraQLlama::try_from(model_config)<span class="question-mark">?</span>),
                 GGUFArchitecture::Phi3 =&gt; Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)<span class="question-mark">?</span>),
                 a =&gt; <span class="macro">bail!</span>(

@@ -482,9 +482,26 @@
 <a href="#482" id="482">482</a>
 <a href="#483" id="483">483</a>
 <a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
+</span><span class="kw">use </span>candle_core::Device;
+<span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
 <span class="kw">pub use </span>engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 <span class="kw">pub use </span>lora::Ordering;
@@ -589,6 +606,11 @@
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>DEBUG: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
 <span class="kw">static </span>ENGINE_ID: AtomicUsize = AtomicUsize::new(<span class="number">0</span>);
 
+<span class="kw">pub struct </span>MistralRsConfig {
+    <span class="kw">pub </span>kind: ModelKind,
+    <span class="kw">pub </span>device: Device,
+}
+
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
@@ -603,6 +625,7 @@
     engine_handler: RwLock&lt;JoinHandle&lt;()&gt;&gt;,
     engine_id: usize,
     category: ModelCategory,
+    config: MistralRsConfig,
 }
 
 <span class="attr">#[derive(Clone)]
@@ -806,6 +829,10 @@
         <span class="kw">let </span>sender = RwLock::new(tx);
         <span class="kw">let </span>id = pipeline.try_lock().unwrap().name();
 
+        <span class="kw">let </span>kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
+        <span class="kw">let </span>device = pipeline.try_lock().unwrap().device();
+        <span class="kw">let </span>config = MistralRsConfig { kind, device };
+
         <span class="kw">let </span>engine_handler = thread::spawn(<span class="kw">move </span>|| {
             <span class="kw">let </span>rt = Runtime::new().unwrap();
             rt.block_on(<span class="kw">async move </span>{
@@ -839,6 +866,7 @@
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,
+            config,
         })
     }
 
@@ -964,6 +992,10 @@
             f.write_all(<span class="macro">format!</span>(<span class="string">"Error response at {time}: {err}\n\n"</span>).as_bytes())
                 .expect(<span class="string">"Unable to write data"</span>);
         }
+    }
+
+    <span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>MistralRsConfig {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.config
     }
 }
 </code></pre></div></section></main></body></html>
