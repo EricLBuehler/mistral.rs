@@ -152,6 +152,11 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
@@ -304,6 +309,11 @@
         <span class="kw">let </span>request = Request::ReIsq(isq_type);
 
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.runner.get_sender()<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>)
+    }
+
+    <span class="doccomment">/// Retrieve some information about this model.
+    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>MistralRsConfig {
+        <span class="self">self</span>.runner.config()
     }
 }
 </code></pre></div></section></main></body></html>
