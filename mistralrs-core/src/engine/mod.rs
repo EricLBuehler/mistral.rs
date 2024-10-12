@@ -127,7 +127,9 @@ impl Engine {
                 self.handle_request(request).await;
             }
             let run_start = Instant::now();
+            println!("Scheduling...");
             let scheduled = self.scheduler.schedule();
+            println!("Scheduled...");
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -139,6 +141,8 @@ impl Engine {
                         let throughput_start = Instant::now();
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+
+                        println!("Running...");
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -178,6 +182,7 @@ impl Engine {
                                 )
                                 .await
                         };
+                        println!("Ran...");
 
                         handle_pipeline_forward_error!(
                             "completion step",

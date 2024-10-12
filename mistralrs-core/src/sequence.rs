@@ -677,7 +677,9 @@ impl Sequence {
     }
 
     pub fn add_choice_to_group(&self, choice: Choice) {
+        println!("Adding choice");
         get_mut_group!(self).choices.push(choice);
+        println!("Added choice");
         self.update_time_info();
     }
 
@@ -817,7 +819,9 @@ impl SequenceGroup {
         sender: Sender<Response>,
     ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
+            println!("Sending response");
             sender.send(Response::Done(response)).await?;
+            println!("Sent response");
         }
 
         Ok(())
