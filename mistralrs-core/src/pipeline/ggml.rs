@@ -109,7 +109,7 @@ impl GGMLLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
-        let kind = ModelKind::Quantized {
+        let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Ggml,
         };
 
@@ -339,8 +339,8 @@ impl Loader for GGMLLoader {
         // Config into model:
         // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
         let model = match self.kind {
-            ModelKind::Quantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
-            ModelKind::AdapterQuantized { .. } => {
+            ModelKind::GgufQuantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::GgufAdapter { .. } => {
                 Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
             }
             _ => unreachable!(),
