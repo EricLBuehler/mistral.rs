@@ -10,7 +10,9 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+mod cublaslt;
 mod dummy;
+mod fp8;
 mod gguf;
 mod gptq;
 mod hqq;
@@ -18,6 +20,7 @@ mod unquantized;
 mod utils;
 
 pub use dummy::DummyLayer;
+pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -75,6 +78,10 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
     },
     Dummy,
+    FP8 {
+        lin: Linear,
+        dtype: DType,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -96,6 +103,7 @@ pub enum IsqType {
     // HQQ3,
     // HQQ2,
     // HQQ1,
+    F8E4M3,
 }
 
 impl TryFrom<IsqType> for GgmlDType {
@@ -143,6 +151,7 @@ pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
     Hqq = 2,
+    Fp8 = 3,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -152,6 +161,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             0 => Ok(Self::Gguf),
             1 => Ok(Self::Unquant),
             2 => Ok(Self::Hqq),
+            3 => Ok(Self::Fp8),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }

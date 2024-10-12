@@ -1,13 +1,14 @@
-pub use candle_core::cuda_backend::cudarc::cublaslt::Activation;
+use candle_core::cuda::cudarc::driver::DevicePtr;
+use float8::F8E4M3;
 use std::ffi::c_int;
 
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::WrapErr;
-use candle_core::{CpuStorage, Device, Layout, Result, Shape, Storage, Tensor};
+use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
 use std::sync::Arc;
 
-use candle_core::cuda_backend::cudarc::cublaslt::{CudaBlasLT, Matmul, MatmulConfig};
+use super::matmul::{Activation, CudaBlasLT, Matmul, MatmulConfig};
 
 #[derive(Debug, Clone)]
 pub struct CublasLt(Arc<CudaBlasLT>);
@@ -858,11 +859,12 @@ pub fn fused_batch_matmul(
         a.apply_op2(b, op)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::PI;
+
     use super::*;
-    use candle_core::{DType, Device};
+    use candle_core::{DType, Device, IndexOp};
 
     fn to_vec2_round(t: Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
         let b = 10f32.powi(digits);

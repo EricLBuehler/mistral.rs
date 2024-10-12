@@ -13,14 +13,19 @@ mod api;
 mod matmul;
 
 #[cfg(feature = "cuda")]
-use api::{fused_batch_matmul, fused_matmul, CublasLt};
+pub use api::{fused_batch_matmul_f8, CublasLt};
+
+pub enum F8MatmulOutType {
+    F8,
+    BF16,
+}
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
 pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
     Lazy::new(|| Mutex::new(None));
 
-pub fn setup_cublas_lt_wrapper() {
+pub fn maybe_init_cublas_lt_wrapper() {
     unsafe {
         INIT.call_once(|| {
             #[cfg(not(feature = "cuda"))]
@@ -43,11 +48,10 @@ pub fn setup_cublas_lt_wrapper() {
                         }),
                         _ => None,
                     });
-                tracing::info!("Initialized cuBLASlt handle");
             }
+            let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
+            *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
         });
-        let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
-        *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
     }
 }
 
@@ -58,16 +62,37 @@ pub struct CublasLtWrapper {
 }
 
 impl CublasLtWrapper {
+    /// Fused batch matmul + add + Relu/Gelu activation using CublasLt for F8 dtypes.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Input tensor of size BxMxK
+    /// * `b` - Input tensor of size BxNxK
+    /// * `dequant_a_scale` - F32 scalar tensor, used to `a` the out tensor.
+    /// * `dequant_b_scale` - F32 scalar tensor, used to `b` the out tensor.
+    /// * `quantize_scale` - F32 scalar tensor, used to requantize.
+    /// * `out` - Optional Output tensor of size BxNxK.
+    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `alpha` - Optional scaling factor for A*B
+    /// * `beta` - Optional scaling factor for C
+    /// * `bias` - Optional bias tensor of size M
+    /// * `act` - Optional Gelu or Relu activation. If set, will be added to the end result
+    ///
+    /// The resulting tensor is of shape NxM
     #[allow(clippy::too_many_arguments)]
     pub fn batch_matmul(
         &self,
         a: &Tensor,
         b: &Tensor,
+        dequant_a_scale: &Tensor,
+        dequant_b_scale: &Tensor,
+        quantize_scale: &Tensor,
         out: Option<&Tensor>,
         alpha: Option<f32>,
         beta: Option<f32>,
         bias: Option<&Tensor>,
         act: Option<CandleActivation>,
+        out_dtype: F8MatmulOutType,
     ) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         {
@@ -76,14 +101,18 @@ impl CublasLtWrapper {
                 CandleActivation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
-            let mut result = fused_batch_matmul(
+            let mut result = fused_batch_matmul_f8(
                 a,
                 b,
+                dequant_a_scale,
+                dequant_b_scale,
+                quantize_scale,
                 out,
                 alpha,
                 beta,
                 bias,
                 inner_act,
+                out_dtype,
                 self.cublaslt.clone(),
             )?;
 

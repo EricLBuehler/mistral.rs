@@ -13,7 +13,8 @@ use crate::{
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    FP8Linear, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
+    QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -28,7 +29,8 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
-            | QuantMethodConfig::Dummy => unreachable!(),
+            | QuantMethodConfig::Dummy
+            | QuantMethodConfig::FP8 { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
         }
     }
@@ -117,6 +119,18 @@ impl QuantMethod for UnquantLinear {
                         .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
                 })?))
             }
+            Some(IsqType::F8E4M3) => {
+                let w = self.0.weight().to_device(&device)?;
+                let b = if let Some(b) = self.0.bias() {
+                    Some(b.to_device(&device)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(FP8Linear::new(QuantMethodConfig::FP8 {
+                    lin: Linear::new(w, b),
+                    dtype: DType::F8E4M3,
+                })?))
+            }
             None => {
                 let w = self.0.weight().to_device(&device)?;
                 let b = if let Some(b) = self.0.bias() {
@@ -138,6 +152,7 @@ impl QuantMethod for UnquantLinear {
                 // Use 1 because our HQQ quantizes on the GPU
                 Some(1.try_into().unwrap())
             }
+            IsqType::F8E4M3 => None,
             IsqType::Q2K
             | IsqType::Q3K
             | IsqType::Q4K
