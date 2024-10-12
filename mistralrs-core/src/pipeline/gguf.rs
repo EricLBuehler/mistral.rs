@@ -124,7 +124,7 @@ impl GGUFLoaderBuilder {
         quantized_filenames: Vec<String>,
         config: GGUFSpecificConfig,
     ) -> Self {
-        let kind = ModelKind::Quantized {
+        let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Gguf,
         };
 
@@ -394,7 +394,7 @@ impl Loader for GGUFLoader {
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
 
-        let paged_attn_config = if matches!(self.kind, ModelKind::AdapterQuantized { .. }) {
+        let paged_attn_config = if matches!(self.kind, ModelKind::GgufAdapter { .. }) {
             warn!("Adapter models do not currently support PagedAttention, running without");
             None
         } else {
@@ -431,7 +431,7 @@ impl Loader for GGUFLoader {
 
         // Config into model:
         let model = match self.kind {
-            ModelKind::Quantized { .. } => match arch {
+            ModelKind::GgufQuantized { .. } => match arch {
                 GGUFArchitecture::Llama => Model::Llama(QLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi2 => Model::Phi2(QPhi::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::Phi3(QPhi3::try_from(model_config)?),
@@ -440,7 +440,7 @@ impl Loader for GGUFLoader {
                 }
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
-            ModelKind::AdapterQuantized { adapter, .. } => match arch {
+            ModelKind::GgufAdapter { adapter, .. } => match arch {
                 GGUFArchitecture::Llama => Model::XLoraLlama(XLoraQLlama::try_from(model_config)?),
                 GGUFArchitecture::Phi3 => Model::XLoraPhi3(XLoraQPhi3::try_from(model_config)?),
                 a => bail!(
