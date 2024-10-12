@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/unquantized/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/fp8/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -244,6 +244,36 @@
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
 <a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
@@ -252,21 +282,32 @@
 };
 
 <span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Linear, Module};
+<span class="kw">use </span>quantize::QuantizationResult;
+
+<span class="kw">mod </span>quantize;
 
 <span class="kw">use crate</span>::{
-    generate_isq,
-    hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
-    QuantizedSerdeType,
+    cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
+    utils::{
+        deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
+        HQFF_VERSION,
+    },
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 <span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>UnquantLinear(Linear);
+</span><span class="kw">pub struct </span>FP8Linear {
+    lin: Linear,
+    dequant_w_scale: Tensor,
+    dequant_x_scale: Tensor,
+    quant_scale: Tensor,
+    <span class="doccomment">/// Quantized type
+    </span>dtype: DType,
+}
 
-<span class="kw">impl </span>QuantMethod <span class="kw">for </span>UnquantLinear {
+<span class="kw">impl </span>QuantMethod <span class="kw">for </span>FP8Linear {
     <span class="kw">fn </span>new(method: QuantMethodConfig) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -276,13 +317,88 @@
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8 { .. } =&gt; <span class="macro">unreachable!</span>(),
-            QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>(l)),
+            | QuantMethodConfig::Unquantized(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            QuantMethodConfig::FP8 { lin, dtype } =&gt; {
+                <span class="kw">let </span>QuantizationResult {
+                    qw,
+                    quantize_scale,
+                    dequantize_scale,
+                } = <span class="self">Self</span>::quantize(lin.weight(), dtype)<span class="question-mark">?</span>;
+                <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                    lin: Linear::new(qw, lin.bias().cloned()),
+                    dequant_x_scale: dequantize_scale.clone(), <span class="comment">// This is probably wrong!
+                    </span>dequant_w_scale: dequantize_scale,
+                    quant_scale: quantize_scale,
+                    dtype,
+                })
+            }
         }
     }
 
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.<span class="number">0</span>.forward(a)
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="comment">// Batch matrix multiplication
+        </span>maybe_init_cublas_lt_wrapper();
+
+        <span class="kw">match </span><span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap() {
+            <span class="prelude-val">Some</span>(handle) =&gt; {
+                <span class="kw">let </span>n_dims = x.dims().len();
+                <span class="kw">if </span>n_dims &lt; <span class="number">3 </span>{
+                    <span class="macro">candle_core::bail!</span>(
+                        <span class="string">"FP8Linear `matmul` via cuBLASlt expects `x` to have at least 3 dimensions"
+                    </span>);
+                }
+                <span class="comment">// Set up target shape
+                </span><span class="kw">let </span><span class="kw-2">mut </span>tgt_shape = x.dims().to_vec();
+                <span class="kw-2">*</span>tgt_shape.last_mut().unwrap() = <span class="self">self</span>.lin.weight().dim(<span class="number">0</span>)<span class="question-mark">?</span>;
+
+                <span class="comment">// Flatten for correct dims
+                </span><span class="kw">let </span><span class="kw-2">mut </span>x = x.flatten_to(D::Minus(<span class="number">3</span>))<span class="question-mark">?</span>;
+
+                <span class="comment">// Prepare the b tensor. If it is not quantized, quantize it
+                </span><span class="kw">let </span><span class="kw-2">mut </span>dequant_x_scale = <span class="self">self</span>.dequant_x_scale.clone();
+                <span class="kw">if </span>!<span class="macro">matches!</span>(x.dtype(), DType::F8E4M3) {
+                    <span class="kw">let </span>QuantizationResult {
+                        qw,
+                        quantize_scale: <span class="kw">_</span>,
+                        dequantize_scale,
+                    } = <span class="self">Self</span>::quantize(<span class="kw-2">&amp;</span>x, DType::F8E4M3)<span class="question-mark">?</span>;
+                    x = qw;
+                    dequant_x_scale = dequantize_scale;
+                }
+
+                <span class="comment">// Handle bias
+                </span><span class="kw">let </span>beta = <span class="kw">match </span><span class="self">self</span>.lin.bias().is_some() {
+                    <span class="bool-val">true </span>=&gt; <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
+                    <span class="bool-val">false </span>=&gt; <span class="prelude-val">None</span>,
+                };
+
+                <span class="comment">// Naming
+                </span><span class="kw">let </span>a = <span class="self">self</span>.lin.weight().unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>b = x;
+
+                handle
+                    .batch_matmul(
+                        <span class="kw-2">&amp;</span>a,
+                        <span class="kw-2">&amp;</span>b,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.dequant_w_scale,
+                        <span class="kw-2">&amp;</span>dequant_x_scale,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.quant_scale,
+                        <span class="self">self</span>.lin.bias(),
+                        <span class="prelude-val">None</span>,
+                        beta,
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        F8MatmulOutType::BF16, <span class="comment">// Output in bf16 to avoid manual dequant
+                    </span>)<span class="question-mark">?
+                    </span>.reshape(tgt_shape)
+            }
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="comment">// Dequantize matmul
+                </span><span class="kw">let </span>dequant_x = x.clone();
+                <span class="kw">let </span>lin = <span class="self">self</span>.dequantize(x.dtype())<span class="question-mark">?</span>;
+                lin.forward(<span class="kw-2">&amp;</span>dequant_x)
+            }
+        }
     }
 
     <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {
@@ -290,14 +406,16 @@
     </span>}
 
     <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(Linear::new(
-            (<span class="self">self</span>.<span class="number">0</span>.weight() + delta)<span class="question-mark">?</span>,
-            <span class="self">self</span>.<span class="number">0</span>.bias().cloned(),
-        ))))
+        <span class="kw">let </span>dequant = <span class="self">self</span>.dequantize(delta.dtype())<span class="question-mark">?</span>;
+        <span class="kw">let </span>new = Linear::new((dequant.weight() + delta)<span class="question-mark">?</span>, dequant.bias().cloned());
+        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>::new(QuantMethodConfig::FP8 {
+            lin: new,
+            dtype: <span class="self">self</span>.dtype,
+        })<span class="question-mark">?</span>))
     }
 
     <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, candle_core::Device) {
-        (<span class="self">self</span>.<span class="number">0</span>.weight().dtype(), <span class="self">self</span>.<span class="number">0</span>.weight().device().clone())
+        (DType::F8E4M3, <span class="self">self</span>.lin.weight().device().clone())
     }
 
     <span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
@@ -306,98 +424,15 @@
 
     <span class="kw">fn </span>apply_isq(
         <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-        device: Device,
-        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+        _dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+        _device: Device,
+        _n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-        <span class="kw">match </span>dtype {
-            <span class="comment">/*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            </span><span class="prelude-val">Some</span>(IsqType::HQQ4 | IsqType::HQQ8) =&gt; {
-                n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-                <span class="kw">let </span>bits = <span class="kw">match </span>dtype.unwrap() {
-                    IsqType::HQQ8 =&gt; HqqBits::Eight,
-                    IsqType::HQQ4 =&gt; HqqBits::Four,
-                    <span class="comment">// IsqType::HQQ3 =&gt; HqqBits::Three,
-                    // IsqType::HQQ2 =&gt; HqqBits::Two,
-                    // IsqType::HQQ1 =&gt; HqqBits::One,
-                    </span><span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-                };
-                <span class="kw">let </span>cfg = HqqConfig {
-                    bits,
-                    group_size: ISQ_HQQ_GROUP_SIZE.try_into()<span class="question-mark">?</span>,
-                    axis: HqqAxis::Zero,
-                    optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
-                    round_zeros: <span class="bool-val">false</span>,
-                    channel_wise: <span class="bool-val">true</span>,
-                };
-                <span class="kw">let </span>res = HqqLayer::quantize(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.<span class="number">0</span>.bias() {
-                    <span class="kw">let </span>bias = bias
-                        .to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-                        </span>.to_dtype(res.dtype_and_device().<span class="number">0</span>)<span class="question-mark">?</span>;
-                    <span class="prelude-val">Ok</span>(Arc::new(res.with_bias(bias)))
-                } <span class="kw">else </span>{
-                    <span class="prelude-val">Ok</span>(Arc::new(res))
-                }
-            }
-            <span class="prelude-val">Some</span>(
-                IsqType::Q2K
-                | IsqType::Q3K
-                | IsqType::Q4K
-                | IsqType::Q4_0
-                | IsqType::Q4_1
-                | IsqType::Q5K
-                | IsqType::Q5_0
-                | IsqType::Q5_1
-                | IsqType::Q6K
-                | IsqType::Q8K
-                | IsqType::Q8_0
-                | IsqType::Q8_1,
-            ) =&gt; {
-                <span class="kw">let </span>dtype: GgmlDType = dtype.unwrap().try_into()<span class="question-mark">?</span>;
-                <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(<span class="self">self</span>.<span class="number">0</span>.weight(), device, dtype, n_quantized);
-                <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: res,
-                    b: <span class="self">self
-                        </span>.<span class="number">0
-                        </span>.bias()
-                        .cloned()
-                        .map(|b| b.to_dtype(DType::F32).unwrap().to_device(<span class="kw-2">&amp;</span>device).unwrap()),
-                })<span class="question-mark">?</span>))
-            }
-            <span class="prelude-val">Some</span>(IsqType::F8E4M3) =&gt; {
-                <span class="kw">let </span>w = <span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.<span class="number">0</span>.bias() {
-                    <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
-                } <span class="kw">else </span>{
-                    <span class="prelude-val">None
-                </span>};
-                <span class="prelude-val">Ok</span>(Arc::new(FP8Linear::new(QuantMethodConfig::FP8 {
-                    lin: Linear::new(w, b),
-                    dtype: DType::F8E4M3,
-                })<span class="question-mark">?</span>))
-            }
-            <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>w = <span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.<span class="number">0</span>.bias() {
-                    <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
-                } <span class="kw">else </span>{
-                    <span class="prelude-val">None
-                </span>};
-                <span class="prelude-val">Ok</span>(Arc::new(UnquantLinear::new(
-                    QuantMethodConfig::Unquantized(Linear::new(w, b)),
-                )<span class="question-mark">?</span>))
-            }
-        }
+        <span class="macro">todo!</span>()
     }
 
     <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {
         <span class="kw">match </span>dtype {
-            <span class="comment">/*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            </span>IsqType::HQQ4 | IsqType::HQQ8 =&gt; {
-                <span class="comment">// Use 1 because our HQQ quantizes on the GPU
-                </span><span class="prelude-val">Some</span>(<span class="number">1</span>.try_into().unwrap())
-            }
             IsqType::F8E4M3 =&gt; <span class="prelude-val">None</span>,
             IsqType::Q2K
             | IsqType::Q3K
@@ -410,7 +445,9 @@
             | IsqType::Q6K
             | IsqType::Q8K
             | IsqType::Q8_0
-            | IsqType::Q8_1 =&gt; <span class="prelude-val">None</span>,
+            | IsqType::Q8_1
+            | IsqType::HQQ4
+            | IsqType::HQQ8 =&gt; <span class="prelude-val">None</span>,
         }
     }
 }
@@ -429,12 +466,12 @@
 // [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
 // -----------------------
 
-</span><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>UnquantLinear {
+</span><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>FP8Linear {
     <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
     <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
-        <span class="string">"unquant-linear"
+        <span class="string">"fp8-linear"
     </span>}
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
@@ -442,15 +479,25 @@
         buffer.extend(<span class="kw-2">&amp;</span>HQFF_VERSION.to_le_bytes());
 
         <span class="comment">// ISQ type for unquant is 1
-        </span>buffer.push(QuantizedSerdeType::Unquant <span class="kw">as </span>u8);
+        </span>buffer.push(QuantizedSerdeType::Fp8 <span class="kw">as </span>u8);
 
         <span class="comment">// Has bias
-        </span>buffer.push(<span class="self">self</span>.<span class="number">0</span>.bias().is_some() <span class="kw">as </span>u8);
+        </span>buffer.push(<span class="self">self</span>.lin.bias().is_some() <span class="kw">as </span>u8);
 
         <span class="comment">// Weight
-        </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="self">self</span>.<span class="number">0</span>.weight())<span class="question-mark">?</span>;
+        </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="self">self</span>.lin.weight())<span class="question-mark">?</span>;
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+        <span class="comment">// Dequant a scale
+        </span>buffer.extend(<span class="self">self</span>.dequant_w_scale.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>.to_le_bytes());
+        <span class="comment">// Dequant b scale
+        </span>buffer.extend(<span class="self">self</span>.dequant_x_scale.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>.to_le_bytes());
+        <span class="comment">// Quant scale
+        </span>buffer.extend(<span class="self">self</span>.quant_scale.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>.to_le_bytes());
+
+        <span class="comment">// DType
+        </span>write_dtype(<span class="self">self</span>.dtype, <span class="kw-2">&amp;mut </span>buffer);
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.lin.bias() {
             <span class="comment">// Bias
             </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, bias)<span class="question-mark">?</span>;
         }
@@ -470,10 +517,10 @@
         }
 
         <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">if </span>isq_type != QuantizedSerdeType::Unquant <span class="kw">as </span>usize {
+        <span class="kw">if </span>isq_type != QuantizedSerdeType::Fp8 <span class="kw">as </span>usize {
             <span class="macro">candle_core::bail!</span>(
                 <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
-                QuantizedSerdeType::Unquant <span class="kw">as </span>usize
+                QuantizedSerdeType::Fp8 <span class="kw">as </span>usize
             );
         }
 
@@ -481,13 +528,26 @@
 
         <span class="kw">let </span>w = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>dequant_w_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>dequant_x_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>quant_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
+
+        <span class="comment">// DType
+        </span><span class="kw">let </span>dtype = read_dtype(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+
         <span class="kw">let </span>b = <span class="kw">if </span>has_bias {
             <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};
 
-        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(Linear::new(w, b))))
+        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
+            lin: Linear::new(w, b),
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        }))
     }
 }
 </code></pre></div></section></main></body></html>

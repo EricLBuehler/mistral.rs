@@ -817,6 +817,9 @@
 <a href="#817" id="817">817</a>
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// T5 Text Model
@@ -824,6 +827,7 @@
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
+<span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
 
@@ -1445,6 +1449,7 @@
             DType::BF16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::bf16&gt;()<span class="question-mark">? </span>== half::bf16::from_f32_const(<span class="number">0.</span>)),
             DType::F32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
             DType::F64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f64&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
+            DType::F8E4M3 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;F8E4M3&gt;()<span class="question-mark">? </span>== F8E4M3::ZERO),
         }
     }
 }
@@ -1460,6 +1465,7 @@
         DType::BF16 =&gt; half::bf16::MAX.to_f64_const() - <span class="number">1000.</span>,
         DType::F32 =&gt; f32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
         DType::F64 =&gt; f64::MAX - <span class="number">1000.</span>,
+        DType::F8E4M3 =&gt; F8E4M3::MAX.to_f64() - <span class="number">1000.</span>,
     };
     <span class="kw">if </span>xs.is_inf()<span class="question-mark">?</span>.any()<span class="question-mark">? </span>{
         max -= <span class="number">1000.</span>;

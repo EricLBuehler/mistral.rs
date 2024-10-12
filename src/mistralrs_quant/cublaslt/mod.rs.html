@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/cublaslt/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-quant/src/cublaslt/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_quant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -98,6 +98,35 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
 </pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
 
 </span><span class="attr">#![allow(unused_variables, unused_imports, dead_code)]
@@ -113,14 +142,19 @@
 </span><span class="kw">mod </span>matmul;
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-</span><span class="kw">use </span>api::{fused_batch_matmul, fused_matmul, CublasLt};
+</span><span class="kw">pub use </span>api::{fused_batch_matmul_f8, CublasLt};
+
+<span class="kw">pub enum </span>F8MatmulOutType {
+    F8,
+    BF16,
+}
 
 <span class="kw">static </span>INIT: Once = Once::new();
 <span class="kw">static </span><span class="kw-2">mut </span>CUBLASLT: <span class="prelude-ty">Option</span>&lt;CublasLtWrapper&gt; = <span class="prelude-val">None</span>;
 <span class="kw">pub static </span>CUBLASLT_HANDLE: Lazy&lt;Mutex&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt;&gt;&gt; =
     Lazy::new(|| Mutex::new(<span class="prelude-val">None</span>));
 
-<span class="kw">pub fn </span>setup_cublas_lt_wrapper() {
+<span class="kw">pub fn </span>maybe_init_cublas_lt_wrapper() {
     <span class="kw">unsafe </span>{
         INIT.call_once(|| {
             <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
@@ -143,11 +177,10 @@
                         }),
                         <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
                     });
-                <span class="macro">tracing::info!</span>(<span class="string">"Initialized cuBLASlt handle"</span>);
             }
+            <span class="kw">let </span>cublaslt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; = CUBLASLT.as_ref();
+            <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
         });
-        <span class="kw">let </span>cublaslt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; = CUBLASLT.as_ref();
-        <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
     }
 }
 
@@ -158,16 +191,37 @@
 }
 
 <span class="kw">impl </span>CublasLtWrapper {
-    <span class="attr">#[allow(clippy::too_many_arguments)]
+    <span class="doccomment">/// Fused batch matmul + add + Relu/Gelu activation using CublasLt for F8 dtypes.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Input tensor of size BxMxK
+    /// * `b` - Input tensor of size BxNxK
+    /// * `dequant_a_scale` - F32 scalar tensor, used to `a` the out tensor.
+    /// * `dequant_b_scale` - F32 scalar tensor, used to `b` the out tensor.
+    /// * `quantize_scale` - F32 scalar tensor, used to requantize.
+    /// * `out` - Optional Output tensor of size BxNxK.
+    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `alpha` - Optional scaling factor for A*B
+    /// * `beta` - Optional scaling factor for C
+    /// * `bias` - Optional bias tensor of size M
+    /// * `act` - Optional Gelu or Relu activation. If set, will be added to the end result
+    ///
+    /// The resulting tensor is of shape NxM
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>batch_matmul(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         a: <span class="kw-2">&amp;</span>Tensor,
         b: <span class="kw-2">&amp;</span>Tensor,
+        dequant_a_scale: <span class="kw-2">&amp;</span>Tensor,
+        dequant_b_scale: <span class="kw-2">&amp;</span>Tensor,
+        quantize_scale: <span class="kw-2">&amp;</span>Tensor,
         out: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         alpha: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         beta: <span class="prelude-ty">Option</span>&lt;f32&gt;,
         bias: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         act: <span class="prelude-ty">Option</span>&lt;CandleActivation&gt;,
+        out_dtype: F8MatmulOutType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
         </span>{
@@ -176,14 +230,18 @@
                 CandleActivation::Gelu =&gt; matmul::Activation::Gelu,
                 <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unsupported activation in cublaslt matmul"</span>),
             });
-            <span class="kw">let </span><span class="kw-2">mut </span>result = fused_batch_matmul(
+            <span class="kw">let </span><span class="kw-2">mut </span>result = fused_batch_matmul_f8(
                 a,
                 b,
+                dequant_a_scale,
+                dequant_b_scale,
+                quantize_scale,
                 out,
                 alpha,
                 beta,
                 bias,
                 inner_act,
+                out_dtype,
                 <span class="self">self</span>.cublaslt.clone(),
             )<span class="question-mark">?</span>;
 

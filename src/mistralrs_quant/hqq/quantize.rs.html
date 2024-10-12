@@ -254,10 +254,10 @@
             },
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>dequant = hqq.dequantize()<span class="question-mark">?</span>;
+        <span class="kw">let </span>_dequant = hqq.dequantize()<span class="question-mark">?</span>;
 
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>dequant - <span class="kw-2">&amp;</span>data)<span class="question-mark">?</span>.abs()<span class="question-mark">?</span>.mean_all()<span class="question-mark">?</span>);
-        <span class="prelude-val">Ok</span>(())
+        <span class="comment">// dbg!(&amp;(&amp;dequant - &amp;data)?.abs()?.mean_all()?);
+        </span><span class="prelude-val">Ok</span>(())
     }
 }
 </code></pre></div></section></main></body></html>

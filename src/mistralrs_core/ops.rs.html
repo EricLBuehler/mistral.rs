@@ -787,6 +787,14 @@
 <a href="#787" id="787">787</a>
 <a href="#788" id="788">788</a>
 <a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
     Tensor, WithDType, D,
@@ -912,6 +920,7 @@
             CpuStorage::F16(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F16, <span class="string">"bitwise"</span>)),
             CpuStorage::F32(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F32, <span class="string">"bitwise"</span>)),
             CpuStorage::F64(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"bitwise"</span>)),
+            CpuStorage::F8E4M3(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"bitwise"</span>)),
         }
     }
     <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -979,6 +988,9 @@
             }
             DType::F64 =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"bitwise"</span>));
+            }
+            DType::F8E4M3 =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"bitwise"</span>));
             }
         };
         <span class="kw">let </span>dst = <span class="kw">match </span>s1.dtype() {
@@ -1186,6 +1198,7 @@
             candle_core::DType::F16 =&gt; ffi::count_nonzero_f16(d_in, n),
             candle_core::DType::F32 =&gt; ffi::count_nonzero_f32(d_in, n),
             candle_core::DType::F64 =&gt; ffi::count_nonzero_f64(d_in, n),
+            candle_core::DType::F8E4M3 =&gt; <span class="macro">todo!</span>(),
         }
     }
 }
@@ -1227,6 +1240,7 @@
             candle_core::DType::F64 =&gt; {
                 ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
+            candle_core::DType::F8E4M3 =&gt; <span class="macro">todo!</span>(),
         }
     }
 }
@@ -1250,6 +1264,7 @@
             candle_core::CpuStorage::F16(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::F32(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
             candle_core::CpuStorage::F64(vs) =&gt; <span class="self">self</span>.nonzero(vs, layout),
+            candle_core::CpuStorage::F8E4M3(_vs) =&gt; <span class="macro">todo!</span>(),
         };
         <span class="kw">let </span>index_len = layout.dims().len();
         <span class="kw">let </span>result_len = result.len() / index_len;
@@ -1277,6 +1292,7 @@
             candle_core::DType::F16 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;f16&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::F32 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;f32&gt;()<span class="question-mark">?</span>.device_ptr(),
             candle_core::DType::F64 =&gt; <span class="kw-2">*</span>storage.as_cuda_slice::&lt;f64&gt;()<span class="question-mark">?</span>.device_ptr(),
+            candle_core::DType::F8E4M3 =&gt; <span class="macro">todo!</span>(),
         } <span class="kw">as </span><span class="kw-2">*const </span>c_void;
         <span class="kw">let </span>n = layout.shape().elem_count();
         <span class="kw">let </span>num_nonzero = count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)<span class="question-mark">?</span>);

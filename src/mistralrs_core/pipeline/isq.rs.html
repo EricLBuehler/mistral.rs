@@ -576,6 +576,15 @@
 <a href="#576" id="576">576</a>
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -589,7 +598,8 @@
 <span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 <span class="kw">use </span>mistralrs_quant::{
-    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
+    FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 <span class="kw">use </span>regex::Regex;
@@ -632,10 +642,11 @@
         <span class="string">"q8k" </span>=&gt; IsqType::Q8K,
         <span class="string">"hqq8" </span>=&gt; IsqType::HQQ8,
         <span class="string">"hqq4" </span>=&gt; IsqType::HQQ4,
+        <span class="string">"fp8" </span>=&gt; IsqType::F8E4M3,
         <span class="comment">// "hqq3" =&gt; IsqType::HQQ3,
         // "hqq2" =&gt; IsqType::HQQ2,
         // "hqq1" =&gt; IsqType::HQQ1,
-        </span><span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`."</span>)),
+        </span><span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`."</span>)),
     };
     <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
     </span>{
@@ -652,11 +663,12 @@
                 | IsqType::Q5K
                 | IsqType::Q6K
                 | IsqType::HQQ8
-                | IsqType::HQQ4 <span class="comment">// | IsqType::HQQ3
-                                // | IsqType::HQQ2
-                                // | IsqType::HQQ1
+                | IsqType::HQQ4
+                | IsqType::F8E4M3 <span class="comment">// | IsqType::HQQ3
+                                  // | IsqType::HQQ2
+                                  // | IsqType::HQQ1
         </span>) {
-            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="string">"GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`"</span>.to_string());
+            <span class="kw">return </span><span class="prelude-val">Err</span>(<span class="string">"ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`"</span>.to_string());
         }
     }
     <span class="prelude-val">Ok</span>(tp)
@@ -1089,6 +1101,9 @@
                             QuantizedSerdeType::Hqq =&gt; {
                                 HqqLayer::deserialize(Cow::from(artifact), <span class="kw-2">&amp;</span>devices[i])<span class="question-mark">?
                             </span>}
+                            QuantizedSerdeType::Fp8 =&gt; {
+                                FP8Linear::deserialize(Cow::from(artifact), <span class="kw-2">&amp;</span>devices[i])<span class="question-mark">?
+                            </span>}
                         };
                         <span class="kw-2">*</span>tensor = deserialized;
                     }
@@ -1114,6 +1129,9 @@
                             </span>}
                             QuantizedSerdeType::Hqq =&gt; {
                                 HqqLayer::deserialize(Cow::from(artifact), <span class="kw-2">&amp;</span>devices[i])<span class="question-mark">?
+                            </span>}
+                            QuantizedSerdeType::Fp8 =&gt; {
+                                FP8Linear::deserialize(Cow::from(artifact), <span class="kw-2">&amp;</span>devices[i])<span class="question-mark">?
                             </span>}
                         };
                         <span class="kw-2">*</span>tensor = deserialized;

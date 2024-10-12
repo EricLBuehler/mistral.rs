@@ -330,6 +330,16 @@
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -342,7 +352,9 @@
     DType, Device, <span class="prelude-ty">Result</span>, Tensor,
 };
 
+<span class="kw">mod </span>cublaslt;
 <span class="kw">mod </span>dummy;
+<span class="kw">mod </span>fp8;
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>gptq;
 <span class="kw">mod </span>hqq;
@@ -350,6 +362,7 @@
 <span class="kw">mod </span>utils;
 
 <span class="kw">pub use </span>dummy::DummyLayer;
+<span class="kw">pub use </span>fp8::FP8Linear;
 <span class="kw">pub use </span>gguf::GgufMatMul;
 <span class="kw">pub use </span>gptq::GptqLayer;
 <span class="kw">pub use </span>hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
@@ -407,6 +420,10 @@
         bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     },
     Dummy,
+    FP8 {
+        lin: Linear,
+        dtype: DType,
+    },
 }
 
 <span class="attr">#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -428,7 +445,8 @@
     <span class="comment">// HQQ3,
     // HQQ2,
     // HQQ1,
-</span>}
+    </span>F8E4M3,
+}
 
 <span class="kw">impl </span>TryFrom&lt;IsqType&gt; <span class="kw">for </span>GgmlDType {
     <span class="kw">type </span>Error = candle_core::Error;
@@ -475,6 +493,7 @@
     Gguf = <span class="number">0</span>,
     Unquant = <span class="number">1</span>,
     Hqq = <span class="number">2</span>,
+    Fp8 = <span class="number">3</span>,
 }
 
 <span class="kw">impl </span>TryFrom&lt;usize&gt; <span class="kw">for </span>QuantizedSerdeType {
@@ -484,6 +503,7 @@
             <span class="number">0 </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Gguf),
             <span class="number">1 </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Unquant),
             <span class="number">2 </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Hqq),
+            <span class="number">3 </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Fp8),
             other =&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"QuantizedSerdeType {other} is invalid."</span>),
         }
     }

@@ -391,6 +391,14 @@
 <a href="#391" id="391">391</a>
 <a href="#392" id="392">392</a>
 <a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
     Tensor, WithDType,
@@ -463,6 +471,7 @@
             CpuStorage::F16(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F16, <span class="string">"bitwise-or"</span>)),
             CpuStorage::F32(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F32, <span class="string">"bitwise-or"</span>)),
             CpuStorage::F64(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"bitwise-or"</span>)),
+            CpuStorage::F8E4M3(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"bitwise-or"</span>)),
         }
     }
     <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -533,6 +542,9 @@
             }
             DType::F64 =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"bitwise-or"</span>));
+            }
+            DType::F8E4M3 =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"bitwise-or"</span>));
             }
         };
         <span class="kw">let </span>dst = <span class="kw">match </span>s1.dtype() {
@@ -619,6 +631,7 @@
             CpuStorage::F16(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F16, <span class="string">"leftshifr"</span>)),
             CpuStorage::F32(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F32, <span class="string">"leftshifr"</span>)),
             CpuStorage::F64(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"leftshifr"</span>)),
+            CpuStorage::F8E4M3(<span class="kw">_</span>) =&gt; <span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"leftshifr"</span>)),
         }
     }
     <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -661,6 +674,9 @@
             }
             DType::F64 =&gt; {
                 <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F64, <span class="string">"leftshift"</span>));
+            }
+            DType::F8E4M3 =&gt; {
+                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::UnsupportedDTypeForOp(DType::F8E4M3, <span class="string">"leftshift"</span>));
             }
         };
         <span class="kw">let </span>dst = <span class="kw">match </span>s1.dtype() {
