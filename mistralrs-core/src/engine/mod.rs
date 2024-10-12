@@ -127,9 +127,7 @@ impl Engine {
                 self.handle_request(request).await;
             }
             let run_start = Instant::now();
-            println!("Scheduling...");
             let scheduled = self.scheduler.schedule();
-            println!("Scheduled...");
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {

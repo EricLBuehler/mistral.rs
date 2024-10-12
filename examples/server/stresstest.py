@@ -38,7 +38,6 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 messages = []
 
 for i in range(1000):
-    prompt = input(">>> ")
     messages.append({"role": "user", "content": "Hello! How are you? Please write generic binary search function in Rust."})
     print("Sending", i)
     completion = client.chat.completions.create(
