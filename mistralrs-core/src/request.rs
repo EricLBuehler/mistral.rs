@@ -17,6 +17,7 @@ use tokio::sync::mpsc::Sender;
 pub enum Constraint {
     Regex(String),
     Yacc(String),
+    Kbnf(String),
     None,
 }
 

@@ -15,7 +15,7 @@ use crate::{
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
-    ImageGenerationResponse, ImageGenerationResponseFormat,
+    ImageGenerationResponse, ImageGenerationResponseFormat, KbnfGrammar,
 };
 use crate::{
     get_mut_group,
@@ -70,6 +70,7 @@ pub enum SequenceState {
 pub enum SequenceRecognizer {
     Regex(Box<StackRecognizer<StateID, RecRx>>),
     Cfg(Box<CfgParser>),
+    Kbnf(KbnfGrammar),
     None,
 }
 

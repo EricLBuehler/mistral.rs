@@ -74,6 +74,8 @@ pub enum Grammar {
     Regex(String),
     #[serde(rename = "yacc")]
     Yacc(String),
+    #[serde(rename = "kbnf")]
+    Kbnf(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
