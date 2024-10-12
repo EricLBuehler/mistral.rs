@@ -368,7 +368,6 @@ pub trait Pipeline:
 
                 match &logits[0] {
                     ForwardInputsResult::CausalGeneration { .. } => {
-                        println!("Sampling...");
                         self.sample_causal_gen(
                             input_seqs,
                             logits
@@ -389,7 +388,6 @@ pub trait Pipeline:
                             rng,
                         )
                         .await?;
-                        println!("Sampled!");
                     }
                     ForwardInputsResult::Image { .. } => {
                         send_responses(

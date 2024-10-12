@@ -2,6 +2,7 @@ from openai import OpenAI
 import httpx
 import textwrap
 import json
+import time
 
 
 def log_response(response: httpx.Response):
@@ -40,6 +41,7 @@ messages = []
 for i in range(1000):
     messages.append({"role": "user", "content": "Hello! How are you? Please write generic binary search function in Rust."})
     print("Sending", i)
+    start = time.time()
     completion = client.chat.completions.create(
         model="mistral",
         messages=messages,
@@ -49,4 +51,4 @@ for i in range(1000):
         temperature=0,
     )
     resp = completion.choices[0].message.content
-    print("Done")
+    print("Done", time.time()-start)
