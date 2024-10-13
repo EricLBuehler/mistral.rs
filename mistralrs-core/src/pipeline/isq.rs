@@ -133,6 +133,16 @@ pub trait IsqModel {
         self.get_layers()
     }
 
+    /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
+    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+        None
+    }
+
+    /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers_moe_experts_only`].
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        None
+    }
+
     /// Quantize the model in-situ.
     fn quantize(
         &mut self,
@@ -333,6 +343,17 @@ pub trait IsqModel {
                                 .collect::<candle_core::Result<Vec<_>>>()
                         }
                     });
+
+                    if let Some(residual) = match organization {
+                        IsqOrganization::Default => self.residual_tensors(),
+                        IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
+                    } {
+                        safetensors::serialize_to_file(
+                            residual,
+                            &None,
+                            &PathBuf::from("residual.safetensors"),
+                        )?;
+                    }
 
                     safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
                 }

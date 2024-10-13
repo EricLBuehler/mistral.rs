@@ -7,6 +7,7 @@ pub(crate) mod normal;
 pub(crate) mod progress;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
+pub(crate) mod unvarbuilder;
 pub(crate) mod varbuilder_utils;
 
 #[doc(hidden)]

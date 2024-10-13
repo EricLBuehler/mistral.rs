@@ -52,6 +52,10 @@ impl RmsNorm {
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
         Ok(Self { eps, weight: w })
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
 }
 
 impl Module for RmsNorm {

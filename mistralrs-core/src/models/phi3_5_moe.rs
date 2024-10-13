@@ -21,7 +21,7 @@ use crate::{
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
@@ -731,6 +731,48 @@ impl IsqModel for Model {
             }
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        Some(uvb.to_safetensors())
+    }
+
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 

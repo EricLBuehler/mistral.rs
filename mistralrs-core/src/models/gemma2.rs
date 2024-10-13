@@ -21,7 +21,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -686,6 +686,30 @@ impl IsqModel for Model {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            uvb_l
+                .pp("pre_feedforward_layernorm")
+                .add(&layer.pre_feedforward_layernorm);
+            uvb_l
+                .pp("post_feedforward_layernorm")
+                .add(&layer.post_feedforward_layernorm);
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 

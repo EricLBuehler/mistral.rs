@@ -219,6 +219,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
+
+    fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
+        None
+    }
 }
 
 macro_rules! pack_factor {

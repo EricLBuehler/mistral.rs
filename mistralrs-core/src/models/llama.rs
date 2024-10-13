@@ -23,7 +23,7 @@ use crate::{
         IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
@@ -584,6 +584,22 @@ impl IsqModel for Llama {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.wte);
+        uvb_m.pp("norm").add(&self.ln_f);
+
+        for (layer_idx, layer) in self.blocks.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.rms_1);
+            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 
