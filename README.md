@@ -70,7 +70,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
 
-Mistal.rs supports several model categories:
+Mistral.rs supports several model categories:
 - Text to Text
 - Text+Image to Text: Vision (see [the docs](docs/VISION_MODELS.md))
 - Text to Image: Image Generation (see [the docs](docs/IMAGEGEN_MODELS.md))
@@ -202,7 +202,7 @@ Enabling features is done by passing `--features ...` to the build system. When 
 
 - Install the [Python package here](mistralrs-pyo3/README.md).
 
-1) Install required packages
+1) Install required packages:
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
     - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
@@ -220,13 +220,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
     huggingface-cli login
     ```
 
-4) Download the code
+4) Download the code:
     ```bash
     git clone https://github.com/EricLBuehler/mistral.rs.git
     cd mistral.rs
     ```
 
-5) Build or install
+5) Build or install:
     - Base build command
         ```bash
         cargo build --release
@@ -257,14 +257,14 @@ Enabling features is done by passing `--features ...` to the build system. When 
         ```bash
         cargo install --path mistralrs-server --features cuda
         ```
-6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
     
     *Example on Ubuntu:*
     ```
     cp ./target/release/mistralrs-server ./mistralrs-server
     ```
 
-7) Use our APIs and integrations 
+7) Use our APIs and integrations: 
     
     [APIs and integrations list](#apis-and-integrations)
 
@@ -431,7 +431,7 @@ You can launch interactive mode, a simple chat application running in the termin
 Vision models work too:
 
 ```bash
-./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+./mistralrs-server -i vision-plain -m llama-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
 
 And even diffusion models:
