@@ -190,6 +190,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            kv_cache_type,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -198,7 +199,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
-                cache_type: None,
+                cache_type: kv_cache_type,
             },
             args.chat_template,
             tokenizer_json,

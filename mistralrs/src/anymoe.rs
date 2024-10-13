@@ -47,6 +47,7 @@ impl AnyMoeModelBuilder {
             organization: self.base.organization,
             write_uqff: self.base.write_uqff,
             from_uqff: self.base.from_uqff,
+            cache_type: self.base.kv_cache_type,
         };
 
         if self.base.with_logging {

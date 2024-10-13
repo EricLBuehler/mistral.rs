@@ -111,6 +111,9 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        kv_cache_type: Option<KVCacheType>,
     },
 
     /// Select a GGUF model.
@@ -453,6 +456,7 @@ fn loader_from_selected(
             topology,
             write_uqff,
             from_uqff,
+            kv_cache_type,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -461,7 +465,7 @@ fn loader_from_selected(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
-                cache_type: None,
+                cache_type: kv_cache_type,
             },
             args.chat_template,
             args.tokenizer_json,

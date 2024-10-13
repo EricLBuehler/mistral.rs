@@ -128,6 +128,7 @@ class Which(Enum):
         organization: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        kv_cache_type: KVCacheType | None = None
 
     @dataclass
     class XLora:
@@ -151,6 +152,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        kv_cache_type: KVCacheType | None = None
 
     @dataclass
     class GGUF:
@@ -223,6 +225,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        kv_cache_type: KVCacheType | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -488,3 +491,8 @@ class ImageChoice:
 class ImageGenerationResponse:
     choices: list[ImageChoice]
     created: int
+
+@dataclass
+class KVCacheType:
+    FullPrecision = "FullPrecision"
+    F8E4M3 = "F8E4M3"

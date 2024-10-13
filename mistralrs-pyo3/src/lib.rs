@@ -90,6 +90,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            kv_cache_type,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -98,6 +99,7 @@ fn parse_which(
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
                 from_uqff,
+                cache_type: kv_cache_type,
             },
             chat_template,
             tokenizer_json,
@@ -124,6 +126,7 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                cache_type: None,
             },
             chat_template,
             tokenizer_json,
@@ -150,6 +153,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            kv_cache_type,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -158,6 +162,7 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                cache_type: kv_cache_type,
             },
             chat_template,
             tokenizer_json,
@@ -342,6 +347,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            kv_cache_type,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -349,6 +355,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                cache_type: kv_cache_type,
             },
             chat_template,
             tokenizer_json,
@@ -1103,5 +1110,6 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::TopLogprob>()?;
     m.add_class::<mistralrs_core::ModelDType>()?;
     m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
+    m.add_class::<mistralrs_core::KVCacheType>()?;
     Ok(())
 }

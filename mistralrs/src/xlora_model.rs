@@ -30,6 +30,11 @@ impl XLoraModelBuilder {
     }
 
     pub async fn build(self) -> anyhow::Result<Model> {
+        anyhow::ensure!(
+            self.text_model.kv_cache_type.is_none(),
+            "X-LoRA models do not support KV cache compression."
+        );
+
         let config = NormalSpecificConfig {
             use_flash_attn: self.text_model.use_flash_attn,
             prompt_batchsize: self.text_model.prompt_batchsize,
@@ -37,6 +42,7 @@ impl XLoraModelBuilder {
             organization: self.text_model.organization,
             write_uqff: self.text_model.write_uqff,
             from_uqff: self.text_model.from_uqff,
+            cache_type: None,
         };
 
         if self.text_model.with_logging {

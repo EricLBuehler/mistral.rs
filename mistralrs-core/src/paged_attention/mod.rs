@@ -24,7 +24,9 @@ pub use scheduler::{
 use crate::MemoryUsage;
 use tracing::info;
 
-#[derive(Clone, Copy, Default, serde::Deserialize, Debug)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Clone, Copy, Default, serde::Deserialize, Debug, PartialEq, Eq)]
 pub enum KVCacheType {
     #[default]
     #[serde(rename = "full-precision")]

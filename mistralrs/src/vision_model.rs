@@ -23,6 +23,7 @@ pub struct VisionModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqType>,
+    pub(crate) kv_cache_type: Option<KVCacheType>,
 
     // Other things
     pub(crate) max_num_seqs: usize,
@@ -52,6 +53,7 @@ impl VisionModelBuilder {
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
+            kv_cache_type: None,
         }
     }
 
@@ -128,6 +130,12 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Specify the KV cache type, allowing KV cache compression.
+    pub fn with_kv_cache_type(mut self, cache_type: KVCacheType) -> Self {
+        self.kv_cache_type = Some(cache_type);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -135,6 +143,7 @@ impl VisionModelBuilder {
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
+            cache_type: self.kv_cache_type,
         };
 
         if self.with_logging {

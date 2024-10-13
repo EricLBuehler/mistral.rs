@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use either::Either;
-use mistralrs_core::{DiffusionLoaderType, ModelDType, NormalLoaderType, VisionLoaderType};
+use mistralrs_core::{
+    DiffusionLoaderType, KVCacheType, ModelDType, NormalLoaderType, VisionLoaderType,
+};
 use pyo3::pyclass;
 
 #[pyclass(eq, eq_int)]
@@ -102,6 +104,7 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
+        kv_cache_type = None,
     ))]
     Plain {
         model_id: String,
@@ -112,6 +115,7 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
+        kv_cache_type: Option<KVCacheType>,
     },
 
     #[pyo3(constructor = (
@@ -149,6 +153,7 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
+        kv_cache_type = None,
     ))]
     Lora {
         adapters_model_id: String,
@@ -160,6 +165,7 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
+        kv_cache_type: Option<KVCacheType>,
     },
 
     #[pyo3(constructor = (
@@ -294,6 +300,7 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
+        kv_cache_type = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -303,6 +310,7 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
+        kv_cache_type: Option<KVCacheType>,
     },
 
     #[pyo3(constructor = (

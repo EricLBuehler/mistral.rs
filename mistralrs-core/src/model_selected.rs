@@ -153,6 +153,10 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// KV cache type. Specifying a type other than `full-precision` be used to enable KV cache compression.
+        #[arg(short, long)]
+        kv_cache_type: Option<KVCacheType>,
     },
 
     /// Select a GGUF model.
