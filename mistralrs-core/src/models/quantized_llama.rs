@@ -14,6 +14,7 @@ use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
+use crate::paged_attention::PagedAttentionKVCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, Cache};
@@ -143,7 +144,7 @@ impl LayerWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
@@ -185,17 +186,8 @@ impl LayerWeights {
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?
+                let (kv_cache, input_metadata) = metadata.unwrap();
+                paged_attn.forward(&q, &k, &v, mask, Some(kv_cache), input_metadata, None)?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
@@ -653,7 +645,7 @@ impl ModelWeights {
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        mut metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();

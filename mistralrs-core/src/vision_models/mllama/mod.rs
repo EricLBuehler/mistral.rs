@@ -21,7 +21,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers_masker::masked_fill,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,
@@ -218,7 +218,7 @@ impl VisionModel for MLlamaModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let MLlamaSpecificArgs {

@@ -14,10 +14,13 @@ pub struct CacheConfig {
     pub num_cpu_blocks: usize,
 }
 
-pub type KVCache = (Tensor, Tensor);
+pub struct PagedAttentionKVCache {
+    pub(crate) k_cache: Tensor,
+    pub(crate) v_cache: Tensor,
+}
 
 pub struct CacheEngine {
-    dummy_cache: Arc<Mutex<Vec<KVCache>>>,
+    dummy_cache: Arc<Mutex<Vec<PagedAttentionKVCache>>>,
 }
 
 impl CacheEngine {
@@ -32,7 +35,7 @@ impl CacheEngine {
         })
     }
 
-    pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
+    pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<PagedAttentionKVCache>> {
         loop {
             if let Ok(v) = self.dummy_cache.try_lock() {
                 return v;

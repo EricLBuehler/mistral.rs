@@ -19,7 +19,9 @@ use crate::{
     layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     models::llama::Config,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, ModelConfigMetadata, PagedAttention, PagedAttentionKVCache,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -54,7 +56,7 @@ impl CausalSelfAttention {
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameter: (&Tensor, &Tensor),
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
@@ -89,14 +91,13 @@ impl CausalSelfAttention {
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                let (kv_cache, input_metadata) = metadata.unwrap();
                 paged_attn.forward(
                     &q,
                     &k,
                     &v,
                     attention_mask.clone().as_ref(),
-                    Some(key_cache),
-                    Some(value_cache),
+                    Some(kv_cache),
                     input_metadata,
                     None,
                 )?
@@ -292,7 +293,7 @@ impl Block {
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameters: (&Tensor, &Tensor),
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
@@ -365,7 +366,7 @@ impl Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let x = self.wte.forward(input_ids)?;
@@ -502,7 +503,7 @@ impl LLaVALLM for Llama {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        mut metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
@@ -550,7 +551,7 @@ impl NormalModel for Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward_input(

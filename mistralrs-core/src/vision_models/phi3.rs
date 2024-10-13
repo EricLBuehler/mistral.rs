@@ -21,7 +21,9 @@ use crate::{
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, ModelConfigMetadata, PagedAttention, PagedAttentionKVCache,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -208,7 +210,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -255,14 +257,13 @@ impl Attention {
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                let (kv_cache, input_metadata) = metadata.unwrap();
                 paged_attn.forward(
                     &q,
                     &k,
                     &v,
                     attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
+                    Some(kv_cache),
                     input_metadata,
                     None,
                 )?
@@ -447,7 +448,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
@@ -994,7 +995,7 @@ impl Model {
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        mut metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
@@ -1080,7 +1081,7 @@ impl VisionModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args

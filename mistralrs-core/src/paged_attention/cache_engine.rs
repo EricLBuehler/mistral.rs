@@ -15,11 +15,15 @@ pub struct CacheConfig {
     pub num_cpu_blocks: usize,
 }
 
-pub type KVCache = (Tensor, Tensor);
+#[derive(Clone, Debug)]
+pub struct PagedAttentionKVCache {
+    pub(crate) k_cache: Tensor,
+    pub(crate) v_cache: Tensor,
+}
 
 pub struct CacheEngine {
-    gpu_cache: Arc<Mutex<Vec<KVCache>>>,
-    cpu_cache: Vec<KVCache>,
+    gpu_cache: Arc<Mutex<Vec<PagedAttentionKVCache>>>,
+    cpu_cache: Vec<PagedAttentionKVCache>,
     num_layers: usize,
 }
 
@@ -42,7 +46,7 @@ impl CacheEngine {
         })
     }
 
-    pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
+    pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<PagedAttentionKVCache>> {
         loop {
             if let Ok(v) = self.gpu_cache.try_lock() {
                 return v;
@@ -55,7 +59,7 @@ impl CacheEngine {
         cache_config: &CacheConfig,
         dtype: DType,
         device: &Device,
-    ) -> Result<Vec<KVCache>> {
+    ) -> Result<Vec<PagedAttentionKVCache>> {
         let key_block_shape =
             Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
         let value_block_shape =
@@ -83,7 +87,10 @@ impl CacheEngine {
                 dtype,
                 device,
             )?;
-            gpu_cache.push((key_blocks, value_blocks));
+            gpu_cache.push(PagedAttentionKVCache {
+                k_cache: key_blocks,
+                v_cache: value_blocks,
+            });
         }
         Ok(gpu_cache)
     }
@@ -93,7 +100,7 @@ impl CacheEngine {
         cache_config: &CacheConfig,
         dtype: DType,
         device: &Device,
-    ) -> Result<Vec<KVCache>> {
+    ) -> Result<Vec<PagedAttentionKVCache>> {
         let key_block_shape =
             Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
         let value_block_shape =
@@ -121,7 +128,10 @@ impl CacheEngine {
                 dtype,
                 device,
             )?;
-            cpu_cache.push((key_blocks, value_blocks));
+            cpu_cache.push(PagedAttentionKVCache {
+                k_cache: key_blocks,
+                v_cache: value_blocks,
+            });
         }
         Ok(cpu_cache)
     }
@@ -176,9 +186,15 @@ impl CacheEngine {
 
     pub fn swap_in(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
         for i in 0..self.num_layers {
-            let (src_key_cache, src_value_cache) = self.cpu_cache.get(i).unwrap();
+            let PagedAttentionKVCache {
+                k_cache: src_key_cache,
+                v_cache: src_value_cache,
+            } = self.cpu_cache.get(i).unwrap();
             let gpu_cache = self.get_kv_cache();
-            let (dst_key_cache, dst_value_cache) = gpu_cache.get(i).unwrap();
+            let PagedAttentionKVCache {
+                k_cache: dst_key_cache,
+                v_cache: dst_value_cache,
+            } = gpu_cache.get(i).unwrap();
             // Swap (copy) key blocks
             unsafe { swap_blocks(src_key_cache.clone(), dst_key_cache, src_to_dst.clone())? };
             // Swap (copy) key blocks
@@ -190,10 +206,15 @@ impl CacheEngine {
     pub fn swap_out(&self, src_to_dst: HashMap<usize, usize>) -> Result<()> {
         for i in 0..self.num_layers {
             let gpu_cache = self.get_kv_cache();
-            let (src_key_cache, src_value_cache) = gpu_cache.get(i).unwrap().clone();
-            drop(gpu_cache);
+            let PagedAttentionKVCache {
+                k_cache: src_key_cache,
+                v_cache: src_value_cache,
+            } = gpu_cache.get(i).unwrap().clone();
 
-            let (dst_key_cache, dst_value_cache) = self.cpu_cache.get(i).unwrap();
+            let PagedAttentionKVCache {
+                k_cache: dst_key_cache,
+                v_cache: dst_value_cache,
+            } = self.cpu_cache.get(i).unwrap();
             // Swap (copy) key blocks
             unsafe { swap_blocks(src_key_cache.clone(), dst_key_cache, src_to_dst.clone())? };
             // Swap (copy) key blocks
@@ -205,8 +226,10 @@ impl CacheEngine {
     pub fn copy(&self, src_to_dst: HashMap<usize, Vec<usize>>) -> Result<()> {
         let mut gpu_cache = self.get_kv_cache();
         #[allow(clippy::map_identity)]
-        let caches: (Vec<&mut Tensor>, Vec<&mut Tensor>) =
-            gpu_cache.iter_mut().map(|(a, b)| (a, b)).unzip();
+        let caches: (Vec<&mut Tensor>, Vec<&mut Tensor>) = gpu_cache
+            .iter_mut()
+            .map(|PagedAttentionKVCache { k_cache, v_cache }| (k_cache, v_cache))
+            .unzip();
         let (key_caches, value_caches) = caches;
 
         // NOTE(EricLBuehler): This may synchronize the CPU and GPU

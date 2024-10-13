@@ -15,7 +15,7 @@ use crate::{
     layers::{CausalMasker, RmsNorm, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
-    paged_attention::ModelConfigMetadata,
+    paged_attention::{ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -881,7 +881,7 @@ impl NormalModel for Model {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()

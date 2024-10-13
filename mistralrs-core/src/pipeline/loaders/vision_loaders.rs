@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
-use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttentionKVCache};
 use crate::pipeline::isq::{IsqModelLoader, WordEmbeddingsShim};
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
@@ -43,7 +43,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;

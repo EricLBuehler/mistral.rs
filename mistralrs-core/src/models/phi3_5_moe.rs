@@ -14,7 +14,9 @@ use crate::{
     layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, ModelConfigMetadata, PagedAttention, PagedAttentionKVCache,
+    },
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -153,7 +155,7 @@ impl Attention {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -196,14 +198,13 @@ impl Attention {
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                let (kv_cache, input_metadata) = metadata.unwrap();
                 paged_attn.forward(
                     &q,
                     &k,
                     &v,
                     attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
+                    Some(kv_cache),
                     input_metadata,
                     None,
                 )?
@@ -503,7 +504,7 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
@@ -652,7 +653,7 @@ impl Model {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        mut metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
@@ -743,7 +744,7 @@ impl NormalModel for Model {
         _start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(

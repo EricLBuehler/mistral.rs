@@ -13,7 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
@@ -955,7 +955,7 @@ impl Idefics2 {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
@@ -1121,7 +1121,7 @@ impl VisionModel for Idefics2 {
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args

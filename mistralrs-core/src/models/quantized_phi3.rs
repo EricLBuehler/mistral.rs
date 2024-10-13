@@ -7,7 +7,7 @@ use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
-use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::paged_attention::{AttentionImplementation, PagedAttention, PagedAttentionKVCache};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
@@ -81,7 +81,7 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let qkv = MatMul.qmethod_matmul(x, &*self.attn_qkv)?;
@@ -117,17 +117,8 @@ impl LayerWeights {
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?
+                let (kv_cache, input_metadata) = metadata.unwrap();
+                paged_attn.forward(&q, &k, &v, mask, Some(kv_cache), input_metadata, None)?
             }
             None => {
                 let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
@@ -369,7 +360,7 @@ impl ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        mut metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;

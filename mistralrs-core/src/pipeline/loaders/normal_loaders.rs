@@ -9,7 +9,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         isq::{IsqModelLoader, WordEmbeddingsShim},
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -45,7 +45,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]

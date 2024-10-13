@@ -13,6 +13,7 @@ pub const _PAD_SLOT_ID: i64 = -1;
 
 pub use block_engine::{BlockEngine, BlockTables, LogicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
+pub(crate) use cache_engine::PagedAttentionKVCache;
 pub use cache_engine::{CacheConfig, CacheEngine};
 use candle_core::{DType, Device};
 pub use config::{ModelConfigLike, ModelConfigMetadata};

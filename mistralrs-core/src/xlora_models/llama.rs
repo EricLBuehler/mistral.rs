@@ -5,7 +5,7 @@ use crate::{
     attention::SdpaParams,
     layers::{Llama3RotaryEmbedding, Sdpa},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
-    paged_attention::ModelConfigMetadata,
+    paged_attention::{ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         IsqModel,
@@ -774,7 +774,7 @@ impl NormalModel for XLoraLlama {
         _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<PagedAttentionKVCache>, &mut PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()

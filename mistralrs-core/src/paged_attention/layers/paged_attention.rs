@@ -4,7 +4,7 @@ use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 use mistralrs_quant::{FP8Linear, FP8QuantizationResult};
 
 use crate::{
-    paged_attention::KVCacheType,
+    paged_attention::{KVCacheType, PagedAttentionKVCache},
     pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
 };
 
@@ -71,8 +71,7 @@ impl PagedAttention {
         key: &Tensor,
         value: &Tensor,
         attention_mask: Option<&Tensor>,
-        mut key_cache: Option<Tensor>,
-        mut value_cache: Option<Tensor>,
+        mut kv_cache: Option<PagedAttentionKVCache>,
         input_metadata: &mut PagedAttentionInputMetadata,
         softcapping: Option<f64>,
     ) -> Result<Tensor> {
@@ -189,12 +188,12 @@ impl PagedAttention {
         // key_cache: &mut Tensor,   // [num_blocks, num_heads, head_size/x, block_size, x] 48,32,16,16,8
         // value_cache: &mut Tensor, // [num_blocks, num_heads, head_size, block_size] 48,32,128,16
         // slot_mapping: Tensor,     // [num_tokens]
-        if key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
+        if let Some(PagedAttentionKVCache { k_cache, v_cache }) = &mut kv_cache {
             reshape_and_cache(
                 &key,
                 &value,
-                key_cache.as_mut().unwrap(),
-                value_cache.as_mut().unwrap(),
+                k_cache,
+                v_cache,
                 &slot_mapping,
                 &key_scale,
                 &value_scale,
@@ -205,6 +204,11 @@ impl PagedAttention {
             // Return result in prefill
             return Ok(att);
         }
+
+        let Some(PagedAttentionKVCache { k_cache, v_cache }) = &mut kv_cache else {
+            unreachable!()
+        };
+
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
@@ -222,8 +226,8 @@ impl PagedAttention {
         #[allow(clippy::cast_possible_truncation)]
         paged_attention(
             &query,
-            key_cache.as_ref().unwrap(),
-            value_cache.as_ref().unwrap(),
+            k_cache,
+            v_cache,
             input_metadata.block_tables.as_ref().unwrap(),
             input_metadata.context_lens.as_ref().unwrap(),
             input_metadata.max_context_len.unwrap(),

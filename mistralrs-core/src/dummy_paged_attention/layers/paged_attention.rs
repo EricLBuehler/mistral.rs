@@ -1,7 +1,7 @@
 use candle_core::{Device, Result, Tensor};
 
 use crate::{
-    paged_attention::KVCacheType,
+    paged_attention::{KVCacheType, PagedAttentionKVCache},
     pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
 };
 
@@ -66,8 +66,7 @@ impl PagedAttention {
         _key: &Tensor,
         _value: &Tensor,
         _attention_mask: Option<&Tensor>,
-        _key_cache: Option<Tensor>,
-        _value_cache: Option<Tensor>,
+        _kv_cache: Option<PagedAttentionKVCache>,
         _input_metadata: &mut PagedAttentionInputMetadata,
         _softcapping: Option<f64>,
     ) -> Result<Tensor> {
