@@ -1,9 +1,13 @@
 use std::sync::{Arc, Mutex};
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, Result};
 use radix_trie::{Trie, TrieCommon, TrieKey};
 
-use crate::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
+use crate::{
+    get_mut_arcmutex,
+    pipeline::{LayerCache, LayerCaches},
+    sequence::Sequence,
+};
 
 #[derive(PartialEq, Eq)]
 struct Tokens(Vec<u32>);
@@ -75,12 +79,19 @@ impl PrefixCacheManager {
     }
 
     fn cache_to<'a>(
-        cache: impl Iterator<Item = &'a mut Option<(Tensor, Tensor)>>,
+        cache: impl Iterator<Item = &'a mut Option<LayerCache>>,
         device: &Device,
     ) -> Result<()> {
         for layer in cache {
-            if let Some((ref q, ref k)) = layer {
-                *layer = Some((q.to_device(device)?, k.to_device(device)?));
+            if let Some(LayerCache {
+                ref k_cache,
+                ref v_cache,
+            }) = layer
+            {
+                *layer = Some(LayerCache {
+                    k_cache: k_cache.to_device(device)?,
+                    v_cache: v_cache.to_device(device)?,
+                });
             }
         }
         Ok(())
@@ -98,7 +109,7 @@ impl PrefixCacheManager {
                 get_mut_arcmutex!(cache.as_ref())[0]
                     .as_ref()
                     .unwrap()
-                    .0
+                    .k_cache
                     .device(),
                 Device::Cpu
             ) {
@@ -115,7 +126,7 @@ impl PrefixCacheManager {
                 get_mut_arcmutex!(cache.as_ref())[0]
                     .as_ref()
                     .unwrap()
-                    .0
+                    .k_cache
                     .device(),
                 Device::Cpu
             ) {
@@ -143,7 +154,7 @@ impl PrefixCacheManager {
                 get_mut_arcmutex!(cache.as_ref())[0]
                     .as_ref()
                     .unwrap()
-                    .0
+                    .k_cache
                     .device(),
                 Device::Cpu
             ) {

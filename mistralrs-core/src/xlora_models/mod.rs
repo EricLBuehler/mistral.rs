@@ -13,7 +13,10 @@ mod starcoder2;
 
 use std::sync::Arc;
 
-use crate::{lora::Ordering, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    lora::Ordering,
+    pipeline::{text_models_inputs_processor::FlashParams, LayerCache},
+};
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
@@ -105,10 +108,10 @@ trait ScalingsMaker {
 
             let mut new_cache = Vec::new();
             for _ in 0..self.get_cache().xlora_lock().len() {
-                new_cache.push(Some((
-                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
-                    Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
-                )));
+                new_cache.push(Some(LayerCache {
+                    k_cache: Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                    v_cache: Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
+                }));
             }
             self.get_cache().lock().clone_from(&new_cache);
 

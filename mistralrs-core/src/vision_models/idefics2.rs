@@ -1041,7 +1041,7 @@ impl Idefics2 {
                 &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
             )?;
 
-            if CausalMasker.calculate_past_kv_len(&self.text_model.cache.lock())? == 0 {
+            if CausalMasker.calculate_past_kv_len(&*self.text_model.cache.lock())? == 0 {
                 self.inputs_merger(
                     input_ids,
                     &self.text_model.get_input_embeddings(input_ids)?,

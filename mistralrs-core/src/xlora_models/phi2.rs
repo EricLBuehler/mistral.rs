@@ -10,7 +10,7 @@ use crate::{
     paged_attention::{ModelConfigMetadata, PagedAttentionKVCache},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata,
+        IsqModel, LayerCache, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -225,7 +225,7 @@ impl Attention {
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
@@ -381,7 +381,7 @@ impl DecoderLayer {
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,

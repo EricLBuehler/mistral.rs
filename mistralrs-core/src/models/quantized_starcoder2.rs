@@ -10,7 +10,7 @@ use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention, PagedAttentionKVCache};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::Cache;
+use crate::pipeline::{Cache, LayerCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -68,7 +68,7 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;

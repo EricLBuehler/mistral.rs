@@ -17,7 +17,13 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool);
 }
 
-pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
+#[derive(Debug, Clone)]
+pub struct LayerCache {
+    pub(crate) k_cache: Tensor,
+    pub(crate) v_cache: Tensor,
+}
+
+pub type LayerCaches = Vec<Option<LayerCache>>;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -74,14 +80,14 @@ impl Cache {
 
     /// Update the KV cache and return (k,v)
     pub(crate) fn update_kv_cache(
-        cache: &mut Option<(Tensor, Tensor)>,
+        cache: &mut Option<LayerCache>,
         k: Tensor,
         v: Tensor,
         slow_cat: bool,
     ) -> Result<(Tensor, Tensor), candle_core::Error> {
         let (k, v) = match &*cache {
             None => (k, v),
-            Some((k_cache, v_cache)) => {
+            Some(LayerCache { k_cache, v_cache }) => {
                 if !slow_cat {
                     let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
                     let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
@@ -93,13 +99,16 @@ impl Cache {
                 }
             }
         };
-        *cache = Some((k.clone(), v.clone()));
+        *cache = Some(LayerCache {
+            k_cache: k.clone(),
+            v_cache: v.clone(),
+        });
         Ok((k, v))
     }
 
     /// Update the KV cache and return (k,v,attn_mask)
     pub(crate) fn update_kv_cache_sliding_window(
-        cache: &mut Option<(Tensor, Tensor)>,
+        cache: &mut Option<LayerCache>,
         k: Tensor,
         v: Tensor,
         attention_mask: Option<&Tensor>,
@@ -108,7 +117,10 @@ impl Cache {
     ) -> Result<(Tensor, Tensor, Option<Tensor>), candle_core::Error> {
         let (k, v, attention_mask) = match cache.clone() {
             None => (k, v, attention_mask.cloned()),
-            Some((mut prev_k, mut prev_v)) => {
+            Some(LayerCache {
+                k_cache: mut prev_k,
+                v_cache: mut prev_v,
+            }) => {
                 let mut mask = attention_mask.cloned();
                 if let Some(sliding_window) = sliding_window {
                     let kv_seq_len = prev_k.dim(2)?;
@@ -149,7 +161,10 @@ impl Cache {
                 (k, v, mask)
             }
         };
-        *cache = Some((k.clone(), v.clone()));
+        *cache = Some(LayerCache {
+            k_cache: k.clone(),
+            v_cache: v.clone(),
+        });
         Ok((k, v, attention_mask))
     }
 }
@@ -187,21 +202,20 @@ fn clone_in_cache(
             let cache = cache
                 .as_ref()
                 .expect("Not handling completions in `clone_in_cache`.");
-            k_vec.push(cache.0.clone());
-            v_vec.push(cache.1.clone());
+            k_vec.push(cache.k_cache.clone());
+            v_vec.push(cache.v_cache.clone());
         }
-        new_cache.push(Some((
-            if k_vec.len() > 1 {
-                Tensor::cat(&k_vec, 0).unwrap()
-            } else {
-                k_vec[0].clone()
-            },
-            if v_vec.len() > 1 {
-                Tensor::cat(&v_vec, 0).unwrap()
-            } else {
-                v_vec[0].clone()
-            },
-        )));
+        let k_cache = if k_vec.len() > 1 {
+            Tensor::cat(&k_vec, 0).unwrap()
+        } else {
+            k_vec[0].clone()
+        };
+        let v_cache = if v_vec.len() > 1 {
+            Tensor::cat(&v_vec, 0).unwrap()
+        } else {
+            v_vec[0].clone()
+        };
+        new_cache.push(Some(LayerCache { k_cache, v_cache }));
     }
     *cache = new_cache;
 }
@@ -219,8 +233,8 @@ fn clone_out_cache(
             continue;
         }
 
-        let k_cache = cache.as_ref().unwrap().0.clone();
-        let v_cache = cache.as_ref().unwrap().1.clone();
+        let k_cache = cache.as_ref().unwrap().k_cache.clone();
+        let v_cache = cache.as_ref().unwrap().v_cache.clone();
 
         let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
         debug_assert_eq!(k_caches.len(), seqs.len());
@@ -234,9 +248,9 @@ fn clone_out_cache(
                 SeqCache::Draft => seq.draft_cache(),
             };
             let seq_cache = &mut output_cache[layer];
-            let k = k_caches.get(seq_i).unwrap().clone();
-            let v = v_caches.get(seq_i).unwrap().clone();
-            *seq_cache = Some((k, v));
+            let k_cache = k_caches.get(seq_i).unwrap().clone();
+            let v_cache = v_caches.get(seq_i).unwrap().clone();
+            *seq_cache = Some(LayerCache { k_cache, v_cache });
         }
     }
 }

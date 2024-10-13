@@ -57,7 +57,7 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
+pub use self::cache_manager::{Cache, CacheManager, LayerCache, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };

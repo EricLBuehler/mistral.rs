@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
-use crate::pipeline::{extract_logits, Cache};
+use crate::pipeline::{extract_logits, Cache, LayerCache};
 use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
@@ -192,7 +192,7 @@ impl LayerWeights {
         mask: &Option<Tensor>,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,

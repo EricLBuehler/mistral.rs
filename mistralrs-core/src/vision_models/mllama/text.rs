@@ -12,7 +12,7 @@ use crate::{
     layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    pipeline::{extract_logits, Cache, IsqModel, LayerCache, NormalLoadingMetadata},
 };
 
 use super::config::MLlamaTextConfig;
@@ -133,7 +133,7 @@ impl MLlamaTextSelfAttention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -236,7 +236,7 @@ impl MLlamaSelfAttentionDecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
@@ -324,7 +324,7 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -370,7 +370,7 @@ impl MLlamaTextCrossAttention {
 
             (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
             (k, v)
-        } else if let Some((k_cache, v_cache)) = kv_cache {
+        } else if let Some(LayerCache { k_cache, v_cache }) = kv_cache {
             (k_cache.clone(), v_cache.clone())
         } else {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
@@ -465,7 +465,7 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 

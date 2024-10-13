@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::DiffusionGenerationParams,
+    pipeline::{DiffusionGenerationParams, LayerCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -386,11 +386,15 @@ impl Sequence {
             self.xlora_cache.as_ref().unwrap()[0]
                 .as_ref()
                 .unwrap()
-                .0
+                .k_cache
                 .dims()[2]
                 + 1
-        } else if let Some((_, x)) = &self.cache[0] {
-            x.dims()[2] + 1
+        } else if let Some(LayerCache {
+            k_cache: _,
+            v_cache,
+        }) = &self.cache[0]
+        {
+            v_cache.dims()[2] + 1
         } else {
             self.tokens.len()
         }
@@ -469,15 +473,15 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+    pub fn cache(&mut self) -> &mut Vec<Option<LayerCache>> {
         &mut self.cache
     }
 
-    pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+    pub fn draft_cache(&mut self) -> &mut Vec<Option<LayerCache>> {
         &mut self.draft_cache
     }
 
-    pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
+    pub fn xlora_cache(&mut self) -> &mut Vec<Option<LayerCache>> {
         self.xlora_cache.as_mut().expect("No X-LoRA cache.")
     }
 

@@ -20,6 +20,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::paged_attention::PagedAttention;
 use crate::paged_attention::PagedAttentionKVCache;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::LayerCache;
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -77,7 +78,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;

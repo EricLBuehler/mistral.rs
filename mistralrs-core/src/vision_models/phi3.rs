@@ -27,7 +27,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        Cache, IsqModel, LayerCache, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -209,7 +209,7 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -447,7 +447,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         metadata: Option<(PagedAttentionKVCache, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {

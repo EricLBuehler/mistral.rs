@@ -17,6 +17,7 @@ use crate::lora::Ordering;
 use crate::lora::QLoraLinear;
 use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::pipeline::LayerCache;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use crate::Topology;
@@ -118,7 +119,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut Option<LayerCache>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,

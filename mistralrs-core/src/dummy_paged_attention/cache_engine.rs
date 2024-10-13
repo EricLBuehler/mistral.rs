@@ -14,6 +14,8 @@ pub struct CacheConfig {
     pub num_cpu_blocks: usize,
 }
 
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct PagedAttentionKVCache {
     pub(crate) k_cache: Tensor,
     pub(crate) v_cache: Tensor,

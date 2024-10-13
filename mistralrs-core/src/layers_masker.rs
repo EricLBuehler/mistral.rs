@@ -4,6 +4,8 @@ use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 
+use crate::pipeline::LayerCache;
+
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
 
@@ -43,6 +45,17 @@ impl<'a> PastKvLenCache for &'a [Option<(Tensor, Tensor)>] {
             return Ok(0);
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
+        return Ok(k_cache_1.dims()[2]);
+    }
+}
+
+impl PastKvLenCache for Vec<Option<LayerCache>> {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        let kv_cache_1 = &self[0];
+        if kv_cache_1.is_none() {
+            return Ok(0);
+        }
+        let k_cache_1 = &kv_cache_1.as_ref().unwrap().k_cache;
         return Ok(k_cache_1.dims()[2]);
     }
 }
@@ -110,16 +123,8 @@ impl CausalMasker {
         )
     }
 
-    pub fn calculate_past_kv_len(
-        &self,
-        cache: &[Option<(Tensor, Tensor)>],
-    ) -> candle_core::Result<usize> {
-        let kv_cache_1 = &cache[0];
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        return Ok(k_cache_1.dims()[2]);
+    pub fn calculate_past_kv_len(&self, cache: &dyn PastKvLenCache) -> candle_core::Result<usize> {
+        cache.get_past_kv_len()
     }
 
     pub fn make_causal_mask_as_attn_bias(
@@ -213,63 +218,6 @@ impl CausalMasker {
             None
         };
         Ok(mask)
-    }
-
-    #[deprecated(
-        since = "0.1.10",
-        note = "use `make_causal_mask_as_attn_bias` instead! \
-        This is *not* compatible with `Sdpa`"
-    )]
-    pub fn make_causal_mask(
-        &self,
-        input_ids: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
-    ) -> Result<Option<Tensor>> {
-        let past_kv_len = self.calculate_past_kv_len(cache)?;
-        let (b_sz, tgt_len) = input_ids.dims2()?;
-        if tgt_len == 1 {
-            return Ok(None);
-        }
-
-        let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-        let mask = mask
-            .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
-            .to_dtype(DType::U8)?;
-
-        Ok(Some(mask))
-    }
-
-    #[deprecated(
-        since = "0.1.10",
-        note = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
-        This is *not* compatible with `Sdpa`"
-    )]
-    pub fn make_causal_mask_with_sliding_window(
-        &self,
-        input_ids: &Tensor,
-        cache: &[Option<(Tensor, Tensor)>],
-        sliding_window: Option<usize>,
-    ) -> Result<Option<Tensor>> {
-        if sliding_window.is_none() {
-            #[allow(deprecated)]
-            return self.make_causal_mask(input_ids, cache);
-        }
-        let sliding_window = sliding_window.unwrap();
-        let past_kv_len = self.calculate_past_kv_len(cache)?;
-        let (b_sz, tgt_len) = input_ids.dims2()?;
-        if tgt_len == 1 {
-            return Ok(None);
-        }
-
-        let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-        let diagonal = past_kv_len as isize - sliding_window as isize - 1;
-        let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-        let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
-        let mask = mask
-            .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
-            .to_dtype(DType::U8)?;
-
-        Ok(Some(mask))
     }
 
     pub fn apply_mask_one_and_zero(
