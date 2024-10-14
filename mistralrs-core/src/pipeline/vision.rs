@@ -56,6 +56,8 @@ pub struct VisionPipeline {
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
     config: String,
+    processor_filename: Option<PathBuf>,
+    preprocessor_filename: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -300,6 +302,8 @@ impl Loader for VisionLoader {
                     template_filename: paths.get_template_filename(),
                     generation_config: paths.get_gen_conf_filename(),
                     config: config.clone(),
+                    processor_filename: paths.get_processor_config(),
+                    preprocessor_filename: paths.get_preprocessor_config(),
                 },
             )?;
         } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
@@ -362,6 +366,8 @@ impl Loader for VisionLoader {
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
+            processor_filename: paths.get_processor_config().clone(),
+            preprocessor_filename: paths.get_preprocessor_config().clone(),
         })))
     }
 
@@ -402,6 +408,8 @@ impl IsqPipelineMixin for VisionPipeline {
                     template_filename: &self.template_filename,
                     generation_config: self.generation_config.as_ref(),
                     config: self.config.clone(),
+                    processor_filename: &self.processor_filename,
+                    preprocessor_filename: &self.preprocessor_filename,
                 },
             )
             .map_err(anyhow::Error::msg)

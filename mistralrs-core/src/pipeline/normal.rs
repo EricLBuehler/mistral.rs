@@ -385,6 +385,8 @@ impl Loader for NormalLoader {
                     template_filename: paths.get_template_filename(),
                     generation_config: paths.get_gen_conf_filename(),
                     config: config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
                 },
             )?;
         } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
@@ -496,6 +498,8 @@ impl IsqPipelineMixin for NormalPipeline {
                     template_filename: &self.template_filename,
                     generation_config: self.generation_config.as_ref(),
                     config: self.config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
                 },
             )
             .map_err(anyhow::Error::msg)
