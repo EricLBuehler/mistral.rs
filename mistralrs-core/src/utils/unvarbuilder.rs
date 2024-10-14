@@ -4,10 +4,10 @@ use std::{
 };
 
 use candle_core::Tensor;
-use candle_nn::{Embedding, LayerNorm, Linear};
+use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use mistralrs_quant::QuantMethod;
 
-use crate::layers::RmsNorm;
+use crate::layers::{FusedBiasLinear, RmsNorm};
 
 pub trait ToTensors {
     /// Tensor names to tensors
@@ -42,6 +42,26 @@ impl ToTensors for Linear {
         if let Some(bias) = self.bias() {
             map.insert("bias".to_string(), bias.clone());
         }
+        map
+    }
+}
+
+impl ToTensors for Conv2d {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        let mut map = HashMap::new();
+        map.insert("weight".to_string(), self.weight().clone());
+        if let Some(bias) = self.bias() {
+            map.insert("bias".to_string(), bias.clone());
+        }
+        map
+    }
+}
+
+impl ToTensors for FusedBiasLinear {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        let mut map = HashMap::new();
+        map.insert("weight".to_string(), self.w.clone());
+        map.insert("bias".to_string(), self.b.clone());
         map
     }
 }
@@ -92,6 +112,24 @@ impl UnVarBuilder {
         let path = self.path.join(".");
         data.extend(
             item.to_tensors()
+                .into_iter()
+                .map(|(n, t)| (format!("{path}.{n}"), t))
+                .collect::<Vec<(_, _)>>(),
+        );
+    }
+
+    pub fn add_tensor<S: ToString>(&self, s: S, v: Tensor) {
+        let mut data = self.data.write().expect("Write failed!");
+        let mut path = self.path.clone();
+        path.push(s.to_string());
+        data.insert(path.join("."), v);
+    }
+
+    pub fn extend(&self, other: Vec<(String, Tensor)>) {
+        let mut data = self.data.write().expect("Write failed!");
+        let path = self.path.join(".");
+        data.extend(
+            other
                 .into_iter()
                 .map(|(n, t)| (format!("{path}.{n}"), t))
                 .collect::<Vec<(_, _)>>(),
