@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_nn::{Linear, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -24,7 +24,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -69,7 +69,7 @@ struct MLP {
     gate_proj: Arc<dyn QuantMethod>,
     up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     params: Vec<usize>,
 }
 

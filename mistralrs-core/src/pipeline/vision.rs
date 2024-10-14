@@ -1,4 +1,5 @@
 use super::cache_manager::DefaultCacheManager;
+use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
@@ -51,6 +52,10 @@ pub struct VisionPipeline {
     preprocessor_config: Arc<PreProcessorConfig>,
     topology: Option<Topology>,
     silent: bool,
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -146,7 +151,8 @@ impl Loader for VisionLoader {
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
         *self
             .token_source
@@ -289,6 +295,12 @@ impl Loader for VisionLoader {
                 silent,
                 IsqOrganization::Default,
                 self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                },
             )?;
         } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
             from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
@@ -347,6 +359,9 @@ impl Loader for VisionLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
         })))
     }
 
@@ -382,6 +397,12 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.silent,
                 IsqOrganization::Default,
                 None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                },
             )
             .map_err(anyhow::Error::msg)
     }

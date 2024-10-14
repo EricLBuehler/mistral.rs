@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
-    Embedding, LayerNorm, Module, VarBuilder,
+    conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
+    LayerNorm, Module, VarBuilder,
 };
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
@@ -11,7 +11,7 @@ use std::{any::Any, ops::Mul};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, Activation, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{

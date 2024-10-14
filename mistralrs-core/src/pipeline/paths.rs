@@ -17,7 +17,10 @@ use tracing::{info, warn};
 use crate::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
-    pipeline::chat_template::{ChatTemplate, ChatTemplateValue},
+    pipeline::{
+        chat_template::{ChatTemplate, ChatTemplateValue},
+        isq::UQFF_RESIDUAL_SAFETENSORS,
+    },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
     ModelPaths, Ordering, TokenSource,
@@ -262,6 +265,7 @@ pub fn get_model_paths(
     quantized_filename: &Option<Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
+    loading_from_uqff: bool,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
         Some(names) => {
@@ -294,6 +298,7 @@ pub fn get_model_paths(
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)
+                    || x == UQFF_RESIDUAL_SAFETENSORS
             });
             let safetensors = listing
                 .clone()
@@ -303,12 +308,18 @@ pub fn get_model_paths(
                 .clone()
                 .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
                 .collect::<Vec<_>>();
+            let uqff_residual = listing
+                .clone()
+                .filter(|x| x == UQFF_RESIDUAL_SAFETENSORS)
+                .collect::<Vec<_>>();
             let files = if !safetensors.is_empty() {
                 // Always prefer safetensors
                 safetensors
             } else if !pickles.is_empty() {
                 // Fall back to pickle
                 pickles
+            } else if !uqff_residual.is_empty() && loading_from_uqff {
+                uqff_residual
             } else {
                 anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
             };

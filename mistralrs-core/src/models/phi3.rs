@@ -412,7 +412,6 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
-    model_config: Config,
 }
 
 impl Model {
@@ -524,7 +523,6 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 head_dim: None,
             },
-            model_config: cfg.clone(),
         })
     }
 
@@ -616,10 +614,6 @@ impl IsqModel for Model {
         }
 
         Some(uvb.to_safetensors())
-    }
-
-    fn serialize_config(&self) -> Option<candle_core::Result<String>> {
-        Some(serde_json::to_string_pretty(&self.model_config).map_err(candle_core::Error::msg))
     }
 }
 

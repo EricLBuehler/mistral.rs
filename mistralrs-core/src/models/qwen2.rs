@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{collections::HashMap, sync::Arc};
 
@@ -13,7 +13,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -27,7 +27,7 @@ use crate::{
 
 serde_default_fn!(bool, word_emb_default, false);
 
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize, Default, serde::Serialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,

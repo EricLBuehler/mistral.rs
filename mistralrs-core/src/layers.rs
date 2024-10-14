@@ -398,7 +398,7 @@ pub enum Llama3RotaryEmbedding {
     Default(RotaryEmbedding),
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum Llama3RopeType {
     #[serde(rename = "llama3")]
     Llama3,
@@ -407,7 +407,7 @@ pub enum Llama3RopeType {
     Default,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Llama3RopeConfig {
     pub factor: f32,
     pub low_freq_factor: f32,

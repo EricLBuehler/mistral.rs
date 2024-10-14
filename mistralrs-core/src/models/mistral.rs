@@ -2,8 +2,9 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -25,7 +26,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,

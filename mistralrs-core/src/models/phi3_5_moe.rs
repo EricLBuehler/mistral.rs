@@ -11,7 +11,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
+    layers::{
+        Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
+        Sdpa,
+    },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -27,10 +30,10 @@ use crate::{
 serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
-    pub(crate) hidden_act: candle_nn::Activation,
+    pub(crate) hidden_act: Activation,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
     pub(crate) num_hidden_layers: usize,
@@ -250,7 +253,7 @@ struct Mlp {
     w1: Arc<dyn QuantMethod>,
     w2: Arc<dyn QuantMethod>,
     w3: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
 }
 
 impl Mlp {

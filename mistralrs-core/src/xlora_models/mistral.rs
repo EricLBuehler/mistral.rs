@@ -14,7 +14,7 @@ use crate::{
 };
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -22,7 +22,7 @@ use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{Activation, CausalMasker, RmsNorm},
     models::mistral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
 };

@@ -410,7 +410,8 @@ impl Loader for GGMLLoader {
             self,
             self.quantized_model_id,
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
-            silent
+            silent,
+            false // Never loading UQFF
         );
         self.load_model_from_path(
             &paths?,

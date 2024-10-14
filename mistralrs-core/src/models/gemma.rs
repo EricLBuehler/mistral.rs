@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_nn::{Linear, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -32,7 +32,7 @@ fn default_max_position_embeddings() -> usize {
 
 serde_default_fn!(bool, word_emb_default, false);
 
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -75,7 +75,7 @@ struct MLP {
     gate_proj: Arc<dyn QuantMethod>,
     up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     params: Vec<usize>,
 }
 

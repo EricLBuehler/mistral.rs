@@ -18,6 +18,7 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -59,6 +60,10 @@ pub struct NormalPipeline {
     topology: Option<Topology>,
     silent: bool,
     organization: IsqOrganization,
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -227,7 +232,8 @@ impl Loader for NormalLoader {
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
         *self
             .token_source
@@ -374,6 +380,12 @@ impl Loader for NormalLoader {
                 silent,
                 self.config.organization,
                 self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                },
             )?;
         } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
             from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
@@ -441,6 +453,9 @@ impl Loader for NormalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
         })))
     }
 
@@ -476,6 +491,12 @@ impl IsqPipelineMixin for NormalPipeline {
                 self.silent,
                 self.organization,
                 None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                },
             )
             .map_err(anyhow::Error::msg)
     }

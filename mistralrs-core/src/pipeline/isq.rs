@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    fs::File,
     path::PathBuf,
     str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
@@ -17,9 +18,12 @@ use mistralrs_quant::{
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
+use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::{device_map::DeviceMapper, serde_default_fn, topology::LayerTopology, Topology};
+
+pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 
 /// Parse ISQ value: one of
 /// - `Q4_0`
@@ -111,6 +115,13 @@ impl FromStr for IsqOrganization {
     }
 }
 
+pub struct UqffFullSer<'a> {
+    pub tokenizer: &'a Tokenizer,
+    pub template_filename: &'a Option<PathBuf>,
+    pub generation_config: Option<&'a PathBuf>,
+    pub config: String,
+}
+
 pub trait IsqModel {
     /// Corresponds to `IsqOrganization::Default`
     #[allow(clippy::type_complexity)]
@@ -143,12 +154,11 @@ pub trait IsqModel {
         None
     }
 
-    /// Seralize the config for this model. Only called if residual tensors are returned.
-    fn serialize_config(&self) -> Option<candle_core::Result<String>> {
-        None
-    }
-
     /// Quantize the model in-situ.
+    ///
+    /// This function will also create a UQFF file, or, if the model supports it (residual tensors are returned),
+    /// a full serialization is created.
+    #[allow(clippy::too_many_arguments)]
     fn quantize(
         &mut self,
         dtype: Option<IsqType>,
@@ -157,6 +167,7 @@ pub trait IsqModel {
         silent: bool,
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
+        full_ser: UqffFullSer<'_>,
     ) -> candle_core::Result<()> {
         {
             let (mut tensors, mapper) = match organization {
@@ -358,8 +369,11 @@ pub trait IsqModel {
                         let parent = serialized
                             .parent()
                             .context("Target UQFF path must have a filename!")?;
-                        let residual_out = parent.join("residual.safetensors");
+                        let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
                         let config_out = parent.join("config.json");
+                        let tokenizer_out = parent.join("tokenizer.json");
+                        let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                        let gen_cfg_out = parent.join("generation_config.json");
 
                         info!(
                             "Serializing {} residual tensors to `{}`.",
@@ -369,13 +383,44 @@ pub trait IsqModel {
 
                         safetensors::serialize_to_file(residual, &None, &residual_out)?;
 
+                        let UqffFullSer {
+                            tokenizer,
+                            template_filename,
+                            generation_config,
+                            config,
+                        } = full_ser;
+
                         info!("Serializing configuration to `{}`.", config_out.display());
 
-                        std::fs::write(
-                            config_out,
-                            self.serialize_config()
-                                .context("UQFF model has residual tensors but no config serialization, please raise an issue.")??
-                        )?;
+                        std::fs::write(config_out, config)?;
+
+                        info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+
+                        serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                            .map_err(candle_core::Error::msg)?;
+
+                        if let Some(template_filename) = template_filename {
+                            info!(
+                                "Serializing tokenizer config to `{}`.",
+                                tokenizer_cfg_out.display()
+                            );
+
+                            let template = std::fs::read(template_filename)
+                                .map_err(candle_core::Error::msg)?;
+                            std::fs::write(&tokenizer_cfg_out, template)
+                                .map_err(candle_core::Error::msg)?;
+                        }
+
+                        if let Some(generation_config) = generation_config {
+                            info!(
+                                "Serializing generation config to `{}`.",
+                                gen_cfg_out.display()
+                            );
+
+                            let cfg = std::fs::read(generation_config)
+                                .map_err(candle_core::Error::msg)?;
+                            std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                        }
                     }
                 }
             }
