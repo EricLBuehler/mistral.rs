@@ -187,7 +187,7 @@ macro_rules! get_write_uqff_paths {
             let parts = path.rsplitn(2, '/').collect::<Vec<_>>();
 
             if parts.len() != 2 {
-                anyhow::bail!("ISQ artifact load path `{path}` not found locally must have format `<HF MODEL ID>/<FILENAME>`");
+                anyhow::bail!("ISQ artifact load path `{path}` not found locally must have format `<HF MODEL ID>/<FILENAME>` or `<LOCAL FILENAME>`");
             }
 
             let file = parts[0];

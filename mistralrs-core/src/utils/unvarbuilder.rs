@@ -5,6 +5,7 @@ use std::{
 
 use candle_core::{quantized::QMatMul, Tensor};
 use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
+use itertools::Itertools;
 use mistralrs_quant::QuantMethod;
 
 use crate::layers::{FusedBiasLinear, QLinear, RmsNorm};
@@ -123,9 +124,13 @@ impl UnVarBuilder {
         self.push_prefix(s)
     }
 
+    pub fn path(&self) -> String {
+        self.path.iter().filter(|p| !p.trim().is_empty()).join(".")
+    }
+
     pub fn add<T: ToTensors>(&self, item: &T) {
         let mut data = self.data.write().expect("Write failed!");
-        let path = self.path.join(".");
+        let path = self.path();
         data.extend(
             item.to_tensors()
                 .into_iter()
@@ -138,16 +143,28 @@ impl UnVarBuilder {
         let mut data = self.data.write().expect("Write failed!");
         let mut path = self.path.clone();
         path.push(s.to_string());
-        data.insert(path.join("."), v);
+        data.insert(
+            path.into_iter().filter(|p| !p.trim().is_empty()).join("."),
+            v,
+        );
     }
 
     pub fn extend(&self, other: Vec<(String, Tensor)>) {
         let mut data = self.data.write().expect("Write failed!");
-        let path = self.path.join(".");
+        let path = self.path();
         data.extend(
             other
                 .into_iter()
-                .map(|(n, t)| (format!("{path}.{n}"), t))
+                .map(|(n, t)| {
+                    (
+                        if path.is_empty() {
+                            n
+                        } else {
+                            format!("{path}.{n}")
+                        },
+                        t,
+                    )
+                })
                 .collect::<Vec<(_, _)>>(),
         );
     }
