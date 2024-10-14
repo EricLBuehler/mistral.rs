@@ -3,11 +3,11 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::Tensor;
+use candle_core::{quantized::QMatMul, Tensor};
 use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use mistralrs_quant::QuantMethod;
 
-use crate::layers::{FusedBiasLinear, RmsNorm};
+use crate::layers::{FusedBiasLinear, QLinear, RmsNorm};
 
 pub trait ToTensors {
     /// Tensor names to tensors
@@ -62,6 +62,22 @@ impl ToTensors for FusedBiasLinear {
         let mut map = HashMap::new();
         map.insert("weight".to_string(), self.w.clone());
         map.insert("bias".to_string(), self.b.clone());
+        map
+    }
+}
+
+impl ToTensors for QLinear {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        let mut map = HashMap::new();
+        match self.inner_ref() {
+            QMatMul::Tensor(w) | QMatMul::TensorF16(w) => {
+                map.insert("weight".to_string(), w.clone());
+                if let Some(bias) = self.bias() {
+                    map.insert("bias".to_string(), bias.clone());
+                }
+            }
+            QMatMul::QTensor(_) => return HashMap::new(),
+        }
         map
     }
 }

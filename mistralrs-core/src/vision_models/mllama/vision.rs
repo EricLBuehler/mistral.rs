@@ -67,6 +67,16 @@ impl MLlamaPrecomputedPositionEmbedding {
 
         hidden_state.broadcast_add(&gated_pos_embed)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_gpe = UnVarBuilder::new();
+
+        uvb_gpe.add_tensor("gate", self.gate.clone());
+        uvb_gpe.add_tensor("embedding", self.embedding.clone());
+        uvb_gpe.pp("tile_embedding").add(&self.tile_embedding);
+
+        uvb_gpe.to_safetensors()
+    }
 }
 
 struct MLlamaPrecomputedAspectRatioEmbedding {
@@ -103,6 +113,17 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
         }
 
         hidden_state.broadcast_add(&embeddings)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_ptpe = UnVarBuilder::new();
+
+        if let Some(gate) = self.gate.clone() {
+            uvb_ptpe.add_tensor("gate", gate);
+        }
+        uvb_ptpe.pp("embedding").add(&self.embedding);
+
+        uvb_ptpe.to_safetensors()
     }
 }
 
@@ -323,6 +344,36 @@ impl MLlamaVisionEncoder {
         }
         hidden_states.push(hidden_state.clone());
         Ok((hidden_state, hidden_states))
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_t = UnVarBuilder::new();
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_t.pp("layers").pp(i);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            if let Some(gate) = layer.gate_attn.clone() {
+                uvb_l.add_tensor("gate_attn", gate);
+            }
+            if let Some(gate) = layer.gate_ffn.clone() {
+                uvb_l.add_tensor("gate_ffn", gate);
+            }
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
+
+            let uvb_mlp = uvb_l.pp("mlp");
+            uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
+            uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
+        }
+
+        uvb_t.to_safetensors()
     }
 }
 
@@ -623,98 +674,27 @@ impl IsqModel for MLlamaVisionModel {
         uvb.add_tensor("class_embedding", self.class_embedding.clone());
 
         // gated_positional_embedding
-        {
-            let uvb_gpe = uvb.pp("gated_positional_embedding");
-            uvb_gpe.add_tensor("gate", self.gated_positional_embedding.gate.clone());
-            uvb_gpe.add_tensor(
-                "embedding",
-                self.gated_positional_embedding.embedding.clone(),
-            );
-            uvb_gpe
-                .pp("tile_embedding")
-                .add(&self.gated_positional_embedding.tile_embedding);
-        }
+        uvb.pp("gated_positional_embedding")
+            .extend(self.gated_positional_embedding.residual_tensors());
 
         // pre_tile_positional_embedding
-        {
-            let uvb_ptpe = uvb.pp("pre_tile_positional_embedding");
-            if let Some(gate) = self.pre_tile_positional_embedding.gate.clone() {
-                uvb_ptpe.add_tensor("gate", gate);
-            }
-            uvb_ptpe
-                .pp("embedding")
-                .add(&self.pre_tile_positional_embedding.embedding);
-        }
+        uvb.pp("pre_tile_positional_embedding")
+            .extend(self.pre_tile_positional_embedding.residual_tensors());
 
         // post_tile_positional_embedding
-        {
-            let uvb_ptpe = uvb.pp("post_tile_positional_embedding");
-            if let Some(gate) = self.post_tile_positional_embedding.gate.clone() {
-                uvb_ptpe.add_tensor("gate", gate);
-            }
-            uvb_ptpe
-                .pp("embedding")
-                .add(&self.post_tile_positional_embedding.embedding);
-        }
+        uvb.pp("post_tile_positional_embedding")
+            .extend(self.post_tile_positional_embedding.residual_tensors());
 
         uvb.pp("layernorm_pre").add(&self.layernorm_pre);
         uvb.pp("layernorm_post").add(&self.layernorm_post);
 
         // transformer
-        {
-            let uvb_t = uvb.pp("transformer");
-            for (i, layer) in self.transformer.layers.iter().enumerate() {
-                let uvb_l = uvb_t.pp("layers").pp(i);
-                uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
-                uvb_l
-                    .pp("post_attention_layernorm")
-                    .add(&layer.post_attention_layernorm);
-                if let Some(gate) = layer.gate_attn.clone() {
-                    uvb_l.add_tensor("gate_attn", gate);
-                }
-                if let Some(gate) = layer.gate_ffn.clone() {
-                    uvb_l.add_tensor("gate_ffn", gate);
-                }
-
-                let uvb_attn = uvb_l.pp("self_attn");
-                uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
-                uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
-                uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
-                uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
-
-                let uvb_mlp = uvb_l.pp("mlp");
-                uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
-                uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
-            }
-        }
+        uvb.pp("transformer")
+            .extend(self.transformer.residual_tensors());
 
         // global_transformer
-        {
-            let uvb_t = uvb.pp("global_transformer");
-            for (i, layer) in self.global_transformer.layers.iter().enumerate() {
-                let uvb_l = uvb_t.pp("layers").pp(i);
-                uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
-                uvb_l
-                    .pp("post_attention_layernorm")
-                    .add(&layer.post_attention_layernorm);
-                if let Some(gate) = layer.gate_attn.clone() {
-                    uvb_l.add_tensor("gate_attn", gate);
-                }
-                if let Some(gate) = layer.gate_ffn.clone() {
-                    uvb_l.add_tensor("gate_ffn", gate);
-                }
-
-                let uvb_attn = uvb_l.pp("self_attn");
-                uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
-                uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
-                uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
-                uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
-
-                let uvb_mlp = uvb_l.pp("mlp");
-                uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
-                uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
-            }
-        }
+        uvb.pp("global_transformer")
+            .extend(self.global_transformer.residual_tensors());
 
         Some(uvb.to_safetensors())
     }

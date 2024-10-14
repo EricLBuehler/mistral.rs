@@ -4,7 +4,7 @@
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
 
-use crate::{layers::FusedBiasLinear, serde_default_fn};
+use crate::{layers::FusedBiasLinear, serde_default_fn, utils::unvarbuilder::UnVarBuilder};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -315,5 +315,49 @@ impl ClipVisionTransformer {
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());
         Ok(result)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("pre_layrnorm").add(&self.pre_layer_norm);
+        uvb.pp("post_layernorm").add(&self.final_layer_norm);
+
+        // vision embeddings
+        {
+            let uvb_emb = uvb.pp("embeddings");
+
+            uvb_emb.add_tensor("class_embedding", self.embeddings.class_embedding.clone());
+            uvb_emb
+                .pp("position_embedding")
+                .add(&self.embeddings.position_embedding);
+            uvb_emb
+                .pp("patch_embedding")
+                .add(&self.embeddings.patch_embedding);
+        }
+
+        // encoder
+        {
+            let uvb_enc = uvb.pp("encoder");
+
+            for (i, layer) in self.encoder.layers.iter().enumerate() {
+                let uvb_l = uvb_enc.pp("layers").pp(i);
+
+                uvb_l.pp("layer_norm1").add(&layer.layer_norm1);
+                uvb_l.pp("layer_norm2").add(&layer.layer_norm2);
+
+                let uvb_mlp = uvb_l.pp("mlp");
+                uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
+                uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
+
+                let uvb_attn = uvb_l.pp("self_attn");
+                uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+                uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+                uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+                uvb_attn.pp("out_proj").add(&layer.self_attn.out_proj);
+            }
+        }
+
+        uvb.to_safetensors()
     }
 }
