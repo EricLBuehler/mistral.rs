@@ -16,8 +16,8 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
-        Sdpa,
+        Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
+        RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -33,10 +33,10 @@ use crate::{
 serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct Config {
     pub vocab_size: usize,
-    pub hidden_act: candle_nn::Activation,
+    pub hidden_act: Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
@@ -239,7 +239,7 @@ impl Attention {
 struct Mlp {
     gate_up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     i_size: usize,
     params: Vec<usize>,
 }
@@ -412,6 +412,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    model_config: Config,
 }
 
 impl Model {
@@ -523,6 +524,7 @@ impl Model {
                 sliding_window: cfg.sliding_window,
                 head_dim: None,
             },
+            model_config: cfg.clone(),
         })
     }
 
@@ -614,6 +616,10 @@ impl IsqModel for Model {
         }
 
         Some(uvb.to_safetensors())
+    }
+
+    fn serialize_config(&self) -> Option<candle_core::Result<String>> {
+        Some(serde_json::to_string_pretty(&self.model_config).map_err(candle_core::Error::msg))
     }
 }
 

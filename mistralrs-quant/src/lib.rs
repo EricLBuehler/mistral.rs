@@ -27,9 +27,9 @@ pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum QuantMethodType {
     #[default]
     #[serde(rename = "gptq")]
@@ -44,7 +44,7 @@ impl Display for QuantMethodType {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct QuantizedConfig {
     pub bits: usize,
     pub quant_method: QuantMethodType,

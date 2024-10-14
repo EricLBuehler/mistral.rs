@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{Context, Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
     FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
@@ -140,6 +140,11 @@ pub trait IsqModel {
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers_moe_experts_only`].
     fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        None
+    }
+
+    /// Seralize the config for this model. Only called if residual tensors are returned.
+    fn serialize_config(&self) -> Option<candle_core::Result<String>> {
         None
     }
 
@@ -344,18 +349,34 @@ pub trait IsqModel {
                         }
                     });
 
+                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+
                     if let Some(residual) = match organization {
                         IsqOrganization::Default => self.residual_tensors(),
                         IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
                     } {
-                        safetensors::serialize_to_file(
-                            residual,
-                            &None,
-                            &PathBuf::from("residual.safetensors"),
+                        let parent = serialized
+                            .parent()
+                            .context("Target UQFF path must have a filename!")?;
+                        let residual_out = parent.join("residual.safetensors");
+                        let config_out = parent.join("config.json");
+
+                        info!(
+                            "Serializing {} residual tensors to `{}`.",
+                            residual.len(),
+                            residual_out.display()
+                        );
+
+                        safetensors::serialize_to_file(residual, &None, &residual_out)?;
+
+                        info!("Serializing configuration to `{}`.", config_out.display());
+
+                        std::fs::write(
+                            config_out,
+                            self.serialize_config()
+                                .context("UQFF model has residual tensors but no config serialization, please raise an issue.")??
                         )?;
                     }
-
-                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
                 }
             }
 

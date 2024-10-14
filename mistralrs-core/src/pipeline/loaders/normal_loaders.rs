@@ -7,7 +7,7 @@ use std::{
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{Llama3RopeConfig, PhiRopeScalingConfig},
+    layers::{Activation, Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -21,7 +21,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::VarBuilder;
 
 use mistralrs_quant::QuantizedConfig;
 #[cfg(feature = "pyo3_macros")]
@@ -301,7 +301,7 @@ struct MistralBasicConfig {
     num_hidden_layers: usize,
     num_attention_heads: usize,
     num_key_value_heads: usize,
-    hidden_act: Activation,
+    hidden_act: candle_nn::Activation,
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
@@ -434,8 +434,8 @@ struct GemmaBasicConfig {
     attention_bias: bool,
     head_dim: usize,
     // The code gemma configs include both hidden_act and hidden_activation.
-    hidden_act: Option<Activation>,
-    hidden_activation: Option<Activation>,
+    hidden_act: Option<candle_nn::Activation>,
+    hidden_activation: Option<candle_nn::Activation>,
     hidden_size: usize,
     intermediate_size: usize,
     num_attention_heads: usize,
@@ -715,7 +715,7 @@ struct MixtralBasicConfig {
     num_hidden_layers: usize,
     num_attention_heads: usize,
     num_key_value_heads: usize,
-    hidden_act: Activation,
+    hidden_act: candle_nn::Activation,
     max_position_embeddings: usize,
     rms_norm_eps: f64,
     rope_theta: f64,
@@ -854,7 +854,7 @@ struct Phi2BasicConfig {
     num_hidden_layers: usize,
     num_attention_heads: usize,
     num_key_value_heads: Option<usize>,
-    hidden_act: Activation,
+    hidden_act: candle_nn::Activation,
     max_position_embeddings: usize,
     layer_norm_eps: f64,
     rope_theta: f32,
@@ -979,7 +979,7 @@ impl IsqModelLoader for Phi2Loader {
 #[derive(Deserialize)]
 struct Phi3BasicConfig {
     vocab_size: usize,
-    hidden_act: candle_nn::Activation,
+    hidden_act: Activation,
     hidden_size: usize,
     intermediate_size: usize,
     num_hidden_layers: usize,
@@ -1122,7 +1122,7 @@ struct Qwen2BasicConfig {
     sliding_window: usize,
     rope_theta: f64,
     rms_norm_eps: f64,
-    hidden_act: Activation,
+    hidden_act: candle_nn::Activation,
     quantization_config: Option<QuantizedConfig>,
     tie_word_embeddings: bool,
 }
@@ -1238,8 +1238,8 @@ struct Gemma2BasicConfig {
     attention_bias: bool,
     head_dim: usize,
     // The code gemma configs include both hidden_act and hidden_activation.
-    hidden_act: Option<Activation>,
-    hidden_activation: Option<Activation>,
+    hidden_act: Option<candle_nn::Activation>,
+    hidden_activation: Option<candle_nn::Activation>,
     hidden_size: usize,
     intermediate_size: usize,
     num_attention_heads: usize,
