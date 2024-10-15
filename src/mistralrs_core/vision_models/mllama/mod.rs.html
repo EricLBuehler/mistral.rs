@@ -279,6 +279,20 @@
 <a href="#279" id="279">279</a>
 <a href="#280" id="280">280</a>
 <a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -307,6 +321,7 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 <span class="kw">fn </span>repeat_interleave(xs: <span class="kw-2">&amp;</span>Tensor, repeats: usize, dim: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -530,6 +545,19 @@
         <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
     ) {
         <span class="self">self</span>.language_model.get_layers()
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        uvb.pp(<span class="string">"multi_modal_projector"</span>)
+            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.multi_modal_projector);
+        uvb.pp(<span class="string">"language_model"</span>)
+            .extend(<span class="self">self</span>.language_model.residual_tensors());
+        uvb.pp(<span class="string">"vision_model"</span>)
+            .extend(<span class="self">self</span>.vision_model.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 

@@ -833,6 +833,10 @@
 <a href="#833" id="833">833</a>
 <a href="#834" id="834">834</a>
 <a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -840,7 +844,7 @@
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::Sdpa,
+    layers::{Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -1032,7 +1036,7 @@
 </span><span class="kw">struct </span>Mlp {
     gate_up_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     down_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     i_size: usize,
 }
 
@@ -1546,6 +1550,10 @@
             ));
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="macro">panic!</span>(<span class="string">"Cannot generate UQFF for an adapter model."</span>)
     }
 }
 

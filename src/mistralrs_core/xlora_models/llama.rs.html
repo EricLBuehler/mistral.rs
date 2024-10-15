@@ -892,6 +892,10 @@
 <a href="#892" id="892">892</a>
 <a href="#893" id="893">893</a>
 <a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1657,6 +1661,10 @@
             ));
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="macro">panic!</span>(<span class="string">"Cannot generate UQFF for an adapter model."</span>)
     }
 }
 

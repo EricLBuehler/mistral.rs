@@ -340,6 +340,10 @@
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
 <a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -369,9 +373,9 @@
 <span class="kw">pub use </span>unquantized::UnquantLinear;
 
 <span class="kw">use </span>candle_nn::{Linear, VarBuilder};
-<span class="kw">use </span>serde::Deserialize;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 
-<span class="attr">#[derive(Debug, Clone, Deserialize, Default)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub enum </span>QuantMethodType {
     <span class="attr">#[default]
     #[serde(rename = <span class="string">"gptq"</span>)]
@@ -386,7 +390,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize, Default)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub struct </span>QuantizedConfig {
     <span class="kw">pub </span>bits: usize,
     <span class="kw">pub </span>quant_method: QuantMethodType,
@@ -561,6 +565,10 @@
     </span><span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;;
 
     <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;;
+
+    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+        <span class="prelude-val">None
+    </span>}
 }
 
 <span class="macro">macro_rules!</span> pack_factor {

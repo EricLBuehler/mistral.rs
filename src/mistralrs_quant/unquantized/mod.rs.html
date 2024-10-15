@@ -244,6 +244,10 @@
 <a href="#244" id="244">244</a>
 <a href="#245" id="245">245</a>
 <a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
@@ -412,6 +416,10 @@
             | IsqType::Q8_0
             | IsqType::Q8_1 =&gt; <span class="prelude-val">None</span>,
         }
+    }
+
+    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+        <span class="prelude-val">Some</span>((<span class="self">self</span>.<span class="number">0</span>.weight().clone(), <span class="self">self</span>.<span class="number">0</span>.bias().cloned()))
     }
 }
 

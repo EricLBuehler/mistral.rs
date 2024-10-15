@@ -879,6 +879,8 @@
 <a href="#879" id="879">879</a>
 <a href="#880" id="880">880</a>
 <a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -886,7 +888,7 @@
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::Sdpa,
+    layers::{Activation, Sdpa},
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -901,9 +903,7 @@
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
-};
+<span class="kw">use </span>candle_nn::{embedding, layer_norm, Embedding, LayerNorm, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
@@ -1634,6 +1634,10 @@
             ));
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="macro">panic!</span>(<span class="string">"Cannot generate UQFF for an adapter model."</span>)
     }
 }
 

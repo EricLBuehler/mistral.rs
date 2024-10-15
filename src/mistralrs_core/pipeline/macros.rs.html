@@ -503,6 +503,50 @@
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
 </pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
@@ -561,7 +605,16 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> get_paths {
-    (<span class="macro-nonterminal">$path_name</span>:ident, <span class="macro-nonterminal">$token_source</span>:expr, <span class="macro-nonterminal">$revision</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$quantized_model_id</span>:expr, <span class="macro-nonterminal">$quantized_filename</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
+    (
+        <span class="macro-nonterminal">$path_name</span>:ident,
+        <span class="macro-nonterminal">$token_source</span>:expr,
+        <span class="macro-nonterminal">$revision</span>:expr,
+        <span class="macro-nonterminal">$this</span>:expr,
+        <span class="macro-nonterminal">$quantized_model_id</span>:expr,
+        <span class="macro-nonterminal">$quantized_filename</span>:expr,
+        <span class="macro-nonterminal">$silent</span>:expr,
+        <span class="macro-nonterminal">$loading_uqff</span>:expr
+    ) =&gt; {{
         <span class="kw">let </span>api = ApiBuilder::new()
             .with_progress(!<span class="macro-nonterminal">$silent</span>)
             .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
@@ -589,6 +642,7 @@
             <span class="kw-2">&amp;</span><span class="macro-nonterminal">$quantized_filename</span>,
             <span class="kw-2">&amp;</span>api,
             <span class="kw-2">&amp;</span>model_id,
+            <span class="macro-nonterminal">$loading_uqff</span>,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>XLoraPaths {
             adapter_configs,
@@ -674,54 +728,49 @@
 
 <span class="attr">#[doc(hidden)]
 #[macro_export]
-</span><span class="macro">macro_rules!</span> get_write_uqff_paths {
+</span><span class="macro">macro_rules!</span> get_uqff_paths {
     (<span class="macro-nonterminal">$from_uqff</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
-        <span class="kw">if </span>!<span class="macro-nonterminal">$from_uqff</span>.exists() {
-            <span class="comment">// Assume it's a HF model id
-            </span><span class="kw">let </span>path = <span class="macro-nonterminal">$from_uqff</span>.to_string_lossy().to_string();
-            <span class="kw">let </span>parts = path.rsplitn(<span class="number">2</span>, <span class="string">'/'</span>).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="kw">let </span>api = ApiBuilder::new()
+            .with_progress(!<span class="macro-nonterminal">$silent</span>)
+            .with_token(get_token(
+                <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this
+                    </span>.token_source
+                    .read()
+                    .expect(<span class="string">"Failed to read token source"</span>)
+                    .clone()
+                    .unwrap_or(TokenSource::None),
+            )<span class="question-mark">?</span>)
+            .build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>revision = <span class="macro-nonterminal">$this
+            </span>.revision
+            .read()
+            .expect(<span class="string">"Failed to read revision"</span>)
+            .clone()
+            .unwrap_or(<span class="string">"main"</span>.to_string());
+        <span class="kw">let </span>api = api.repo(Repo::with_revision(
+            <span class="macro-nonterminal">$this</span>.model_id.to_string(),
+            RepoType::Model,
+            revision.clone(),
+        ));
 
-            <span class="kw">if </span>parts.len() != <span class="number">2 </span>{
-                <span class="macro">anyhow::bail!</span>(<span class="string">"ISQ artifact load path `{path}` not found locally must have format `&lt;HF MODEL ID&gt;/&lt;FILENAME&gt;`"</span>);
-            }
+        <span class="kw">let </span>file = <span class="macro-nonterminal">$from_uqff</span>.display().to_string();
 
-            <span class="kw">let </span>file = parts[<span class="number">0</span>];
-            <span class="kw">let </span>model_id = parts[<span class="number">1</span>];
-
-            <span class="kw">let </span>api = ApiBuilder::new()
-                .with_progress(!<span class="macro-nonterminal">$silent</span>)
-                .with_token(get_token(
-                    <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this
-                        </span>.token_source
-                        .read()
-                        .expect(<span class="string">"Failed to read token source"</span>)
-                        .clone()
-                        .unwrap_or(TokenSource::None),
-                )<span class="question-mark">?</span>)
-                .build()<span class="question-mark">?</span>;
-            <span class="kw">let </span>revision = <span class="macro-nonterminal">$this
-                </span>.revision
-                .read()
-                .expect(<span class="string">"Failed to read revision"</span>)
-                .clone()
-                .unwrap_or(<span class="string">"main"</span>.to_string());
-            <span class="kw">let </span>api = api.repo(Repo::with_revision(
-                model_id.to_string(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            <span class="macro">api_get_file!</span>(api, file, Path::new(model_id))
-        } <span class="kw">else </span>{
-            <span class="macro-nonterminal">$from_uqff
-        </span>}
+        <span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>file, Path::new(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$this</span>.model_id))
     }};
 }
 
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> get_paths_gguf {
-    (<span class="macro-nonterminal">$path_name</span>:ident, <span class="macro-nonterminal">$token_source</span>:expr, <span class="macro-nonterminal">$revision</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$quantized_model_id</span>:expr, <span class="macro-nonterminal">$quantized_filenames</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
+    (
+        <span class="macro-nonterminal">$path_name</span>:ident,
+        <span class="macro-nonterminal">$token_source</span>:expr,
+        <span class="macro-nonterminal">$revision</span>:expr,
+        <span class="macro-nonterminal">$this</span>:expr,
+        <span class="macro-nonterminal">$quantized_model_id</span>:expr,
+        <span class="macro-nonterminal">$quantized_filenames</span>:expr,
+        <span class="macro-nonterminal">$silent</span>:expr
+    ) =&gt; {{
         <span class="kw">let </span>api = ApiBuilder::new()
             .with_progress(!<span class="macro-nonterminal">$silent</span>)
             .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
@@ -763,7 +812,8 @@
             <span class="kw-2">&amp;</span><span class="prelude-val">Some</span>(<span class="macro-nonterminal">$quantized_filenames</span>),
             <span class="kw-2">&amp;</span>api,
             <span class="kw-2">&amp;</span>model_id,
-        )<span class="question-mark">?</span>;
+            <span class="bool-val">false</span>, <span class="comment">// Never loading UQFF
+        </span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>XLoraPaths {
             adapter_configs,
@@ -850,7 +900,21 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> normal_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$loading_uqff</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr, <span class="macro-nonterminal">$attention_mechanism</span>:expr, <span class="macro-nonterminal">$is_moqe</span>:expr) =&gt; {{
+    (
+        <span class="macro-nonterminal">$paths</span>:expr,
+        <span class="macro-nonterminal">$dtype</span>:expr,
+        <span class="macro-nonterminal">$device</span>:expr,
+        <span class="macro-nonterminal">$config</span>:expr,
+        <span class="macro-nonterminal">$loader</span>:expr,
+        <span class="macro-nonterminal">$use_flash_attn</span>:expr,
+        <span class="macro-nonterminal">$silent</span>:expr,
+        <span class="macro-nonterminal">$mapper</span>:expr,
+        <span class="macro-nonterminal">$loading_isq</span>:expr,
+        <span class="macro-nonterminal">$loading_uqff</span>:expr,
+        <span class="macro-nonterminal">$real_device</span>:expr,
+        <span class="macro-nonterminal">$attention_mechanism</span>:expr,
+        <span class="macro-nonterminal">$is_moqe</span>:expr
+    ) =&gt; {{
         <span class="kw">let </span>regexes = <span class="kw">if </span><span class="macro-nonterminal">$loading_isq </span>&amp;&amp; <span class="macro-nonterminal">$loading_uqff </span>{
             <span class="comment">// Dummy weights for the layers which will be overwritten...
             </span><span class="prelude-val">Some</span>(std::sync::Arc::new(<span class="kw">if </span><span class="macro-nonterminal">$is_moqe </span>{
@@ -889,7 +953,20 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> vision_normal_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$loading_uqff</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr, <span class="macro-nonterminal">$attention_mechanism</span>:expr) =&gt; {{
+    (
+        <span class="macro-nonterminal">$paths</span>:expr,
+        <span class="macro-nonterminal">$dtype</span>:expr,
+        <span class="macro-nonterminal">$device</span>:expr,
+        <span class="macro-nonterminal">$config</span>:expr,
+        <span class="macro-nonterminal">$loader</span>:expr,
+        <span class="macro-nonterminal">$use_flash_attn</span>:expr,
+        <span class="macro-nonterminal">$silent</span>:expr,
+        <span class="macro-nonterminal">$mapper</span>:expr,
+        <span class="macro-nonterminal">$loading_isq</span>:expr,
+        <span class="macro-nonterminal">$loading_uqff</span>:expr,
+        <span class="macro-nonterminal">$real_device</span>:expr,
+        <span class="macro-nonterminal">$attention_mechanism</span>:expr
+    ) =&gt; {{
         <span class="kw">let </span>regexes = <span class="kw">if </span><span class="macro-nonterminal">$loading_isq </span>&amp;&amp; <span class="macro-nonterminal">$loading_uqff </span>{
             <span class="comment">// Dummy weights for the layers which will be overwritten...
             </span><span class="prelude-val">Some</span>(std::sync::Arc::new(<span class="macro-nonterminal">$loader</span>.isq_layer_regexes(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>)<span class="question-mark">?</span>))
@@ -924,7 +1001,18 @@
 <span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> xlora_model_loader {
-    (<span class="macro-nonterminal">$paths</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$config</span>:expr, <span class="macro-nonterminal">$loader</span>:expr, <span class="macro-nonterminal">$use_flash_attn</span>:expr, <span class="macro-nonterminal">$silent</span>:expr, <span class="macro-nonterminal">$mapper</span>:expr, <span class="macro-nonterminal">$loading_isq</span>:expr, <span class="macro-nonterminal">$real_device</span>:expr) =&gt; {{
+    (
+        <span class="macro-nonterminal">$paths</span>:expr,
+        <span class="macro-nonterminal">$dtype</span>:expr,
+        <span class="macro-nonterminal">$device</span>:expr,
+        <span class="macro-nonterminal">$config</span>:expr,
+        <span class="macro-nonterminal">$loader</span>:expr,
+        <span class="macro-nonterminal">$use_flash_attn</span>:expr,
+        <span class="macro-nonterminal">$silent</span>:expr,
+        <span class="macro-nonterminal">$mapper</span>:expr,
+        <span class="macro-nonterminal">$loading_isq</span>:expr,
+        <span class="macro-nonterminal">$real_device</span>:expr
+    ) =&gt; {{
         <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
         <span class="kw">let </span>vb = from_mmaped_safetensors(

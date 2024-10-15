@@ -835,12 +835,32 @@
 <a href="#835" id="835">835</a>
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Activation, VarBuilder};
+<span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+<span class="kw">use </span>serde::Serialize;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
@@ -851,7 +871,7 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -859,10 +879,10 @@
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-<span class="attr">#[derive(Debug, Clone, Default)]
+<span class="attr">#[derive(Debug, Clone, Default, Serialize)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub</span>(<span class="kw">crate</span>) vocab_size: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_size: usize,
@@ -1494,6 +1514,24 @@
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

@@ -448,40 +448,6 @@
 <a href="#448" id="448">448</a>
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
-<a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a>
-<a href="#457" id="457">457</a>
-<a href="#458" id="458">458</a>
-<a href="#459" id="459">459</a>
-<a href="#460" id="460">460</a>
-<a href="#461" id="461">461</a>
-<a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a>
-<a href="#464" id="464">464</a>
-<a href="#465" id="465">465</a>
-<a href="#466" id="466">466</a>
-<a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a>
-<a href="#469" id="469">469</a>
-<a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a>
-<a href="#474" id="474">474</a>
-<a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a>
-<a href="#477" id="477">477</a>
-<a href="#478" id="478">478</a>
-<a href="#479" id="479">479</a>
-<a href="#480" id="480">480</a>
-<a href="#481" id="481">481</a>
-<a href="#482" id="482">482</a>
-<a href="#483" id="483">483</a>
-<a href="#484" id="484">484</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
@@ -499,7 +465,7 @@
 <span class="kw">use </span><span class="kw">super</span>::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeBaseModelMixin;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::{IsqModelLoader, WordEmbeddingsShim};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::IsqModelLoader;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
@@ -641,28 +607,16 @@
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Phi3VLoader {
-    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>regexes = Vec::new();
-        <span class="kw">if </span>serde_json::from_str::&lt;WordEmbeddingsShim&gt;(config)<span class="question-mark">?</span>.tie_word_embeddings {
-            regexes.push(Regex::new(<span class="string">r"(embed_tokens|lm_head)\.(weight|bias)$"</span>)<span class="question-mark">?</span>);
-        } <span class="kw">else </span>{
-            regexes.push(Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>);
-        }
-        <span class="comment">// Attention
-        </span>regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        <span class="comment">// MLP
-        </span>regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        <span class="prelude-val">Ok</span>(regexes)
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// Attention
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate__up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+        ])
     }
 }
 
@@ -724,8 +678,7 @@
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Idefics2Loader {
     <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            <span class="comment">// Tie weights is unsupported for this model
-            </span>Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             <span class="comment">// Attention
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
@@ -794,8 +747,7 @@
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>LLaVANextLoader {
     <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            <span class="comment">// Tie weights is unsupported for this model
-            </span>Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             <span class="comment">// Attention
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
@@ -864,8 +816,7 @@
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>LLaVALoader {
     <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            <span class="comment">// Tie weights is unsupported for this model
-            </span>Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             <span class="comment">// Attention
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
@@ -932,38 +883,19 @@
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>VLlamaLoader {
-    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>regexes = Vec::new();
-        <span class="kw">if </span>serde_json::from_str::&lt;MLlamaConfig&gt;(config)<span class="question-mark">?
-            </span>.text_config
-            .tie_word_embeddings
-        {
-            regexes.push(Regex::new(<span class="string">r"(embed_tokens|lm_head)\.(weight|bias)$"</span>)<span class="question-mark">?</span>);
-        } <span class="kw">else </span>{
-            regexes.push(Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>);
-        }
-        <span class="comment">// Attention
-        </span>regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        <span class="comment">// MLP
-        </span>regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        regexes.push(Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>);
-        regexes.push(Regex::new(
-            <span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>,
-        )<span class="question-mark">?</span>);
-        <span class="prelude-val">Ok</span>(regexes)
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// Attention
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+        ])
     }
 }
 </code></pre></div></section></main></body></html>

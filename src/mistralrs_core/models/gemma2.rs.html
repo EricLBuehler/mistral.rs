@@ -864,12 +864,38 @@
 <a href="#864" id="864">864</a>
 <a href="#865" id="865">865</a>
 <a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{Linear, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 <span class="kw">use crate</span>::{
@@ -880,17 +906,17 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-<span class="attr">#[derive(Debug, Clone, Default)]
+<span class="attr">#[derive(Debug, Clone, Default, serde::Serialize)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub </span>attention_bias: bool,
     <span class="kw">pub </span>head_dim: usize,
@@ -935,7 +961,7 @@
     gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     params: Vec&lt;usize&gt;,
 }
 
@@ -1552,6 +1578,32 @@
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm.undo_gemma().unwrap());
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l
+                .pp(<span class="string">"input_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.input_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp(<span class="string">"pre_feedforward_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.pre_feedforward_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp(<span class="string">"post_feedforward_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_feedforward_layernorm.undo_gemma().unwrap());
+        }
+
+        uvb.to_safetensors()
     }
 }
 

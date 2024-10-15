@@ -898,6 +898,10 @@
 <a href="#898" id="898">898</a>
 <a href="#899" id="899">899</a>
 <a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -911,7 +915,7 @@
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
     paged_attention::ModelConfigMetadata,
@@ -931,7 +935,7 @@
 </span><span class="kw">struct </span>MLP {
     c_fc: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
     c_proj: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    act: candle_nn::Activation,
+    act: Activation,
 }
 
 <span class="kw">impl </span>MLP {
@@ -1672,6 +1676,10 @@
             ));
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="macro">panic!</span>(<span class="string">"Cannot generate UQFF for an adapter model."</span>)
     }
 }
 

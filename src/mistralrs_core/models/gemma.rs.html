@@ -792,12 +792,32 @@
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{Linear, RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 <span class="kw">use crate</span>::{
@@ -808,7 +828,7 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -817,7 +837,7 @@
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 <span class="kw">fn </span>default_max_position_embeddings() -&gt; usize {
@@ -826,7 +846,7 @@
 
 <span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
-<span class="attr">#[derive(serde::Deserialize, Debug, Clone, Default)]
+<span class="attr">#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub </span>attention_bias: bool,
     <span class="kw">pub </span>head_dim: usize,
@@ -869,7 +889,7 @@
     gate_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     params: Vec&lt;usize&gt;,
 }
 
@@ -1332,7 +1352,7 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
-                head_dim: <span class="prelude-val">None</span>,
+                head_dim: <span class="prelude-val">Some</span>(cfg.head_dim),
             },
         })
     }
@@ -1408,6 +1428,26 @@
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm.undo_gemma().unwrap());
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l
+                .pp(<span class="string">"input_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.input_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm.undo_gemma().unwrap());
+        }
+
+        uvb.to_safetensors()
     }
 }
 

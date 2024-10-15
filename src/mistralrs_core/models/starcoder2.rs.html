@@ -753,6 +753,24 @@
 <a href="#753" id="753">753</a>
 <a href="#754" id="754">754</a>
 <a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -765,7 +783,7 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -774,13 +792,13 @@
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     AnyMoeConfig, AnyMoeExpertType,
 };
 
 <span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
-<span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
+<span class="attr">#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub</span>(<span class="kw">crate</span>) vocab_size: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_size: usize,
@@ -788,7 +806,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_hidden_layers: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_attention_heads: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_key_value_heads: usize,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_act: candle_nn::Activation,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_act: Activation,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_position_embeddings: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) norm_epsilon: f64,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
@@ -806,7 +824,7 @@
 </span><span class="kw">struct </span>MLP {
     c_fc: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     c_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act: candle_nn::Activation,
+    act: Activation,
     params: Vec&lt;usize&gt;,
 }
 
@@ -1341,6 +1359,24 @@
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

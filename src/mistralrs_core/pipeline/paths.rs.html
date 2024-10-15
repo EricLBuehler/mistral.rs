@@ -507,6 +507,17 @@
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -526,7 +537,10 @@
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
-    pipeline::chat_template::{ChatTemplate, ChatTemplateValue},
+    pipeline::{
+        chat_template::{ChatTemplate, ChatTemplateValue},
+        isq::UQFF_RESIDUAL_SAFETENSORS,
+    },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
     ModelPaths, Ordering, TokenSource,
@@ -771,6 +785,7 @@
     quantized_filename: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
     api: <span class="kw-2">&amp;</span>ApiRepo,
     model_id: <span class="kw-2">&amp;</span>Path,
+    loading_from_uqff: bool,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;PathBuf&gt;&gt; {
     <span class="kw">match </span><span class="kw-2">&amp;</span>quantized_filename {
         <span class="prelude-val">Some</span>(names) =&gt; {
@@ -803,6 +818,7 @@
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)
+                    || x == UQFF_RESIDUAL_SAFETENSORS
             });
             <span class="kw">let </span>safetensors = listing
                 .clone()
@@ -812,12 +828,18 @@
                 .clone()
                 .filter(|x| x.ends_with(<span class="string">".pth"</span>) || x.ends_with(<span class="string">".pt"</span>) || x.ends_with(<span class="string">".bin"</span>))
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            <span class="kw">let </span>uqff_residual = listing
+                .clone()
+                .filter(|x| x == UQFF_RESIDUAL_SAFETENSORS)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             <span class="kw">let </span>files = <span class="kw">if </span>!safetensors.is_empty() {
                 <span class="comment">// Always prefer safetensors
                 </span>safetensors
             } <span class="kw">else if </span>!pickles.is_empty() {
                 <span class="comment">// Fall back to pickle
                 </span>pickles
+            } <span class="kw">else if </span>!uqff_residual.is_empty() &amp;&amp; loading_from_uqff {
+                uqff_residual
             } <span class="kw">else </span>{
                 <span class="macro">anyhow::bail!</span>(<span class="string">"Expected file with extension one of .safetensors, .pth, .pt, .bin."</span>);
             };

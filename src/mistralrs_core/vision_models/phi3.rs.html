@@ -1223,6 +1223,47 @@
 <a href="#1223" id="1223">1223</a>
 <a href="#1224" id="1224">1224</a>
 <a href="#1225" id="1225">1225</a>
+<a href="#1226" id="1226">1226</a>
+<a href="#1227" id="1227">1227</a>
+<a href="#1228" id="1228">1228</a>
+<a href="#1229" id="1229">1229</a>
+<a href="#1230" id="1230">1230</a>
+<a href="#1231" id="1231">1231</a>
+<a href="#1232" id="1232">1232</a>
+<a href="#1233" id="1233">1233</a>
+<a href="#1234" id="1234">1234</a>
+<a href="#1235" id="1235">1235</a>
+<a href="#1236" id="1236">1236</a>
+<a href="#1237" id="1237">1237</a>
+<a href="#1238" id="1238">1238</a>
+<a href="#1239" id="1239">1239</a>
+<a href="#1240" id="1240">1240</a>
+<a href="#1241" id="1241">1241</a>
+<a href="#1242" id="1242">1242</a>
+<a href="#1243" id="1243">1243</a>
+<a href="#1244" id="1244">1244</a>
+<a href="#1245" id="1245">1245</a>
+<a href="#1246" id="1246">1246</a>
+<a href="#1247" id="1247">1247</a>
+<a href="#1248" id="1248">1248</a>
+<a href="#1249" id="1249">1249</a>
+<a href="#1250" id="1250">1250</a>
+<a href="#1251" id="1251">1251</a>
+<a href="#1252" id="1252">1252</a>
+<a href="#1253" id="1253">1253</a>
+<a href="#1254" id="1254">1254</a>
+<a href="#1255" id="1255">1255</a>
+<a href="#1256" id="1256">1256</a>
+<a href="#1257" id="1257">1257</a>
+<a href="#1258" id="1258">1258</a>
+<a href="#1259" id="1259">1259</a>
+<a href="#1260" id="1260">1260</a>
+<a href="#1261" id="1261">1261</a>
+<a href="#1262" id="1262">1262</a>
+<a href="#1263" id="1263">1263</a>
+<a href="#1264" id="1264">1264</a>
+<a href="#1265" id="1265">1265</a>
+<a href="#1266" id="1266">1266</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1253,7 +1294,7 @@
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -1728,6 +1769,7 @@
     hd_transform_order: String,
     use_hd_transform: bool,
     vocab_size: usize,
+    tensors: Vec&lt;(String, Tensor)&gt;,
 }
 
 <span class="kw">impl </span>ImageEmbedding {
@@ -1783,50 +1825,52 @@
             .projection_cls
             .clone()
             .unwrap_or(<span class="string">"linear"</span>.to_string());
+
+        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
         <span class="kw">let </span>layers: Vec&lt;Box&lt;<span class="kw">dyn </span>ModuleWithMetadata&gt;&gt; =
             <span class="kw">match </span>(projection_cls.as_str(), use_hd_transform) {
                 (<span class="string">"linear"</span>, <span class="kw">_</span>) =&gt; {
-                    <span class="macro">vec!</span>[Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(linear_b(
-                        image_dim_out,
-                        hidden_size,
-                        <span class="bool-val">true</span>,
-                        vb.pp(<span class="string">"img_projection"</span>),
-                    )<span class="question-mark">?</span>)<span class="question-mark">?</span>)]
+                    <span class="kw">let </span>a = linear_b(image_dim_out, hidden_size, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection"</span>))<span class="question-mark">?</span>;
+                    tensors.push((<span class="string">"img_projection.weight"</span>.to_string(), a.weight().clone()));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                        tensors.push((<span class="string">"img_projection.bias"</span>.to_string(), b));
+                    }
+                    <span class="macro">vec!</span>[Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>)]
                 }
                 (<span class="string">"mlp"</span>, <span class="bool-val">true</span>) =&gt; {
                     <span class="kw">let </span>dim_proj = hidden_size;
+                    <span class="kw">let </span>a = linear_b(image_dim_out * <span class="number">4</span>, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.0"</span>))<span class="question-mark">?</span>;
+                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a.weight().clone()));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                        tensors.push((<span class="string">"img_projection.0.bias"</span>.to_string(), b));
+                    }
+                    <span class="kw">let </span>b = linear_b(dim_proj, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.2"</span>))<span class="question-mark">?</span>;
+                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b.weight().clone()));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b.bias().cloned() {
+                        tensors.push((<span class="string">"img_projection.2.bias"</span>.to_string(), b));
+                    }
                     <span class="macro">vec!</span>[
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(linear_b(
-                            image_dim_out * <span class="number">4</span>,
-                            dim_proj,
-                            <span class="bool-val">true</span>,
-                            vb.pp(<span class="string">"img_projection.0"</span>),
-                        )<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            <span class="bool-val">true</span>,
-                            vb.pp(<span class="string">"img_projection.2"</span>),
-                        )<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(b)<span class="question-mark">?</span>),
                     ]
                 }
                 (<span class="string">"mlp"</span>, <span class="bool-val">false</span>) =&gt; {
                     <span class="kw">let </span>dim_proj = hidden_size;
+                    <span class="kw">let </span>a = linear_b(image_dim_out, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.0"</span>))<span class="question-mark">?</span>;
+                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a.weight().clone()));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                        tensors.push((<span class="string">"img_projection.0.bias"</span>.to_string(), b));
+                    }
+                    <span class="kw">let </span>b = linear_b(dim_proj, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.2"</span>))<span class="question-mark">?</span>;
+                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b.weight().clone()));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b.bias().cloned() {
+                        tensors.push((<span class="string">"img_projection.2.bias"</span>.to_string(), b));
+                    }
                     <span class="macro">vec!</span>[
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(linear_b(
-                            image_dim_out,
-                            dim_proj,
-                            <span class="bool-val">true</span>,
-                            vb.pp(<span class="string">"img_projection.0"</span>),
-                        )<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            <span class="bool-val">true</span>,
-                            vb.pp(<span class="string">"img_projection.2"</span>),
-                        )<span class="question-mark">?</span>)<span class="question-mark">?</span>),
+                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(b)<span class="question-mark">?</span>),
                     ]
                 }
                 <span class="kw">_ </span>=&gt; {
@@ -1854,6 +1898,7 @@
             hd_transform_order,
             use_hd_transform,
             vocab_size: config.vocab_size,
+            tensors,
         })
     }
 
@@ -2079,6 +2124,22 @@
 
         <span class="prelude-val">Ok</span>(hidden_states)
     }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(glb_gn) = <span class="self">self</span>.glb_gn.clone() {
+            uvb.add_tensor(<span class="string">"glb_GN"</span>, glb_gn);
+        }
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(sub_gn) = <span class="self">self</span>.sub_gn.clone() {
+            uvb.add_tensor(<span class="string">"sub_GN"</span>, sub_gn);
+        }
+        uvb.extend(<span class="self">self</span>.tensors.clone());
+        uvb.pp(<span class="string">"img_processor.vision_model"</span>)
+            .extend(<span class="self">self</span>.image_processor.residual_tensors());
+
+        uvb.to_safetensors()
+    }
 }
 
 <span class="comment">// =================== ============= ===================
@@ -2287,6 +2348,27 @@
             );
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+        uvb_m
+            .pp(<span class="string">"vision_embed_tokens"</span>)
+            .extend(<span class="self">self</span>.vision_embed_tokens.residual_tensors());
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

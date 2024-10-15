@@ -173,6 +173,25 @@
 <a href="#173" id="173">173</a>
 <a href="#174" id="174">174</a>
 <a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
@@ -300,6 +319,25 @@
     /// the [`Topology`], see [`Self::with_topology`].
     </span><span class="kw">pub fn </span>with_device_mapping(<span class="kw-2">mut </span><span class="self">self</span>, device_mapping: DeviceMapMetadata) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.device_mapping = <span class="prelude-val">Some</span>(device_mapping);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Path to read a UQFF file from.
+    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.from_uqff = <span class="prelude-val">Some</span>(path);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Path to write a UQFF file to.
+    ///
+    /// The parent (part of the path excluding the filename) will determine where any other files
+    /// generated are written to. These can be used to load UQFF models standalone, and may include:
+    /// - `residual.safetensors`
+    /// - `tokenizer.json`
+    /// - `config.json`
+    /// - And others
+    </span><span class="kw">pub fn </span>write_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.write_uqff = <span class="prelude-val">Some</span>(path);
         <span class="self">self
     </span>}
 

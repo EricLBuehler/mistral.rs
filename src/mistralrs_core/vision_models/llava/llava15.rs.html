@@ -350,6 +350,25 @@
 <a href="#350" id="350">350</a>
 <a href="#351" id="351">351</a>
 <a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -366,6 +385,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::IsqModel;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
+<span class="kw">use </span><span class="kw">crate</span>::utils::unvarbuilder::UnVarBuilder;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config;
 <span class="kw">use </span><span class="kw">crate</span>::AnyMoeConfig;
@@ -620,6 +640,24 @@
         <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
     ) {
         <span class="self">self</span>.llm.get_layers()
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="comment">// MM projectors
+        </span>uvb.pp(<span class="string">"multi_modal_projector.linear_1"</span>)
+            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.mm_projector.linear_1);
+        uvb.pp(<span class="string">"multi_modal_projector.linear_2"</span>)
+            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.mm_projector.linear_2);
+
+        <span class="comment">// Vision tower
+        </span>{
+            <span class="kw">let </span>uvb_vt = uvb.pp(<span class="string">"vision_tower.vision_model"</span>);
+            uvb_vt.extend(<span class="self">self</span>.clip_vision_tower.model.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }
 

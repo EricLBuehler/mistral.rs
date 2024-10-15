@@ -616,7 +616,41 @@
 <a href="#616" id="616">616</a>
 <a href="#617" id="617">617</a>
 <a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
+<span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
@@ -639,7 +673,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
-    api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
+    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
     AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
@@ -669,6 +703,12 @@
     preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
     topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     silent: bool,
+    <span class="comment">// For full UQFF serialization
+    </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    config: String,
+    processor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    preprocessor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="doccomment">/// A loader for a vision (non-quantized) model.
@@ -683,6 +723,7 @@
     xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
     token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
     revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
+    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -740,6 +781,7 @@
             xlora_order: <span class="prelude-val">None</span>,
             token_source: RwLock::new(<span class="prelude-val">None</span>),
             revision: RwLock::new(<span class="prelude-val">None</span>),
+            from_uqff: RwLock::new(<span class="prelude-val">None</span>),
         })
     }
 }
@@ -764,8 +806,12 @@
             <span class="self">self</span>,
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
-            silent
+            silent,
+            <span class="self">self</span>.config.from_uqff.is_some()
         );
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="self">self</span>.config.from_uqff.clone() {
+            <span class="kw-2">*</span><span class="self">self</span>.from_uqff.write().unwrap() = <span class="prelude-val">Some</span>(<span class="macro">get_uqff_paths!</span>(<span class="kw-2">&amp;</span>from_uqff, <span class="self">self</span>, silent));
+        }
         <span class="kw-2">*</span><span class="self">self
             </span>.token_source
             .write()
@@ -907,14 +953,21 @@
                 silent,
                 IsqOrganization::Default,
                 <span class="self">self</span>.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: <span class="kw-2">&amp;</span>tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: paths.get_processor_config(),
+                    preprocessor_filename: paths.get_preprocessor_config(),
+                },
             )<span class="question-mark">?</span>;
-        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(<span class="kw-2">mut </span>from_uqff) = <span class="self">self</span>.config.from_uqff.clone() {
-            from_uqff = <span class="macro">get_write_uqff_paths!</span>(from_uqff, <span class="self">self</span>, silent);
+        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
             model.load_from_artifacts(
                 device.clone(),
                 <span class="self">self</span>.config.topology.as_ref(),
                 silent,
-                <span class="kw-2">&amp;</span>from_uqff,
+                from_uqff,
             )<span class="question-mark">?</span>;
         }
 
@@ -965,6 +1018,11 @@
             preprocessor_config: Arc::new(preprocessor_config),
             topology: <span class="self">self</span>.config.topology.clone(),
             silent,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
+            processor_filename: paths.get_processor_config().clone(),
+            preprocessor_filename: paths.get_preprocessor_config().clone(),
         })))
     }
 
@@ -1000,6 +1058,14 @@
                 <span class="self">self</span>.silent,
                 IsqOrganization::Default,
                 <span class="prelude-val">None</span>,
+                UqffFullSer {
+                    tokenizer: <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer,
+                    template_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename,
+                    generation_config: <span class="self">self</span>.generation_config.as_ref(),
+                    config: <span class="self">self</span>.config.clone(),
+                    processor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.processor_filename,
+                    preprocessor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_filename,
+                },
             )
             .map_err(anyhow::Error::msg)
     }

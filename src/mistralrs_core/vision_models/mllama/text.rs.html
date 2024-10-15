@@ -714,6 +714,50 @@
 <a href="#714" id="714">714</a>
 <a href="#715" id="715">715</a>
 <a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -729,6 +773,7 @@
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 <span class="kw">use </span><span class="kw">super</span>::config::MLlamaTextConfig;
@@ -1162,16 +1207,12 @@
             mlp,
             input_layernorm,
             post_attention_layernorm,
-            <span class="comment">// NOTE: Preapply the tanh
-            </span>attn_gate: mapper
+            attn_gate: mapper
                 .set_device(layer_idx, vb.clone(), <span class="bool-val">false</span>)
-                .get((<span class="number">1</span>,), <span class="string">"cross_attn_attn_gate"</span>)<span class="question-mark">?
-                </span>.tanh()<span class="question-mark">?</span>,
-            <span class="comment">// NOTE: Preapply the tanh
-            </span>mlp_gate: mapper
+                .get((<span class="number">1</span>,), <span class="string">"cross_attn_attn_gate"</span>)<span class="question-mark">?</span>,
+            mlp_gate: mapper
                 .set_device(layer_idx, vb.clone(), <span class="bool-val">false</span>)
-                .get((<span class="number">1</span>,), <span class="string">"cross_attn_mlp_gate"</span>)<span class="question-mark">?
-                </span>.tanh()<span class="question-mark">?</span>,
+                .get((<span class="number">1</span>,), <span class="string">"cross_attn_mlp_gate"</span>)<span class="question-mark">?</span>,
         })
     }
 
@@ -1190,7 +1231,7 @@
         hidden_states =
             <span class="self">self</span>.attn
                 .forward(<span class="kw-2">&amp;</span>hidden_states, cross_attn_states, attention_mask, kv_cache)<span class="question-mark">?</span>;
-        hidden_states = (residual + hidden_states.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.attn_gate)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        hidden_states = (residual + hidden_states.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.attn_gate.tanh()<span class="question-mark">?</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>hidden_states;
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = <span class="self">self</span>.post_attention_layernorm.forward(<span class="kw-2">&amp;</span>hidden_states)<span class="question-mark">?</span>;
@@ -1202,7 +1243,7 @@
                 </span>.broadcast_mul(<span class="kw-2">&amp;</span>hidden_states)<span class="question-mark">?</span>;
         }
 
-        residual + hidden_states.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.mlp_gate)<span class="question-mark">?
+        residual + hidden_states.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.mlp_gate.tanh()<span class="question-mark">?</span>)<span class="question-mark">?
     </span>}
 }
 
@@ -1428,6 +1469,53 @@
             }
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        uvb.pp(<span class="string">"model.embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb.pp(<span class="string">"lm_head"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head);
+
+        <span class="kw">let </span>uvb = uvb.pp(<span class="string">"model"</span>);
+
+        uvb.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb.pp(<span class="string">"layers"</span>).pp(i);
+            <span class="kw">match </span>layer {
+                MLlamaDecoderLayer::CrossAttn(crossattn) =&gt; {
+                    <span class="comment">// Cross attention layers are not quantized
+                    </span>uvb_l
+                        .pp(<span class="string">"post_attention_layernorm"</span>)
+                        .add(<span class="kw-2">&amp;</span>crossattn.post_attention_layernorm);
+                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>crossattn.input_layernorm);
+                    uvb_l.add_tensor(<span class="string">"cross_attn_attn_gate"</span>, crossattn.attn_gate.clone());
+                    uvb_l.add_tensor(<span class="string">"cross_attn_mlp_gate"</span>, crossattn.mlp_gate.clone());
+
+                    <span class="kw">let </span>uvb_attn = uvb_l.pp(<span class="string">"cross_attn"</span>);
+                    uvb_attn.pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_proj);
+                    uvb_attn.pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_proj);
+                    uvb_attn.pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.v_proj);
+                    uvb_attn.pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.o_proj);
+                    uvb_attn.pp(<span class="string">"q_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_norm);
+                    uvb_attn.pp(<span class="string">"k_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_norm);
+
+                    <span class="kw">let </span>uvb_mlp = uvb_l.pp(<span class="string">"mlp"</span>);
+                    uvb_mlp.pp(<span class="string">"gate_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.gate_proj);
+                    uvb_mlp.pp(<span class="string">"up_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.up_proj);
+                    uvb_mlp.pp(<span class="string">"down_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.down_proj);
+                }
+                MLlamaDecoderLayer::SelfAttn(selfattn) =&gt; {
+                    uvb_l
+                        .pp(<span class="string">"post_attention_layernorm"</span>)
+                        .add(<span class="kw-2">&amp;</span>selfattn.post_attention_layernorm);
+                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>selfattn.input_layernorm);
+                }
+            }
+        }
+
+        uvb.to_safetensors()
     }
 }
 </code></pre></div></section></main></body></html>

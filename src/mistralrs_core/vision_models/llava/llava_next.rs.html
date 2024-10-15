@@ -441,6 +441,27 @@
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -458,6 +479,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
 
+<span class="kw">use </span><span class="kw">crate</span>::utils::unvarbuilder::UnVarBuilder;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::utils::get_anyres_image_grid_shape;
@@ -790,6 +812,26 @@
         <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
     ) {
         <span class="self">self</span>.llm.get_layers()
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="comment">// MM projectors
+        </span>uvb.pp(<span class="string">"multi_modal_projector.linear_1"</span>)
+            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.mm_projector.linear_1);
+        uvb.pp(<span class="string">"multi_modal_projector.linear_2"</span>)
+            .add(<span class="kw-2">&amp;</span><span class="self">self</span>.mm_projector.linear_2);
+
+        <span class="comment">// Vision tower
+        </span>{
+            <span class="kw">let </span>uvb_vt = uvb.pp(<span class="string">"vision_tower.vision_model"</span>);
+            uvb_vt.extend(<span class="self">self</span>.clip_vision_tower.model.residual_tensors());
+        }
+
+        uvb.add_tensor(<span class="string">"image_newline"</span>, <span class="self">self</span>.image_newline.clone());
+
+        uvb.to_safetensors()
     }
 }
 

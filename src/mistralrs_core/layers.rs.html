@@ -944,6 +944,64 @@
 <a href="#944" id="944">944</a>
 <a href="#945" id="945">945</a>
 <a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -962,7 +1020,7 @@
 };
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
-<span class="kw">use </span>serde::Deserialize;
+<span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">pub use </span><span class="kw">crate</span>::attention::Sdpa;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
@@ -995,8 +1053,20 @@
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 
+    <span class="doccomment">/// Gemma uses weight + 1.0. Undo for UQFF generation.
+    </span><span class="kw">pub fn </span>undo_gemma(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            eps: <span class="self">self</span>.eps,
+            weight: (<span class="kw-2">&amp;</span><span class="self">self</span>.weight - <span class="number">1.0</span>)<span class="question-mark">?</span>,
+        })
+    }
+
     <span class="kw">pub fn </span>from_w(w: Tensor, eps: f64) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
+    }
+
+    <span class="kw">pub fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.weight
     }
 }
 
@@ -1036,7 +1106,8 @@
     original_max_position_embeddings: usize,
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = <span class="string">"lowercase"</span>)]
 </span><span class="kw">pub enum </span>ScaledRopeType {
     <span class="attr">#[serde(alias = <span class="string">"su"</span>)]
     #[serde(alias = <span class="string">"longrope"</span>)]
@@ -1058,7 +1129,7 @@
     }
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 </span><span class="kw">pub enum </span>PhiRopeScalingConfig {
     Classic {
@@ -1339,7 +1410,7 @@
     Default(RotaryEmbedding),
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize, Default)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub enum </span>Llama3RopeType {
     <span class="attr">#[serde(rename = <span class="string">"llama3"</span>)]
     </span>Llama3,
@@ -1348,7 +1419,7 @@
     </span>Default,
 }
 
-<span class="attr">#[derive(Debug, Clone, Deserialize, Default)]
+<span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub struct </span>Llama3RopeConfig {
     <span class="kw">pub </span>factor: f32,
     <span class="kw">pub </span>low_freq_factor: f32,
@@ -1813,6 +1884,51 @@
         b_sz: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="self">self</span>.<span class="number">0</span>.forward(positions, positions_kernel, q, k, b_sz)
+    }
+}
+
+<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = <span class="string">"lowercase"</span>)]
+</span><span class="kw">pub enum </span>Activation {
+    <span class="attr">#[default]
+    #[serde(alias = <span class="string">"gelu"</span>)]
+    </span>Gelu,
+    <span class="attr">#[serde(alias = <span class="string">"gelu_new"</span>)]
+    </span>NewGelu,
+    Relu,
+    Relu2,
+    Relu6,
+    Silu,
+    Sigmoid,
+    HardSigmoid,
+    Swiglu,
+    Swish,
+    HardSwish,
+    Elu(f64),
+    LeakyRelu(f64),
+    <span class="attr">#[serde(alias = <span class="string">"gelu_pytorch_tanh"</span>)]
+    </span>GeluPytorchTanh,
+}
+
+<span class="kw">impl </span>Module <span class="kw">for </span>Activation {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Gelu =&gt; xs.gelu_erf(),
+            <span class="comment">// https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
+            </span><span class="self">Self</span>::NewGelu =&gt; xs.gelu(),
+            <span class="self">Self</span>::Relu =&gt; xs.relu(),
+            <span class="self">Self</span>::Relu2 =&gt; xs.relu()<span class="question-mark">?</span>.sqr(),
+            <span class="self">Self</span>::Relu6 =&gt; xs.clamp(<span class="number">0f32</span>, <span class="number">6f32</span>),
+            <span class="self">Self</span>::Silu =&gt; xs.silu(),
+            <span class="self">Self</span>::Sigmoid =&gt; candle_nn::ops::sigmoid(xs),
+            <span class="self">Self</span>::HardSigmoid =&gt; candle_nn::ops::hard_sigmoid(xs),
+            <span class="self">Self</span>::Swiglu =&gt; candle_nn::ops::swiglu(xs),
+            <span class="self">Self</span>::Swish =&gt; xs * candle_nn::ops::sigmoid(xs)<span class="question-mark">?</span>,
+            <span class="self">Self</span>::HardSwish =&gt; xs * candle_nn::ops::hard_sigmoid(xs)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span><span class="self">Self</span>::Elu(alpha) =&gt; xs.elu(alpha),
+            <span class="kw-2">&amp;</span><span class="self">Self</span>::LeakyRelu(negative_slope) =&gt; candle_nn::ops::leaky_relu(xs, negative_slope),
+            <span class="self">Self</span>::GeluPytorchTanh =&gt; xs.gelu(),
+        }
     }
 }
 

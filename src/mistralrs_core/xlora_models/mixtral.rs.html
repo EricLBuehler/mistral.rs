@@ -1066,12 +1066,16 @@
 <a href="#1066" id="1066">1066</a>
 <a href="#1067" id="1067">1067</a>
 <a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::Sdpa,
+    layers::{Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -1084,7 +1088,7 @@
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>tqdm::Iter;
@@ -2000,6 +2004,10 @@
             }
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="macro">panic!</span>(<span class="string">"Cannot generate UQFF for an adapter model."</span>)
     }
 }
 

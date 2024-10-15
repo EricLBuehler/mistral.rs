@@ -789,6 +789,51 @@
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -802,7 +847,10 @@
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
+    layers::{
+        Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
+        Sdpa,
+    },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -812,16 +860,16 @@
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 <span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
 
 <span class="comment">// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
-</span><span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
+</span><span class="attr">#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub</span>(<span class="kw">crate</span>) vocab_size: usize,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_act: candle_nn::Activation,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_act: Activation,
     <span class="kw">pub</span>(<span class="kw">crate</span>) hidden_size: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) intermediate_size: usize,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_hidden_layers: usize,
@@ -1041,7 +1089,7 @@
     w1: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     w2: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     w3: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
 }
 
 <span class="kw">impl </span>Mlp {
@@ -1522,6 +1570,48 @@
             }
         }
         (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+    }
+
+    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
+    }
+
+    <span class="kw">fn </span>residual_tensors_moe_experts_only(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;(String, Tensor)&gt;&gt; {
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.input_layernorm);
+            uvb_l
+                .pp(<span class="string">"post_attention_layernorm"</span>)
+                .add(<span class="kw-2">&amp;</span>layer.post_attention_layernorm);
+
+            <span class="kw">let </span>uvb_attn = uvb_l.pp(<span class="string">"self_attn"</span>);
+            uvb_attn.pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.q_proj);
+            uvb_attn.pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.k_proj);
+            uvb_attn.pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.v_proj);
+            uvb_attn.pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>layer.self_attn.o_proj);
+        }
+
+        <span class="prelude-val">Some</span>(uvb.to_safetensors())
     }
 }
 

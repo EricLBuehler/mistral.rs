@@ -573,6 +573,7 @@
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -985,8 +986,9 @@
             <span class="self">self</span>,
             <span class="self">self</span>.quantized_model_id,
             <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.quantized_filename.as_ref().unwrap().clone()]),
-            silent
-        );
+            silent,
+            <span class="bool-val">false </span><span class="comment">// Never loading UQFF
+        </span>);
         <span class="self">self</span>.load_model_from_path(
             <span class="kw-2">&amp;</span>paths<span class="question-mark">?</span>,
             dtype,
