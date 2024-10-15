@@ -9,6 +9,9 @@ model_id = input("Please enter the original model ID: ")
 display_model_id = input(
     "Please enter the model ID where this model card will be displayed: "
 )
+is_vision = input("Is this a vision model (yes/no): ").strip().lower() == "yes"
+if is_vision:
+    arch = input("What is the vision model architecture?: ").strip().lower()
 
 output = f"""---
 tags:
@@ -39,9 +42,9 @@ print(
     " NOTE: If multiple quantizations were used: enter the quantization names, and then in the next prompt, the topology file used."
 )
 
-output += f"## Files\n\n"
+output += f"\n## Examples\n"
 
-output += "|Name|Quantization type(s)|Example|\n|--|--|--|\n"
+output += "|Quantization type(s)|Example|\n|--|--|\n"
 
 topologies = {}
 
@@ -52,7 +55,6 @@ try:
             f" NOTE: Next file. Have processed {n} files. Press CTRL-C now if there are no more."
         )
         file = input("Enter UQFF filename (with extension): ").strip()
-        output += f"|{file}|"
 
         quants = input(
             "Enter quantization NAMES used to make that file (single quantization name, OR if multiple, comma delimited): "
@@ -63,11 +65,21 @@ try:
                 "Enter topology used to make UQFF with multiple quantizations: "
             )
             topologies[file] = topology
-            output += f"{",".join(quants)} (see topology for this file)|"
+            output += f"|{",".join(quants)} (see topology for this file)|"
         else:
-            output += f"{quants.strip().upper()}|"
-        # This interactive mode only will work for text models...
-        output += f"`./mistralrs-server -i plain -m {model_id} --from-uqff {display_model_id}/{file}`|\n"
+            output += f"|{quants.strip().upper()}|"
+            
+        if is_vision:
+            cmd = "vision-plain"
+        else:
+            cmd = "plain"
+        
+        if is_vision:
+            arch = f"-a {arch}"
+        else:
+            arch = ""
+
+        output += f"`./mistralrs-server -i {cmd} -m {display_model_id} {arch} --from-uqff {file}`|\n"
         n += 1
         print()
 except KeyboardInterrupt:

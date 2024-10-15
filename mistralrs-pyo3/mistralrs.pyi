@@ -98,7 +98,6 @@ class IsqOrganization(Enum):
     Default = "default"
     MoQE = "moqe"
 
-
 @dataclass
 class ModelDType(Enum):
     Auto = "auto"

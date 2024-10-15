@@ -179,47 +179,34 @@ macro_rules! get_paths {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! get_write_uqff_paths {
+macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        if !$from_uqff.exists() {
-            // Assume it's a HF model id
-            let path = $from_uqff.to_string_lossy().to_string();
-            let parts = path.rsplitn(2, '/').collect::<Vec<_>>();
+        let api = ApiBuilder::new()
+            .with_progress(!$silent)
+            .with_token(get_token(
+                &$this
+                    .token_source
+                    .read()
+                    .expect("Failed to read token source")
+                    .clone()
+                    .unwrap_or(TokenSource::None),
+            )?)
+            .build()?;
+        let revision = $this
+            .revision
+            .read()
+            .expect("Failed to read revision")
+            .clone()
+            .unwrap_or("main".to_string());
+        let api = api.repo(Repo::with_revision(
+            $this.model_id.to_string(),
+            RepoType::Model,
+            revision.clone(),
+        ));
 
-            if parts.len() != 2 {
-                anyhow::bail!("ISQ artifact load path `{path}` not found locally must have format `<HF MODEL ID>/<FILENAME>` or `<LOCAL FILENAME>`");
-            }
+        let file = $from_uqff.display().to_string();
 
-            let file = parts[0];
-            let model_id = parts[1];
-
-            let api = ApiBuilder::new()
-                .with_progress(!$silent)
-                .with_token(get_token(
-                    &$this
-                        .token_source
-                        .read()
-                        .expect("Failed to read token source")
-                        .clone()
-                        .unwrap_or(TokenSource::None),
-                )?)
-                .build()?;
-            let revision = $this
-                .revision
-                .read()
-                .expect("Failed to read revision")
-                .clone()
-                .unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                model_id.to_string(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            api_get_file!(api, file, Path::new(model_id))
-        } else {
-            $from_uqff
-        }
+        api_get_file!(api, &file, Path::new(&$this.model_id))
     }};
 }
 
