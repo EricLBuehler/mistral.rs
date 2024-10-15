@@ -711,7 +711,7 @@ impl IsqModel for MLlamaTextModel {
         (tensors, &*self.mapper)
     }
 
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         uvb.pp("model.embed_tokens").add(&self.embed_tokens);
@@ -755,6 +755,6 @@ impl IsqModel for MLlamaTextModel {
             }
         }
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }

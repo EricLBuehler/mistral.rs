@@ -598,7 +598,7 @@ impl IsqModel for Model {
         (tensors, &*self.mapper)
     }
 
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         let uvb_m = uvb.pp("model");
@@ -613,7 +613,7 @@ impl IsqModel for Model {
                 .add(&layer.post_attention_layernorm);
         }
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }
 

@@ -116,6 +116,11 @@ Creating a UQFF model requires you to generate the UQFF file.
 - This means specifying a local path to a file ending in `.uqff`, where your new UQFF model will be created.
 - The quantization of a UQFF model is determined from the ISQ or model topology (see the [topology docs](TOPOLOGY.md) for more details on how ISQ and the topology mix).
 
+Along with the UQFF file, the generation process will also output several `.json` configuation files and `residual.safetensors`. All of these files are considered the
+UQFF model, and should be kept together or uploaded.
+
+> Note: Only the `.uqff` files are unique to the quantization level(s). If you are generating multiple UQFF files, it is OK for the others to be overwritten.
+
 After creating the UQFF file, you can upload the model to Hugging Face. To do this:
 1) [Create a new model](https://huggingface.co/docs/transformers/v4.17.0/en/create_a_model).
 2) Upload the UQFF file:

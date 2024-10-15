@@ -147,9 +147,7 @@ pub trait IsqModel {
     }
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
-        None
-    }
+    fn residual_tensors(&self) -> Vec<(String, Tensor)>;
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers_moe_experts_only`].
     fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
@@ -367,89 +365,90 @@ pub trait IsqModel {
 
                     safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
 
-                    if let Some(residual) = match organization {
+                    let residual = match organization {
                         IsqOrganization::Default => self.residual_tensors(),
-                        IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
-                    } {
-                        let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
-                        let config_out = parent.join("config.json");
-                        let tokenizer_out = parent.join("tokenizer.json");
-                        let tokenizer_cfg_out = parent.join("tokenizer_config.json");
-                        let gen_cfg_out = parent.join("generation_config.json");
-                        let processor_out = parent.join("processor_config.json");
-                        let preprocessor_out = parent.join("preprocessor_config.json");
+                        IsqOrganization::MoeExpertsOnly => self
+                            .residual_tensors_moe_experts_only()
+                            .unwrap_or(self.residual_tensors()),
+                    };
 
+                    let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+                    let config_out = parent.join("config.json");
+                    let tokenizer_out = parent.join("tokenizer.json");
+                    let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                    let gen_cfg_out = parent.join("generation_config.json");
+                    let processor_out = parent.join("processor_config.json");
+                    let preprocessor_out = parent.join("preprocessor_config.json");
+
+                    info!(
+                        "Serializing {} residual tensors to `{}`.",
+                        residual.len(),
+                        residual_out.display()
+                    );
+
+                    safetensors::serialize_to_file(residual, &None, &residual_out)?;
+
+                    let UqffFullSer {
+                        tokenizer,
+                        template_filename,
+                        generation_config,
+                        config,
+                        processor_filename,
+                        preprocessor_filename,
+                    } = full_ser;
+
+                    info!("Serializing configuration to `{}`.", config_out.display());
+
+                    std::fs::write(config_out, config)?;
+
+                    info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+
+                    serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                        .map_err(candle_core::Error::msg)?;
+
+                    if let Some(template_filename) = template_filename {
                         info!(
-                            "Serializing {} residual tensors to `{}`.",
-                            residual.len(),
-                            residual_out.display()
+                            "Serializing tokenizer config to `{}`.",
+                            tokenizer_cfg_out.display()
                         );
 
-                        safetensors::serialize_to_file(residual, &None, &residual_out)?;
-
-                        let UqffFullSer {
-                            tokenizer,
-                            template_filename,
-                            generation_config,
-                            config,
-                            processor_filename,
-                            preprocessor_filename,
-                        } = full_ser;
-
-                        info!("Serializing configuration to `{}`.", config_out.display());
-
-                        std::fs::write(config_out, config)?;
-
-                        info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
-
-                        serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                        let template =
+                            std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&tokenizer_cfg_out, template)
                             .map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(template_filename) = template_filename {
-                            info!(
-                                "Serializing tokenizer config to `{}`.",
-                                tokenizer_cfg_out.display()
-                            );
+                    if let Some(generation_config) = generation_config {
+                        info!(
+                            "Serializing generation config to `{}`.",
+                            gen_cfg_out.display()
+                        );
 
-                            let template = std::fs::read(template_filename)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&tokenizer_cfg_out, template)
-                                .map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(generation_config) = generation_config {
-                            info!(
-                                "Serializing generation config to `{}`.",
-                                gen_cfg_out.display()
-                            );
+                    if let Some(processor_config) = processor_filename {
+                        info!(
+                            "Serializing processor config to `{}`.",
+                            processor_out.display()
+                        );
 
-                            let cfg = std::fs::read(generation_config)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(processor_config) = processor_filename {
-                            info!(
-                                "Serializing processor config to `{}`.",
-                                processor_out.display()
-                            );
+                    if let Some(preprocessor_config) = preprocessor_filename {
+                        info!(
+                            "Serializing preprocessor config to `{}`.",
+                            preprocessor_out.display()
+                        );
 
-                            let cfg =
-                                std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                            std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
-                        }
-
-                        if let Some(preprocessor_config) = preprocessor_filename {
-                            info!(
-                                "Serializing preprocessor config to `{}`.",
-                                preprocessor_out.display()
-                            );
-
-                            let cfg = std::fs::read(preprocessor_config)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&preprocessor_out, cfg)
-                                .map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
                     }
                 }
             }
@@ -537,91 +536,90 @@ pub trait IsqModel {
 
                     std::fs::create_dir_all(parent)?;
 
-                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
-
-                    if let Some(residual) = match organization {
+                    let residual = match organization {
                         IsqOrganization::Default => self.residual_tensors(),
-                        IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
-                    } {
-                        let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
-                        let config_out = parent.join("config.json");
-                        let tokenizer_out = parent.join("tokenizer.json");
-                        let tokenizer_cfg_out = parent.join("tokenizer_config.json");
-                        let gen_cfg_out = parent.join("generation_config.json");
-                        let processor_out = parent.join("processor_config.json");
-                        let preprocessor_out = parent.join("preprocessor_config.json");
+                        IsqOrganization::MoeExpertsOnly => self
+                            .residual_tensors_moe_experts_only()
+                            .unwrap_or(self.residual_tensors()),
+                    };
 
+                    let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+                    let config_out = parent.join("config.json");
+                    let tokenizer_out = parent.join("tokenizer.json");
+                    let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                    let gen_cfg_out = parent.join("generation_config.json");
+                    let processor_out = parent.join("processor_config.json");
+                    let preprocessor_out = parent.join("preprocessor_config.json");
+
+                    info!(
+                        "Serializing {} residual tensors to `{}`.",
+                        residual.len(),
+                        residual_out.display()
+                    );
+
+                    safetensors::serialize_to_file(residual, &None, &residual_out)?;
+
+                    let UqffFullSer {
+                        tokenizer,
+                        template_filename,
+                        generation_config,
+                        config,
+                        processor_filename,
+                        preprocessor_filename,
+                    } = full_ser;
+
+                    info!("Serializing configuration to `{}`.", config_out.display());
+
+                    std::fs::write(config_out, config)?;
+
+                    info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+
+                    serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                        .map_err(candle_core::Error::msg)?;
+
+                    if let Some(template_filename) = template_filename {
                         info!(
-                            "Serializing {} residual tensors to `{}`.",
-                            residual.len(),
-                            residual_out.display()
+                            "Serializing tokenizer config to `{}`.",
+                            tokenizer_cfg_out.display()
                         );
 
-                        safetensors::serialize_to_file(residual, &None, &residual_out)?;
-
-                        let UqffFullSer {
-                            tokenizer,
-                            template_filename,
-                            generation_config,
-                            config,
-                            processor_filename,
-                            preprocessor_filename,
-                        } = full_ser;
-
-                        info!("Serializing configuration to `{}`.", config_out.display());
-
-                        std::fs::write(config_out, config)?;
-
-                        info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
-
-                        serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                        let template =
+                            std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&tokenizer_cfg_out, template)
                             .map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(template_filename) = template_filename {
-                            info!(
-                                "Serializing tokenizer config to `{}`.",
-                                tokenizer_cfg_out.display()
-                            );
+                    if let Some(generation_config) = generation_config {
+                        info!(
+                            "Serializing generation config to `{}`.",
+                            gen_cfg_out.display()
+                        );
 
-                            let template = std::fs::read(template_filename)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&tokenizer_cfg_out, template)
-                                .map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(generation_config) = generation_config {
-                            info!(
-                                "Serializing generation config to `{}`.",
-                                gen_cfg_out.display()
-                            );
+                    if let Some(processor_config) = processor_filename {
+                        info!(
+                            "Serializing processor config to `{}`.",
+                            processor_out.display()
+                        );
 
-                            let cfg = std::fs::read(generation_config)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    }
 
-                        if let Some(processor_config) = processor_filename {
-                            info!(
-                                "Serializing processor config to `{}`.",
-                                processor_out.display()
-                            );
+                    if let Some(preprocessor_config) = preprocessor_filename {
+                        info!(
+                            "Serializing preprocessor config to `{}`.",
+                            preprocessor_out.display()
+                        );
 
-                            let cfg =
-                                std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                            std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
-                        }
-
-                        if let Some(preprocessor_config) = preprocessor_filename {
-                            info!(
-                                "Serializing preprocessor config to `{}`.",
-                                preprocessor_out.display()
-                            );
-
-                            let cfg = std::fs::read(preprocessor_config)
-                                .map_err(candle_core::Error::msg)?;
-                            std::fs::write(&preprocessor_out, cfg)
-                                .map_err(candle_core::Error::msg)?;
-                        }
+                        let cfg =
+                            std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
+                        std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
                     }
                 }
             }

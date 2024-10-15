@@ -797,6 +797,10 @@ impl IsqModel for XLoraModel {
         }
         (tensors, &*self.mapper)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
+    }
 }
 
 impl NormalModel for XLoraModel {

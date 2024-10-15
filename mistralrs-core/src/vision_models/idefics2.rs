@@ -1188,13 +1188,13 @@ impl IsqModel for Idefics2 {
         self.text_model.get_layers()
     }
 
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         let uvb_m = uvb.pp("model");
         uvb_m
             .pp("text_model")
-            .extend(self.text_model.residual_tensors()?);
+            .extend(self.text_model.residual_tensors());
         uvb_m
             .pp("vision_model")
             .extend(self.vision_model.residual_tensors());
@@ -1202,7 +1202,7 @@ impl IsqModel for Idefics2 {
             .pp("connector")
             .extend(self.connector.residual_tensors());
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }
 

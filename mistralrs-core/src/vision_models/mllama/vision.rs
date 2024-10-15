@@ -667,7 +667,7 @@ impl IsqModel for MLlamaVisionModel {
     ) {
         unreachable!("MLlamaVision model cannot be quantized.");
     }
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         uvb.pp("patch_embedding").add(&self.patch_embedding);
@@ -696,6 +696,6 @@ impl IsqModel for MLlamaVisionModel {
         uvb.pp("global_transformer")
             .extend(self.global_transformer.residual_tensors());
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }

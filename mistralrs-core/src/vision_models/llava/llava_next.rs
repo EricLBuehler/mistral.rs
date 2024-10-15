@@ -350,7 +350,7 @@ impl IsqModel for Model {
         self.llm.get_layers()
     }
 
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         // MM projectors
@@ -367,7 +367,7 @@ impl IsqModel for Model {
 
         uvb.add_tensor("image_newline", self.image_newline.clone());
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }
 

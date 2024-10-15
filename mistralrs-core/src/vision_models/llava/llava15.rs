@@ -271,7 +271,7 @@ impl IsqModel for Model {
         self.llm.get_layers()
     }
 
-    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         // MM projectors
@@ -286,7 +286,7 @@ impl IsqModel for Model {
             uvb_vt.extend(self.clip_vision_tower.model.residual_tensors());
         }
 
-        Some(uvb.to_safetensors())
+        uvb.to_safetensors()
     }
 }
 
