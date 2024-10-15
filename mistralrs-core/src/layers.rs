@@ -49,6 +49,14 @@ impl RmsNorm {
         Ok(Self { eps, weight: w })
     }
 
+    /// Gemma uses weight + 1.0. Undo for UQFF generation.
+    pub fn undo_gemma(&self) -> Result<Self> {
+        Ok(Self {
+            eps: self.eps,
+            weight: (&self.weight - 1.0)?,
+        })
+    }
+
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
         Ok(Self { eps, weight: w })
     }

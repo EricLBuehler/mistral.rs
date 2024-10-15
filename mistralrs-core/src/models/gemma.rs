@@ -621,14 +621,16 @@ impl IsqModel for Model {
 
         let uvb_m = uvb.pp("model");
         uvb_m.pp("embed_tokens").add(&self.embed_tokens);
-        uvb_m.pp("norm").add(&self.norm);
+        uvb_m.pp("norm").add(&self.norm.undo_gemma().ok()?);
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("input_layernorm")
+                .add(&layer.input_layernorm.undo_gemma().ok()?);
             uvb_l
                 .pp("post_attention_layernorm")
-                .add(&layer.post_attention_layernorm);
+                .add(&layer.post_attention_layernorm.undo_gemma().ok()?);
         }
 
         Some(uvb.to_safetensors())
