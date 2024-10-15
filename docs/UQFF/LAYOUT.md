@@ -6,6 +6,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 - [GGUF quantization](#gguf-quantization)
 - [HQQ quantization](#hqq-quantization)
 - [Uquantized layers](#unquantized-layers)
+- [FP8 layers](#fp8-layers)
 - [Standard tensors](#standard-tensors)
 
 
@@ -30,6 +31,19 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 | ISQ type (1) | u8 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
 | **Array** Weight tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
+| **[Optional]** **Array** Bias tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
+
+## FP8 layers
+| ID | Element type | Endianness |
+| -------- | -------- | -------- |
+| HQFF version | u32 | little endian  |
+| ISQ type (1) | u8 | little endian  |
+| Whether bias data is included (boolean) | u8 | little endian  |
+| **Array** Weight tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
+| Dequant W scalar | f32 | little endian
+| Dequant X scalar | f32 | little endian
+| Quant scalar | f32 | little endian
+| Quantization type | u32 | little endian
 | **[Optional]** **Array** Bias tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
 
 ## HQQ quantization
