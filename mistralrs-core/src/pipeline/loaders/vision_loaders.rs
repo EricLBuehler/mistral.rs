@@ -15,7 +15,7 @@ use serde::Deserialize;
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::isq::{IsqModelLoader, WordEmbeddingsShim};
+use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
@@ -157,13 +157,9 @@ impl VisionModelLoader for Phi3VLoader {
 }
 
 impl IsqModelLoader for Phi3VLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
@@ -240,7 +236,6 @@ impl VisionModelLoader for Idefics2Loader {
 impl IsqModelLoader for Idefics2Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -310,7 +305,6 @@ impl VisionModelLoader for LLaVANextLoader {
 impl IsqModelLoader for LLaVANextLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -380,7 +374,6 @@ impl VisionModelLoader for LLaVALoader {
 impl IsqModelLoader for LLaVALoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -448,16 +441,9 @@ impl VisionModelLoader for VLlamaLoader {
 }
 
 impl IsqModelLoader for VLlamaLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<MLlamaConfig>(config)?
-            .text_config
-            .tie_word_embeddings
-        {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",

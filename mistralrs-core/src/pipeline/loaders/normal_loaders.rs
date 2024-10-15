@@ -11,7 +11,7 @@ use crate::{
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        isq::{IsqModelLoader, WordEmbeddingsShim},
+        isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel,
     },
@@ -391,13 +391,9 @@ impl NormalModelLoader for MistralLoader {
 }
 
 impl IsqModelLoader for MistralLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -535,13 +531,9 @@ impl NormalModelLoader for GemmaLoader {
 }
 
 impl IsqModelLoader for GemmaLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -673,13 +665,9 @@ impl NormalModelLoader for LlamaLoader {
 }
 
 impl IsqModelLoader for LlamaLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -807,13 +795,9 @@ impl NormalModelLoader for MixtralLoader {
 }
 
 impl IsqModelLoader for MixtralLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -947,13 +931,9 @@ impl NormalModelLoader for Phi2Loader {
 }
 
 impl IsqModelLoader for Phi2Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -1083,13 +1063,9 @@ impl NormalModelLoader for Phi3Loader {
 }
 
 impl IsqModelLoader for Phi3Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
@@ -1199,13 +1175,9 @@ impl NormalModelLoader for Qwen2Loader {
 }
 
 impl IsqModelLoader for Qwen2Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -1348,13 +1320,9 @@ impl NormalModelLoader for Gemma2Loader {
 }
 
 impl IsqModelLoader for Gemma2Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -1482,13 +1450,9 @@ impl NormalModelLoader for Starcoder2Loader {
 }
 
 impl IsqModelLoader for Starcoder2Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -1622,13 +1586,9 @@ impl NormalModelLoader for Phi3_5MoELoader {
 }
 
 impl IsqModelLoader for Phi3_5MoELoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // Attention
         regexes.push(Regex::new(
             r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
@@ -1655,13 +1615,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
         Ok(regexes)
     }
 
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
+        regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
         // MLP
         regexes.push(Regex::new(
             r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$",

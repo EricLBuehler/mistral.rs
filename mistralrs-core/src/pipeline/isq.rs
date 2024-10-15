@@ -21,7 +21,7 @@ use serde::Deserialize;
 use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::{device_map::DeviceMapper, serde_default_fn, topology::LayerTopology, Topology};
+use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 
@@ -359,15 +359,18 @@ pub trait IsqModel {
                         }
                     });
 
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+
+                    std::fs::create_dir_all(parent)?;
+
                     safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
 
                     if let Some(residual) = match organization {
                         IsqOrganization::Default => self.residual_tensors(),
                         IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
                     } {
-                        let parent = serialized
-                            .parent()
-                            .context("Target UQFF path must have a filename!")?;
                         let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
                         let config_out = parent.join("config.json");
                         let tokenizer_out = parent.join("tokenizer.json");
@@ -528,7 +531,98 @@ pub trait IsqModel {
                             .collect::<candle_core::Result<Vec<_>>>()
                     };
 
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+
+                    std::fs::create_dir_all(parent)?;
+
                     safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+
+                    if let Some(residual) = match organization {
+                        IsqOrganization::Default => self.residual_tensors(),
+                        IsqOrganization::MoeExpertsOnly => self.residual_tensors_moe_experts_only(),
+                    } {
+                        let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+                        let config_out = parent.join("config.json");
+                        let tokenizer_out = parent.join("tokenizer.json");
+                        let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                        let gen_cfg_out = parent.join("generation_config.json");
+                        let processor_out = parent.join("processor_config.json");
+                        let preprocessor_out = parent.join("preprocessor_config.json");
+
+                        info!(
+                            "Serializing {} residual tensors to `{}`.",
+                            residual.len(),
+                            residual_out.display()
+                        );
+
+                        safetensors::serialize_to_file(residual, &None, &residual_out)?;
+
+                        let UqffFullSer {
+                            tokenizer,
+                            template_filename,
+                            generation_config,
+                            config,
+                            processor_filename,
+                            preprocessor_filename,
+                        } = full_ser;
+
+                        info!("Serializing configuration to `{}`.", config_out.display());
+
+                        std::fs::write(config_out, config)?;
+
+                        info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+
+                        serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                            .map_err(candle_core::Error::msg)?;
+
+                        if let Some(template_filename) = template_filename {
+                            info!(
+                                "Serializing tokenizer config to `{}`.",
+                                tokenizer_cfg_out.display()
+                            );
+
+                            let template = std::fs::read(template_filename)
+                                .map_err(candle_core::Error::msg)?;
+                            std::fs::write(&tokenizer_cfg_out, template)
+                                .map_err(candle_core::Error::msg)?;
+                        }
+
+                        if let Some(generation_config) = generation_config {
+                            info!(
+                                "Serializing generation config to `{}`.",
+                                gen_cfg_out.display()
+                            );
+
+                            let cfg = std::fs::read(generation_config)
+                                .map_err(candle_core::Error::msg)?;
+                            std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                        }
+
+                        if let Some(processor_config) = processor_filename {
+                            info!(
+                                "Serializing processor config to `{}`.",
+                                processor_out.display()
+                            );
+
+                            let cfg =
+                                std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
+                            std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                        }
+
+                        if let Some(preprocessor_config) = preprocessor_filename {
+                            info!(
+                                "Serializing preprocessor config to `{}`.",
+                                preprocessor_out.display()
+                            );
+
+                            let cfg = std::fs::read(preprocessor_config)
+                                .map_err(candle_core::Error::msg)?;
+                            std::fs::write(&preprocessor_out, cfg)
+                                .map_err(candle_core::Error::msg)?;
+                        }
+                    }
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
@@ -689,12 +783,4 @@ pub(crate) trait IsqModelLoader {
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
-}
-
-serde_default_fn!(bool, word_emb_default, false);
-
-#[derive(Deserialize)]
-pub(crate) struct WordEmbeddingsShim {
-    #[serde(default = "word_emb_default")]
-    pub(crate) tie_word_embeddings: bool,
 }
