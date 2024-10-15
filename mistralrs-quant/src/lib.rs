@@ -27,9 +27,9 @@ pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, VarBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum QuantMethodType {
     #[default]
     #[serde(rename = "gptq")]
@@ -44,7 +44,7 @@ impl Display for QuantMethodType {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct QuantizedConfig {
     pub bits: usize,
     pub quant_method: QuantMethodType,
@@ -219,6 +219,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
+
+    fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
+        None
+    }
 }
 
 macro_rules! pack_factor {

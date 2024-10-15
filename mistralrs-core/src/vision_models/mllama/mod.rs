@@ -26,6 +26,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
@@ -249,6 +250,19 @@ impl IsqModel for MLlamaModel {
         &dyn DeviceMapper,
     ) {
         self.language_model.get_layers()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("multi_modal_projector")
+            .add(&self.multi_modal_projector);
+        uvb.pp("language_model")
+            .extend(self.language_model.residual_tensors());
+        uvb.pp("vision_model")
+            .extend(self.vision_model.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, Linear, RotaryEmbedding, VarBuilder};
+use candle_nn::{Linear, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -23,7 +23,7 @@ use crate::{
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 fn default_max_position_embeddings() -> usize {
@@ -32,7 +32,7 @@ fn default_max_position_embeddings() -> usize {
 
 serde_default_fn!(bool, word_emb_default, false);
 
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -75,7 +75,7 @@ struct MLP {
     gate_proj: Arc<dyn QuantMethod>,
     up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     params: Vec<usize>,
 }
 
@@ -538,7 +538,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                head_dim: None,
+                head_dim: Some(cfg.head_dim),
             },
         })
     }
@@ -614,6 +614,26 @@ impl IsqModel for Model {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm.undo_gemma().unwrap());
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l
+                .pp("input_layernorm")
+                .add(&layer.input_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm.undo_gemma().unwrap());
+        }
+
+        uvb.to_safetensors()
     }
 }
 

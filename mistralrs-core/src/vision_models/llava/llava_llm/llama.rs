@@ -488,6 +488,10 @@ impl IsqModel for Llama {
         }
         (tensors, &*self.mapper)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
+    }
 }
 
 impl LLaVALLM for Llama {

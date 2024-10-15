@@ -12,7 +12,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, RmsNorm, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
@@ -33,7 +33,7 @@ struct MLP {
     gate_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     up_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     down_proj: Arc<dyn LinearLayerLike + Send + Sync>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
 }
 
 impl MLP {
@@ -870,6 +870,10 @@ impl IsqModel for Model {
             ));
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 

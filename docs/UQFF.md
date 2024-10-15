@@ -56,22 +56,26 @@ The following quantization formats are supported in UQFF. One can, of course, be
 
 ## Loading a UQFF model
 
-To load a UQFF model, one should specify the artifact path. This can be either be a path to a UQFF file locally, or a Hugging Face model ID with the format `<MODEL ID>/<FILE>`. For example, the following work:
+To load a UQFF model, one should specify the filename. This will be located based on the model ID, and can
+be loaded locally or from Hugging Face based on the model ID.
 
-- `EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff`
+- `phi3.5-mini-instruct-q4k.uqff`
 - `../UQFF/phi3.5-mini-instruct-q4k.uqff`
 
-> Note: when loading an UQFF model, it will take precedence over any ISQ setting.
+You can find a [collection of UQFF models here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c), which each include a simple
+command to get started.
+
+> Note: when loading an UQFF model, *any* ISQ setting will be ignored.
 
 ### Running with the CLI
 
 ```
-cargo run --features cuda -- -i plain -m microsoft/Phi-3.5-mini-instruct --from-uqff EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff
+./mistralrs-server -i plain -m EricB/Phi-3.5-mini-instruct-UQFF --from-uqff phi3.5-mini-instruct-f8e4m3.uqff
 ```
 
 ### Using with the Rust API
 
-Modify the Normal or Vision config as follows:
+Modify the Normal or Vision config as follows and update the model ID to point to a UQFF model:
 
 ```diff
 NormalSpecificConfig {
@@ -81,7 +85,7 @@ NormalSpecificConfig {
     organization: Default::default(),
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff".to_string()),
++   from_uqff: Some("phi3.5-mini-instruct-q4k.uqff".to_string()), // Pull from specified HF hub repo
 }
 ```
 
@@ -92,7 +96,7 @@ VisionSpecificConfig {
     topology: None,
     write_uqff: None,
 -   from_uqff: None,
-+   from_uqff: Some("../UQFF/phi3.5-mini-instruct-q4k.uqff".to_string()),
++   from_uqff: Some("../phi3.5-mini-instruct-q4k.uqff".to_string()), // Local path
 }
 ```
 
@@ -100,8 +104,8 @@ VisionSpecificConfig {
 Modify the `Which` instantiation as follows:
 ```diff
 Which.Plain(
-    model_id="microsoft/Phi-3.5-mini-instruct",
-+   from_uqff="EricB/Phi-3.5-mini-instruct-ISQ/phi3.5-mini-instruct-q4k.uqff"
+    model_id="EricB/Phi-3.5-mini-instruct-UQFF",
++   from_uqff="phi3.5-mini-instruct-q4k.uqff"
 ),
 ```
 
@@ -111,6 +115,11 @@ Which.Plain(
 Creating a UQFF model requires you to generate the UQFF file.
 - This means specifying a local path to a file ending in `.uqff`, where your new UQFF model will be created.
 - The quantization of a UQFF model is determined from the ISQ or model topology (see the [topology docs](TOPOLOGY.md) for more details on how ISQ and the topology mix).
+
+Along with the UQFF file, the generation process will also output several `.json` configuration files and `residual.safetensors`. All of these files are considered the
+UQFF model, and should be kept together or uploaded.
+
+> Note: Only the `.uqff` files are unique to the quantization level(s). If you are generating multiple UQFF files, it is OK for the others to be overwritten.
 
 After creating the UQFF file, you can upload the model to Hugging Face. To do this:
 1) [Create a new model](https://huggingface.co/docs/transformers/v4.17.0/en/create_a_model).
@@ -123,7 +132,7 @@ After creating the UQFF file, you can upload the model to Hugging Face. To do th
 ### Creating with the CLI
 
 ```
-cargo run --features cuda -- --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
+./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-mini-instruct --write-uqff phi3.5-mini-instruct-q4k.uqff
 ```
 
 ### Creating with the Rust API
@@ -154,7 +163,7 @@ VisionSpecificConfig {
 ```
 
 ### Creating with the Python API
-Modify the `Which` instantiation as follows:
+Modify the `Which` instantiation as follows. Be sure to add the `in_situ_quant`.
 ```diff
 Which.Plain(
     model_id="microsoft/Phi-3.5-mini-instruct",
@@ -173,10 +182,6 @@ After this, you can use Git to track, commit, and push files.
 
 ## List of models
 
-Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/EricLBuehler/mistral.rs/issues/new) and we will include it here!
+You can find a list of models in the [Hugging Face model collection](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-| Name | Base model | UQFF model |
-| -- | -- | -- |
-| Phi 3.5 Mini Instruct | microsoft/Phi-3.5-mini-instruct | [EricB/Phi-3.5-mini-instruct-UQFF](EricB/Phi-3.5-mini-instruct-UQFF) |
-| Llama 3.2 Vision | meta-llama/Llama-3.2-11B-Vision-Instruct | [EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF) |
-| Mistral Nemo 2407 | mistralai/Mistral-Nemo-Instruct-2407 | [EricB/Mistral-Nemo-Instruct-2407-UQFF](https://huggingface.co/EricB/Mistral-Nemo-Instruct-2407-UQFF) |
+Have you created a UQFF model on Hugging Face? If so, please [create an issue](https://github.com/EricLBuehler/mistral.rs/issues/new).

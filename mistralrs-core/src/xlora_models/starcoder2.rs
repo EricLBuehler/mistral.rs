@@ -11,7 +11,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::starcoder2::Config,
     paged_attention::ModelConfigMetadata,
@@ -31,7 +31,7 @@ use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraC
 struct MLP {
     c_fc: Arc<dyn LinearLayerLike + Send + Sync>,
     c_proj: Arc<dyn LinearLayerLike + Send + Sync>,
-    act: candle_nn::Activation,
+    act: Activation,
 }
 
 impl MLP {
@@ -772,6 +772,10 @@ impl IsqModel for Model {
             ));
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 

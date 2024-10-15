@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias, Activation, VarBuilder};
+use candle_nn::{linear_no_bias, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
@@ -12,7 +12,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -571,6 +571,10 @@ impl IsqModel for Model {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
     }
 }
 

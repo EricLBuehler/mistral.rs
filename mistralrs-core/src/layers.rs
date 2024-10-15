@@ -16,7 +16,7 @@ use candle_core::{
 };
 use candle_nn::{Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
@@ -49,8 +49,20 @@ impl RmsNorm {
         Ok(Self { eps, weight: w })
     }
 
+    /// Gemma uses weight + 1.0. Undo for UQFF generation.
+    pub fn undo_gemma(&self) -> Result<Self> {
+        Ok(Self {
+            eps: self.eps,
+            weight: (&self.weight - 1.0)?,
+        })
+    }
+
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
         Ok(Self { eps, weight: w })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
     }
 }
 
@@ -90,7 +102,8 @@ pub struct PhiRotaryEmbedding {
     original_max_position_embeddings: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScaledRopeType {
     #[serde(alias = "su")]
     #[serde(alias = "longrope")]
@@ -112,7 +125,7 @@ impl FromStr for ScaledRopeType {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum PhiRopeScalingConfig {
     Classic {
@@ -393,7 +406,7 @@ pub enum Llama3RotaryEmbedding {
     Default(RotaryEmbedding),
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum Llama3RopeType {
     #[serde(rename = "llama3")]
     Llama3,
@@ -402,7 +415,7 @@ pub enum Llama3RopeType {
     Default,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Llama3RopeConfig {
     pub factor: f32,
     pub low_freq_factor: f32,
@@ -867,6 +880,51 @@ impl RotaryEmbedding {
         b_sz: usize,
     ) -> Result<()> {
         self.0.forward(positions, positions_kernel, q, k, b_sz)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Activation {
+    #[default]
+    #[serde(alias = "gelu")]
+    Gelu,
+    #[serde(alias = "gelu_new")]
+    NewGelu,
+    Relu,
+    Relu2,
+    Relu6,
+    Silu,
+    Sigmoid,
+    HardSigmoid,
+    Swiglu,
+    Swish,
+    HardSwish,
+    Elu(f64),
+    LeakyRelu(f64),
+    #[serde(alias = "gelu_pytorch_tanh")]
+    GeluPytorchTanh,
+}
+
+impl Module for Activation {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Gelu => xs.gelu_erf(),
+            // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
+            Self::NewGelu => xs.gelu(),
+            Self::Relu => xs.relu(),
+            Self::Relu2 => xs.relu()?.sqr(),
+            Self::Relu6 => xs.clamp(0f32, 6f32),
+            Self::Silu => xs.silu(),
+            Self::Sigmoid => candle_nn::ops::sigmoid(xs),
+            Self::HardSigmoid => candle_nn::ops::hard_sigmoid(xs),
+            Self::Swiglu => candle_nn::ops::swiglu(xs),
+            Self::Swish => xs * candle_nn::ops::sigmoid(xs)?,
+            Self::HardSwish => xs * candle_nn::ops::hard_sigmoid(xs)?,
+            &Self::Elu(alpha) => xs.elu(alpha),
+            &Self::LeakyRelu(negative_slope) => candle_nn::ops::leaky_relu(xs, negative_slope),
+            Self::GeluPytorchTanh => xs.gelu(),
+        }
     }
 }
 

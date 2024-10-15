@@ -11,8 +11,6 @@ These are API docs for the `mistralrs` package.
 
 Each `*_model_id` may be a HF hub repo or a local path. For quantized GGUF models, a list is accepted if multiples files must be specified.
 
-Additionally, for models without quantization, the model architecture should be provided as the `arch` parameter in contrast to GGUF models which encode the architecture in the file. It should be one of the following:
-
 ### Architecture for plain models
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 

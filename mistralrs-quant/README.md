@@ -6,6 +6,7 @@ Currently supported:
 - GGUF: `GgufMatMul`
 - Gptq: `GptqLayer`
 - Hqq: `HqqLayer`
+- FP8: `FP8Linear`
 - Unquantized (used for ISQ): `UnquantLinear`
 
 Some kernels are copied or based on implementations in:

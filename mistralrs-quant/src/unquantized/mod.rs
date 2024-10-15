@@ -167,6 +167,10 @@ impl QuantMethod for UnquantLinear {
             | IsqType::Q8_1 => None,
         }
     }
+
+    fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
+        Some((self.0.weight().clone(), self.0.bias().cloned()))
+    }
 }
 
 // Serialization structure:

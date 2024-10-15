@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    conv2d, embedding, layer_norm, linear, linear_no_bias, Activation, Conv2d, Conv2dConfig,
-    Embedding, LayerNorm, Module, VarBuilder,
+    conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
+    LayerNorm, Module, VarBuilder,
 };
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
@@ -11,13 +11,14 @@ use std::{any::Any, ops::Mul};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, Activation, CausalMasker, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -332,6 +333,15 @@ impl VisionEmbeddings {
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_embedding").add(&self.patch_embedding);
+        uvb.pp("position_embedding").add(&self.position_embedding);
+
+        uvb.to_safetensors()
+    }
 }
 
 struct Attention {
@@ -421,6 +431,17 @@ impl Attention {
         }
         Ok(res)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("q_proj").add(&self.q_proj);
+        uvb.pp("k_proj").add(&self.k_proj);
+        uvb.pp("v_proj").add(&self.v_proj);
+        uvb.pp("out_proj").add(&self.o_proj);
+
+        uvb.to_safetensors()
+    }
 }
 
 struct VisionMLP {
@@ -453,6 +474,15 @@ impl VisionMLP {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("fc1").add(&self.fc1);
+        uvb.pp("fc2").add(&self.fc2);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -580,6 +610,26 @@ impl VisionTransformer {
             .forward(&hidden_states, attention_mask.as_ref())?;
         hidden_states.apply(&self.post_layernorm)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("post_layernorm").add(&self.post_layernorm);
+        uvb.pp("embeddings")
+            .extend(self.embeddings.residual_tensors());
+
+        let uvb_enc = uvb.pp("encoder");
+        for (i, layer) in self.encoder.layers.iter().enumerate() {
+            let uvb_l = uvb_enc.pp("layers").pp(i);
+
+            uvb_l.pp("layer_norm1").add(&layer.layer_norm_1);
+            uvb_l.pp("layer_norm2").add(&layer.layer_norm_2);
+            uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
+            uvb_l.pp("self_attn").extend(layer.attn.residual_tensors());
+        }
+
+        uvb.to_safetensors()
+    }
 }
 
 // == END VISION MODEL ==
@@ -625,6 +675,16 @@ impl Mlp {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("gate_proj").add(&self.gate_proj);
+        uvb.pp("up_proj").add(&self.up_proj);
+        uvb.pp("down_proj").add(&self.down_proj);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -728,6 +788,17 @@ impl PerceiverAttention {
         }
         Ok(res)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("q_proj").add(&self.q_proj);
+        uvb.pp("k_proj").add(&self.k_proj);
+        uvb.pp("v_proj").add(&self.v_proj);
+        uvb.pp("o_proj").add(&self.o_proj);
+
+        uvb.to_safetensors()
+    }
 }
 
 struct PerceiverLayer {
@@ -829,6 +900,33 @@ impl PerceiverResampler {
         }
         self.norm.forward(&compressed_context)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("norm").add(&self.norm);
+        uvb.add_tensor("latents", self.latents.clone());
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb.pp("layers").pp(i);
+
+            uvb_l
+                .pp("input_latents_norm")
+                .add(&layer.input_latents_norm);
+            uvb_l
+                .pp("input_context_norm")
+                .add(&layer.input_context_norm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attn_norm);
+            uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
+            uvb_l
+                .pp("self_attn")
+                .extend(layer.self_attn.residual_tensors());
+        }
+
+        uvb.to_safetensors()
+    }
 }
 
 struct Connector {
@@ -856,6 +954,17 @@ impl Connector {
         let image_hidden_states = self.modality_projection.forward(image_hidden_states)?;
         self.perceiver_resampler
             .forward(&image_hidden_states, attention_mask)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("modality_projection")
+            .extend(self.modality_projection.residual_tensors());
+        uvb.pp("perceiver_resampler")
+            .extend(self.perceiver_resampler.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 
@@ -1077,6 +1186,23 @@ impl IsqModel for Idefics2 {
         &dyn DeviceMapper,
     ) {
         self.text_model.get_layers()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m
+            .pp("text_model")
+            .extend(self.text_model.residual_tensors());
+        uvb_m
+            .pp("vision_model")
+            .extend(self.vision_model.residual_tensors());
+        uvb_m
+            .pp("connector")
+            .extend(self.connector.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 

@@ -212,6 +212,25 @@ impl TextModelBuilder {
         self
     }
 
+    /// Path to read a UQFF file from.
+    pub fn from_uqff(mut self, path: PathBuf) -> Self {
+        self.from_uqff = Some(path);
+        self
+    }
+
+    /// Path to write a UQFF file to.
+    ///
+    /// The parent (part of the path excluding the filename) will determine where any other files
+    /// generated are written to. These can be used to load UQFF models standalone, and may include:
+    /// - `residual.safetensors`
+    /// - `tokenizer.json`
+    /// - `config.json`
+    /// - And others
+    pub fn write_uqff(mut self, path: PathBuf) -> Self {
+        self.write_uqff = Some(path);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.use_flash_attn,

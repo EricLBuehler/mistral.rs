@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::{RmsNorm, Sdpa},
+    layers::{Activation, RmsNorm, Sdpa},
     lora::{linear_b as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -39,7 +39,7 @@ struct MLP {
     gate_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     up_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     down_proj: Arc<dyn LinearLayerLike + Send + Sync>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
 }
 
 impl MLP {
@@ -801,6 +801,10 @@ impl IsqModel for XLoraModel {
             ));
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 

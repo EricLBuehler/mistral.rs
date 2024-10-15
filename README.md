@@ -28,6 +28,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
+- Check out UQFF for prequantized models of various methods!
+    - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
+
 - 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
@@ -106,7 +109,7 @@ Mistal.rs supports several model categories:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
-- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, see some [models](docs/UQFF.md#list-of-models) which have already been converted.
+- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
@@ -376,8 +379,6 @@ please consider using the method demonstrated in examples below, where the token
 ## Run with the CLI
 
 Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
-
-Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
 
 ### Architecture for plain models
 

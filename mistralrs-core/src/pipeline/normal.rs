@@ -18,6 +18,7 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -28,9 +29,9 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_write_uqff_paths,
-    lora_model_loader, normal_model_loader, xlora_model_loader, DeviceMapMetadata,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
+    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -59,6 +60,10 @@ pub struct NormalPipeline {
     topology: Option<Topology>,
     silent: bool,
     organization: IsqOrganization,
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -75,6 +80,7 @@ pub struct NormalLoader {
     tgt_non_granular_index: Option<usize>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
+    from_uqff: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -203,6 +209,7 @@ impl NormalLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
+            from_uqff: RwLock::new(None),
         }))
     }
 }
@@ -227,8 +234,12 @@ impl Loader for NormalLoader {
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         *self
             .token_source
             .write()
@@ -374,14 +385,21 @@ impl Loader for NormalLoader {
                 silent,
                 self.config.organization,
                 self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
+                },
             )?;
-        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
-            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
+        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                &from_uqff,
+                from_uqff,
             )?;
         }
 
@@ -441,6 +459,9 @@ impl Loader for NormalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
         })))
     }
 
@@ -476,6 +497,14 @@ impl IsqPipelineMixin for NormalPipeline {
                 self.silent,
                 self.organization,
                 None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
+                },
             )
             .map_err(anyhow::Error::msg)
     }
