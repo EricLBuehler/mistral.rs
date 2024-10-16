@@ -415,6 +415,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `phi2`
 - `phi3`
 - `starcoder2`
+- `qwen2`
 
 **With adapters:**
 
