@@ -64,6 +64,7 @@ pub enum QuantMethodConfig {
         g_idx: Option<Tensor>,
         bias: Option<Tensor>,
         workspace: Option<Tensor>,
+        is_marlin: bool,
     },
     Gguf {
         q_weight: Arc<QTensor>,

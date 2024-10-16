@@ -30,6 +30,7 @@ impl GPTQMatMul {
         let scale_shape = scale_l.dims();
 
         let pack_factor: usize = 32 / self.bits as usize;
+        let size_m = x_shape[0] * x_shape[1];
         let size_k = weight_shape[0] * pack_factor * 2; //marlin format
         let size_n = weight_shape[1] / 2; //marlin format
 
@@ -39,7 +40,7 @@ impl GPTQMatMul {
 
         // Get cuda slices for all tensors
         let input = x.as_cuda_slice::<T>()?;
-        let qw = qweight.as_cuda_slice::<u32>()?;
+        let qw = qweight.as_cuda_slice::<i32>()?;
         let qs = scale.as_cuda_slice::<T>()?;
 
         // Get cuda views for all tensors
@@ -65,35 +66,37 @@ impl GPTQMatMul {
             *workspace_.device_ptr() as *const core::ffi::c_void
         };
 
-        unsafe {
-            let groupsize: i32 = if scale_shape[0] == 1 {
-                -1i32
-            } else {
-                (size_k / scale_shape[0]) as i32
-            };
-            if x.dtype() == DType::F16 {
+        let groupsize: i32 = if scale_shape[0] == 1 {
+            -1i32
+        } else {
+            (size_k / scale_shape[0]) as i32
+        };
+        if x.dtype() == DType::F16 {
+            unsafe {
                 marlin_4bit_f16(
                     in_ptr,
                     qw_ptr as *const i32,
                     qs_ptr,
                     out_ptr,
-                    (x_shape[0] * x_shape[1]) as i32, //m
-                    size_k as i32,                    //k
-                    size_n as i32,                    //n
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
                     workspace_ptr,
-                    groupsize as i32,
+                    groupsize,
                 );
-            } else if x.dtype() == DType::BF16 {
+            }
+        } else if x.dtype() == DType::BF16 {
+            unsafe {
                 marlin_4bit_bf16(
                     in_ptr,
                     qw_ptr as *const i32,
                     qs_ptr,
                     out_ptr,
-                    (x_shape[0] * x_shape[1]) as i32, //m
-                    size_k as i32,                    //k
-                    size_n as i32,                    //n
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
                     workspace_ptr,
-                    groupsize as i32,
+                    groupsize,
                 );
             }
         }
@@ -137,7 +140,7 @@ impl candle::CustomOp3 for GPTQMatMul {
     }
 }
 
-pub fn gptq_matmul(
+pub fn gptq_marlin_matmul(
     x: &Tensor,
     qweight: &Tensor,
     scale: &Tensor,
@@ -169,8 +172,8 @@ impl GPTQRepack {
         let dev = qweight.device();
         let q_shape = qweight_l.dims();
         let mut out_shape: Vec<usize> = q_shape.to_vec();
-        out_shape[0] = (q_shape[0] / 2) as usize;
-        out_shape[1] = (q_shape[1] * 2) as usize;
+        out_shape[0] /= 2;
+        out_shape[1] *= 2;
 
         let oshape: Shape = out_shape.into();
 

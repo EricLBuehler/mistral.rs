@@ -19,7 +19,7 @@ use half::f16;
 use lazy_static::lazy_static;
 
 use crate::{
-    gptq::cuda_backend::{gptq_matmul, gptq_weight_repack},
+    gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
 };
@@ -47,6 +47,7 @@ pub struct GptqLayer {
     bits: i32,
     use_exllama: bool,
     workspace: Option<Tensor>,
+    is_marlin: bool,
 }
 
 impl GptqLayer {
@@ -229,6 +230,7 @@ impl QuantMethod for GptqLayer {
                 g_idx,
                 bias,
                 workspace,
+                is_marlin,
             } => {
                 if workspace.is_none() {
                     let dev = get_cuda_device(&q_weight)?;
@@ -249,6 +251,7 @@ impl QuantMethod for GptqLayer {
                     use_exllama,
                     bias,
                     workspace,
+                    is_marlin,
                 })
             }
             QuantMethodConfig::Gguf { .. }
@@ -275,15 +278,21 @@ impl QuantMethod for GptqLayer {
             candle_core::bail!("Expected CUDA input to GptqLayer");
         }
 
-        let out = match (self.g_idx.as_ref(), self.gptq_qzeros.as_ref()) {
-            (Some(g_idx), Some(gptq_qzeros)) => self.gptq_gemm(
-                reshaped_a,
-                g_idx,
-                gptq_qzeros,
-                gptq_qzeros.dim(0)? as i32,
-                self.use_exllama,
-            )?,
-            (None, None) => gptq_matmul(
+        let out = match (
+            self.g_idx.as_ref(),
+            self.gptq_qzeros.as_ref(),
+            self.is_marlin,
+        ) {
+            (Some(g_idx), Some(gptq_qzeros), false) => self
+                .gptq_gemm(
+                    reshaped_a,
+                    g_idx,
+                    gptq_qzeros,
+                    gptq_qzeros.dim(0)? as i32,
+                    self.use_exllama,
+                )?
+                .reshape(out_shape)?,
+            (_, _, true) => gptq_marlin_matmul(
                 a,
                 &self.q_weight,
                 &self.gptq_scales,
@@ -292,8 +301,6 @@ impl QuantMethod for GptqLayer {
             )?,
             _ => unreachable!(),
         };
-
-        let out = out.reshape(out_shape)?;
 
         if let Some(bias) = &self.bias {
             out.broadcast_add(bias)
@@ -361,12 +368,18 @@ pub fn gptq_linear(
     }
 
     let marlin_compatible = config.bits == 4 || config.bits == 8;
+    let marlin_format = config
+        .checkpoint_format
+        .as_ref()
+        .is_some_and(|fmt| fmt == "marlin");
 
-    let marlin_format = config.checkpoint_format.is_some()
-        && config.checkpoint_format.as_ref().unwrap() == "marlin";
-
+    let qw_shape = if marlin_format {
+        (in_dim / pack_factor!(config.bits) / 2, out_dim * 2)
+    } else {
+        (in_dim / pack_factor!(config.bits), out_dim)
+    };
     let qweight = vb.get_with_hints_dtype(
-        (in_dim / pack_factor!(config.bits), out_dim),
+        qw_shape,
         if marlin_format { "B" } else { "qweight" },
         Default::default(),
         DType::I32,
@@ -383,11 +396,9 @@ pub fn gptq_linear(
     } else {
         None
     };
+    let workspace = Tensor::zeros(out_dim / pack_factor!(config.bits), DType::U32, vb.device())?;
 
     let config = if marlin_format {
-        let workspace =
-            Tensor::zeros(out_dim / pack_factor!(config.bits), DType::U32, vb.device())?;
-
         QuantMethodConfig::Gptq {
             bits: config.bits as i32,
             use_exllama: false,
@@ -397,6 +408,7 @@ pub fn gptq_linear(
             g_idx: None,
             bias,
             workspace: Some(workspace),
+            is_marlin: true,
         }
     } else {
         fn get_scale_perms() -> (Vec<u32>, Vec<u32>) {
@@ -466,6 +478,11 @@ pub fn gptq_linear(
         } else {
             scales
         };
+        let workspace = if marlin_compatible {
+            Some(workspace)
+        } else {
+            None
+        };
 
         QuantMethodConfig::Gptq {
             bits: config.bits as i32,
@@ -475,7 +492,8 @@ pub fn gptq_linear(
             gptq_scales: scales,
             g_idx: Some(g_idx),
             bias,
-            workspace: None,
+            workspace,
+            is_marlin: marlin_compatible,
         }
     };
     Ok(Arc::new(GptqLayer::new(config)?))

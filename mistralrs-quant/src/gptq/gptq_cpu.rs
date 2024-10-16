@@ -123,6 +123,7 @@ pub fn gptq_linear(
         g_idx: Some(g_idx),
         bias,
         workspace: None,
+        is_marlin: false,
     };
     Ok(Arc::new(GptqLayer::new(config)?))
 }
