@@ -734,6 +734,20 @@
 <a href="#734" id="734">734</a>
 <a href="#735" id="735">735</a>
 <a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -772,6 +786,7 @@
     models::quantized_llama::ModelWeights <span class="kw">as </span>QLlama,
     models::quantized_phi2::ModelWeights <span class="kw">as </span>QPhi,
     models::quantized_phi3::ModelWeights <span class="kw">as </span>QPhi3,
+    models::quantized_qwen2::ModelWeights <span class="kw">as </span>QQwen2,
     models::quantized_starcoder2::ModelWeights <span class="kw">as </span>QStarcoder2,
     utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -799,6 +814,7 @@
     XLoraPhi3(XLoraQPhi3),
     Phi3(QPhi3),
     Starcoder2(QStarcoder2),
+    Qwen2(QQwen2),
 }
 
 <span class="kw">pub struct </span>GGUFPipeline {
@@ -1174,6 +1190,7 @@
                 GGUFArchitecture::Starcoder2 =&gt; {
                     Model::Starcoder2(QStarcoder2::try_from(model_config)<span class="question-mark">?</span>)
                 }
+                GGUFArchitecture::Qwen2 =&gt; Model::Qwen2(QQwen2::try_from(model_config)<span class="question-mark">?</span>),
                 a =&gt; <span class="macro">bail!</span>(<span class="string">"Unsupported architecture `{a:?}` for GGUF"</span>),
             },
             ModelKind::GgufAdapter { adapter, .. } =&gt; <span class="kw">match </span>arch {
@@ -1215,6 +1232,7 @@
             Model::Phi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
             Model::XLoraPhi3(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
             Model::Starcoder2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
+            Model::Qwen2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
         };
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
@@ -1224,6 +1242,7 @@
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
         };
 
         <span class="kw">if </span>chat_template.bos_token.is_none() &amp;&amp; bos.is_some() {
@@ -1319,6 +1338,7 @@
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
         }
     }
 }
@@ -1351,6 +1371,7 @@
             Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
             Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.device.clone(),
         }
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
@@ -1448,6 +1469,13 @@
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_kernel,
+                paged_attn_meta,
+            )<span class="question-mark">?</span>,
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.forward(
+                <span class="kw-2">&amp;</span>input_ids,
+                <span class="kw-2">&amp;</span>seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
                 paged_attn_meta,
             )<span class="question-mark">?</span>,
         };
