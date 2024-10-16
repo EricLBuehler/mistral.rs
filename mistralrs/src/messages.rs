@@ -4,7 +4,7 @@ use super::*;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// A type which can be used as a request.
 pub trait RequestLike {
@@ -331,10 +331,63 @@ impl RequestBuilder {
         }
     }
 
+    /// Add a message to the request.
+    ///
+    /// For messages with tool calls, use [`Self::add_message_with_tool_call`].
+    /// For messages with tool outputs, use [`Self::add_tool_message`].
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
+        ]));
+        self
+    }
+
+    /// Add a message with the output of a tool call.
+    pub fn add_tool_message(mut self, tool_content: impl ToString, tool_id: impl ToString) -> Self {
+        self.messages.push(IndexMap::from([
+            (
+                "role".to_string(),
+                Either::Left(TextMessageRole::Tool.to_string()),
+            ),
+            (
+                "content".to_string(),
+                Either::Left(tool_content.to_string()),
+            ),
+            (
+                "tool_call_id".to_string(),
+                Either::Left(tool_id.to_string()),
+            ),
+        ]));
+        self
+    }
+
+    pub fn add_message_with_tool_call(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        tool_calls: Vec<ToolCallResponse>,
+    ) -> Self {
+        let tool_messages = tool_calls
+            .iter()
+            .map(|t| {
+                IndexMap::from([
+                    ("id".to_string(), Value::String(t.id.clone())),
+                    ("type".to_string(), Value::String(t.tp.to_string())),
+                    (
+                        "function".to_string(),
+                        json!({
+                            "name": t.function.name,
+                            "arguments": t.function.arguments,
+                        }),
+                    ),
+                ])
+            })
+            .collect();
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Left(text.to_string())),
+            ("function".to_string(), Either::Right(tool_messages)),
         ]));
         self
     }

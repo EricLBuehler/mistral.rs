@@ -125,21 +125,27 @@ fn main() -> anyhow::Result<()> {
             let result = get_weather(input);
             // Add tool call message from assistant so it knows what it called
             messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left("asistant".to_string())),
+                ("role".to_string(), Either::Left("assistant".to_string())),
+                ("content".to_string(), Either::Left("".to_string())),
                 (
-                    "content".to_string(),
-                    Either::Right(
-                        json!({
-                            "name": called.function.name,
-                            "parameters": called.function.arguments,
-                        })
-                        .to_string(),
-                    ),
+                    "tool_calls".to_string(),
+                    Either::Right(Vec![IndexMap::from([
+                        ("id".to_string(), tool_call.id),
+                        (
+                            "function".to_string(),
+                            json!({
+                                "name": called.function.name,
+                                "arguments": called.function.arguments,
+                            })
+                        ),
+                        ("type".to_string(), "function".to_string()),
+                    ])]),
                 ),
             ]));
             // Add message from the tool
             messages.push(IndexMap::from([
                 ("role".to_string(), Either::Left("tool".to_string())),
+                ("tool_call_id".to_string(), Either::Left(tool_call.id)),
                 ("content".to_string(), Either::Left(result)),
             ]));
 
