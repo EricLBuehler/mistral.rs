@@ -431,7 +431,7 @@ You can launch interactive mode, a simple chat application running in the termin
 Vision models work too:
 
 ```bash
-./mistralrs-server -i vision-plain -m llama-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
 
 And even diffusion models:
