@@ -2,7 +2,7 @@
 
 - X-LoRA with no quantization
 
-To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
+To start an X-LoRA server exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
 
 ```bash
 ./mistralrs-server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
@@ -15,4 +15,4 @@ To start an LoRA server with adapters from the X-LoRA paper (you should modify t
 ./mistralrs-server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora
 ```
 
-Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
+Normally with a LoRA model, you would use a custom ordering file. However, for this example, we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.

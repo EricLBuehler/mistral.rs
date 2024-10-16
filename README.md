@@ -95,7 +95,7 @@ Mistral.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
-- HQQ: 4-bit and 8 bit, with ISQ support
+- HQQ: 4-bit and 8-bit, with ISQ support
 
 **Powerful**:
 - LoRA support with weight merging
@@ -570,7 +570,7 @@ Mistral.rs will attempt to automatically load a chat template and tokenizer. Thi
 
 ## Contributing
 
-Thank you for contributing! If you have any problems or want to contribute something, please raise an issue or pull request.
+Thank you for contributing! If you have any problems or want to contribute something, please raise an issue or pull a request.
 If you want to add a new model, please contact us via an issue and we can coordinate how to do this.
 
 ## FAQ
@@ -583,7 +583,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
 - Error: `recompile with -fPIE`:
     - Some Linux distributions require compiling with `-fPIE`.
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
-- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
+- Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vision model:
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 
 ## Credits

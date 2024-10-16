@@ -8,7 +8,7 @@ This implementation supports both LLaVA and LLaVANext(which adds multi resolutio
 * llava-hf/llava-1.5-7b-hf
 
 
-The LLaVA and LLaVANext Model has support in the Rust, Python, and HTTP APIs. The LLaVA and LLaVANext Model also supports ISQ for increased performance. 
+The LLaVA and LLaVANext Model have support in the Rust, Python, and HTTP APIs. The LLaVA and LLaVANext Models also support ISQ for increased performance. 
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -101,7 +101,7 @@ print(resp)
 ## Rust
 You can find this example [here](../mistralrs/examples/llava_next/main.rs).
 
-This is a minimal example of running the LLaVA and LLaVANext model with a dummy image.
+This is a minimal example of running the LLaVA and LLaVANext models with a dummy image.
 
 ```rust
 use anyhow::Result;
