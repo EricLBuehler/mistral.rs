@@ -536,6 +536,8 @@ pub trait IsqModel {
 
                     std::fs::create_dir_all(parent)?;
 
+                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+
                     let residual = match organization {
                         IsqOrganization::Default => self.residual_tensors(),
                         IsqOrganization::MoeExpertsOnly => self
