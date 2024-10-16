@@ -66,8 +66,12 @@ async fn main() -> Result<()> {
             // Add tool call message from assistant so it knows what it called
             // Then, add message from the tool
             messages = messages
-                .add_message_with_tool_call(TextMessageRole::Assistant, String::new(), vec![called])
-                .add_tool_message(result, called.id)
+                .add_message_with_tool_call(
+                    TextMessageRole::Assistant,
+                    String::new(),
+                    vec![called.clone()],
+                )
+                .add_tool_message(result, called.id.clone())
                 .set_tool_choice(ToolChoice::None);
 
             let response = model.send_chat_request(messages.clone()).await?;

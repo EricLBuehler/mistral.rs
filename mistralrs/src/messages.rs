@@ -1,10 +1,10 @@
-use std::{collections::HashMap, fmt::Display, ops::Index, sync::Arc};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
 
 use super::*;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// A type which can be used as a request.
 pub trait RequestLike {
@@ -372,21 +372,21 @@ impl RequestBuilder {
             .iter()
             .map(|t| {
                 IndexMap::from([
-                    ("id".to_string(), Either::Left(t.id)),
-                    ("type".to_string(), Either::Left(t.tp.to_string())),
+                    ("id".to_string(), Value::String(t.id.clone())),
+                    ("type".to_string(), Value::String(t.tp.to_string())),
                     (
                         "function".to_string(),
-                        Either::Right(IndexMap::from([
-                            ("name".to_string(), Value::String(t.function.name)),
-                            ("arguments".to_string(), Value::String(t.function.arguments)),
-                        ])),
+                        json!({
+                            "name": t.function.name,
+                            "arguments": t.function.arguments,
+                        }),
                     ),
                 ])
             })
             .collect();
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
-            ("content".to_string(), Either::Left(text.into())),
+            ("content".to_string(), Either::Left(text.to_string())),
             ("function".to_string(), Either::Right(tool_messages)),
         ]));
         self
