@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -23,12 +23,12 @@ use crate::{
         IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -584,6 +584,22 @@ impl IsqModel for Llama {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.wte);
+        uvb_m.pp("norm").add(&self.ln_f);
+
+        for (layer_idx, layer) in self.blocks.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.rms_1);
+            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

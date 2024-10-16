@@ -236,17 +236,17 @@ impl fmt::Display for TokenSource {
 #[derive(Clone, Default, derive_more::From, strum::Display)]
 pub enum ModelKind {
     #[default]
-    #[strum(to_string = "normal (no quant, no adapters)")]
+    #[strum(to_string = "normal (no adapters)")]
     Normal,
 
-    #[strum(to_string = "quantized from {quant} (no adapters)")]
-    Quantized { quant: QuantizationKind },
+    #[strum(to_string = "gguf quantized from {quant} (no adapters)")]
+    GgufQuantized { quant: QuantizationKind },
 
-    #[strum(to_string = "{adapter}, (no quant)")]
+    #[strum(to_string = "{adapter}")]
     Adapter { adapter: AdapterKind },
 
-    #[strum(to_string = "{adapter}, quantized from {quant}")]
-    AdapterQuantized {
+    #[strum(to_string = "{adapter}, gguf quantized from {quant}")]
+    GgufAdapter {
         adapter: AdapterKind,
         quant: QuantizationKind,
     },
@@ -311,7 +311,7 @@ impl ModelKind {
 
         match self {
             Normal | Adapter { .. } => vec![None],
-            Quantized { quant } | AdapterQuantized { quant, .. } => vec![Some(*quant)],
+            GgufQuantized { quant } | GgufAdapter { quant, .. } => vec![Some(*quant)],
             Speculative { target, draft } => {
                 let t = *target.clone();
                 let d = *draft.clone();
@@ -335,8 +335,8 @@ impl ModelKind {
         use ModelKind::*;
 
         match self {
-            Normal | Quantized { .. } => vec![None],
-            Adapter { adapter } | AdapterQuantized { adapter, .. } => vec![Some(*adapter)],
+            Normal | GgufQuantized { .. } => vec![None],
+            Adapter { adapter } | GgufAdapter { adapter, .. } => vec![Some(*adapter)],
             Speculative { target, draft } => {
                 let t = *target.clone();
                 let d = *draft.clone();

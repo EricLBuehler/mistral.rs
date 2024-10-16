@@ -1,5 +1,6 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
@@ -107,6 +108,11 @@ pub use utils::paged_attn_supported;
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
+pub struct MistralRsConfig {
+    pub kind: ModelKind,
+    pub device: Device,
+}
+
 /// The MistralRs struct handles sending requests to the engine.
 /// It is the core multi-threaded component of mistral.rs, and uses `mspc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
@@ -121,6 +127,7 @@ pub struct MistralRs {
     engine_handler: RwLock<JoinHandle<()>>,
     engine_id: usize,
     category: ModelCategory,
+    config: MistralRsConfig,
 }
 
 #[derive(Clone)]
@@ -324,6 +331,10 @@ impl MistralRs {
         let sender = RwLock::new(tx);
         let id = pipeline.try_lock().unwrap().name();
 
+        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
+        let device = pipeline.try_lock().unwrap().device();
+        let config = MistralRsConfig { kind, device };
+
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
@@ -357,6 +368,7 @@ impl MistralRs {
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,
+            config,
         })
     }
 
@@ -482,5 +494,9 @@ impl MistralRs {
             f.write_all(format!("Error response at {time}: {err}\n\n").as_bytes())
                 .expect("Unable to write data");
         }
+    }
+
+    pub fn config(&self) -> &MistralRsConfig {
+        &self.config
     }
 }

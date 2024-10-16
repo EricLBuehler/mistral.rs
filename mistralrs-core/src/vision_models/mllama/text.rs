@@ -13,6 +13,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::config::MLlamaTextConfig;
@@ -446,16 +447,12 @@ impl MLlamaCrossAttentionDecoderLayer {
             mlp,
             input_layernorm,
             post_attention_layernorm,
-            // NOTE: Preapply the tanh
             attn_gate: mapper
                 .set_device(layer_idx, vb.clone(), false)
-                .get((1,), "cross_attn_attn_gate")?
-                .tanh()?,
-            // NOTE: Preapply the tanh
+                .get((1,), "cross_attn_attn_gate")?,
             mlp_gate: mapper
                 .set_device(layer_idx, vb.clone(), false)
-                .get((1,), "cross_attn_mlp_gate")?
-                .tanh()?,
+                .get((1,), "cross_attn_mlp_gate")?,
         })
     }
 
@@ -474,7 +471,7 @@ impl MLlamaCrossAttentionDecoderLayer {
         hidden_states =
             self.attn
                 .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
-        hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate)?)?;
+        hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
         let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
@@ -486,7 +483,7 @@ impl MLlamaCrossAttentionDecoderLayer {
                 .broadcast_mul(&hidden_states)?;
         }
 
-        residual + hidden_states.broadcast_mul(&self.mlp_gate)?
+        residual + hidden_states.broadcast_mul(&self.mlp_gate.tanh()?)?
     }
 }
 
@@ -712,5 +709,52 @@ impl IsqModel for MLlamaTextModel {
             }
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("model.embed_tokens").add(&self.embed_tokens);
+        uvb.pp("lm_head").add(&self.lm_head);
+
+        let uvb = uvb.pp("model");
+
+        uvb.pp("norm").add(&self.norm);
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb.pp("layers").pp(i);
+            match layer {
+                MLlamaDecoderLayer::CrossAttn(crossattn) => {
+                    // Cross attention layers are not quantized
+                    uvb_l
+                        .pp("post_attention_layernorm")
+                        .add(&crossattn.post_attention_layernorm);
+                    uvb_l.pp("input_layernorm").add(&crossattn.input_layernorm);
+                    uvb_l.add_tensor("cross_attn_attn_gate", crossattn.attn_gate.clone());
+                    uvb_l.add_tensor("cross_attn_mlp_gate", crossattn.mlp_gate.clone());
+
+                    let uvb_attn = uvb_l.pp("cross_attn");
+                    uvb_attn.pp("q_proj").add(&crossattn.attn.q_proj);
+                    uvb_attn.pp("k_proj").add(&crossattn.attn.k_proj);
+                    uvb_attn.pp("v_proj").add(&crossattn.attn.v_proj);
+                    uvb_attn.pp("o_proj").add(&crossattn.attn.o_proj);
+                    uvb_attn.pp("q_norm").add(&crossattn.attn.q_norm);
+                    uvb_attn.pp("k_norm").add(&crossattn.attn.k_norm);
+
+                    let uvb_mlp = uvb_l.pp("mlp");
+                    uvb_mlp.pp("gate_proj").add(&crossattn.mlp.gate_proj);
+                    uvb_mlp.pp("up_proj").add(&crossattn.mlp.up_proj);
+                    uvb_mlp.pp("down_proj").add(&crossattn.mlp.down_proj);
+                }
+                MLlamaDecoderLayer::SelfAttn(selfattn) => {
+                    uvb_l
+                        .pp("post_attention_layernorm")
+                        .add(&selfattn.post_attention_layernorm);
+                    uvb_l.pp("input_layernorm").add(&selfattn.input_layernorm);
+                }
+            }
+        }
+
+        uvb.to_safetensors()
     }
 }

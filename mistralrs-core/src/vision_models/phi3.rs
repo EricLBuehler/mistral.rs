@@ -28,7 +28,7 @@ use crate::{
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -503,6 +503,7 @@ pub struct ImageEmbedding {
     hd_transform_order: String,
     use_hd_transform: bool,
     vocab_size: usize,
+    tensors: Vec<(String, Tensor)>,
 }
 
 impl ImageEmbedding {
@@ -558,50 +559,52 @@ impl ImageEmbedding {
             .projection_cls
             .clone()
             .unwrap_or("linear".to_string());
+
+        let mut tensors = Vec::new();
         let layers: Vec<Box<dyn ModuleWithMetadata>> =
             match (projection_cls.as_str(), use_hd_transform) {
                 ("linear", _) => {
-                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                        image_dim_out,
-                        hidden_size,
-                        true,
-                        vb.pp("img_projection"),
-                    )?)?)]
+                    let a = linear_b(image_dim_out, hidden_size, true, vb.pp("img_projection"))?;
+                    tensors.push(("img_projection.weight".to_string(), a.weight().clone()));
+                    if let Some(b) = a.bias().cloned() {
+                        tensors.push(("img_projection.bias".to_string(), b));
+                    }
+                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(a)?)]
                 }
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
+                    let a = linear_b(image_dim_out * 4, dim_proj, true, vb.pp("img_projection.0"))?;
+                    tensors.push(("img_projection.0.weight".to_string(), a.weight().clone()));
+                    if let Some(b) = a.bias().cloned() {
+                        tensors.push(("img_projection.0.bias".to_string(), b));
+                    }
+                    let b = linear_b(dim_proj, dim_proj, true, vb.pp("img_projection.2"))?;
+                    tensors.push(("img_projection.2.weight".to_string(), b.weight().clone()));
+                    if let Some(b) = b.bias().cloned() {
+                        tensors.push(("img_projection.2.bias".to_string(), b));
+                    }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            image_dim_out * 4,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.0"),
-                        )?)?),
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(a)?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.2"),
-                        )?)?),
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(b)?),
                     ]
                 }
                 ("mlp", false) => {
                     let dim_proj = hidden_size;
+                    let a = linear_b(image_dim_out, dim_proj, true, vb.pp("img_projection.0"))?;
+                    tensors.push(("img_projection.0.weight".to_string(), a.weight().clone()));
+                    if let Some(b) = a.bias().cloned() {
+                        tensors.push(("img_projection.0.bias".to_string(), b));
+                    }
+                    let b = linear_b(dim_proj, dim_proj, true, vb.pp("img_projection.2"))?;
+                    tensors.push(("img_projection.2.weight".to_string(), b.weight().clone()));
+                    if let Some(b) = b.bias().cloned() {
+                        tensors.push(("img_projection.2.bias".to_string(), b));
+                    }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            image_dim_out,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.0"),
-                        )?)?),
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(a)?),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.2"),
-                        )?)?),
+                        Box::new(TryInto::<FusedBiasLinear>::try_into(b)?),
                     ]
                 }
                 _ => {
@@ -629,6 +632,7 @@ impl ImageEmbedding {
             hd_transform_order,
             use_hd_transform,
             vocab_size: config.vocab_size,
+            tensors,
         })
     }
 
@@ -854,6 +858,22 @@ impl ImageEmbedding {
 
         Ok(hidden_states)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        if let Some(glb_gn) = self.glb_gn.clone() {
+            uvb.add_tensor("glb_GN", glb_gn);
+        }
+        if let Some(sub_gn) = self.sub_gn.clone() {
+            uvb.add_tensor("sub_GN", sub_gn);
+        }
+        uvb.extend(self.tensors.clone());
+        uvb.pp("img_processor.vision_model")
+            .extend(self.image_processor.residual_tensors());
+
+        uvb.to_safetensors()
+    }
 }
 
 // =================== ============= ===================
@@ -1062,6 +1082,27 @@ impl IsqModel for Model {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+        uvb_m
+            .pp("vision_embed_tokens")
+            .extend(self.vision_embed_tokens.residual_tensors());
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

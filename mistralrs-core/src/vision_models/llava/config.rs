@@ -1,7 +1,6 @@
-use candle_nn::Activation;
 use serde::Deserialize;
 
-use crate::layers::Llama3RopeConfig;
+use crate::layers::{Activation, Llama3RopeConfig};
 use crate::serde_default_fn;
 
 use crate::models::llama::Config as LLaMAConfig;

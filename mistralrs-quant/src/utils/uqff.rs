@@ -1,11 +1,16 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use half::{bf16, f16};
+
+// v0.1.0: initial release
+// v0.1.1: add i16 dtype
+// v0.1.2: add F8E4M3
 
 const HQFF_VERSION_MAJOR: u32 = 0;
 const HQFF_VERSION_MINOR: u32 = 1;
-const HQFF_VERSION_PATCH: u32 = 1;
+const HQFF_VERSION_PATCH: u32 = 2;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 pub(crate) const HQFF_VERSION: u32 =
@@ -22,6 +27,43 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+// -----------------------
+// Tensor dtype, u32, little endian
+// -----------------------
+pub(crate) fn write_dtype(dtype: DType, buffer: &mut Vec<u8>) {
+    let dtype: u32 = match dtype {
+        DType::U8 => 0,
+        DType::U32 => 1,
+        DType::I32 => 2,
+        DType::I64 => 3,
+        DType::F16 => 4,
+        DType::BF16 => 5,
+        DType::F32 => 6,
+        DType::F64 => 7,
+        DType::I16 => 8,
+        DType::F8E4M3 => 9,
+    };
+    buffer.extend(&dtype.to_le_bytes());
+}
+
+pub(crate) fn read_dtype<R: std::io::Read>(buffer: &mut R) -> Result<DType> {
+    let dtype = buffer.read_u32::<LittleEndian>()?;
+    let dtype = match dtype {
+        0 => DType::U8,
+        1 => DType::U32,
+        2 => DType::I32,
+        3 => DType::I64,
+        4 => DType::F16,
+        5 => DType::BF16,
+        6 => DType::F32,
+        7 => DType::F64,
+        8 => DType::I16,
+        9 => DType::F8E4M3,
+        _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
+    };
+    Ok(dtype)
 }
 
 // -----------------------
@@ -54,21 +96,12 @@ pub(crate) fn serialize_tensor(buffer: &mut Vec<u8>, tensor: &Tensor) -> Result<
         DType::BF16 => data_to_bytes::<half::bf16>(tensor.to_vec1()?),
         DType::F32 => data_to_bytes::<f32>(tensor.to_vec1()?),
         DType::F64 => data_to_bytes::<f64>(tensor.to_vec1()?),
+        DType::F8E4M3 => data_to_bytes::<F8E4M3>(tensor.to_vec1()?),
     };
     buffer.extend(&(bias.len() as u32).to_le_bytes());
 
-    let dtype: u32 = match tensor.dtype() {
-        DType::U8 => 0,
-        DType::U32 => 1,
-        DType::I32 => 2,
-        DType::I64 => 3,
-        DType::F16 => 4,
-        DType::BF16 => 5,
-        DType::F32 => 6,
-        DType::F64 => 7,
-        DType::I16 => 8,
-    };
-    buffer.extend(&dtype.to_le_bytes());
+    // DType
+    write_dtype(tensor.dtype(), buffer);
 
     // Shape
     buffer.extend((b_shape.len() as u32).to_le_bytes());
@@ -87,19 +120,8 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
 ) -> Result<Tensor> {
     let data_len = buffer.read_u32::<LittleEndian>()? as usize;
 
-    let dtype = buffer.read_u32::<LittleEndian>()?;
-    let dtype = match dtype {
-        0 => DType::U8,
-        1 => DType::U32,
-        2 => DType::I32,
-        3 => DType::I64,
-        4 => DType::F16,
-        5 => DType::BF16,
-        6 => DType::F32,
-        7 => DType::F64,
-        8 => DType::I16,
-        _ => candle_core::bail!("unknown dtype for quantized bias tensor {dtype}"),
-    };
+    // DType
+    let dtype = read_dtype(buffer)?;
 
     let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
 
@@ -121,6 +143,7 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::I16 => bytes_to_data::<i16>(&tensor_data, &dims, device),
         DType::U32 => bytes_to_data::<u32>(&tensor_data, &dims, device),
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
+        DType::F8E4M3 => bytes_to_data::<F8E4M3>(&tensor_data, &dims, device),
     }
 }
 
