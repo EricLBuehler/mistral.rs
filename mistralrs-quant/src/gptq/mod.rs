@@ -1,4 +1,6 @@
 #[cfg(feature = "cuda")]
+mod cuda_backend;
+#[cfg(feature = "cuda")]
 mod ffi;
 #[cfg(not(feature = "cuda"))]
 mod gptq_cpu;
@@ -6,6 +8,6 @@ mod gptq_cpu;
 mod gptq_cuda;
 
 #[cfg(not(feature = "cuda"))]
-pub use gptq_cpu::GptqLayer;
+pub use gptq_cpu::{gptq_linear, GptqLayer};
 #[cfg(feature = "cuda")]
-pub use gptq_cuda::GptqLayer;
+pub use gptq_cuda::{gptq_linear, GptqLayer};
