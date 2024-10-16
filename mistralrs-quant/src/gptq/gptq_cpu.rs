@@ -1,5 +1,6 @@
-use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
+use crate::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
 use candle_core::{DType, Device, Result, Tensor};
+use candle_nn::VarBuilder;
 use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -14,15 +15,7 @@ impl QuantMethod for GptqLayer {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gptq {
-                bits: _,
-                use_exllama: _,
-                q_weight: _,
-                gptq_qzeros: _,
-                gptq_scales: _,
-                g_idx: _,
-                bias: _,
-            } => candle_core::bail!("GPTQ is only supported on CUDA."),
+            QuantMethodConfig::Gptq { .. } => candle_core::bail!("GPTQ is only supported on CUDA."),
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
@@ -71,4 +64,66 @@ impl QuantizedSerde for GptqLayer {
     fn name(&self) -> &'static str {
         "gptq"
     }
+}
+
+macro_rules! pack_factor {
+    ($bits:expr) => {
+        32 / $bits
+    };
+}
+
+pub fn gptq_linear(
+    in_dim: usize,
+    out_dim: usize,
+    config: &QuantizedConfig,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    // Handle the case where the layer is dummy (no tensors)
+    if !(vb.contains_tensor("qweight")
+        && vb.contains_tensor("qzeros")
+        && vb.contains_tensor("g_idx")
+        && vb.contains_tensor("scales"))
+    {
+        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    }
+
+    let qweight = vb.get_with_hints_dtype(
+        (in_dim / pack_factor!(config.bits), out_dim),
+        "qweight",
+        Default::default(),
+        DType::I32,
+    )?;
+    let scale_and_zero_size = in_dim / config.group_size;
+    let qzeros = vb.get_with_hints_dtype(
+        (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
+        "qzeros",
+        Default::default(),
+        DType::I32,
+    )?;
+    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
+    let scales = vb.get_with_hints_dtype(
+        (scale_and_zero_size, out_dim),
+        "scales",
+        Default::default(),
+        DType::F16,
+    )?;
+    let bias = if vb.contains_tensor("bias") {
+        Some(vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16)?)
+    } else {
+        None
+    };
+
+    let config = QuantMethodConfig::Gptq {
+        bits: config.bits as i32,
+        use_exllama: false,
+        q_weight: qweight,
+        gptq_qzeros: Some(qzeros),
+        gptq_scales: scales,
+        g_idx: Some(g_idx),
+        bias,
+        workspace: None,
+        is_marlin: false,
+    };
+    Ok(Arc::new(GptqLayer::new(config)?))
 }

@@ -4,7 +4,8 @@ extend-ignore-identifiers-re = [
     "mmaped",
     "arange",
     "Nd",
-    "nin"
+    "nin",
+    "cudaDevAttrMaxSharedMemoryPerBlockOptin"
 ]
 
 [files]

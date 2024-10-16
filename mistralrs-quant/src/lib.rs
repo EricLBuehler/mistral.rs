@@ -22,6 +22,7 @@ mod utils;
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
+use gptq::gptq_linear;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
@@ -49,6 +50,7 @@ pub struct QuantizedConfig {
     pub bits: usize,
     pub quant_method: QuantMethodType,
     pub group_size: usize,
+    pub checkpoint_format: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,10 +59,12 @@ pub enum QuantMethodConfig {
         bits: i32,
         use_exllama: bool,
         q_weight: Tensor,
-        gptq_qzeros: Tensor,
+        gptq_qzeros: Option<Tensor>,
         gptq_scales: Tensor,
-        g_idx: Tensor,
-        bias: Tensor,
+        g_idx: Option<Tensor>,
+        bias: Option<Tensor>,
+        workspace: Option<Tensor>,
+        is_marlin: bool,
     },
     Gguf {
         q_weight: Arc<QTensor>,
@@ -225,12 +229,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 }
 
-macro_rules! pack_factor {
-    ($bits:expr) => {
-        32 / $bits
-    };
-}
-
 pub fn linear_no_bias(
     in_dim: usize,
     out_dim: usize,
@@ -293,54 +291,4 @@ pub fn linear_b(
     } else {
         linear_no_bias(in_dim, out_dim, config, vb)
     }
-}
-
-pub fn gptq_linear(
-    in_dim: usize,
-    out_dim: usize,
-    config: &QuantizedConfig,
-    vb: VarBuilder,
-) -> Result<Arc<dyn QuantMethod>> {
-    // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("qweight")
-        && vb.contains_tensor("qzeros")
-        && vb.contains_tensor("g_idx")
-        && vb.contains_tensor("scales"))
-    {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
-    }
-
-    let qweight = vb.get_with_hints_dtype(
-        (in_dim / pack_factor!(config.bits), out_dim),
-        "qweight",
-        Default::default(),
-        DType::I32,
-    )?;
-    let scale_and_zero_size = in_dim / config.group_size;
-    let qzeros = vb.get_with_hints_dtype(
-        (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
-        "qzeros",
-        Default::default(),
-        DType::I32,
-    )?;
-    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
-    let scales = vb.get_with_hints_dtype(
-        (scale_and_zero_size, out_dim),
-        "scales",
-        Default::default(),
-        DType::F16,
-    )?;
-    let bias = vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16)?;
-
-    let config = QuantMethodConfig::Gptq {
-        bits: config.bits as i32,
-        use_exllama: false,
-        q_weight: qweight,
-        gptq_qzeros: qzeros,
-        gptq_scales: scales,
-        g_idx,
-        bias,
-    };
-    Ok(Arc::new(GptqLayer::new(config)?))
 }

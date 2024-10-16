@@ -11,6 +11,7 @@ fn main() {
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
+            "kernels/marlin/marlin_kernel.cu",
         ];
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");

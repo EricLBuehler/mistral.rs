@@ -94,7 +94,7 @@ Mistral.rs supports several model categories:
 **Quantization**:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
-- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
+- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ: 4-bit and 8 bit, with ISQ support
 
 **Powerful**:
