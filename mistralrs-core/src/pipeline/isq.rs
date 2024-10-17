@@ -243,21 +243,26 @@ pub trait IsqModel {
 
             use rayon::iter::IntoParallelRefIterator;
 
-            let current_rayon_threads = rayon::current_num_threads();
             // Get the MINIMUM of the max isq threads the quant method allows
-            let minimum_max_threads = tensors
-                .iter()
-                .map(|(q, _)| {
-                    if let Some(dtype) = dtype {
-                        q.get_max_isq_cpu_threads(dtype)
-                            .map(usize::from)
-                            .unwrap_or(current_rayon_threads)
-                    } else {
-                        current_rayon_threads
-                    }
-                })
-                .min()
-                .unwrap_or(current_rayon_threads);
+            #[cfg(not(feature = "metal"))]
+            let minimum_max_threads = {
+                let current_rayon_threads = rayon::current_num_threads();
+                tensors
+                    .iter()
+                    .map(|(q, _)| {
+                        if let Some(dtype) = dtype {
+                            q.get_max_isq_cpu_threads(dtype)
+                                .map(usize::from)
+                                .unwrap_or(current_rayon_threads)
+                        } else {
+                            current_rayon_threads
+                        }
+                    })
+                    .min()
+                    .unwrap_or(current_rayon_threads)
+            };
+            #[cfg(feature = "metal")]
+            let minimum_max_threads = 1;
 
             info!("Applying ISQ on {minimum_max_threads} threads.");
 
