@@ -599,6 +599,11 @@
 <a href="#599" id="599">599</a>
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -844,21 +849,26 @@
 
             <span class="kw">use </span>rayon::iter::IntoParallelRefIterator;
 
-            <span class="kw">let </span>current_rayon_threads = rayon::current_num_threads();
             <span class="comment">// Get the MINIMUM of the max isq threads the quant method allows
-            </span><span class="kw">let </span>minimum_max_threads = tensors
-                .iter()
-                .map(|(q, <span class="kw">_</span>)| {
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(dtype) = dtype {
-                        q.get_max_isq_cpu_threads(dtype)
-                            .map(usize::from)
-                            .unwrap_or(current_rayon_threads)
-                    } <span class="kw">else </span>{
-                        current_rayon_threads
-                    }
-                })
-                .min()
-                .unwrap_or(current_rayon_threads);
+            </span><span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+            </span><span class="kw">let </span>minimum_max_threads = {
+                <span class="kw">let </span>current_rayon_threads = rayon::current_num_threads();
+                tensors
+                    .iter()
+                    .map(|(q, <span class="kw">_</span>)| {
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(dtype) = dtype {
+                            q.get_max_isq_cpu_threads(dtype)
+                                .map(usize::from)
+                                .unwrap_or(current_rayon_threads)
+                        } <span class="kw">else </span>{
+                            current_rayon_threads
+                        }
+                    })
+                    .min()
+                    .unwrap_or(current_rayon_threads)
+            };
+            <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+            </span><span class="kw">let </span>minimum_max_threads = <span class="number">1</span>;
 
             <span class="macro">info!</span>(<span class="string">"Applying ISQ on {minimum_max_threads} threads."</span>);
 
