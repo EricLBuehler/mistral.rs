@@ -393,7 +393,7 @@ checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 [[package]]
 name = "candle-core"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f2b6941#f2b6941a4856ae5d5b3413789f58d4ee3aa5a562"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2578db#2578db6dcfc8fc25b425bb3f8fe585dfb7c716f9"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -421,7 +421,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f2b6941#f2b6941a4856ae5d5b3413789f58d4ee3aa5a562"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2578db#2578db6dcfc8fc25b425bb3f8fe585dfb7c716f9"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -432,7 +432,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f2b6941#f2b6941a4856ae5d5b3413789f58d4ee3aa5a562"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2578db#2578db6dcfc8fc25b425bb3f8fe585dfb7c716f9"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -440,7 +440,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f2b6941#f2b6941a4856ae5d5b3413789f58d4ee3aa5a562"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2578db#2578db6dcfc8fc25b425bb3f8fe585dfb7c716f9"
 dependencies = [
  "metal",
  "once_cell",
@@ -451,7 +451,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=f2b6941#f2b6941a4856ae5d5b3413789f58d4ee3aa5a562"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2578db#2578db6dcfc8fc25b425bb3f8fe585dfb7c716f9"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1711,9 +1711,9 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.25.2"
+version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99314c8a2152b8ddb211f924cdae532d8c5e4c8bb54728e12fff1b0cd5963a10"
+checksum = "d97eb9a8e0cd5b76afea91d7eecd5cf8338cd44ced04256cf1f800474b227c52"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1731,9 +1731,9 @@ dependencies = [
 
 [[package]]
 name = "image-webp"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79afb8cbee2ef20f59ccd477a218c12a93943d075b492015ecb1bb81f8ee904"
+checksum = "e031e8e3d94711a9ccb5d6ea357439ef3dcbed361798bd4071dc4d9793fbe22f"
 dependencies = [
  "byteorder-lite",
  "quick-error",
@@ -2212,7 +2212,7 @@ dependencies = [
  "tqdm",
  "tracing",
  "tracing-subscriber",
- "uuid 1.10.0",
+ "uuid 1.11.0",
  "variantly",
  "vob",
 ]
@@ -2548,7 +2548,7 @@ dependencies = [
  "toml",
  "ureq",
  "url",
- "uuid 1.10.0",
+ "uuid 1.11.0",
  "walkdir",
 ]
 
@@ -2582,9 +2582,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.66"
+version = "0.10.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9529f4786b70a3e8c61e11179af17ab6188ad8d0ded78c5529441ed39d4bd9c1"
+checksum = "7b8cefcf97f41316955f9294cd61f639bdcfa9f2f230faac6cb896aa8ab64704"
 dependencies = [
  "bitflags 2.6.0",
  "cfg-if",
@@ -2614,9 +2614,9 @@ checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.103"
+version = "0.9.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f9e8deee91df40a943c71b917e5874b951d32a802526c85721ce3b776c929d6"
+checksum = "45abf306cbf99debc8195b66b7346498d7b10c210de50418b5ccd7ceba08c741"
 dependencies = [
  "cc",
  "libc",
@@ -2831,9 +2831,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.87"
+version = "1.0.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3e4daa0dcf6feba26f985457cdf104d4b4256fc5a09547140f3631bb076b19a"
+checksum = "7c3a7fc5db1e57d5a779a352c8cdb57b29aa4c40cc69c3a68a7fedc815fbf2f9"
 dependencies = [
  "unicode-ident",
 ]
@@ -3311,9 +3311,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.14"
+version = "0.23.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "415d9944693cb90382053259f89fbb077ea730ad7273047ec63b19bc9b160ba8"
+checksum = "5fbb44d7acc4e873d613422379f69f237a1b141928c02f6bc6ccfddddc2d7993"
 dependencies = [
  "log",
  "once_cell",
@@ -4395,9 +4395,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81dfa00651efa65069b0b6b651f4aaa31ba9e3c3ce0137aaad053604ee7e0314"
+checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
 dependencies = [
  "getrandom",
 ]
