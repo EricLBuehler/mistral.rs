@@ -25,8 +25,11 @@ pub struct VisionModelBuilder {
     pub(crate) isq: Option<IsqType>,
 
     // Other things
+    pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
+    pub(crate) no_kv_cache: bool,
+    pub(crate) prefix_cache_n: Option<usize>,
 }
 
 impl VisionModelBuilder {
@@ -52,6 +55,9 @@ impl VisionModelBuilder {
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
+            paged_attn_cfg: None,
+            no_kv_cache: false,
+            prefix_cache_n: None,
         }
     }
 
@@ -109,9 +115,37 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
+    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
+    ///
+    /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
+    pub fn with_paged_attn(
+        mut self,
+        paged_attn_cfg: impl FnOnce() -> anyhow::Result<PagedAttentionConfig>,
+    ) -> anyhow::Result<Self> {
+        if paged_attn_supported() {
+            self.paged_attn_cfg = Some(paged_attn_cfg()?);
+        } else {
+            self.paged_attn_cfg = None;
+        }
+        Ok(self)
+    }
+
     /// Set the maximum number of sequences which can be run at once.
     pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
         self.max_num_seqs = max_num_seqs;
+        self
+    }
+
+    /// Disable KV cache. Trade performance for memory usage.
+    pub fn with_no_kv_cache(mut self) -> Self {
+        self.no_kv_cache = true;
+        self
+    }
+
+    /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
+    pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
+        self.prefix_cache_n = n_seqs;
         self
     }
 
@@ -177,17 +211,38 @@ impl VisionModelBuilder {
             !self.with_logging,
             self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
             self.isq,
-            None,
+            self.paged_attn_cfg,
         )?;
 
-        let scheduler_method = SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
+        let scheduler_method = match self.paged_attn_cfg {
+            Some(_) => {
+                let config = pipeline
+                    .lock()
+                    .await
+                    .get_metadata()
+                    .cache_config
+                    .as_ref()
+                    .unwrap()
+                    .clone();
+
+                SchedulerConfig::PagedAttentionMeta {
+                    max_num_seqs: self.max_num_seqs,
+                    config,
+                }
+            }
+            None => SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
+            },
         };
 
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
             .with_no_kv_cache(false)
             .with_gemm_full_precision_f16(true)
             .with_no_prefix_cache(false);
+
+        if let Some(n) = self.prefix_cache_n {
+            runner = runner.with_prefix_cache_n(n)
+        }
 
         Ok(Model::new(runner.build()))
     }

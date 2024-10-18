@@ -1,8 +1,13 @@
 use anyhow::Context;
 use candle_core::{Device, Result};
+use futures::{
+    stream::{self, StreamExt},
+    Stream,
+};
 use mistralrs_core::*;
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 use tokio::sync::mpsc::channel;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::RequestLike;
 
@@ -92,6 +97,54 @@ impl Model {
         Ok(response)
     }
 
+    /// Generate with the model, returning a stream of chunk responses.
+    pub async fn send_streaming_chat_request<R: RequestLike>(
+        &self,
+        mut request: R,
+    ) -> Pin<Box<dyn Stream<Item = anyhow::Result<ChatCompletionChunkResponse>>>> {
+        // Max permits
+        // https://github.com/tokio-rs/tokio/blob/1656d8e231903a7b84b9e2d5e3db7aeed13a2966/tokio/src/sync/batch_semaphore.rs#L130
+        let (tx, rx) = channel(usize::MAX >> 3);
+
+        let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
+            (Some(a), Some(b))
+        } else {
+            (None, None)
+        };
+        let request = Request::Normal(NormalRequest {
+            messages: request.take_messages(),
+            sampling_params: request.take_sampling_params(),
+            response: tx,
+            return_logprobs: request.return_logprobs(),
+            is_streaming: true,
+            id: 0,
+            constraint: request.take_constraint(),
+            suffix: None,
+            adapters: request.take_adapters(),
+            tools,
+            tool_choice,
+            logits_processors: request.take_logits_processors(),
+        });
+
+        let sender = match self.runner.get_sender() {
+            Ok(s) => s,
+            Err(e) => return Box::pin(stream::once(async move { Err(anyhow::Error::from(e)) })),
+        };
+
+        match sender.send(request).await {
+            Ok(_) => (),
+            Err(e) => return Box::pin(stream::once(async move { Err(anyhow::Error::from(e)) })),
+        }
+
+        Box::pin(ReceiverStream::new(rx).map(|resp| {
+            if let ResponseOk::Chunk(chunk) = resp.as_result()? {
+                Ok(chunk)
+            } else {
+                Err(anyhow::Error::msg("Got unexpected response type."))
+            }
+        }))
+    }
+
     pub async fn generate_image(
         &self,
         prompt: impl ToString,
@@ -155,5 +208,10 @@ impl Model {
     /// Retrieve some information about this model.
     pub fn config(&self) -> &MistralRsConfig {
         self.runner.config()
+    }
+
+    /// Retrieve some information about this model.
+    pub fn get_model_category(&self) -> ModelCategory {
+        self.runner.get_model_category()
     }
 }

@@ -88,7 +88,7 @@ pub enum QuantMethodConfig {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, PartialEq, Hash, Eq)]
 pub enum IsqType {
     Q4_0,
     Q4_1,
@@ -108,6 +108,34 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+}
+
+impl Debug for IsqType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl Display for IsqType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::F8E4M3 => write!(f, "fp8"),
+            Self::Q2K => write!(f, "q2k"),
+            Self::Q3K => write!(f, "q3k"),
+            Self::Q4K => write!(f, "q4k"),
+            Self::Q4_0 => write!(f, "q4_0"),
+            Self::Q4_1 => write!(f, "q4_1"),
+            Self::Q5K => write!(f, "q5k"),
+            Self::Q5_0 => write!(f, "q5_0"),
+            Self::Q5_1 => write!(f, "q5_1"),
+            Self::Q6K => write!(f, "q6k"),
+            Self::Q8K => write!(f, "q8k"),
+            Self::Q8_0 => write!(f, "q8_0"),
+            Self::Q8_1 => write!(f, "q8_1"),
+            Self::HQQ4 => write!(f, "hqq4"),
+            Self::HQQ8 => write!(f, "hqq8"),
+        }
+    }
 }
 
 impl TryFrom<IsqType> for GgmlDType {

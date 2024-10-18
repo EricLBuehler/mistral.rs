@@ -24,6 +24,7 @@ either.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 rand = "0.8.5"
+tokio-stream = "0.1.16"
 
 [features]
 cuda = ["mistralrs-core/cuda"]
