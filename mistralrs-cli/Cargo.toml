@@ -1,0 +1,34 @@
+[package]
+name = "mistralrs-cli"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mistralrs = { path = "../mistralrs" }
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+once_cell.workspace = true
+image.workspace = true
+reqwest.workspace = true
+url.workspace = true
+data-url.workspace = true
+ctrlc.workspace = true
+futures.workspace = true
+
+[features]
+cuda = ["mistralrs/cuda"]
+cudnn = ["mistralrs/cudnn"]
+metal = ["mistralrs/metal"]
+flash-attn = ["cuda", "mistralrs/flash-attn"]
+accelerate = ["mistralrs/accelerate"]
+mkl = ["mistralrs/mkl"]
