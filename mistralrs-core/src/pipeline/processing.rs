@@ -45,6 +45,19 @@ pub trait Processor {
             self.template_action(),
             tools,
         )?;
+        let prompt = r#"<|start_header_id|>user<|end_header_id|>
+
+Hello!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+How can I assist you today?<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+<|image|>What is this?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+The picture shown appears to be a picture of a rose, but judging by the style, I believe it is a photorealistic artwork of a cut garden rose with its details intricate to the point that it nearly appears three dimensional.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+<|image|>What is this?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"#.to_string();
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {

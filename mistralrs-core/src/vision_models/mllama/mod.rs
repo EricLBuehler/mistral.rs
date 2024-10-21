@@ -159,6 +159,15 @@ impl MLlamaModel {
                 .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
                 .to_dtype(self.dtype)?;
+            // println!("Saving...");
+            // dbg!(&cross_attention_states);
+            // cross_attention_states
+            //     .to_dtype(DType::F32)?
+            //     .write_npy("m-cross_attention_states.npy")?;
+            // println!("Saved!");
+            let cross_attention_states = Tensor::read_npy("t-cross_attention_states.npy")?
+                .to_dtype(cross_attention_states.dtype())?
+                .to_device(cross_attention_states.device())?;
             Some(cross_attention_states)
         } else {
             None
@@ -171,6 +180,15 @@ impl MLlamaModel {
                     self.vision_model.num_patches,
                     self.dtype,
                 )?;
+                println!("Saving...");
+                dbg!(&cmask, &fmask);
+                cmask
+                    .to_dtype(DType::F32)?
+                    .write_npy("m-cmask.npy")?;
+                fmask
+                    .to_dtype(DType::F32)?
+                    .write_npy("m-fmask.npy")?;
+                println!("Saved!");
                 (Some(cmask), Some(fmask))
             } else {
                 (None, None)
