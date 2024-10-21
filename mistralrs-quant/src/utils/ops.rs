@@ -398,4 +398,34 @@ mod tests {
         assert_eq!(bv, [0b00001111]);
         assert_eq!(c, [0b11111111]);
     }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn test_bitpack() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = &Device::Cpu;
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
+    }
+
+    #[cfg(all(feature = "cuda"))]
+    #[test]
+    fn test_bitpack() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
+    }
 }
