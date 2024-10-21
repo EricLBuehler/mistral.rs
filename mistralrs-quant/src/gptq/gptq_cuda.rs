@@ -18,8 +18,11 @@ use candle_nn::VarBuilder;
 use half::f16;
 use lazy_static::lazy_static;
 
+#[cfg(feature = "marlin")]
+use crate::gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack};
+
+
 use crate::{
-    gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
 };
@@ -292,6 +295,7 @@ impl QuantMethod for GptqLayer {
                     self.use_exllama,
                 )?
                 .reshape(out_shape)?,
+            #[cfg(feature = "marlin")]
             (_, _, true) => gptq_marlin_matmul(
                 a,
                 &self.q_weight,
@@ -350,54 +354,66 @@ macro_rules! pack_factor {
         32 / $bits
     };
 }
-
 pub fn gptq_linear(
     in_dim: usize,
     out_dim: usize,
     config: &QuantizedConfig,
     vb: VarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
-    // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
         && vb.contains_tensor("qzeros")
         && vb.contains_tensor("g_idx")
         && vb.contains_tensor("scales"))
     {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+        return Ok(Arc::new(<DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?));
     }
 
+  
     let marlin_compatible = config.bits == 4 || config.bits == 8;
+ 
     let marlin_format = config
         .checkpoint_format
         .as_ref()
         .is_some_and(|fmt| fmt == "marlin");
 
-    let qw_shape = if marlin_format {
+    let qw_shape = if cfg!(feature = "marlin") && marlin_format {
         (in_dim / pack_factor!(config.bits) / 2, out_dim * 2)
     } else {
         (in_dim / pack_factor!(config.bits), out_dim)
     };
+
     let qweight = vb.get_with_hints_dtype(
         qw_shape,
-        if marlin_format { "B" } else { "qweight" },
+        if cfg!(feature = "marlin") && marlin_format { "B" } else { "qweight" },
         Default::default(),
         DType::I32,
     )?;
+
     let scale_and_zero_size = in_dim / config.group_size;
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),
-        if marlin_format { "s" } else { "scales" },
+        if cfg!(feature = "marlin") && marlin_format { "s" } else { "scales" },
         Default::default(),
         DType::F16,
     )?;
-    let bias = if vb.contains_tensor("bias") {
-        Some(vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16)?)
-    } else {
-        None
-    };
+
+    let bias = vb.get_with_hints_dtype((out_dim,), "bias", Default::default(), DType::F16).ok();
+
+    #[cfg(feature = "marlin")]
     let workspace = Tensor::zeros(out_dim / pack_factor!(config.bits), DType::U32, vb.device())?;
 
+    #[cfg(not(feature = "marlin"))]
+    let qzeros = vb.get_with_hints_dtype(
+        (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
+        "qzeros",
+        Default::default(),
+        DType::I32,
+    )?;
+
+    #[cfg(not(feature = "marlin"))]
+    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
+
+    #[cfg(feature = "marlin")]
     let config = if marlin_format {
         QuantMethodConfig::Gptq {
             bits: config.bits as i32,
@@ -411,78 +427,15 @@ pub fn gptq_linear(
             is_marlin: true,
         }
     } else {
-        fn get_scale_perms() -> (Vec<u32>, Vec<u32>) {
-            let mut scale_perm: Vec<u32> = Vec::new();
-            for i in 0..8 {
-                scale_perm.extend((0..8).map(|j| i + 8 * j));
-            }
-            let mut scale_perm_single: Vec<u32> = Vec::new();
-            for i in 0..4 {
-                scale_perm_single.extend([0, 1, 8, 9, 16, 17, 24, 25].iter().map(|&j| 2 * i + j));
-            }
-            (scale_perm, scale_perm_single)
-        }
-
-        fn marlin_permute_scales(
-            s: &Tensor,
-            size_k: usize,
-            size_n: usize,
-            group_size: i32,
-            _num_bits: u32,
-        ) -> Result<Tensor> {
-            let (scale_perm, scale_perm_single) = get_scale_perms();
-            let s = if (group_size as usize) < size_k && group_size != -1 {
-                let s = s.reshape(((), scale_perm.len()))?;
-                let scale_perm_tensor =
-                    Tensor::from_slice(&scale_perm, scale_perm.len(), s.device())?;
-                s.index_select(&scale_perm_tensor, 1)?
-            } else {
-                let s = s.reshape(((), scale_perm_single.len()))?;
-                let scale_perm_single_tensor =
-                    Tensor::from_slice(&scale_perm_single, scale_perm_single.len(), s.device())?;
-                s.index_select(&scale_perm_single_tensor, 1)?
-            };
-
-            let s = s.reshape(((), size_n))?.contiguous()?;
-            Ok(s)
-        }
-
-        let qzeros = vb.get_with_hints_dtype(
-            (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
-            "qzeros",
-            Default::default(),
-            DType::I32,
+        let (qweight, scales, qzeros, g_idx) = repack_to_marlin(
+            qweight,
+            scales,
+            vb,
+            in_dim,
+            out_dim,
+            config,
+            marlin_compatible,
         )?;
-
-        let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
-        let perm = g_idx
-            .to_device(&Device::Cpu)?
-            .arg_sort_last_dim(true)?
-            .to_device(g_idx.device())?;
-
-        // Repack to marlin format
-        let qweight = if marlin_compatible {
-            gptq_weight_repack(&qweight, &perm, in_dim, config.bits as i32)?
-        } else {
-            qweight
-        };
-
-        let scales = if marlin_compatible {
-            marlin_permute_scales(
-                &scales,
-                in_dim / pack_factor!(config.bits),
-                out_dim,
-                config.group_size as i32,
-                config.bits as u32,
-            )?
-        } else {
-            scales
-        };
-        let workspace = if marlin_compatible {
-            Some(workspace)
-        } else {
-            None
-        };
 
         QuantMethodConfig::Gptq {
             bits: config.bits as i32,
@@ -492,9 +445,103 @@ pub fn gptq_linear(
             gptq_scales: scales,
             g_idx: Some(g_idx),
             bias,
-            workspace,
+            workspace: if marlin_compatible { Some(workspace) } else { None },
             is_marlin: marlin_compatible,
         }
     };
+
+    #[cfg(not(feature = "marlin"))]
+    let config = QuantMethodConfig::Gptq {
+        bits: config.bits as i32,
+        use_exllama: false,
+        q_weight: qweight,
+        gptq_qzeros: Some(qzeros),
+        gptq_scales: scales,
+        g_idx: Some(g_idx),
+        bias,
+        workspace: None,
+        is_marlin: false,
+    };
+
     Ok(Arc::new(GptqLayer::new(config)?))
+}
+
+#[cfg(feature = "marlin")]
+fn repack_to_marlin(
+    qweight: Tensor,
+    scales: Tensor,
+    vb: VarBuilder,
+    in_dim: usize,
+    out_dim: usize,
+    config: &QuantizedConfig,
+    marlin_compatible: bool,
+) -> Result<(Tensor, Tensor, Tensor, Tensor)> {
+    let qzeros = vb.get_with_hints_dtype(
+        (in_dim / config.group_size, out_dim / pack_factor!(config.bits)),
+        "qzeros",
+        Default::default(),
+        DType::I32,
+    )?;
+
+    let g_idx = vb.get_with_hints_dtype((in_dim,), "g_idx", Default::default(), DType::I32)?;
+    let perm = g_idx
+        .to_device(&Device::Cpu)?
+        .arg_sort_last_dim(true)?
+        .to_device(g_idx.device())?;
+
+    let qweight = if marlin_compatible {
+        gptq_weight_repack(&qweight, &perm, in_dim, config.bits as i32)?
+    } else {
+        qweight
+    };
+
+    let scales = if marlin_compatible {
+        marlin_permute_scales(
+            &scales,
+            in_dim / pack_factor!(config.bits),
+            out_dim,
+            config.group_size as i32,
+            config.bits as u32,
+        )?
+    } else {
+        scales
+    };
+
+    Ok((qweight, scales, qzeros, g_idx))
+}
+
+fn get_scale_perms() -> (Vec<u32>, Vec<u32>) {
+    let mut scale_perm: Vec<u32> = Vec::new();
+    for i in 0..8 {
+        scale_perm.extend((0..8).map(|j| i + 8 * j));
+    }
+    let mut scale_perm_single: Vec<u32> = Vec::new();
+    for i in 0..4 {
+        scale_perm_single.extend([0, 1, 8, 9, 16, 17, 24, 25].iter().map(|&j| 2 * i + j));
+    }
+    (scale_perm, scale_perm_single)
+}
+
+fn marlin_permute_scales(
+    s: &Tensor,
+    size_k: usize,
+    size_n: usize,
+    group_size: i32,
+    _num_bits: u32,
+) -> Result<Tensor> {
+    let (scale_perm, scale_perm_single) = get_scale_perms();
+    let s = if (group_size as usize) < size_k && group_size != -1 {
+        let s = s.reshape(((), scale_perm.len()))?;
+        let scale_perm_tensor =
+            Tensor::from_slice(&scale_perm, scale_perm.len(), s.device())?;
+        s.index_select(&scale_perm_tensor, 1)?
+    } else {
+        let s = s.reshape(((), scale_perm_single.len()))?;
+        let scale_perm_single_tensor =
+            Tensor::from_slice(&scale_perm_single, scale_perm_single.len(), s.device())?;
+        s.index_select(&scale_perm_single_tensor, 1)?
+    };
+
+    let s = s.reshape(((), size_n))?.contiguous()?;
+    Ok(s)
 }
