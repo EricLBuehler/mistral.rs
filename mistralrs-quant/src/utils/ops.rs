@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
     }
 
-    #[cfg(all(feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     #[test]
     fn test_bitpack_8bit() {
         use crate::HqqBits;
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(c, [[19, 36]]);
     }
 
-    #[cfg(all(feature = "cuda"))]
+    #[cfg(feature = "cuda")]
     #[test]
     fn test_bitpack_4bit() {
         use crate::HqqBits;
