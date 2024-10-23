@@ -1,14 +1,10 @@
-use std::{fs::read_to_string, process::Command};
-
-#[cfg(feature = "cuda")]
-const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
-#[cfg(feature = "cuda")]
-const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
-
 fn main() {
     #[cfg(feature = "cuda")]
     {
-        use std::{path::PathBuf, vec};
+        use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
+        const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
+        const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
         println!("cargo:rerun-if-changed=build.rs");
 
         let compute_cap = {
