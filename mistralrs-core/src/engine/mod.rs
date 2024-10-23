@@ -562,7 +562,7 @@ impl Engine {
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
-                    true,
+                    pipeline.get_processing_cfg(),
                     request.tools.unwrap_or_default(),
                 );
                 handle_seq_error!(template, request.response)

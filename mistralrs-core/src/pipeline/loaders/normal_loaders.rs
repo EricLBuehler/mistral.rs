@@ -13,7 +13,7 @@ use crate::{
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel,
+        Cache, IsqModel, ProcessingConfig,
     },
     serde_default_fn,
     utils::log::once_log_info,
@@ -111,6 +111,9 @@ pub trait NormalModelLoader: IsqModelLoader {
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     /// Get total num_hidden_layers for the layers which will be device mapped.
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
+    fn processing_cfg(&self) -> ProcessingConfig {
+        ProcessingConfig::default()
+    }
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -637,6 +640,9 @@ impl NormalModelLoader for LlamaLoader {
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(LlamaBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+    fn processing_cfg(&self) -> ProcessingConfig {
+        ProcessingConfig::default().with_add_date_string(true)
     }
 }
 

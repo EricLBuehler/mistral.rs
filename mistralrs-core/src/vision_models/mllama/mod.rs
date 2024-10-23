@@ -14,7 +14,7 @@ use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{linear, Linear, Module, VarBuilder};
+use candle_nn::{linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
@@ -55,35 +55,17 @@ fn prepare_cross_attention_mask(
         num_vision_tokens,
         3,
     )?;
-    dbg!(&cross_attn_mask);
-    cross_attn_mask
-        .to_dtype(DType::F32)?
-        .write_npy("m-repeati.npy")?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask)?;
-    dbg!(&inverted_cross_attn_mask);
-    inverted_cross_attn_mask
-        .to_dtype(DType::F32)?
-        .write_npy("m-invmask.npy")?;
     const NEG_INF_VALUE: f32 = -3.3895313892515355e+38;
-    dbg!(&NEG_INF_VALUE);
-    dbg!(&inverted_cross_attn_mask);
-    inverted_cross_attn_mask
-        .ne(0.)?
-        .to_dtype(DType::F32)?
-        .write_npy("m-boolmask.npy")?;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
         NEG_INF_VALUE,
     )?;
-    dbg!(&cross_attn_mask);
-    cross_attn_mask
-        .to_dtype(DType::F32)?
-        .write_npy("m-fillmask.npy")?;
 
     // Apply full-row bias which return 4d tensor of shape (b, h, s1, 1) where
     // value is 0 if a full row in cross attn mask's last dimension contains
@@ -171,19 +153,6 @@ impl MLlamaModel {
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
-            pixel_values
-                .to_dtype(DType::F32)?
-                .write_npy("m-pixel_values.npy")?;
-            let pixel_values = Tensor::read_npy("t-pixel_values.npy")?
-                .to_dtype(pixel_values.dtype())?
-                .to_device(pixel_values.device())?;
-            dbg!(&aspect_ratio_ids, &aspect_ratio_mask);
-            aspect_ratio_ids
-                .to_dtype(DType::F32)?
-                .write_npy("m-aspect_ratio_ids.npy")?;
-            aspect_ratio_mask
-                .to_dtype(DType::F32)?
-                .write_npy("m-aspect_ratio_mask.npy")?;
             let vision_outputs =
                 self.vision_model
                     .forward(&pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
@@ -192,12 +161,6 @@ impl MLlamaModel {
                 .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
                 .to_dtype(self.dtype)?;
-            println!("Saving...");
-            dbg!(&cross_attention_states);
-            cross_attention_states
-                .to_dtype(DType::F32)?
-                .write_npy("m-cross_attention_states.npy")?;
-            println!("Saved!");
 
             // let cross_attention_states = Tensor::read_npy("t-cross_attention_states.npy")?
             //     .to_dtype(cross_attention_states.dtype())?
@@ -214,11 +177,6 @@ impl MLlamaModel {
                     self.vision_model.num_patches,
                     self.dtype,
                 )?;
-                println!("Saving...");
-                dbg!(&cmask, &fmask);
-                cmask.to_dtype(DType::F32)?.write_npy("m-cmask.npy")?;
-                fmask.to_dtype(DType::F32)?.write_npy("m-fmask.npy")?;
-                println!("Saved!");
                 (Some(cmask), Some(fmask))
             } else {
                 (None, None)

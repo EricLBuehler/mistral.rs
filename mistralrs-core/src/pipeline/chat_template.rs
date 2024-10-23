@@ -11,6 +11,8 @@ use tracing::info;
 
 use crate::{MessageContent, Tool};
 
+use super::processing::ProcessingConfig;
+
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",    // Handle ChatML case
     "<end_of_turn>", // Handle Gemma2 chat case
@@ -216,7 +218,7 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
 
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
-    add_generation_prompt: bool,
+    cfg: ProcessingConfig,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -268,27 +270,52 @@ pub fn apply_chat_template_to(
     env.add_filter("tojson", tojson);
     let tmpl = env.get_template("chat_template").unwrap();
 
-    let date = chrono::Utc::now();
-    let date_string = date.format("%d, %B, %Y").to_string();
+    let date_string = if cfg.add_date_string {
+        let date = chrono::Utc::now();
+        Some(date.format("%d, %B, %Y").to_string())
+    } else {
+        None
+    };
 
     if tools.is_empty() {
-        Ok(tmpl.render(context! {
-            messages => new_messages,
-            add_generation_prompt => add_generation_prompt,
-            bos_token => bos_tok,
-            eos_token => eos_tok,
-            unk_token => unk_tok,
-            date_string => date_string,
-        })?)
+        if let Some(date_string) = date_string {
+            Ok(tmpl.render(context! {
+                messages => new_messages,
+                add_generation_prompt => cfg.add_generation_prompt,
+                bos_token => bos_tok,
+                eos_token => eos_tok,
+                unk_token => unk_tok,
+                date_string => date_string,
+            })?)
+        } else {
+            Ok(tmpl.render(context! {
+                messages => new_messages,
+                add_generation_prompt => cfg.add_generation_prompt,
+                bos_token => bos_tok,
+                eos_token => eos_tok,
+                unk_token => unk_tok,
+            })?)
+        }
     } else {
-        Ok(tmpl.render(context! {
-            messages => new_messages,
-            add_generation_prompt => add_generation_prompt,
-            bos_token => bos_tok,
-            eos_token => eos_tok,
-            unk_token => unk_tok,
-            tools => tools,
-            date_string => date_string,
-        })?)
+        if let Some(date_string) = date_string {
+            Ok(tmpl.render(context! {
+                messages => new_messages,
+                add_generation_prompt => cfg.add_generation_prompt,
+                bos_token => bos_tok,
+                eos_token => eos_tok,
+                unk_token => unk_tok,
+                tools => tools,
+                date_string => date_string,
+            })?)
+        } else {
+            Ok(tmpl.render(context! {
+                messages => new_messages,
+                add_generation_prompt => cfg.add_generation_prompt,
+                bos_token => bos_tok,
+                eos_token => eos_tok,
+                unk_token => unk_tok,
+                tools => tools,
+            })?)
+        }
     }
 }

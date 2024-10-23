@@ -2,15 +2,14 @@
 
 use std::{collections::HashMap, ops::Mul};
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
 
 use crate::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, MatMul, Sdpa},
+    layers::{FusedBiasLinear, MatMul},
     pipeline::IsqModel,
     utils::unvarbuilder::{ToTensors, UnVarBuilder},
 };
@@ -177,7 +176,6 @@ struct MLlamaVisionAttention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    sdpa_params: SdpaParams,
     num_heads: usize,
     head_dim: usize,
 }
@@ -206,13 +204,6 @@ impl MLlamaVisionAttention {
                 cfg.num_attention_heads * head_dim,
                 vb.pp("o_proj"),
             )?,
-            sdpa_params: SdpaParams {
-                n_kv_groups: 1,
-                use_flash_attn: false,
-                softcap: None,
-                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
-            },
             num_heads: cfg.num_attention_heads,
             head_dim,
         })
@@ -238,31 +229,20 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        // let attn_output = Sdpa
-        //     .run_attention(
-        //         &q.contiguous()?,
-        //         &k.contiguous()?,
-        //         &v.contiguous()?,
-        //         attention_mask,
-        //         None,
-        //         &self.sdpa_params,
-        //     )?
-        //     .transpose(1, 2)?
-        //     .contiguous()?
-        //     .reshape((bs, q_sq, ()))?;
         let attn_output = {
-            let q = q.to_dtype(DType::F32)?;
-            let k = k.to_dtype(DType::F32)?;
-            let v = v.to_dtype(DType::F32)?;
+            let q = q.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+            let k = k.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
             let att = match attention_mask {
                 Some(m) => {
-                    let mut out = m.to_dtype(DType::F32)?;
+                    let mut out = m.copy()?;
+                    // let mut out = m.to_dtype(q.dtype())?;//.to_device(&Device::Cpu)?;
                     q.contiguous()?.matmul_with_alpha_beta(
                         &k.t()?.contiguous()?,
                         &mut out,
                         Some(1. / (self.head_dim as f64).sqrt()),
                     )?;
-                    out
+                    out.to_device(hidden_state.device())?
+                        .to_dtype(hidden_state.dtype())?
                 }
                 None => MatMul.matmul_affine_div(
                     &q.contiguous()?,
@@ -286,7 +266,8 @@ impl MLlamaVisionAttention {
                 .matmul(&att, &v.contiguous()?)?
                 .transpose(1, 2)?
                 .reshape((bs, q_sq, ()))?
-                .to_dtype(hidden_state.dtype())?
+            // .to_dtype(hidden_state.dtype())?
+            // .to_device(hidden_state.device())?
         };
 
         self.o_proj.forward(&attn_output)
@@ -370,24 +351,31 @@ impl MLlamaVisionEncoderLayer {
     fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         // Self attn
         let residual = hidden_state;
-        let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
+        let hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        if let Some(gate) = &self.gate_attn {
-            hidden_state = hidden_state.broadcast_mul(&gate.tanh()?)?;
-        }
-        hidden_state = (residual + hidden_state)?;
+        let hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
+
+        let hidden_state = if let Some(gate) = &self.gate_attn {
+            hidden_state.broadcast_mul(&gate.tanh()?)?
+        } else {
+            hidden_state
+        };
+
+        let hidden_state = (hidden_state + residual)?;
 
         // FF
         let residual = hidden_state.clone();
-        hidden_state = self.post_attention_layernorm.forward(&hidden_state)?;
 
-        hidden_state = self.mlp.forward(&hidden_state)?;
+        let hidden_state = self
+            .mlp
+            .forward(&hidden_state.apply(&self.post_attention_layernorm)?)?;
 
-        if let Some(gate) = &self.gate_ffn {
-            hidden_state = hidden_state.broadcast_mul(&gate.tanh()?)?;
-        }
+        let hidden_state = if let Some(gate) = &self.gate_ffn {
+            hidden_state.broadcast_mul(&gate.tanh()?)?
+        } else {
+            hidden_state
+        };
         residual + hidden_state
     }
 }
@@ -419,19 +407,12 @@ impl MLlamaVisionEncoder {
         &self,
         hidden_state: &Tensor,
         attention_mask: Option<&Tensor>,
-        name: &str,
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut hidden_state = hidden_state.clone();
         let mut hidden_states = Vec::new();
-        let mut i = 0;
         for layer in &self.layers {
             hidden_states.push(hidden_state.clone());
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
-
-            hidden_state
-                .to_dtype(DType::F32)?
-                .write_npy(format!("m-{name}-{i}.npy"))?;
-            i+=1;
         }
         hidden_states.push(hidden_state.clone());
         Ok((hidden_state, hidden_states))
@@ -472,7 +453,6 @@ fn _prepare_aspect_ratio_attention_mask(
     aspect_ratio_mask: &Tensor,
     num_patches: usize,
     target_length: usize,
-    dtype: DType,
     num_attn_heads: usize,
 ) -> Result<Tensor> {
     let (bs, max_num_tiles) = aspect_ratio_mask.dims2()?;
@@ -506,8 +486,8 @@ fn _prepare_aspect_ratio_attention_mask(
     attention_mask
         .unsqueeze(1)?
         .contiguous()?
-        .repeat((1, num_attn_heads, 1, 1))
-    // ?.to_dtype(dtype)
+        .repeat((1, num_attn_heads, 1, 1))?
+        .to_device(&Device::Cpu)
 }
 
 pub(super) struct MLlamaVisionModel {
@@ -620,9 +600,6 @@ impl MLlamaVisionModel {
 
         // Patch embedding
         let patch_embeds = self.patch_embedding.forward(&pixel_values)?;
-        patch_embeds
-            .to_dtype(DType::F32)?
-            .write_npy("m-patch_embeds.npy")?;
         let mut hidden_state = patch_embeds.flatten_from(2)?.transpose(1, 2)?;
 
         // Tile embeddings
@@ -631,18 +608,12 @@ impl MLlamaVisionModel {
         hidden_state = self
             .pre_tile_positional_embedding
             .forward(&hidden_state, &aspect_ratio_ids)?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-ptpe.npy")?;
 
         // Add cls token
         hidden_state =
             hidden_state.reshape((bs * num_concurrent_media * num_tiles, num_patches, dim))?;
         hidden_state = self.apply_class_embedding(&hidden_state)?;
         num_patches += 1;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-cle.npy")?;
 
         // Position embeddings
         hidden_state =
@@ -650,14 +621,8 @@ impl MLlamaVisionModel {
         hidden_state = self
             .gated_positional_embedding
             .forward(&hidden_state, &aspect_ratio_ids)?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-gpe.npy")?;
 
         hidden_state = self.layernorm_pre.forward(&hidden_state)?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-lnpre.npy")?;
 
         // Compute the number of tokens to pad
         let num_padding_patches = (8 - (hidden_state.dim(D::Minus2)? as isize % 8)) % 8;
@@ -681,27 +646,16 @@ impl MLlamaVisionModel {
             &attention_mask,
             self.num_patches,
             hidden_state.dim(2)?,
-            hidden_state.dtype(),
             self.num_attn_heads,
         )?;
-        attention_mask
-            .to_dtype(DType::F32)?
-            .sum(D::Minus1)?
-            .write_npy("m-attention_mask.npy")?;
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
         let (mut hidden_state, all_intermediate_hidden_states) = self
             .transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask), "trans1")?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-trans1.npy")?;
+            .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-lnpt.npy")?;
 
         // Apply global encoder
         hidden_state = hidden_state.reshape((
@@ -720,10 +674,7 @@ impl MLlamaVisionModel {
         ))?;
         (hidden_state, _) = self
             .global_transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask), "trans2")?;
-        hidden_state
-            .to_dtype(DType::F32)?
-            .write_npy("m-trans2.npy")?;
+            .forward_with_states(&hidden_state, Some(&attention_mask))?;
 
         // Remove padding from hidden state
         hidden_state = hidden_state.reshape((

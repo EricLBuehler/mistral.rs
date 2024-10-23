@@ -204,51 +204,10 @@ impl MLlamaTextSelfAttention {
 
         (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        // let mut attn_output = Sdpa
-        //     .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
-        //     .transpose(1, 2)?
-        //     .reshape((bs, q_len, ()))?;
-        let mut attn_output = {
-            k = repeat_kv(k.clone(), self.num_heads / self.num_kv_heads)?.contiguous()?;
-            v = repeat_kv(v.clone(), self.num_heads / self.num_kv_heads)?.contiguous()?;
-
-            let att = match attention_mask {
-                Some(m) => {
-                    let mut out = m.to_dtype(DType::F32)?;
-                    q.contiguous()?
-                        .to_dtype(DType::F32)?
-                        .matmul_with_alpha_beta(
-                            &k.t()?.contiguous()?.to_dtype(DType::F32)?,
-                            &mut out,
-                            Some(1. / (self.head_dim as f64).sqrt()),
-                        )?;
-                    out.to_dtype(q.dtype())?
-                }
-                None => MatMul.matmul_affine_div(
-                    &q.contiguous()?,
-                    &k.t()?.contiguous()?,
-                    (self.head_dim as f64).sqrt(),
-                )?,
-            };
-
-            // let att = MatMul.matmul_affine_div(
-            //     &q.contiguous()?,
-            //     &k.t()?.contiguous()?,
-            //     (self.head_dim as f64).sqrt(),
-            // )?;
-
-            // let att = match attention_mask {
-            //     Some(m) => att.broadcast_add(m)?,
-            //     None => att,
-            // };
-            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                .to_dtype(q.dtype())?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            MatMul
-                .matmul(&att, &v.contiguous()?)?
-                .transpose(1, 2)?
-                .reshape((bs, q_len, ()))?
-        };
+        let mut attn_output = Sdpa
+            .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
+            .transpose(1, 2)?
+            .reshape((bs, q_len, ()))?;
 
         if let Some(t) = self.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)?;

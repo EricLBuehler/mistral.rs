@@ -233,6 +233,9 @@ impl PreProcessingMixin for SpeculativePipeline {
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         get_mut_arcmutex!(self.target).get_input_processor_config()
     }
+    fn get_processing_cfg(&self) -> super::ProcessingConfig {
+        get_mut_arcmutex!(self.target).get_processing_cfg()
+    }
 }
 
 impl IsqPipelineMixin for SpeculativePipeline {

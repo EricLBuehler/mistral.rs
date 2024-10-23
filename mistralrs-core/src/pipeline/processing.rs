@@ -26,6 +26,34 @@ pub enum MessagesAction {
     FlattenOnlyText,
 }
 
+#[derive(Copy, Clone)]
+/// Configuration for a processor
+pub struct ProcessingConfig {
+    // This should normally always be true
+    pub add_generation_prompt: bool,
+    // Add the date string
+    pub add_date_string: bool,
+}
+
+impl Default for ProcessingConfig {
+    fn default() -> Self {
+        Self {
+            add_generation_prompt: true,
+            add_date_string: false,
+        }
+    }
+}
+
+impl ProcessingConfig {
+    /// Control adding a date string
+    pub fn with_add_date_string(self, add_date_string: bool) -> Self {
+        Self {
+            add_date_string,
+            ..self
+        }
+    }
+}
+
 /// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
@@ -35,29 +63,10 @@ pub trait Processor {
         &self,
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
-        add_generation_prompt: bool,
+        cfg: ProcessingConfig,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
-        let prompt = apply_chat_template(
-            pipeline,
-            messages,
-            add_generation_prompt,
-            self.template_action(),
-            tools,
-        )?;
-        let prompt = r#"<|start_header_id|>user<|end_header_id|>
-
-Hello!<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-How can I assist you today?<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-<|image|>What is this?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-The picture shown appears to be a picture of a tulip.<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-<|image|>What is this?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"#.to_string();
+        let prompt = apply_chat_template(pipeline, messages, cfg, self.template_action(), tools)?;
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {
@@ -75,7 +84,7 @@ The picture shown appears to be a picture of a tulip.<|eot_id|><|start_header_id
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
-    add_generation_prompt: bool,
+    cfg: ProcessingConfig,
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
@@ -141,15 +150,7 @@ pub(crate) fn apply_chat_template(
     } else {
         None
     };
-    apply_chat_template_to(
-        messages,
-        add_generation_prompt,
-        template,
-        bos_tok,
-        eos_tok,
-        unk_tok,
-        tools,
-    )
+    apply_chat_template_to(messages, cfg, template, bos_tok, eos_tok, unk_tok, tools)
 }
 
 pub struct BasicProcessor;
