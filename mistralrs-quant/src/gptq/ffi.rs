@@ -1,5 +1,3 @@
-use std::os::raw::c_void;
-
 use half::f16;
 
 #[allow(dead_code)]
@@ -54,38 +52,5 @@ extern "C" {
         n: i32,
         k: i32,
         bit: i32,
-    );
-
-    pub(crate) fn marlin_4bit_f16(
-        inputs: *const c_void,
-        weight: *const i32,
-        scales: *const c_void,
-        out: *const c_void,
-        m: i32,
-        k: i32,
-        n: i32,
-        workspace: *const c_void, //tensor with at least `n / 128 * max_par` entries that are all zero
-        groupsize: i32,
-    );
-
-    pub(crate) fn marlin_4bit_bf16(
-        inputs: *const c_void,
-        weight: *const i32,
-        scales: *const c_void,
-        out: *const c_void,
-        m: i32,
-        k: i32,
-        n: i32,
-        workspace: *const c_void, //tensor with at least `n / 128 * max_par` entries that are all zero
-        groupsize: i32,
-    );
-
-    pub(crate) fn gptq_marlin_repack(
-        weight: *const c_void,
-        perm: *const c_void,
-        result: *const c_void,
-        k: i32,
-        n: i32,
-        bits: i32,
     );
 }
