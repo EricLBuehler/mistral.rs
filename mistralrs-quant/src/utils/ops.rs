@@ -52,7 +52,18 @@ impl CustomOp2 for BitWiseOr {
         }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let vs2 = &s2.as_slice::<u8>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((start, end)) => &vs1[start..end],
+                    None => candle_core::bail!("Input tensor s1 must be contiguous"),
+                };
+                let vs2 = s2.as_slice::<u8>()?;
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((start, end)) => &vs2[start..end],
+                    None => candle_core::bail!("Input tensor s2 must be contiguous"),
+                };
+                if vs1.len() != vs2.len() {
+                    candle_core::bail!("Input tensors must have the same number of elements");
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
