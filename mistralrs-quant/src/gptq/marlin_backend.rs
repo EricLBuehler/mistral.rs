@@ -1,4 +1,6 @@
-use super::ffi::{gptq_marlin_repack, marlin_4bit_bf16, marlin_4bit_f16};
+use super::marlin_ffi::{
+    gptq_marlin_repack, marlin_4bit_bf16, marlin_4bit_f16, HAVE_MARLIN_KERNELS,
+};
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
@@ -71,6 +73,11 @@ impl GPTQMatMul {
         } else {
             (size_k / scale_shape[0]) as i32
         };
+        if !HAVE_MARLIN_KERNELS {
+            candle_core::bail!(
+                "Marlin INT4xF16 matmul kernels were not compiled, please raise an issue."
+            )
+        }
         if x.dtype() == DType::F16 {
             unsafe {
                 marlin_4bit_f16(
@@ -192,7 +199,13 @@ impl GPTQRepack {
         let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
         let q_perm = *perm_.device_ptr() as *const core::ffi::c_void;
 
-        unsafe { gptq_marlin_repack(q_ptr, q_perm, out_ptr, self.k, q_shape[1] as i32, self.bits) }
+        if HAVE_MARLIN_KERNELS {
+            unsafe {
+                gptq_marlin_repack(q_ptr, q_perm, out_ptr, self.k, q_shape[1] as i32, self.bits)
+            }
+        } else {
+            candle_core::bail!("Not compiled with marlin kernels, but attempted to use one. Please raise an issue.");
+        }
 
         let out = CudaStorage::wrap_cuda_slice(out, dev.clone());
         Ok((out, oshape))

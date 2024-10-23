@@ -6,6 +6,8 @@ mod gptq_cpu;
 mod gptq_cuda;
 #[cfg(feature = "cuda")]
 mod marlin_backend;
+#[cfg(feature = "cuda")]
+mod marlin_ffi;
 
 #[cfg(not(feature = "cuda"))]
 pub use gptq_cpu::{gptq_linear, GptqLayer};
