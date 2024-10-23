@@ -60,7 +60,7 @@ fn prepare_cross_attention_mask(
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask)?;
-    const NEG_INF_VALUE: f32 = -3.3895313892515355e+38;
+    const NEG_INF_VALUE: f32 = -3.389_531_4e38;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
@@ -155,7 +155,7 @@ impl MLlamaModel {
             };
             let vision_outputs =
                 self.vision_model
-                    .forward(&pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
+                    .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
             let cross_attention_states = self
                 .multi_modal_projector
                 .forward(&vision_outputs.flatten(0, 1)?)?

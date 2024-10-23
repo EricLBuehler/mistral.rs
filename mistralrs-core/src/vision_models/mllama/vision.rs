@@ -481,7 +481,7 @@ fn _prepare_aspect_ratio_attention_mask(
     attention_mask = attention_mask.matmul(
         &attention_mask
             .transpose(D::Minus1, D::Minus2)?
-            .mul(-3.3895313892515355e+38)?,
+            .mul(-3.389_531_389_251_535_5e38)?,
     )?;
     attention_mask
         .unsqueeze(1)?

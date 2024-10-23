@@ -296,26 +296,24 @@ pub fn apply_chat_template_to(
                 unk_token => unk_tok,
             })?)
         }
+    } else if let Some(date_string) = date_string {
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => cfg.add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+            tools => tools,
+            date_string => date_string,
+        })?)
     } else {
-        if let Some(date_string) = date_string {
-            Ok(tmpl.render(context! {
-                messages => new_messages,
-                add_generation_prompt => cfg.add_generation_prompt,
-                bos_token => bos_tok,
-                eos_token => eos_tok,
-                unk_token => unk_tok,
-                tools => tools,
-                date_string => date_string,
-            })?)
-        } else {
-            Ok(tmpl.render(context! {
-                messages => new_messages,
-                add_generation_prompt => cfg.add_generation_prompt,
-                bos_token => bos_tok,
-                eos_token => eos_tok,
-                unk_token => unk_tok,
-                tools => tools,
-            })?)
-        }
+        Ok(tmpl.render(context! {
+            messages => new_messages,
+            add_generation_prompt => cfg.add_generation_prompt,
+            bos_token => bos_tok,
+            eos_token => eos_tok,
+            unk_token => unk_tok,
+            tools => tools,
+        })?)
     }
 }
