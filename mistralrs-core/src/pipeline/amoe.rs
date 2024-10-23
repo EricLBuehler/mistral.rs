@@ -20,6 +20,7 @@ use tracing::{info, warn};
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
+    pipeline::processing::ProcessingConfig,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
@@ -215,6 +216,9 @@ impl PreProcessingMixin for AnyMoePipeline {
     fn get_processor(&self) -> Arc<dyn super::Processor> {
         get_mut_arcmutex!(self.target).get_processor()
     }
+    fn get_processing_cfg(&self) -> ProcessingConfig {
+        get_mut_arcmutex!(self.target).get_processing_cfg()
+    }
 }
 
 impl MetadataMixin for AnyMoePipeline {
@@ -398,7 +402,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("role".to_string(), Either::Left("user".to_string())),
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
-                            true,
+                            ProcessingConfig::default(),
                             Vec::new(),
                         )
                         .map_err(candle_core::Error::msg)?;

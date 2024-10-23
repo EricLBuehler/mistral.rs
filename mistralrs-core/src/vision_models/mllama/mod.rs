@@ -14,12 +14,13 @@ use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{linear, Linear, Module, VarBuilder};
+use candle_nn::{linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
+    layers::FusedBiasLinear,
     layers_masker::masked_fill,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -59,7 +60,7 @@ fn prepare_cross_attention_mask(
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask)?;
-    const NEG_INF_VALUE: f32 = -1e15;
+    const NEG_INF_VALUE: f32 = -3.389_531_4e38;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
@@ -86,7 +87,7 @@ fn prepare_cross_attention_mask(
 pub(crate) struct MLlamaModel {
     vision_model: MLlamaVisionModel,
     language_model: MLlamaTextModel,
-    multi_modal_projector: Linear,
+    multi_modal_projector: FusedBiasLinear,
     hidden_size: usize,
     dtype: DType,
 }
@@ -126,7 +127,8 @@ impl MLlamaModel {
                 vb.pp("multi_modal_projector")
                     .set_device(real_dev.clone())
                     .set_dtype(vision_model_dtype),
-            )?,
+            )?
+            .try_into()?,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
         })
@@ -159,6 +161,10 @@ impl MLlamaModel {
                 .forward(&vision_outputs.flatten(0, 1)?)?
                 .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
                 .to_dtype(self.dtype)?;
+
+            // let cross_attention_states = Tensor::read_npy("t-cross_attention_states.npy")?
+            //     .to_dtype(cross_attention_states.dtype())?
+            //     .to_device(cross_attention_states.device())?;
             Some(cross_attention_states)
         } else {
             None
@@ -196,7 +202,7 @@ pub(crate) struct MLlamaSpecificArgs {
 
 impl VisionModel for MLlamaModel {
     fn cache(&self) -> &Cache {
-        &self.language_model.self_attn_cache
+        &self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg

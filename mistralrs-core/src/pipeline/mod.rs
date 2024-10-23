@@ -41,7 +41,8 @@ use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 pub(crate) use processing::{
-    apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
+    apply_chat_template, BasicProcessor, MessagesAction, ProcessingConfig, Processor,
+    ProcessorCreator,
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
@@ -100,6 +101,7 @@ pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
         Arc::new(BasicProcessor)
     }
+    fn get_processing_cfg(&self) -> ProcessingConfig;
     /// Only None if it doesnt make sense for the model
     fn get_chat_template(&self) -> Option<Arc<ChatTemplate>>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
@@ -564,7 +566,7 @@ mod tests {
         expected_outputs: &[&str],
         inputs: Vec<IndexMap<String, MessageContent>>,
     ) {
-        use crate::pipeline::chat_template::ChatTemplateValue;
+        use crate::pipeline::{chat_template::ChatTemplateValue, processing::ProcessingConfig};
 
         use super::chat_template::apply_chat_template_to;
         let mut failed = Vec::new();
@@ -578,7 +580,7 @@ mod tests {
                 } else {
                     inputs.clone()
                 },
-                true,
+                ProcessingConfig::default(),
                 &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),

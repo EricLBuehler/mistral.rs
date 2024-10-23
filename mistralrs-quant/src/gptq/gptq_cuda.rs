@@ -24,8 +24,11 @@ use crate::{
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
 };
 
-use super::ffi::{
-    gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
+use super::{
+    ffi::{
+        gemm_half_q_half_alt, gemm_half_q_half_cuda_part, reconstruct_exllama, reconstruct_gptq,
+    },
+    marlin_ffi::HAVE_MARLIN_KERNELS,
 };
 
 const MAX_Q_GEMM_ROWS_8BIT: i32 = 24;
@@ -371,7 +374,8 @@ pub fn gptq_linear(
     let marlin_format = config
         .checkpoint_format
         .as_ref()
-        .is_some_and(|fmt| fmt == "marlin");
+        .is_some_and(|fmt| fmt == "marlin")
+        && HAVE_MARLIN_KERNELS;
 
     let qw_shape = if marlin_format {
         (in_dim / pack_factor!(config.bits) / 2, out_dim * 2)

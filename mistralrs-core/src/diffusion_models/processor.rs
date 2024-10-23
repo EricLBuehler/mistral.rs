@@ -8,7 +8,7 @@ use tokenizers::Tokenizer;
 use crate::{
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, InputProcessorOutput, InputsProcessor,
-        InputsProcessorType, MessagesAction, Processor,
+        InputsProcessorType, MessagesAction, ProcessingConfig, Processor,
     },
     sequence::Sequence,
     MessageContent, Pipeline,
@@ -23,7 +23,7 @@ impl Processor for DiffusionProcessor {
         &self,
         _pipeline: &dyn Pipeline,
         _messages: Vec<IndexMap<String, MessageContent>>,
-        _add_generation_prompt: bool,
+        _cfg: ProcessingConfig,
         _tools: Vec<crate::Tool>,
     ) -> Result<(Vec<u32>, String)> {
         anyhow::bail!(

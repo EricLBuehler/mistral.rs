@@ -1,18 +1,56 @@
-#[cfg(feature = "cuda")]
-const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
-
 fn main() {
     #[cfg(feature = "cuda")]
     {
-        use std::{path::PathBuf, vec};
+        use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
+        const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
+        const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
         println!("cargo:rerun-if-changed=build.rs");
+
+        let compute_cap = {
+            let mut cmd = Command::new("nvidia-smi");
+            let output = String::from_utf8(
+                cmd.args(["--query-gpu=compute_cap", "--format=csv"])
+                    .output()
+                    .expect("Failed to get compute cap")
+                    .stdout,
+            )
+            .expect("Output of nvidia-smi was not utf8.");
+            (output.split('\n').nth(1).unwrap().parse::<f32>().unwrap() * 100.) as usize
+        };
+
+        // ======== Handle optional marlin kernel compilation
+        let compile_marlin = compute_cap >= 800;
+        let mut marlin_ffi_ct = read_to_string(MARLIN_FFI_PATH).unwrap();
+        let have_marlin = match compile_marlin {
+            true => "true",
+            false => "false",
+        };
+        if marlin_ffi_ct.contains("pub(crate) const HAVE_MARLIN_KERNELS: bool = true;") {
+            marlin_ffi_ct = marlin_ffi_ct.replace(
+                "pub(crate) const HAVE_MARLIN_KERNELS: bool = true;",
+                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {have_marlin};"),
+            );
+        } else {
+            marlin_ffi_ct = marlin_ffi_ct.replace(
+                "pub(crate) const HAVE_MARLIN_KERNELS: bool = false;",
+                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {have_marlin};"),
+            );
+        }
+        std::fs::write(MARLIN_FFI_PATH, marlin_ffi_ct).unwrap();
+        // ========
+
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let lib_files = vec![
+        let mut lib_files = vec![
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
-            "kernels/marlin/marlin_kernel.cu",
         ];
+        if compile_marlin {
+            lib_files.push("kernels/marlin/marlin_kernel.cu");
+        } else {
+            lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
+        }
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }

@@ -6,7 +6,7 @@ use super::{
 };
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin, ProcessingConfig,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -442,6 +442,9 @@ impl PreProcessingMixin for GGMLPipeline {
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
+    }
+    fn get_processing_cfg(&self) -> ProcessingConfig {
+        ProcessingConfig::default()
     }
 }
 
