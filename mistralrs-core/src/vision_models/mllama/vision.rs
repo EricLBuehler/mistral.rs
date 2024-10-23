@@ -1,21 +1,64 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::ops::Mul;
+use std::{collections::HashMap, ops::Mul};
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
 
 use crate::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
+    layers::{FusedBiasLinear, MatMul},
     pipeline::IsqModel,
-    utils::unvarbuilder::UnVarBuilder,
+    utils::unvarbuilder::{ToTensors, UnVarBuilder},
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
+
+struct MLlamaLayerNorm {
+    w: Tensor,
+    b: Tensor,
+    eps: f64,
+}
+
+impl MLlamaLayerNorm {
+    pub fn new<C: Into<LayerNormConfig>>(size: usize, config: C, vb: VarBuilder) -> Result<Self> {
+        let config: LayerNormConfig = config.into();
+        Ok(Self {
+            w: vb.get((size,), "weight")?,
+            b: vb.get((size,), "bias")?,
+            eps: config.eps,
+        })
+    }
+}
+
+impl Module for MLlamaLayerNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let x_dtype = xs.dtype();
+        let internal_dtype = match x_dtype {
+            DType::F16 | DType::BF16 => DType::F32,
+            d => d,
+        };
+        let hidden_size = xs.dim(D::Minus1)?;
+        let mut xs = xs.to_dtype(internal_dtype)?;
+        let mean_x = (xs.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        xs = xs.broadcast_sub(&mean_x)?;
+        let norm_x = (xs.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        let x_normed = xs.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        xs = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.w)?;
+        xs.broadcast_add(&self.b)
+    }
+}
+
+impl ToTensors for MLlamaLayerNorm {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        HashMap::from_iter([
+            ("weight".to_string(), self.w.clone()),
+            ("bias".to_string(), self.b.clone()),
+        ])
+    }
+}
 
 struct MLlamaPrecomputedPositionEmbedding {
     gate: Tensor,
@@ -46,7 +89,7 @@ impl MLlamaPrecomputedPositionEmbedding {
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L197
     fn forward(&self, hidden_state: &Tensor, aspect_ratio_ids: &Tensor) -> Result<Tensor> {
         // position embeddings
-        let mut gated_pos_embed = (1. - &self.gate.tanh()?)?.broadcast_mul(&self.embedding)?;
+        let gated_pos_embed = (1. - &self.gate.tanh()?)?.broadcast_mul(&self.embedding)?;
         let hidden_state = hidden_state.broadcast_add(&gated_pos_embed.reshape((
             1,
             1,
@@ -63,9 +106,10 @@ impl MLlamaPrecomputedPositionEmbedding {
             self.num_patches,
             self.hidden_size,
         ))?;
-        gated_pos_embed = self.gate.tanh()?.broadcast_mul(&tile_position_embedding)?;
+        let gated_tile_position_embedding =
+            self.gate.tanh()?.broadcast_mul(&tile_position_embedding)?;
 
-        hidden_state.broadcast_add(&gated_pos_embed)
+        hidden_state.broadcast_add(&gated_tile_position_embedding)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -132,7 +176,6 @@ struct MLlamaVisionAttention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    sdpa_params: SdpaParams,
     num_heads: usize,
     head_dim: usize,
 }
@@ -161,13 +204,6 @@ impl MLlamaVisionAttention {
                 cfg.num_attention_heads * head_dim,
                 vb.pp("o_proj"),
             )?,
-            sdpa_params: SdpaParams {
-                n_kv_groups: 1,
-                use_flash_attn: false,
-                softcap: None,
-                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
-            },
             num_heads: cfg.num_attention_heads,
             head_dim,
         })
@@ -193,18 +229,46 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_output = Sdpa
-            .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
-                None,
-                &self.sdpa_params,
-            )?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((bs, q_sq, ()))?;
+        let attn_output = {
+            let q = q.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+            let k = k.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+            let att = match attention_mask {
+                Some(m) => {
+                    let mut out = m.copy()?;
+                    // let mut out = m.to_dtype(q.dtype())?;//.to_device(&Device::Cpu)?;
+                    q.contiguous()?.matmul_with_alpha_beta(
+                        &k.t()?.contiguous()?,
+                        &mut out,
+                        Some(1. / (self.head_dim as f64).sqrt()),
+                    )?;
+                    out.to_device(hidden_state.device())?
+                        .to_dtype(hidden_state.dtype())?
+                }
+                None => MatMul.matmul_affine_div(
+                    &q.contiguous()?,
+                    &k.t()?.contiguous()?,
+                    (self.head_dim as f64).sqrt(),
+                )?,
+            };
+            // let att = MatMul.matmul_affine_div(
+            //     &q.contiguous()?,
+            //     &k.t()?.contiguous()?,
+            //     (self.head_dim as f64).sqrt(),
+            // )?;
+
+            // let att = match attention_mask {
+            //     Some(m) => att.broadcast_add(m)?,
+            //     None => att,
+            // };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            MatMul
+                .matmul(&att, &v.contiguous()?)?
+                .transpose(1, 2)?
+                .reshape((bs, q_sq, ()))?
+            // .to_dtype(hidden_state.dtype())?
+            // .to_device(hidden_state.device())?
+        };
 
         self.o_proj.forward(&attn_output)
     }
@@ -243,8 +307,8 @@ impl MLlamaMlp {
 struct MLlamaVisionEncoderLayer {
     self_attn: MLlamaVisionAttention,
     mlp: MLlamaMlp,
-    input_layernorm: LayerNorm,
-    post_attention_layernorm: LayerNorm,
+    input_layernorm: MLlamaLayerNorm,
+    post_attention_layernorm: MLlamaLayerNorm,
     gate_attn: Option<Tensor>,
     gate_ffn: Option<Tensor>,
 }
@@ -254,8 +318,9 @@ impl MLlamaVisionEncoderLayer {
         let self_attn = MLlamaVisionAttention::new(cfg, vb.pp("self_attn"))?;
         let mlp = MLlamaMlp::new(cfg, vb.pp("mlp"))?;
 
-        let input_layernorm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = layer_norm(
+        let input_layernorm =
+            MLlamaLayerNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = MLlamaLayerNorm::new(
             cfg.hidden_size,
             cfg.norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -286,24 +351,31 @@ impl MLlamaVisionEncoderLayer {
     fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         // Self attn
         let residual = hidden_state;
-        let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
+        let hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        if let Some(gate) = &self.gate_attn {
-            hidden_state = gate.broadcast_mul(&hidden_state.tanh()?)?;
-        }
-        hidden_state = (residual + hidden_state)?;
+        let hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
+
+        let hidden_state = if let Some(gate) = &self.gate_attn {
+            hidden_state.broadcast_mul(&gate.tanh()?)?
+        } else {
+            hidden_state
+        };
+
+        let hidden_state = (hidden_state + residual)?;
 
         // FF
         let residual = hidden_state.clone();
-        hidden_state = self.post_attention_layernorm.forward(&hidden_state)?;
 
-        hidden_state = self.mlp.forward(&hidden_state)?;
+        let hidden_state = self
+            .mlp
+            .forward(&hidden_state.apply(&self.post_attention_layernorm)?)?;
 
-        if let Some(gate) = &self.gate_ffn {
-            hidden_state = gate.broadcast_mul(&hidden_state.tanh()?)?;
-        }
+        let hidden_state = if let Some(gate) = &self.gate_ffn {
+            hidden_state.broadcast_mul(&gate.tanh()?)?
+        } else {
+            hidden_state
+        };
         residual + hidden_state
     }
 }
@@ -381,7 +453,6 @@ fn _prepare_aspect_ratio_attention_mask(
     aspect_ratio_mask: &Tensor,
     num_patches: usize,
     target_length: usize,
-    dtype: DType,
     num_attn_heads: usize,
 ) -> Result<Tensor> {
     let (bs, max_num_tiles) = aspect_ratio_mask.dims2()?;
@@ -402,17 +473,21 @@ fn _prepare_aspect_ratio_attention_mask(
     )?;
 
     // Invert the mask
-    attention_mask = (1. - attention_mask.to_dtype(DType::F32)?.to_dtype(dtype)?)?;
+    attention_mask = (1. - attention_mask.to_dtype(DType::F32)?)?;
 
     // Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
     attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, 1))?;
-    attention_mask =
-        attention_mask.matmul(&attention_mask.transpose(D::Minus1, D::Minus2)?.mul(-1e15)?)?;
+    attention_mask = attention_mask.matmul(
+        &attention_mask
+            .transpose(D::Minus1, D::Minus2)?
+            .mul(-3.389_531_389_251_535_5e38)?,
+    )?;
     attention_mask
         .unsqueeze(1)?
         .contiguous()?
-        .repeat((1, num_attn_heads, 1, 1))
+        .repeat((1, num_attn_heads, 1, 1))?
+        .to_device(&Device::Cpu)
 }
 
 pub(super) struct MLlamaVisionModel {
@@ -421,8 +496,8 @@ pub(super) struct MLlamaVisionModel {
     gated_positional_embedding: MLlamaPrecomputedPositionEmbedding,
     pre_tile_positional_embedding: MLlamaPrecomputedAspectRatioEmbedding,
     post_tile_positional_embedding: MLlamaPrecomputedAspectRatioEmbedding,
-    layernorm_pre: LayerNorm,
-    layernorm_post: LayerNorm,
+    layernorm_pre: MLlamaLayerNorm,
+    layernorm_post: MLlamaLayerNorm,
     transformer: MLlamaVisionEncoder,
     global_transformer: MLlamaVisionEncoder,
     pub(super) num_patches: usize,
@@ -457,12 +532,12 @@ impl MLlamaVisionModel {
         )?;
 
         // layer norms
-        let layernorm_pre = layer_norm(
+        let layernorm_pre = MLlamaLayerNorm::new(
             cfg.hidden_size,
             LayerNormConfig::default(),
             vb.pp("layernorm_pre"),
         )?;
-        let layernorm_post = layer_norm(
+        let layernorm_post = MLlamaLayerNorm::new(
             cfg.hidden_size,
             LayerNormConfig::default(),
             vb.pp("layernorm_post"),
@@ -571,7 +646,6 @@ impl MLlamaVisionModel {
             &attention_mask,
             self.num_patches,
             hidden_state.dim(2)?,
-            hidden_state.dtype(),
             self.num_attn_heads,
         )?;
 

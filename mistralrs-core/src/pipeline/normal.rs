@@ -7,6 +7,7 @@ use super::{
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
     IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    ProcessingConfig,
 };
 use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -64,6 +65,7 @@ pub struct NormalPipeline {
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
     config: String,
+    processing_cfg: ProcessingConfig,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -462,6 +464,7 @@ impl Loader for NormalLoader {
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
+            processing_cfg: self.inner.processing_cfg(),
         })))
     }
 
@@ -483,6 +486,9 @@ impl PreProcessingMixin for NormalPipeline {
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
+    }
+    fn get_processing_cfg(&self) -> ProcessingConfig {
+        self.processing_cfg
     }
 }
 

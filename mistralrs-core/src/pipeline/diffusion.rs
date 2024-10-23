@@ -3,7 +3,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
     IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, Processor, TokenSource,
+    PreProcessingMixin, ProcessingConfig, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
@@ -250,6 +250,9 @@ impl PreProcessingMixin for DiffusionPipeline {
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
+    }
+    fn get_processing_cfg(&self) -> ProcessingConfig {
+        ProcessingConfig::default()
     }
 }
 

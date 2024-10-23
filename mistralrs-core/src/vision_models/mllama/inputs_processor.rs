@@ -354,11 +354,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::msg(e.to_string())))),
             };
 
-            // cross_attn_mask
-            //     .to_dtype(DType::F32).unwrap()
-            //     .to_device(&Device::Cpu).unwrap()
-            //     .write_npy("/home/ubuntu/dump/mistralrs/cross_attn_mask.npy").unwrap();
-
             (
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(Tensor::cat(&aspect_ratio_ids_accum, 0).unwrap()),
@@ -753,19 +748,6 @@ impl ImagePreProcessor for MLlamaImageProcessor {
                 .as_ref()
                 .context("`do_resize=false` is not supported, need `size`!")?;
 
-            // {
-            //     let to_tensor_rescale = Transforms {
-            //         input: &ToTensorNoNorm,
-            //         inner_transforms: &[],
-            //     };
-            //     let image = image.apply(to_tensor_rescale, device)?;
-
-            //     image
-            //         .to_dtype(DType::F32)?
-            //         .to_device(&Device::Cpu)?
-            //         .write_npy("/home/ubuntu/dump/mistralrs/original_image.npy")?;
-            // }
-
             let (image, aspect_ratio) =
                 self.resize(image, size, max_image_tiles, config.resampling.to_filter()?)?;
 
@@ -778,17 +760,7 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             };
             let mut image = image.apply(to_tensor_rescale, device)?;
 
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/resize_image.npy")?;
-
             image = self.pad(&image, size, aspect_ratio)?;
-
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/pad_image.npy")?;
 
             let transforms = TensorTransforms {
                 inner_transforms: &[
@@ -811,18 +783,8 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             };
             image = <Tensor as ApplyTensorTransforms>::apply(&image, transforms, device)?;
 
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/rescale_norm_image.npy")?;
-
             let (num_tiles_height, num_tiles_width) = aspect_ratio;
             image = self.split_to_tiles(&image, num_tiles_height, num_tiles_width)?;
-
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/split_image.npy")?;
 
             sample_images.push(image);
             sample_aspect_ratios.push((num_tiles_height, num_tiles_width));
@@ -843,22 +805,6 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             (bs, max_num_images),
             device,
         )?;
-
-        // aspect_ratio_ids
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/aspect_ratio_ids.npy")?;
-
-        // aspect_ratio_mask
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/aspect_ratio_mask.npy")?;
-
-        // images
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/packed_images.npy")?;
-        // dbg!(&num_tiles);
 
         Ok(PreprocessedImages {
             pixel_values: images,

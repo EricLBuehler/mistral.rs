@@ -15,7 +15,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction,
+        ProcessingConfig, Processor,
     },
     sequence::Sequence,
     vision_models::ModelInputs,
@@ -54,16 +55,11 @@ impl Processor for Idefics2Processor {
         &self,
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
-        add_generation_prompt: bool,
+        cfg: ProcessingConfig,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
-        let mut prompt = apply_chat_template(
-            pipeline,
-            messages,
-            add_generation_prompt,
-            self.template_action(),
-            tools,
-        )?;
+        let mut prompt =
+            apply_chat_template(pipeline, messages, cfg, self.template_action(), tools)?;
 
         let mut image_str = format!(
             "{}{}{}",

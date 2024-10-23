@@ -2,21 +2,51 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
 use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
+    layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
-    utils::unvarbuilder::UnVarBuilder,
+    utils::unvarbuilder::{ToTensors, UnVarBuilder},
 };
 
 use super::config::MLlamaTextConfig;
+
+struct MLlamaRmsNorm {
+    w: Tensor,
+    eps: f64,
+}
+
+impl MLlamaRmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            w: vb.get((size,), "weight")?,
+            eps,
+        })
+    }
+}
+
+impl Module for MLlamaRmsNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let initial_type = xs.dtype();
+        let mut xs = xs.to_dtype(DType::F32)?;
+        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
+        xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
+        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
+    }
+}
+
+impl ToTensors for MLlamaRmsNorm {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        HashMap::from_iter([("weight".to_string(), self.w.clone())])
+    }
+}
 
 struct MLlamaTextMlp {
     gate_proj: Arc<dyn QuantMethod>,
@@ -193,8 +223,8 @@ impl MLlamaTextSelfAttention {
 struct MLlamaSelfAttentionDecoderLayer {
     attn: MLlamaTextSelfAttention,
     mlp: MLlamaTextMlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: MLlamaRmsNorm,
+    post_attention_layernorm: MLlamaRmsNorm,
 }
 
 impl MLlamaSelfAttentionDecoderLayer {
@@ -207,12 +237,12 @@ impl MLlamaSelfAttentionDecoderLayer {
         loading_isq: bool,
     ) -> Result<Self> {
         let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = MLlamaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = MLlamaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -265,8 +295,8 @@ struct MLlamaTextCrossAttention {
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: MLlamaRmsNorm,
+    k_norm: MLlamaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -304,12 +334,12 @@ impl MLlamaTextCrossAttention {
                 &cfg.quantization_config,
                 vb.pp("o_proj"),
             )?,
-            q_norm: RmsNorm::new(
+            q_norm: MLlamaRmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("q_norm"), false),
             )?,
-            k_norm: RmsNorm::new(
+            k_norm: MLlamaRmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("k_norm"), false),
@@ -378,17 +408,36 @@ impl MLlamaTextCrossAttention {
         };
 
         let mut attn_output = {
-            let att = MatMul.matmul_affine_div(
-                &q.contiguous()?,
-                &k.t()?.contiguous()?,
-                (self.head_dim as f64).sqrt(),
-            )?;
-
             let att = match attention_mask {
-                Some(m) => att.broadcast_add(m)?,
-                None => att,
+                Some(m) => {
+                    let mut out = m.to_dtype(DType::F32)?.repeat((1, self.num_heads, 1, 1))?;
+                    q.contiguous()?
+                        .to_dtype(DType::F32)?
+                        .matmul_with_alpha_beta(
+                            &k.t()?.contiguous()?.to_dtype(DType::F32)?,
+                            &mut out,
+                            Some(1. / (self.head_dim as f64).sqrt()),
+                        )?;
+                    out.to_dtype(q.dtype())?
+                }
+                None => MatMul.matmul_affine_div(
+                    &q.contiguous()?,
+                    &k.t()?.contiguous()?,
+                    (self.head_dim as f64).sqrt(),
+                )?,
             };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // let att = MatMul.matmul_affine_div(
+            //     &q.contiguous()?,
+            //     &k.t()?.contiguous()?,
+            //     (self.head_dim as f64).sqrt(),
+            // )?;
+
+            // let att = match attention_mask {
+            //     Some(m) => att.broadcast_add(m)?,
+            //     None => att,
+            // };
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
             MatMul
                 .matmul(&att, &v.contiguous()?)?
@@ -412,8 +461,8 @@ struct MLlamaCrossAttentionDecoderLayer {
     attn_gate: Tensor,
     mlp: MLlamaTextMlp,
     mlp_gate: Tensor,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: MLlamaRmsNorm,
+    post_attention_layernorm: MLlamaRmsNorm,
 }
 
 impl MLlamaCrossAttentionDecoderLayer {
@@ -425,12 +474,12 @@ impl MLlamaCrossAttentionDecoderLayer {
         loading_isq: bool,
     ) -> Result<Self> {
         let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = MLlamaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = MLlamaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -495,10 +544,10 @@ enum MLlamaDecoderLayer {
 pub(super) struct MLlamaTextModel {
     embed_tokens: Embedding,
     lm_head: Arc<dyn QuantMethod>,
-    norm: RmsNorm,
+    norm: MLlamaRmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
     pub(crate) cfg: ModelConfigMetadata,
-    pub(crate) self_attn_cache: Cache,
+    pub(crate) cache: Cache,
     pub(crate) device: Device,
     pub(crate) max_position_embeddings: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -541,7 +590,7 @@ impl MLlamaTextModel {
 
         let vb = vb.pp("model");
 
-        let norm = RmsNorm::new(
+        let norm = MLlamaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("norm"), false),
@@ -608,7 +657,7 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 head_dim: None,
             },
-            self_attn_cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
@@ -628,7 +677,7 @@ impl MLlamaTextModel {
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
-        let mut self_cache = self.self_attn_cache.lock();
+        let mut cache = self.cache.lock();
         let self_mask = CausalMasker.make_causal_mask_as_attn_bias(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -645,7 +694,7 @@ impl MLlamaTextModel {
                         self_mask.as_ref(),
                         seqlen_offsets,
                         start_offsets_kernel.clone(),
-                        &mut self_cache[i],
+                        &mut cache[i],
                     )?;
                 }
                 MLlamaDecoderLayer::CrossAttn(attn) => {
@@ -660,7 +709,7 @@ impl MLlamaTextModel {
                         cross_attn_states,
                         cross_attention_mask,
                         full_text_row_masked_out_mask,
-                        &mut self_cache[i],
+                        &mut cache[i],
                     )?;
                 }
             }

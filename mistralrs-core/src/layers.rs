@@ -721,7 +721,17 @@ impl Module for FusedBiasLinear {
                 )?
                 .t()
         } else {
-            x.matmul(&w.t()?)? + b
+            // x.matmul(&w.t()?)? + b
+            let dtype = x.dtype();
+            let mut out = b.contiguous()?.to_dtype(DType::F32)?;
+            x.to_dtype(DType::F32)?
+                .contiguous()?
+                .matmul_with_alpha_beta(
+                    &w.t()?.to_dtype(DType::F32)?.contiguous()?,
+                    &mut out,
+                    None,
+                )?;
+            Ok(out.to_dtype(dtype)?)
         }
     }
 }

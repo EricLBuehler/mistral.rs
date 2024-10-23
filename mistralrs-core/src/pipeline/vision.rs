@@ -3,8 +3,9 @@ use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
+    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
+    ProcessingConfig, Processor, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
+    XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -393,6 +394,9 @@ impl PreProcessingMixin for VisionPipeline {
     }
     fn get_processor(&self) -> Arc<dyn super::Processor> {
         self.processor.clone()
+    }
+    fn get_processing_cfg(&self) -> ProcessingConfig {
+        ProcessingConfig::default()
     }
 }
 
