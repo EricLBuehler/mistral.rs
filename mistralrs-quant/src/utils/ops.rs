@@ -405,7 +405,7 @@ mod tests {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
-        let device = &Device::Cpu;
+        let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
             .unwrap()
@@ -438,7 +438,7 @@ mod tests {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Four;
-        let device = &Device::Cpu;
+        let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
             .unwrap()
