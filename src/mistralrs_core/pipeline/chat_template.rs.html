@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/chat_template.rs`."><title>chat_template.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/chat_template.rs`."><title>chat_template.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-492a78a4a87dcc01.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.82.0 (f6e511eec 2024-10-15)" data-channel="1.82.0" data-search-js="search-a99f1315e7cc5121.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-921df33f47b8780c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-3b12f09e550e0385.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -292,6 +292,31 @@
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -304,6 +329,8 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{MessageContent, Tool};
+
+<span class="kw">use </span><span class="kw">super</span>::processing::ProcessingConfig;
 
 <span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str] = <span class="kw-2">&amp;</span>[
     <span class="string">"&lt;|im_end|&gt;"</span>,    <span class="comment">// Handle ChatML case
@@ -510,7 +537,7 @@
 
 <span class="kw">pub fn </span>apply_chat_template_to(
     messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-    add_generation_prompt: bool,
+    cfg: ProcessingConfig,
     template: <span class="kw-2">&amp;</span>ChatTemplateValue,
     bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
     eos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -562,27 +589,50 @@
     env.add_filter(<span class="string">"tojson"</span>, tojson);
     <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
 
-    <span class="kw">let </span>date = chrono::Utc::now();
-    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
+    <span class="kw">let </span>date_string = <span class="kw">if </span>cfg.add_date_string {
+        <span class="kw">let </span>date = chrono::Utc::now();
+        <span class="prelude-val">Some</span>(date.format(<span class="string">"%d, %B, %Y"</span>).to_string())
+    } <span class="kw">else </span>{
+        <span class="prelude-val">None
+    </span>};
 
     <span class="kw">if </span>tools.is_empty() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(date_string) = date_string {
+            <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+                messages =&gt; new_messages,
+                add_generation_prompt =&gt; cfg.add_generation_prompt,
+                bos_token =&gt; bos_tok,
+                eos_token =&gt; eos_tok,
+                unk_token =&gt; unk_tok,
+                date_string =&gt; date_string,
+            })<span class="question-mark">?</span>)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+                messages =&gt; new_messages,
+                add_generation_prompt =&gt; cfg.add_generation_prompt,
+                bos_token =&gt; bos_tok,
+                eos_token =&gt; eos_tok,
+                unk_token =&gt; unk_tok,
+            })<span class="question-mark">?</span>)
+        }
+    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(date_string) = date_string {
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
             messages =&gt; new_messages,
-            add_generation_prompt =&gt; add_generation_prompt,
-            bos_token =&gt; bos_tok,
-            eos_token =&gt; eos_tok,
-            unk_token =&gt; unk_tok,
-            date_string =&gt; date_string,
-        })<span class="question-mark">?</span>)
-    } <span class="kw">else </span>{
-        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-            messages =&gt; new_messages,
-            add_generation_prompt =&gt; add_generation_prompt,
+            add_generation_prompt =&gt; cfg.add_generation_prompt,
             bos_token =&gt; bos_tok,
             eos_token =&gt; eos_tok,
             unk_token =&gt; unk_tok,
             tools =&gt; tools,
             date_string =&gt; date_string,
+        })<span class="question-mark">?</span>)
+    } <span class="kw">else </span>{
+        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+            messages =&gt; new_messages,
+            add_generation_prompt =&gt; cfg.add_generation_prompt,
+            bos_token =&gt; bos_tok,
+            eos_token =&gt; eos_tok,
+            unk_token =&gt; unk_tok,
+            tools =&gt; tools,
         })<span class="question-mark">?</span>)
     }
 }

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/processing.rs`."><title>processing.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-c5d6553a23f1e5a6.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.81.0 (eeb90cda1 2024-09-04)" data-channel="1.81.0" data-search-js="search-d234aafac6c221dd.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-d2fab2bf619172d3.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/processing.rs`."><title>processing.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-492a78a4a87dcc01.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.82.0 (f6e511eec 2024-10-15)" data-channel="1.82.0" data-search-js="search-a99f1315e7cc5121.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-921df33f47b8780c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-3b12f09e550e0385.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers"><a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
 <a href="#4" id="4">4</a>
@@ -152,6 +152,20 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -180,6 +194,34 @@
     </span>FlattenOnlyText,
 }
 
+<span class="attr">#[derive(Copy, Clone)]
+</span><span class="doccomment">/// Configuration for a processor
+</span><span class="kw">pub struct </span>ProcessingConfig {
+    <span class="comment">// This should normally always be true
+    </span><span class="kw">pub </span>add_generation_prompt: bool,
+    <span class="comment">// Add the date string
+    </span><span class="kw">pub </span>add_date_string: bool,
+}
+
+<span class="kw">impl </span>Default <span class="kw">for </span>ProcessingConfig {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            add_generation_prompt: <span class="bool-val">true</span>,
+            add_date_string: <span class="bool-val">false</span>,
+        }
+    }
+}
+
+<span class="kw">impl </span>ProcessingConfig {
+    <span class="doccomment">/// Control adding a date string
+    </span><span class="kw">pub fn </span>with_add_date_string(<span class="self">self</span>, add_date_string: bool) -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            add_date_string,
+            ..<span class="self">self
+        </span>}
+    }
+}
+
 <span class="doccomment">/// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
@@ -189,16 +231,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-        add_generation_prompt: bool,
+        cfg: ProcessingConfig,
         tools: Vec&lt;Tool&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Vec&lt;u32&gt;, String)&gt; {
-        <span class="kw">let </span>prompt = apply_chat_template(
-            pipeline,
-            messages,
-            add_generation_prompt,
-            <span class="self">self</span>.template_action(),
-            tools,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>prompt = apply_chat_template(pipeline, messages, cfg, <span class="self">self</span>.template_action(), tools)<span class="question-mark">?</span>;
         <span class="kw">let </span>encoding = pipeline
             .tokenizer()
             .with_context(|| {
@@ -216,7 +252,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>apply_chat_template(
     pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
     messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-    add_generation_prompt: bool,
+    cfg: ProcessingConfig,
     action: MessagesAction,
     tools: Vec&lt;Tool&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
@@ -282,15 +318,7 @@
     } <span class="kw">else </span>{
         <span class="prelude-val">None
     </span>};
-    apply_chat_template_to(
-        messages,
-        add_generation_prompt,
-        template,
-        bos_tok,
-        eos_tok,
-        unk_tok,
-        tools,
-    )
+    apply_chat_template_to(messages, cfg, template, bos_tok, eos_tok, unk_tok, tools)
 }
 
 <span class="kw">pub struct </span>BasicProcessor;
