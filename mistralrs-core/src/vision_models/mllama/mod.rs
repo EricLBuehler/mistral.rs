@@ -196,7 +196,7 @@ pub(crate) struct MLlamaSpecificArgs {
 
 impl VisionModel for MLlamaModel {
     fn cache(&self) -> &Cache {
-        &self.language_model.self_attn_cache
+        &self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg

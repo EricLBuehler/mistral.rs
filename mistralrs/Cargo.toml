@@ -132,3 +132,7 @@ required-features = []
 [[example]]
 name = "llama_vision"
 required-features = []
+
+[[example]]
+name = "llama_vision_multiturn"
+required-features = []

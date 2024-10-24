@@ -195,16 +195,19 @@ impl MLlamaVisionAttention {
 
         let attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
+                &q.contiguous()?.to_dtype(DType::F32)?,
+                &k.contiguous()?.to_dtype(DType::F32)?,
+                &v.contiguous()?.to_dtype(DType::F32)?,
+                attention_mask
+                    .map(|m| m.to_dtype(DType::F32).unwrap())
+                    .as_ref(),
                 None,
                 &self.sdpa_params,
             )?
             .transpose(1, 2)?
             .contiguous()?
-            .reshape((bs, q_sq, ()))?;
+            .reshape((bs, q_sq, ()))?
+            .to_dtype(q.dtype())?;
 
         self.o_proj.forward(&attn_output)
     }
