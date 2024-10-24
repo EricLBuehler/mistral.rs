@@ -806,7 +806,6 @@
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -818,7 +817,7 @@
 <span class="kw">use crate</span>::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, Sdpa},
+    layers::{CausalMasker, Llama3RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
@@ -1014,9 +1013,20 @@
         (k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa
-            .run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, attention_mask, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
+            .run_attention(
+                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                attention_mask
+                    .map(|m| m.to_dtype(DType::F32).unwrap())
+                    .as_ref(),
+                <span class="prelude-val">None</span>,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+            )<span class="question-mark">?
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.reshape((bs, q_len, ()))<span class="question-mark">?</span>;
+            </span>.contiguous()<span class="question-mark">?
+            </span>.reshape((bs, q_len, ()))<span class="question-mark">?
+            </span>.to_dtype(q.dtype())<span class="question-mark">?</span>;
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)<span class="question-mark">?</span>;
@@ -1109,6 +1119,7 @@
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    sdpa_params: SdpaParams,
 }
 
 <span class="kw">impl </span>MLlamaTextCrossAttention {
@@ -1156,6 +1167,13 @@
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
             head_dim: cfg.head_dim(),
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: <span class="bool-val">false</span>,
+                softcap: <span class="prelude-val">None</span>,
+                softmax_scale: <span class="number">1.0 </span>/ (cfg.head_dim() <span class="kw">as </span>f32).sqrt(),
+                sliding_window: <span class="prelude-val">None</span>,
+            },
         })
     }
 
@@ -1205,9 +1223,6 @@
                 .reshape((bs, (), <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-            k = repeat_kv(k.clone(), <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-            v = repeat_kv(v.clone(), <span class="self">self</span>.num_heads / <span class="self">self</span>.num_kv_heads)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-
             (k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
             (k, v)
         } <span class="kw">else if let </span><span class="prelude-val">Some</span>((k_cache, v_cache)) = kv_cache {
@@ -1216,43 +1231,26 @@
             <span class="macro">candle_core::bail!</span>(<span class="string">"Cross attn cannot find k,v cache or cross attn hidden states!"</span>)
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = {
-            <span class="kw">let </span>att = <span class="kw">match </span>attention_mask {
-                <span class="prelude-val">Some</span>(m) =&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>out = m.to_dtype(DType::F32)<span class="question-mark">?</span>.repeat((<span class="number">1</span>, <span class="self">self</span>.num_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
-                    q.contiguous()<span class="question-mark">?
-                        </span>.to_dtype(DType::F32)<span class="question-mark">?
-                        </span>.matmul_with_alpha_beta(
-                            <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                            <span class="kw-2">&amp;mut </span>out,
-                            <span class="prelude-val">Some</span>(<span class="number">1. </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt()),
-                        )<span class="question-mark">?</span>;
-                    out.to_dtype(q.dtype())<span class="question-mark">?
-                </span>}
-                <span class="prelude-val">None </span>=&gt; MatMul.matmul_affine_div(
-                    <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
-                    <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
-                    (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt(),
-                )<span class="question-mark">?</span>,
-            };
-            <span class="comment">// let att = MatMul.matmul_affine_div(
-            //     &amp;q.contiguous()?,
-            //     &amp;k.t()?.contiguous()?,
-            //     (self.head_dim as f64).sqrt(),
-            // )?;
-
-            // let att = match attention_mask {
-            //     Some(m) =&gt; att.broadcast_add(m)?,
-            //     None =&gt; att,
-            // };
-            </span><span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att.to_dtype(DType::F32)<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.to_dtype(q.dtype())<span class="question-mark">?</span>;
-            <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-            </span>MatMul
-                .matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.reshape((bs, q_len, ()))<span class="question-mark">?
-        </span>};
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa
+            .run_attention(
+                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                attention_mask
+                    .map(|m| {
+                        m.to_dtype(DType::F32)
+                            .unwrap()
+                            .repeat((<span class="number">1</span>, <span class="self">self</span>.num_heads, <span class="number">1</span>, <span class="number">1</span>))
+                            .unwrap()
+                    })
+                    .as_ref(),
+                <span class="prelude-val">None</span>,
+                <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+            )<span class="question-mark">?
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?
+            </span>.reshape((bs, q_len, ()))<span class="question-mark">?
+            </span>.to_dtype(q.dtype())<span class="question-mark">?</span>;
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.q_proj.quantized_act_type() {
             attn_output = attn_output.to_dtype(t)<span class="question-mark">?</span>;
