@@ -429,7 +429,12 @@ impl MLlamaTextCrossAttention {
                 &k.contiguous()?.to_dtype(DType::F32)?,
                 &v.contiguous()?.to_dtype(DType::F32)?,
                 attention_mask
-                    .map(|m| m.to_dtype(DType::F32).unwrap())
+                    .map(|m| {
+                        m.to_dtype(DType::F32)
+                            .unwrap()
+                            .repeat((1, self.num_heads, 1, 1))
+                            .unwrap()
+                    })
                     .as_ref(),
                 None,
                 &self.sdpa_params,
