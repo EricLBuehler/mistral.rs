@@ -102,7 +102,7 @@
 <span class="kw">use crate</span>::{
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, InputProcessorOutput, InputsProcessor,
-        InputsProcessorType, MessagesAction, ProcessingConfig, Processor,
+        InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     MessageContent, Pipeline,
@@ -117,7 +117,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         _messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-        _cfg: ProcessingConfig,
+        _add_generation_prompt: bool,
         _tools: Vec&lt;<span class="kw">crate</span>::Tool&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Vec&lt;u32&gt;, String)&gt; {
         <span class="macro">anyhow::bail!</span>(

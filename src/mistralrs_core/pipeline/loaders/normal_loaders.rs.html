@@ -1512,12 +1512,6 @@
 <a href="#1512" id="1512">1512</a>
 <a href="#1513" id="1513">1513</a>
 <a href="#1514" id="1514">1514</a>
-<a href="#1515" id="1515">1515</a>
-<a href="#1516" id="1516">1516</a>
-<a href="#1517" id="1517">1517</a>
-<a href="#1518" id="1518">1518</a>
-<a href="#1519" id="1519">1519</a>
-<a href="#1520" id="1520">1520</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
@@ -1533,7 +1527,7 @@
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, ProcessingConfig,
+        Cache, IsqModel,
     },
     serde_default_fn,
     utils::log::once_log_info,
@@ -1631,9 +1625,6 @@
     <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt;;
     <span class="doccomment">/// Get total num_hidden_layers for the layers which will be device mapped.
     </span><span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-    <span class="kw">fn </span>processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        ProcessingConfig::default()
-    }
 }
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass(eq, eq_int))]
@@ -2160,9 +2151,6 @@
     }
     <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="prelude-val">Ok</span>(LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
-    <span class="kw">fn </span>processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        ProcessingConfig::default().with_add_date_string(<span class="bool-val">true</span>)
     }
 }
 

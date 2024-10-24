@@ -152,20 +152,6 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
-<a href="#155" id="155">155</a>
-<a href="#156" id="156">156</a>
-<a href="#157" id="157">157</a>
-<a href="#158" id="158">158</a>
-<a href="#159" id="159">159</a>
-<a href="#160" id="160">160</a>
-<a href="#161" id="161">161</a>
-<a href="#162" id="162">162</a>
-<a href="#163" id="163">163</a>
-<a href="#164" id="164">164</a>
-<a href="#165" id="165">165</a>
-<a href="#166" id="166">166</a>
-<a href="#167" id="167">167</a>
-<a href="#168" id="168">168</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -194,34 +180,6 @@
     </span>FlattenOnlyText,
 }
 
-<span class="attr">#[derive(Copy, Clone)]
-</span><span class="doccomment">/// Configuration for a processor
-</span><span class="kw">pub struct </span>ProcessingConfig {
-    <span class="comment">// This should normally always be true
-    </span><span class="kw">pub </span>add_generation_prompt: bool,
-    <span class="comment">// Add the date string
-    </span><span class="kw">pub </span>add_date_string: bool,
-}
-
-<span class="kw">impl </span>Default <span class="kw">for </span>ProcessingConfig {
-    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            add_generation_prompt: <span class="bool-val">true</span>,
-            add_date_string: <span class="bool-val">false</span>,
-        }
-    }
-}
-
-<span class="kw">impl </span>ProcessingConfig {
-    <span class="doccomment">/// Control adding a date string
-    </span><span class="kw">pub fn </span>with_add_date_string(<span class="self">self</span>, add_date_string: bool) -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
-            add_date_string,
-            ..<span class="self">self
-        </span>}
-    }
-}
-
 <span class="doccomment">/// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
@@ -231,10 +189,16 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-        cfg: ProcessingConfig,
+        add_generation_prompt: bool,
         tools: Vec&lt;Tool&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Vec&lt;u32&gt;, String)&gt; {
-        <span class="kw">let </span>prompt = apply_chat_template(pipeline, messages, cfg, <span class="self">self</span>.template_action(), tools)<span class="question-mark">?</span>;
+        <span class="kw">let </span>prompt = apply_chat_template(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            <span class="self">self</span>.template_action(),
+            tools,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>encoding = pipeline
             .tokenizer()
             .with_context(|| {
@@ -252,7 +216,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>apply_chat_template(
     pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
     messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-    cfg: ProcessingConfig,
+    add_generation_prompt: bool,
     action: MessagesAction,
     tools: Vec&lt;Tool&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
@@ -318,7 +282,15 @@
     } <span class="kw">else </span>{
         <span class="prelude-val">None
     </span>};
-    apply_chat_template_to(messages, cfg, template, bos_tok, eos_tok, unk_tok, tools)
+    apply_chat_template_to(
+        messages,
+        add_generation_prompt,
+        template,
+        bos_tok,
+        eos_tok,
+        unk_tok,
+        tools,
+    )
 }
 
 <span class="kw">pub struct </span>BasicProcessor;

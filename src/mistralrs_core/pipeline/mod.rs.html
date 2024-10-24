@@ -779,8 +779,6 @@
 <a href="#779" id="779">779</a>
 <a href="#780" id="780">780</a>
 <a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -824,8 +822,7 @@
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>processing::{
-    apply_chat_template, BasicProcessor, MessagesAction, ProcessingConfig, Processor,
-    ProcessorCreator,
+    apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">pub use </span>speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
@@ -884,7 +881,6 @@
     <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>Processor&gt; {
         Arc::new(BasicProcessor)
     }
-    <span class="kw">fn </span>get_processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig;
     <span class="doccomment">/// Only None if it doesnt make sense for the model
     </span><span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt;;
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;;
@@ -1349,7 +1345,7 @@
         expected_outputs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str],
         inputs: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     ) {
-        <span class="kw">use </span><span class="kw">crate</span>::pipeline::{chat_template::ChatTemplateValue, processing::ProcessingConfig};
+        <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::ChatTemplateValue;
 
         <span class="kw">use </span><span class="kw">super</span>::chat_template::apply_chat_template_to;
         <span class="kw">let </span><span class="kw-2">mut </span>failed = Vec::new();
@@ -1363,7 +1359,7 @@
                 } <span class="kw">else </span>{
                     inputs.clone()
                 },
-                ProcessingConfig::default(),
+                <span class="bool-val">true</span>,
                 <span class="kw-2">&amp;</span>ChatTemplateValue(Either::Left(template.to_string())),
                 <span class="prelude-val">Some</span>(bos.to_string()),
                 <span class="prelude-val">Some</span>(eos.to_string()),

@@ -649,18 +649,13 @@
 <a href="#649" id="649">649</a>
 <a href="#650" id="650">650</a>
 <a href="#651" id="651">651</a>
-<a href="#652" id="652">652</a>
-<a href="#653" id="653">653</a>
-<a href="#654" id="654">654</a>
-<a href="#655" id="655">655</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
-    ProcessingConfig, Processor, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
-    XLoraPaths,
+    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
+    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 <span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
@@ -1049,9 +1044,6 @@
     }
     <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span><span class="kw">super</span>::Processor&gt; {
         <span class="self">self</span>.processor.clone()
-    }
-    <span class="kw">fn </span>get_processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        ProcessingConfig::default()
     }
 }
 

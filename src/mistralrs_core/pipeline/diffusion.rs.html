@@ -327,15 +327,12 @@
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
 <a href="#329" id="329">329</a>
-<a href="#330" id="330">330</a>
-<a href="#331" id="331">331</a>
-<a href="#332" id="332">332</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
     IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, ProcessingConfig, Processor, TokenSource,
+    PreProcessingMixin, Processor, TokenSource,
 };
 <span class="kw">use </span><span class="kw">crate</span>::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
@@ -583,9 +580,6 @@
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="prelude-val">None
     </span>}
-    <span class="kw">fn </span>get_processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        ProcessingConfig::default()
-    }
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>DiffusionPipeline {

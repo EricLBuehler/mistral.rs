@@ -1400,7 +1400,7 @@
                 <span class="kw">let </span>template = pipeline.get_processor().process(
                     pipeline,
                     messages,
-                    pipeline.get_processing_cfg(),
+                    <span class="bool-val">true</span>,
                     request.tools.unwrap_or_default(),
                 );
                 <span class="macro">handle_seq_error!</span>(template, request.response)

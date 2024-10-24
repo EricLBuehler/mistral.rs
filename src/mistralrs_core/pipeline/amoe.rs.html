@@ -573,10 +573,6 @@
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a>
-<a href="#577" id="577">577</a>
-<a href="#578" id="578">578</a>
-<a href="#579" id="579">579</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -599,7 +595,6 @@
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
-    pipeline::processing::ProcessingConfig,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
@@ -795,9 +790,6 @@
     <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span><span class="kw">super</span>::Processor&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_processor()
     }
-    <span class="kw">fn </span>get_processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_processing_cfg()
-    }
 }
 
 <span class="kw">impl </span>MetadataMixin <span class="kw">for </span>AnyMoePipeline {
@@ -981,7 +973,7 @@
                                 (<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string())),
                                 (<span class="string">"content"</span>.to_string(), Either::Left(prompt.clone())),
                             ])],
-                            ProcessingConfig::default(),
+                            <span class="bool-val">true</span>,
                             Vec::new(),
                         )
                         .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;

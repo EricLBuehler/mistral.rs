@@ -363,6 +363,10 @@
 <a href="#363" id="363">363</a>
 <a href="#364" id="364">364</a>
 <a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -380,8 +384,7 @@
         text_models_inputs_processor::{
             <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction,
-        ProcessingConfig, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::ModelInputs,
@@ -420,11 +423,16 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-        cfg: ProcessingConfig,
+        add_generation_prompt: bool,
         tools: Vec&lt;Tool&gt;,
     ) -&gt; anyhow::Result&lt;(Vec&lt;u32&gt;, String)&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>prompt =
-            apply_chat_template(pipeline, messages, cfg, <span class="self">self</span>.template_action(), tools)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>prompt = apply_chat_template(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            <span class="self">self</span>.template_action(),
+            tools,
+        )<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>image_str = <span class="macro">format!</span>(
             <span class="string">"{}{}{}"</span>,

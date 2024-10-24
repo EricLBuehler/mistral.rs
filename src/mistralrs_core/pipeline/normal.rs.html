@@ -764,12 +764,6 @@
 <a href="#764" id="764">764</a>
 <a href="#765" id="765">765</a>
 <a href="#766" id="766">766</a>
-<a href="#767" id="767">767</a>
-<a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -779,7 +773,6 @@
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
     IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
-    ProcessingConfig,
 };
 <span class="kw">use super</span>::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -837,7 +830,6 @@
     </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     config: String,
-    processing_cfg: ProcessingConfig,
 }
 
 <span class="doccomment">/// A loader for a "normal" (non-quantized) model.
@@ -1236,7 +1228,6 @@
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
-            processing_cfg: <span class="self">self</span>.inner.processing_cfg(),
         })))
     }
 
@@ -1259,9 +1250,6 @@
     <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
         <span class="prelude-val">None
     </span>}
-    <span class="kw">fn </span>get_processing_cfg(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ProcessingConfig {
-        <span class="self">self</span>.processing_cfg
-    }
 }
 
 <span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>NormalPipeline {

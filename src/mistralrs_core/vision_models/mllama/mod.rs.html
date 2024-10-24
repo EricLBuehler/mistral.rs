@@ -293,12 +293,6 @@
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -315,13 +309,12 @@
 <span class="kw">use </span>vision::MLlamaVisionModel;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{linear, Module, VarBuilder};
+<span class="kw">use </span>candle_nn::{linear, Linear, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::FusedBiasLinear,
     layers_masker::masked_fill,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -361,7 +354,7 @@
 
     <span class="comment">// Invert the mask
     </span><span class="kw">let </span>inverted_cross_attn_mask = (<span class="number">1. </span>- cross_attn_mask)<span class="question-mark">?</span>;
-    <span class="kw">const </span>NEG_INF_VALUE: f32 = -<span class="number">3.389_531_4e38</span>;
+    <span class="kw">const </span>NEG_INF_VALUE: f32 = -<span class="number">1e15</span>;
     cross_attn_mask = masked_fill(
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask,
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask.ne(<span class="number">0.</span>)<span class="question-mark">?</span>,
@@ -388,7 +381,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>MLlamaModel {
     vision_model: MLlamaVisionModel,
     language_model: MLlamaTextModel,
-    multi_modal_projector: FusedBiasLinear,
+    multi_modal_projector: Linear,
     hidden_size: usize,
     dtype: DType,
 }
@@ -428,8 +421,7 @@
                 vb.pp(<span class="string">"multi_modal_projector"</span>)
                     .set_device(real_dev.clone())
                     .set_dtype(vision_model_dtype),
-            )<span class="question-mark">?
-            </span>.try_into()<span class="question-mark">?</span>,
+            )<span class="question-mark">?</span>,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
         })
@@ -462,11 +454,7 @@
                 .forward(<span class="kw-2">&amp;</span>vision_outputs.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>)<span class="question-mark">?
                 </span>.reshape(((), vision_outputs.dim(D::Minus2)<span class="question-mark">?</span>, <span class="self">self</span>.hidden_size))<span class="question-mark">?
                 </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
-
-            <span class="comment">// let cross_attention_states = Tensor::read_npy("t-cross_attention_states.npy")?
-            //     .to_dtype(cross_attention_states.dtype())?
-            //     .to_device(cross_attention_states.device())?;
-            </span><span class="prelude-val">Some</span>(cross_attention_states)
+            <span class="prelude-val">Some</span>(cross_attention_states)
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};

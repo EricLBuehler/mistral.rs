@@ -292,31 +292,6 @@
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
-<a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a>
-<a href="#304" id="304">304</a>
-<a href="#305" id="305">305</a>
-<a href="#306" id="306">306</a>
-<a href="#307" id="307">307</a>
-<a href="#308" id="308">308</a>
-<a href="#309" id="309">309</a>
-<a href="#310" id="310">310</a>
-<a href="#311" id="311">311</a>
-<a href="#312" id="312">312</a>
-<a href="#313" id="313">313</a>
-<a href="#314" id="314">314</a>
-<a href="#315" id="315">315</a>
-<a href="#316" id="316">316</a>
-<a href="#317" id="317">317</a>
-<a href="#318" id="318">318</a>
-<a href="#319" id="319">319</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
@@ -329,8 +304,6 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{MessageContent, Tool};
-
-<span class="kw">use </span><span class="kw">super</span>::processing::ProcessingConfig;
 
 <span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str] = <span class="kw-2">&amp;</span>[
     <span class="string">"&lt;|im_end|&gt;"</span>,    <span class="comment">// Handle ChatML case
@@ -537,7 +510,7 @@
 
 <span class="kw">pub fn </span>apply_chat_template_to(
     messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-    cfg: ProcessingConfig,
+    add_generation_prompt: bool,
     template: <span class="kw-2">&amp;</span>ChatTemplateValue,
     bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
     eos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -589,50 +562,27 @@
     env.add_filter(<span class="string">"tojson"</span>, tojson);
     <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
 
-    <span class="kw">let </span>date_string = <span class="kw">if </span>cfg.add_date_string {
-        <span class="kw">let </span>date = chrono::Utc::now();
-        <span class="prelude-val">Some</span>(date.format(<span class="string">"%d, %B, %Y"</span>).to_string())
-    } <span class="kw">else </span>{
-        <span class="prelude-val">None
-    </span>};
+    <span class="kw">let </span>date = chrono::Utc::now();
+    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
 
     <span class="kw">if </span>tools.is_empty() {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(date_string) = date_string {
-            <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-                messages =&gt; new_messages,
-                add_generation_prompt =&gt; cfg.add_generation_prompt,
-                bos_token =&gt; bos_tok,
-                eos_token =&gt; eos_tok,
-                unk_token =&gt; unk_tok,
-                date_string =&gt; date_string,
-            })<span class="question-mark">?</span>)
-        } <span class="kw">else </span>{
-            <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-                messages =&gt; new_messages,
-                add_generation_prompt =&gt; cfg.add_generation_prompt,
-                bos_token =&gt; bos_tok,
-                eos_token =&gt; eos_tok,
-                unk_token =&gt; unk_tok,
-            })<span class="question-mark">?</span>)
-        }
-    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(date_string) = date_string {
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
             messages =&gt; new_messages,
-            add_generation_prompt =&gt; cfg.add_generation_prompt,
+            add_generation_prompt =&gt; add_generation_prompt,
             bos_token =&gt; bos_tok,
             eos_token =&gt; eos_tok,
             unk_token =&gt; unk_tok,
-            tools =&gt; tools,
             date_string =&gt; date_string,
         })<span class="question-mark">?</span>)
     } <span class="kw">else </span>{
         <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
             messages =&gt; new_messages,
-            add_generation_prompt =&gt; cfg.add_generation_prompt,
+            add_generation_prompt =&gt; add_generation_prompt,
             bos_token =&gt; bos_tok,
             eos_token =&gt; eos_tok,
             unk_token =&gt; unk_tok,
             tools =&gt; tools,
+            date_string =&gt; date_string,
         })<span class="question-mark">?</span>)
     }
 }
