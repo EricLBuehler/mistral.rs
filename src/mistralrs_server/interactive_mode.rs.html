@@ -493,6 +493,10 @@
 <a href="#493" id="493">493</a>
 <a href="#494" id="494">494</a>
 <a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
@@ -509,7 +513,7 @@
 <span class="kw">use </span>tokio::sync::mpsc::channel;
 <span class="kw">use </span>tracing::{error, info};
 
-<span class="kw">use </span><span class="kw">crate</span>::util;
+<span class="kw">use crate</span>::{printer::Printer, util};
 
 <span class="kw">fn </span>exit_handler() {
     std::process::exit(<span class="number">0</span>);
@@ -674,6 +678,8 @@ Commands:
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
 
+        <span class="kw">let </span><span class="kw-2">mut </span>printer = Printer::new();
+
         <span class="kw">let </span>start = Instant::now();
         <span class="kw">let </span><span class="kw-2">mut </span>toks = <span class="number">0</span>;
         <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
@@ -681,7 +687,7 @@ Commands:
                 Response::Chunk(chunk) =&gt; {
                     <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
                     assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                    <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
+                    printer.print_to_stdout(<span class="kw-2">&amp;</span>choice.delta.content).unwrap();
                     toks += <span class="number">3usize</span>; <span class="comment">// NOTE: we send toks every 3.
                     </span>io::stdout().flush().unwrap();
                     <span class="kw">if </span>choice.finish_reason.is_some() {
@@ -856,6 +862,8 @@ Commands:
 
         <span class="kw">let </span><span class="kw-2">mut </span>assistant_output = String::new();
 
+        <span class="kw">let </span><span class="kw-2">mut </span>printer = Printer::new();
+
         <span class="kw">let </span>start = Instant::now();
         <span class="kw">let </span><span class="kw-2">mut </span>toks = <span class="number">0</span>;
         <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
@@ -863,7 +871,7 @@ Commands:
                 Response::Chunk(chunk) =&gt; {
                     <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
                     assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                    <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
+                    printer.print_to_stdout(<span class="kw-2">&amp;</span>choice.delta.content).unwrap();
                     toks += <span class="number">3usize</span>; <span class="comment">// NOTE: we send toks every 3.
                     </span>io::stdout().flush().unwrap();
                     <span class="kw">if </span>choice.finish_reason.is_some() {
