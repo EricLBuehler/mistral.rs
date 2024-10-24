@@ -5,7 +5,7 @@ MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="MODEL_ID",
+        model_id=MODEL_ID,
         arch=VisionArchitecture.VLlama,
     ),
 )
