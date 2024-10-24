@@ -65,8 +65,9 @@ pub(crate) struct Dequant4Bit {
 }
 
 impl Dequant4Bit {
-    fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
-        let mut out = Vec::with_capacity(w.len());
+    fn dequantize<T: WithDType + Default>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
+        let output_size = w.len() * 2;
+        let mut out = vec![T::default(); output_size];
         for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
@@ -125,8 +126,9 @@ pub(crate) struct Dequant2Bit {
 }
 
 impl Dequant2Bit {
-    fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
-        let mut out = Vec::with_capacity(w.len());
+    fn dequantize<T: WithDType + Default>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
+        let output_size = w.len() * 4;
+        let mut out = vec![T::default(); output_size];
         for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
@@ -187,8 +189,9 @@ pub(crate) struct Dequant1Bit {
 }
 
 impl Dequant1Bit {
-    fn dequantize<T: WithDType>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
-        let mut out = Vec::with_capacity(w.len());
+    fn dequantize<T: WithDType + Default>(&self, w: &[u8], s: &[T], z: &[T]) -> Vec<T> {
+        let output_size = w.len() * 8;
+        let mut out = vec![T::default(); output_size];
         for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
@@ -253,8 +256,9 @@ pub(crate) struct Dequant3Bit {
 }
 
 impl Dequant3Bit {
-    fn dequantize<T: WithDType>(&self, w: &[i32], s: &[T], z: &[T]) -> Vec<T> {
-        let mut out = Vec::with_capacity(w.len());
+    fn dequantize<T: WithDType + Default>(&self, w: &[i32], s: &[T], z: &[T]) -> Vec<T> {
+        let output_size = w.len() * 10;
+        let mut out = vec![T::default(); output_size];
         for (i, w) in w.iter().enumerate() {
             let j = i % self.w;
             let nrows = self.h * self.w;
