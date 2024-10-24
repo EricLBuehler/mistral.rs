@@ -25,6 +25,7 @@ mod completions;
 mod image_generation;
 mod interactive_mode;
 mod openai;
+mod printer;
 mod util;
 
 use crate::openai::ModelObject;
