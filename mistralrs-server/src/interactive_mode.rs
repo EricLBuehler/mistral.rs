@@ -14,7 +14,7 @@ use std::{
 use tokio::sync::mpsc::channel;
 use tracing::{error, info};
 
-use crate::util;
+use crate::{printer::Printer, util};
 
 fn exit_handler() {
     std::process::exit(0);
@@ -179,6 +179,8 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
 
         let mut assistant_output = String::new();
 
+        let mut printer = Printer::new();
+
         let start = Instant::now();
         let mut toks = 0;
         while let Some(resp) = rx.recv().await {
@@ -186,7 +188,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::Chunk(chunk) => {
                     let choice = &chunk.choices[0];
                     assistant_output.push_str(&choice.delta.content);
-                    print!("{}", choice.delta.content);
+                    printer.print_to_stdout(&choice.delta.content).unwrap();
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
@@ -361,6 +363,8 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
 
         let mut assistant_output = String::new();
 
+        let mut printer = Printer::new();
+
         let start = Instant::now();
         let mut toks = 0;
         while let Some(resp) = rx.recv().await {
@@ -368,7 +372,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::Chunk(chunk) => {
                     let choice = &chunk.choices[0];
                     assistant_output.push_str(&choice.delta.content);
-                    print!("{}", choice.delta.content);
+                    printer.print_to_stdout(&choice.delta.content).unwrap();
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
