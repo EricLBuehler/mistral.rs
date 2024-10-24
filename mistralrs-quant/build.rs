@@ -16,7 +16,14 @@ fn main() {
                     .stdout,
             )
             .expect("Output of nvidia-smi was not utf8.");
-            (output.split('\n').nth(1).unwrap().parse::<f32>().unwrap() * 100.) as usize
+            (output
+                .split('\n')
+                .nth(1)
+                .unwrap()
+                .trim()
+                .parse::<f32>()
+                .unwrap()
+                * 100.) as usize
         };
 
         // ======== Handle optional marlin kernel compilation
