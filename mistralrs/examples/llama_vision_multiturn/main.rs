@@ -9,16 +9,43 @@ const MODEL_ID: &str = "meta-llama/Llama-3.2-11B-Vision-Instruct";
 async fn main() -> Result<()> {
     let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::VLlama)
         .with_logging()
+        .with_isq(mistralrs::IsqType::Q8_0)
         .build()
         .await?;
 
+    let mut messages = VisionMessages::new().add_message(TextMessageRole::User, "Hello!");
+
+    let resp = model
+        .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
+        .await?
+        .choices[0]
+        .message
+        .content
+        .clone()
+        .unwrap();
+    println!("\n\n{resp}");
+    messages = messages.add_message(TextMessageRole::Assistant, resp);
+
     let bytes = match reqwest::blocking::get(
-        "https://s3.amazonaws.com/cdn.tulips.com/images/large/Timeless-Tulip.jpg",
+        // "https://s3.amazonaws.com/cdn.tulips.com/images/large/Timeless-Tulip.jpg",
+        "https://niche-museums.imgix.net/pioneer-history.jpeg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
     };
-    let image1 = image::load_from_memory(&bytes)?;
+    let image = image::load_from_memory(&bytes)?;
+
+    messages = messages.add_vllama_image_message(TextMessageRole::User, "What is this?", image);
+    let resp = model
+        .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
+        .await?
+        .choices[0]
+        .message
+        .content
+        .clone()
+        .unwrap();
+    println!("\n\n{resp}");
+    messages = messages.add_message(TextMessageRole::Assistant, resp);
 
     let bytes = match reqwest::blocking::get(
             "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
@@ -26,29 +53,41 @@ async fn main() -> Result<()> {
             Ok(http_resp) => http_resp.bytes()?.to_vec(),
             Err(e) => anyhow::bail!(e),
         };
-    let image2 = image::load_from_memory(&bytes)?;
+    let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new()
-        .add_message(TextMessageRole::User, "Hello!")
-        .add_message(TextMessageRole::Assistant, "How can I assist you today?")
-        .add_vllama_image_message(TextMessageRole::User, "What is this?", image1)
-        .add_message(
-            TextMessageRole::Assistant,
-            "The picture shown appears to be a picture of a tulip.",
-        )
-        .add_vllama_image_message(TextMessageRole::User, "What is this?", image2);
-    let messages = RequestBuilder::from(messages)
-        .set_sampler_max_len(75)
-        .set_sampler_topk(50)
-        .set_sampler_temperature(0.);
+    messages = messages.add_vllama_image_message(TextMessageRole::User, "What is this?", image);
+    let resp = model
+        .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
+        .await?
+        .choices[0]
+        .message
+        .content
+        .clone()
+        .unwrap();
+    println!("\n\n{resp}");
+    messages = messages.add_message(TextMessageRole::Assistant, resp);
 
-    let response = model.send_chat_request(messages).await?;
+    let bytes =
+        match reqwest::blocking::get("https://cdn.britannica.com/79/4679-050-BC127236/Titanic.jpg")
+        {
+            Ok(http_resp) => http_resp.bytes()?.to_vec(),
+            Err(e) => anyhow::bail!(e),
+        };
+    let image = image::load_from_memory(&bytes)?;
 
-    println!("{}", response.choices[0].message.content.as_ref().unwrap());
-    dbg!(
-        response.usage.avg_prompt_tok_per_sec,
-        response.usage.avg_compl_tok_per_sec
-    );
+    messages = messages.add_vllama_image_message(TextMessageRole::User, "What is this?", image);
+    let resp = model
+        .send_chat_request(RequestBuilder::from(messages.clone()).set_sampler_max_len(100))
+        .await?
+        .choices[0]
+        .message
+        .content
+        .clone()
+        .unwrap();
+    println!("\n\nModel response*: {resp}");
+    messages = messages.add_message(TextMessageRole::Assistant, resp);
+
+    println!("Final chat history: {messages:?}");
 
     Ok(())
 }

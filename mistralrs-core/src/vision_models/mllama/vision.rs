@@ -229,46 +229,21 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_output = {
-            let q = q.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
-            let k = k.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
-            let att = match attention_mask {
-                Some(m) => {
-                    let mut out = m.copy()?;
-                    // let mut out = m.to_dtype(q.dtype())?;//.to_device(&Device::Cpu)?;
-                    q.contiguous()?.matmul_with_alpha_beta(
-                        &k.t()?.contiguous()?,
-                        &mut out,
-                        Some(1. / (self.head_dim as f64).sqrt()),
-                    )?;
-                    out.to_device(hidden_state.device())?
-                        .to_dtype(hidden_state.dtype())?
-                }
-                None => MatMul.matmul_affine_div(
-                    &q.contiguous()?,
-                    &k.t()?.contiguous()?,
-                    (self.head_dim as f64).sqrt(),
-                )?,
-            };
-            // let att = MatMul.matmul_affine_div(
-            //     &q.contiguous()?,
-            //     &k.t()?.contiguous()?,
-            //     (self.head_dim as f64).sqrt(),
-            // )?;
-
-            // let att = match attention_mask {
-            //     Some(m) => att.broadcast_add(m)?,
-            //     None => att,
-            // };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            MatMul
-                .matmul(&att, &v.contiguous()?)?
-                .transpose(1, 2)?
-                .reshape((bs, q_sq, ()))?
-            // .to_dtype(hidden_state.dtype())?
-            // .to_device(hidden_state.device())?
-        };
+        let attn_output = Sdpa
+            .run_attention(
+                &q.contiguous()?.to_dtype(DType::F32)?,
+                &k.contiguous()?.to_dtype(DType::F32)?,
+                &v.contiguous()?.to_dtype(DType::F32)?,
+                attention_mask
+                    .map(|m| m.to_dtype(DType::F32).unwrap())
+                    .as_ref(),
+                None,
+                &self.sdpa_params,
+            )?
+            .transpose(1, 2)?
+            .contiguous()?
+            .reshape((bs, q_sq, ()))?
+            .to_dtype(q.dtype())?;
 
         self.o_proj.forward(&attn_output)
     }
