@@ -90,6 +90,7 @@ pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
 };
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
+pub use sequence::StopReason;
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
