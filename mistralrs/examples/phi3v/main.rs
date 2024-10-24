@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.mos.cms.futurecdn.net/39CUYMP8vJqHAYGVzUghBX-1200-80.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
         "What is depicted here? Please describe the scene in detail.",
         image,
     );
+    dbg!(&messages);
 
     let response = model.send_chat_request(messages).await?;
 

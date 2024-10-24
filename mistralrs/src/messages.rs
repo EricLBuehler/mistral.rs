@@ -1,8 +1,12 @@
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
 use super::*;
 use either::Either;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use indexmap::IndexMap;
 
 /// A type which can be used as a request.
@@ -101,7 +105,7 @@ impl RequestLike for TextMessages {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 /// Text (chat) messages with images.
 ///
 /// No constraints, logits processors, logprobs, tools, or adapters.
@@ -110,6 +114,20 @@ impl RequestLike for TextMessages {
 pub struct VisionMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
+}
+
+impl Debug for VisionMessages {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let images = self
+            .images
+            .iter()
+            .map(|img| img.dimensions())
+            .collect::<Vec<_>>();
+        f.debug_struct("VisionMessages")
+            .field("messages", &self.messages)
+            .field("images", &images)
+            .finish()
+    }
 }
 
 impl Default for VisionMessages {

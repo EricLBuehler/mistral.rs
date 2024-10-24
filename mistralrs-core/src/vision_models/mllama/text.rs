@@ -9,7 +9,7 @@ use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLin
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
+    layers::{CausalMasker, Llama3RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},

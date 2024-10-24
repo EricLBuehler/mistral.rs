@@ -5,11 +5,13 @@ use crate::SelectedModel;
 pub enum ModelSpec {
     Text {
         uqff_model_id: &'static str,
+        base_model_id: &'static str,
         supported_quants: &'static [IsqType],
         stem: &'static str,
     },
     Vision {
         uqff_model_id: &'static str,
+        base_model_id: &'static str,
         supported_quants: &'static [IsqType],
         arch: VisionLoaderType,
         stem: &'static str,
@@ -21,6 +23,7 @@ impl ModelSpec {
         match selected {
             SelectedModel::VLlama_11b => ModelSpec::Vision {
                 uqff_model_id: "EricB/Llama-3.2-11B-Vision-Instruct-UQFF",
+                base_model_id: "meta-llama/Llama-3.2-11B-Vision-Instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -35,6 +38,7 @@ impl ModelSpec {
             },
             SelectedModel::MistralNemo_12b => ModelSpec::Text {
                 uqff_model_id: "EricB/Mistral-Nemo-Instruct-2407-UQFF",
+                base_model_id: "mistralai/Mistral-Nemo-Instruct-2407",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -48,6 +52,7 @@ impl ModelSpec {
             },
             SelectedModel::Phi3_3_8b => ModelSpec::Text {
                 uqff_model_id: "EricB/Phi-3.5-mini-instruct-UQFF",
+                base_model_id: "microsoft/Phi-3.5-mini-instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -61,6 +66,7 @@ impl ModelSpec {
             },
             SelectedModel::Gemma1_2b => ModelSpec::Text {
                 uqff_model_id: "EricB/gemma-1.1-2b-it-UQFF",
+                base_model_id: "google/gemma-1.1-2b-it",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -74,6 +80,7 @@ impl ModelSpec {
             },
             SelectedModel::Gemma1_7b => ModelSpec::Text {
                 uqff_model_id: "EricB/gemma-1.1-7b-it-UQFF",
+                base_model_id: "google/gemma-1.1-7b-it",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -87,6 +94,7 @@ impl ModelSpec {
             },
             SelectedModel::Gemma2_2b => ModelSpec::Text {
                 uqff_model_id: "EricB/gemma-2-2b-it-UQFF",
+                base_model_id: "google/gemma-2-2b-it",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -100,6 +108,7 @@ impl ModelSpec {
             },
             SelectedModel::Gemma2_9b => ModelSpec::Text {
                 uqff_model_id: "EricB/gemma-2-9b-it-UQFF",
+                base_model_id: "google/gemma-2-9b-it",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -113,6 +122,7 @@ impl ModelSpec {
             },
             SelectedModel::Gemma2_27b => ModelSpec::Text {
                 uqff_model_id: "EricB/gemma-2-27b-it-UQFF",
+                base_model_id: "google/gemma-2-27b-it",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -126,6 +136,7 @@ impl ModelSpec {
             },
             SelectedModel::Llama3_2_3b => ModelSpec::Text {
                 uqff_model_id: "EricB/Llama-3.2-3B-Instruct-UQFF",
+                base_model_id: "meta-llama/Llama-3.2-3B-Instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -139,6 +150,7 @@ impl ModelSpec {
             },
             SelectedModel::Llama3_2_1b => ModelSpec::Text {
                 uqff_model_id: "EricB/Llama-3.2-1B-Instruct-UQFF",
+                base_model_id: "meta-llama/Llama-3.2-1B-Instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -152,6 +164,7 @@ impl ModelSpec {
             },
             SelectedModel::Llama3_1_8b => ModelSpec::Text {
                 uqff_model_id: "EricB/Llama-3.1-8B-Instruct-UQFF",
+                base_model_id: "meta-llama/Llama-3.1-8B-Instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -165,6 +178,7 @@ impl ModelSpec {
             },
             SelectedModel::Mistral_7b => ModelSpec::Text {
                 uqff_model_id: "EricB/Mistral-7B-Instruct-v0.3-UQFF",
+                base_model_id: "mistralai/Mistral-7B-Instruct-v0.3",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -178,6 +192,7 @@ impl ModelSpec {
             },
             SelectedModel::MistralSmall_12b => ModelSpec::Text {
                 uqff_model_id: "EricB/Mistral-Small-Instruct-2409-UQFF",
+                base_model_id: "mistralai/Mistral-Small-Instruct-2409",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,
@@ -191,6 +206,7 @@ impl ModelSpec {
             },
             SelectedModel::Phi3V_3_8b => ModelSpec::Vision {
                 uqff_model_id: "EricB/Phi-3.5-vision-instruct-UQFF",
+                base_model_id: "microsoft/Phi-3.5-vision-instruct",
                 supported_quants: &[
                     IsqType::F8E4M3,
                     IsqType::Q3K,

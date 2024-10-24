@@ -8,6 +8,7 @@ use registry::ModelSpec;
 use tracing::info;
 
 mod interactive;
+mod printer;
 mod registry;
 mod util;
 
@@ -62,7 +63,11 @@ struct Args {
     #[arg(short, long, value_parser = parse_isq_value)]
     paged_attn_ctxt_len: Option<usize>,
 
+    #[arg(short, long, default_value_t = false)]
+    insitu: bool,
+
     /// Quantization to use. See the supported ones at https://github.com/EricLBuehler/mistral.rs/blob/master/docs/ISQ.md.
+    /// If `insitu` is set, then the model will be quantized in-situ.
     /// The default is Q4K.
     #[arg(short, long, value_parser = parse_isq_value)]
     quant: Option<IsqType>,
@@ -88,6 +93,7 @@ async fn main() -> Result<()> {
     let model = match &spec {
         ModelSpec::Text {
             uqff_model_id,
+            base_model_id,
             supported_quants,
             stem,
         } => {
@@ -96,15 +102,25 @@ async fn main() -> Result<()> {
                 anyhow::bail!("The model `{:?}` does not support `{quant}`. It supports {supported_quants:?}.", args.model)
             }
             info!("Loading model {:?} with quantization {quant}", args.model);
-            TextModelBuilder::new(uqff_model_id)
-                .from_uqff(format!("{stem}-{quant}.uqff").into())
+            let model_id = if args.insitu {
+                base_model_id
+            } else {
+                uqff_model_id
+            };
+            let mut builder = TextModelBuilder::new(model_id)
                 .with_paged_attn(|| paged_attn_cfg.build())?
-                .with_logging()
-                .build()
-                .await?
+                .with_logging();
+            if args.insitu {
+                builder = builder.with_isq(quant);
+            } else {
+                builder = builder.from_uqff(format!("{stem}-{quant}.uqff").into());
+            }
+
+            builder.build().await?
         }
         ModelSpec::Vision {
             uqff_model_id,
+            base_model_id,
             supported_quants,
             arch,
             stem,
@@ -114,12 +130,21 @@ async fn main() -> Result<()> {
                 anyhow::bail!("The model `{:?}` does not support `{quant}`. It supports {supported_quants:?}.", args.model)
             }
             info!("Loading model {:?} with quantization {quant}", args.model);
-            VisionModelBuilder::new(uqff_model_id, arch.clone())
-                .from_uqff(format!("{stem}-{quant}.uqff").into())
+            let model_id = if args.insitu {
+                base_model_id
+            } else {
+                uqff_model_id
+            };
+            let mut builder = VisionModelBuilder::new(model_id, arch.clone())
                 .with_paged_attn(|| paged_attn_cfg.build())?
-                .with_logging()
-                .build()
-                .await?
+                .with_logging();
+            if args.insitu {
+                builder = builder.with_isq(quant);
+            } else {
+                builder = builder.from_uqff(format!("{stem}-{quant}.uqff").into());
+            }
+
+            builder.build().await?
         }
     };
 
