@@ -154,7 +154,13 @@ impl Sdpa {
         }
 
         if q.device().is_metal() && seq_len == 1 {
-            return candle_nn::ops::sdpa(q, k, v, sdpa_params.softmax_scale);
+            return candle_nn::ops::sdpa(
+                q,
+                k,
+                v,
+                sdpa_params.softmax_scale,
+                sdpa_params.softcap.unwrap_or(1.0),
+            );
         }
 
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?.contiguous()?;
