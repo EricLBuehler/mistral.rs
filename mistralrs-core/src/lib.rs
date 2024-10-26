@@ -112,7 +112,7 @@ pub struct MistralRsConfig {
 }
 
 /// The MistralRs struct handles sending requests to the engine.
-/// It is the core multi-threaded component of mistral.rs, and uses `mspc`
+/// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// engine.
 pub struct MistralRs {

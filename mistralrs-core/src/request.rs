@@ -112,7 +112,7 @@ impl NormalRequest {
 
 #[derive(Clone)]
 /// A request to the Engine, encapsulating the various parameters as well as
-/// the `mspc` response `Sender` used to return the [`Response`].
+/// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
