@@ -215,6 +215,16 @@
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
 <a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -368,6 +378,16 @@
             <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>v = v.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">return </span>flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, flash_params, sdpa_params)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>);
+        }
+
+        <span class="kw">if </span>q.device().is_metal() &amp;&amp; seq_len == <span class="number">1 </span>{
+            <span class="kw">return </span>candle_nn::ops::sdpa(
+                q,
+                k,
+                v,
+                sdpa_params.softmax_scale,
+                sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>),
+            );
         }
 
         <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
