@@ -13,7 +13,7 @@ use std::{
 };
 use tracing::info;
 
-use crate::{printer::Printer, util};
+use crate::util;
 
 fn exit_handler() {
     std::process::exit(0);
@@ -151,8 +151,6 @@ async fn text_interactive_mode(model: Model, throughput: bool) -> Result<()> {
         let mut stream = model.send_streaming_chat_request(messages.clone()).await;
         let mut ctx = Context::from_waker(futures::task::noop_waker_ref());
 
-        let mut printer = Printer::new();
-
         loop {
             match stream.poll_next_unpin(&mut ctx) {
                 Poll::Pending => continue,
@@ -160,7 +158,7 @@ async fn text_interactive_mode(model: Model, throughput: bool) -> Result<()> {
                 Poll::Ready(Some(chunk)) => {
                     let choice = &chunk?.choices[0];
                     assistant_output.push_str(&choice.delta.content);
-                    printer.print_to_stdout(&choice.delta.content).unwrap();
+                    print!("{}", choice.delta.content);
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
@@ -289,8 +287,6 @@ async fn vision_interactive_mode(model: Model, throughput: bool) -> Result<()> {
         let mut stream = model.send_streaming_chat_request(messages.clone()).await;
         let mut ctx = Context::from_waker(futures::task::noop_waker_ref());
 
-        let mut printer = Printer::new();
-
         loop {
             match stream.poll_next_unpin(&mut ctx) {
                 Poll::Pending => continue,
@@ -298,7 +294,7 @@ async fn vision_interactive_mode(model: Model, throughput: bool) -> Result<()> {
                 Poll::Ready(Some(chunk)) => {
                     let choice = &chunk?.choices[0];
                     assistant_output.push_str(&choice.delta.content);
-                    printer.print_to_stdout(&choice.delta.content).unwrap();
+                    print!("{}", choice.delta.content);
                     toks += 3usize; // NOTE: we send toks every 3.
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {

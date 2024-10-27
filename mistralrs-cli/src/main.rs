@@ -8,7 +8,6 @@ use registry::ModelSpec;
 use tracing::info;
 
 mod interactive;
-mod printer;
 mod registry;
 mod util;
 
