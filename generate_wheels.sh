@@ -38,3 +38,9 @@ maturin build -o wheels-cuda -m mistralrs-pyo3/Cargo.toml --interpreter python3.
 maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.10 --features mkl
 maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features mkl
 maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features mkl
+
+### UPLOADING
+## testpypi:
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-NAME/*.whl
+## pypi:
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-NAME/*.whl

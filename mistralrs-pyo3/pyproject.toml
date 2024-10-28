@@ -3,15 +3,15 @@ requires = ["maturin==1.4"]
 build-backend = "maturin"
 
 [project]
-name = "mistralrs"
+name = "mistralrs_cuda"
 version = "0.3.2"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Rust",
 ]
 dynamic = ["description"]
