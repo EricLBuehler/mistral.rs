@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "522531d", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "629ec72", optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -64,13 +64,13 @@ tracing-subscriber.workspace = true
 derive-new = "0.7.0"
 itertools = "0.13.0"
 sysinfo = "0.30.12"
-mistralrs-vision = { version = "0.3.1", path = "../mistralrs-vision" }
+mistralrs-vision = { version = "0.3.2", path = "../mistralrs-vision" }
 csv = "1.3.0"
 reqwest.workspace = true
 base64.workspace = true
 bytemuck_derive = "1.7.0"
-mistralrs-paged-attn = { version = "0.3.1", path = "../mistralrs-paged-attn", optional = true }
-mistralrs-quant = { version = "0.3.1", path = "../mistralrs-quant" }
+mistralrs-paged-attn = { version = "0.3.2", path = "../mistralrs-paged-attn", optional = true }
+mistralrs-quant = { version = "0.3.2", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
 serde_yaml = "0.9.34"

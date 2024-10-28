@@ -393,7 +393,7 @@ checksum = "9ac0150caa2ae65ca5bd83f25c7de183dea78d4d366469f148435e2acfbad0da"
 [[package]]
 name = "candle-core"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=522531d#522531d8400b4b282670624d66d6074915ab8a0c"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=629ec72#629ec72d08953f79eae6af3f260e090397b29646"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -406,7 +406,7 @@ dependencies = [
  "intel-mkl-src",
  "libc",
  "memmap2",
- "metal",
+ "metal 0.27.0",
  "num-traits",
  "num_cpus",
  "rand",
@@ -414,6 +414,9 @@ dependencies = [
  "rayon",
  "safetensors",
  "thiserror",
+ "ug",
+ "ug-cuda",
+ "ug-metal",
  "yoke",
  "zip",
 ]
@@ -421,7 +424,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=522531d#522531d8400b4b282670624d66d6074915ab8a0c"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=629ec72#629ec72d08953f79eae6af3f260e090397b29646"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -432,7 +435,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=522531d#522531d8400b4b282670624d66d6074915ab8a0c"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=629ec72#629ec72d08953f79eae6af3f260e090397b29646"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -440,9 +443,9 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=522531d#522531d8400b4b282670624d66d6074915ab8a0c"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=629ec72#629ec72d08953f79eae6af3f260e090397b29646"
 dependencies = [
- "metal",
+ "metal 0.27.0",
  "once_cell",
  "thiserror",
  "tracing",
@@ -451,14 +454,14 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.7.2"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=522531d#522531d8400b4b282670624d66d6074915ab8a0c"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=629ec72#629ec72d08953f79eae6af3f260e090397b29646"
 dependencies = [
  "accelerate-src",
  "candle-core",
  "candle-metal-kernels",
  "half",
  "intel-mkl-src",
- "metal",
+ "metal 0.27.0",
  "num-traits",
  "rayon",
  "safetensors",
@@ -2028,6 +2031,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "metal"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ecfd3296f8c56b7c1f6fbac3c71cefa9d78ce009850c45000015f206dc7fa21"
+dependencies = [
+ "bitflags 2.6.0",
+ "block",
+ "core-graphics-types",
+ "foreign-types 0.5.0",
+ "log",
+ "objc",
+ "paste",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2114,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2132,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -2147,7 +2165,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2219,7 +2237,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2230,7 +2248,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2254,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bindgen_cuda 0.1.5",
  "byteorder",
@@ -2272,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2301,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "candle-core",
  "image",
@@ -2396,6 +2414,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "num"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
+dependencies = [
+ "num-bigint",
+ "num-complex",
+ "num-integer",
+ "num-iter",
+ "num-rational",
+ "num-traits",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2421,6 +2453,17 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-iter"
+version = "0.1.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1429034a0490724d0075ebb2bc9e875d6503c3cf69e235a8941aa757d83ef5bf"
+dependencies = [
+ "autocfg",
+ "num-integer",
  "num-traits",
 ]
 
@@ -4223,6 +4266,48 @@ name = "typenum"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
+
+[[package]]
+name = "ug"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4eef2ebfc18c67a6dbcacd9d8a4d85e0568cc58c82515552382312c2730ea13"
+dependencies = [
+ "half",
+ "num",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "ug-cuda"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c4dcab280ad0ef3957e153a82dcad608c954d02cf253b695322f502d1f8902e"
+dependencies = [
+ "cudarc",
+ "half",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ug",
+]
+
+[[package]]
+name = "ug-metal"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e4ed1df2c20a1a138f993041f650cc84ff27aaefb4342b7f986e77d00e80799"
+dependencies = [
+ "half",
+ "metal 0.29.0",
+ "objc",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ug",
+]
 
 [[package]]
 name = "unchecked-index"

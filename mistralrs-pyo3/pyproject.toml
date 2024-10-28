@@ -4,14 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "mistralrs"
-version = "0.3.1"
-requires-python = ">=3.8"
+version = "0.3.2"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Rust",
 ]
 dynamic = ["description"]

@@ -893,8 +893,7 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
   }
 
   if (!is_valid_config(th_config, prob_m, prob_n, prob_k)) {
-    throw std::runtime_error(
-        "Invalid thread config");
+    assert(false);
   }
 
   int num_threads = th_config.num_threads;
@@ -941,7 +940,7 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
     CALL_IF(8, 4, 128)
     CALL_IF(4, 8, 128)
     else {
-      throw std::runtime_error("Unsupported shapes: MKN");
+      assert(false);
     }
 
     A_ptr += 16 * thread_m_blocks * (prob_k / 8) * par;

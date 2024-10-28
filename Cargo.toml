@@ -14,7 +14,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -25,8 +25,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "522531d" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "522531d" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "629ec72" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "629ec72" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
