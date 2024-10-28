@@ -40,7 +40,18 @@ maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.1
 maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features mkl
 
 ### UPLOADING
+
+# ⚠️⚠️⚠️⚠️ Be sure to update the `project.name` field in `pyproject.toml`!! ⚠️⚠️⚠️⚠️
+# mistralrs, mistralrs-cuda, mistralrs-metal, mistralrs-mkl, mistralrs-accelerate
+
 ## testpypi:
 # twine upload --repository pypi --password PASSWORD --username __token__ wheels-NAME/*.whl
+
+
 ## pypi:
-# twine upload --repository pypi --password PASSWORD --username __token__ wheels-NAME/*.whl
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cuda/*.whl
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-mkl/*.whl
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cuda/*.whl
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-mkl/*.whl
+# ⚠️ Need both x86_64 and aarch64 builds before this! ⚠️
+# twine upload --repository pypi --password PASSWORD --username __token__ wheels-cpu/*.whl

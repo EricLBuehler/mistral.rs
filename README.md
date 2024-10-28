@@ -158,7 +158,7 @@ Rust multithreaded/async API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Installation including PyPI](mistralrs-pyo3/README.md)
+- [Installation including PyPI](mistralrs-pyo3/_README.md)
 - [Docs](mistralrs-pyo3/API.md)
 - [Examples](examples/python)
 - [Cookbook](examples/python/cookbook.ipynb)
@@ -203,7 +203,8 @@ Enabling features is done by passing `--features ...` to the build system. When 
 
 > Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.1)
 
-- Install the [Python package here](mistralrs-pyo3/README.md).
+- Install the [Python package here](mistralrs-pyo3/_README.md).
+- The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
 
 1) Install required packages:
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
