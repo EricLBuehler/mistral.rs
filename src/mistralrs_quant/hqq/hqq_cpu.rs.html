@@ -311,6 +311,10 @@
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
 <a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{CpuStorage, CustomOp3, Layout, <span class="prelude-ty">Result</span>, Shape, WithDType};
 
 <span class="comment">/*
@@ -378,8 +382,9 @@
 }
 
 <span class="kw">impl </span>Dequant4Bit {
-    <span class="kw">fn </span>dequantize&lt;T: WithDType&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(w.len());
+    <span class="kw">fn </span>dequantize&lt;T: WithDType + Default&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
+        <span class="kw">let </span>output_size = w.len() * <span class="number">2</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>out = <span class="macro">vec!</span>[T::default(); output_size];
         <span class="kw">for </span>(i, w) <span class="kw">in </span>w.iter().enumerate() {
             <span class="kw">let </span>j = i % <span class="self">self</span>.w;
             <span class="kw">let </span>nrows = <span class="self">self</span>.h * <span class="self">self</span>.w;
@@ -438,8 +443,9 @@
 }
 
 <span class="kw">impl </span>Dequant2Bit {
-    <span class="kw">fn </span>dequantize&lt;T: WithDType&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(w.len());
+    <span class="kw">fn </span>dequantize&lt;T: WithDType + Default&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
+        <span class="kw">let </span>output_size = w.len() * <span class="number">4</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>out = <span class="macro">vec!</span>[T::default(); output_size];
         <span class="kw">for </span>(i, w) <span class="kw">in </span>w.iter().enumerate() {
             <span class="kw">let </span>j = i % <span class="self">self</span>.w;
             <span class="kw">let </span>nrows = <span class="self">self</span>.h * <span class="self">self</span>.w;
@@ -500,8 +506,9 @@
 }
 
 <span class="kw">impl </span>Dequant1Bit {
-    <span class="kw">fn </span>dequantize&lt;T: WithDType&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(w.len());
+    <span class="kw">fn </span>dequantize&lt;T: WithDType + Default&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[u8], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
+        <span class="kw">let </span>output_size = w.len() * <span class="number">8</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>out = <span class="macro">vec!</span>[T::default(); output_size];
         <span class="kw">for </span>(i, w) <span class="kw">in </span>w.iter().enumerate() {
             <span class="kw">let </span>j = i % <span class="self">self</span>.w;
             <span class="kw">let </span>nrows = <span class="self">self</span>.h * <span class="self">self</span>.w;
@@ -566,8 +573,9 @@
 }
 
 <span class="kw">impl </span>Dequant3Bit {
-    <span class="kw">fn </span>dequantize&lt;T: WithDType&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[i32], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>out = Vec::with_capacity(w.len());
+    <span class="kw">fn </span>dequantize&lt;T: WithDType + Default&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, w: <span class="kw-2">&amp;</span>[i32], s: <span class="kw-2">&amp;</span>[T], z: <span class="kw-2">&amp;</span>[T]) -&gt; Vec&lt;T&gt; {
+        <span class="kw">let </span>output_size = w.len() * <span class="number">10</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>out = <span class="macro">vec!</span>[T::default(); output_size];
         <span class="kw">for </span>(i, w) <span class="kw">in </span>w.iter().enumerate() {
             <span class="kw">let </span>j = i % <span class="self">self</span>.w;
             <span class="kw">let </span>nrows = <span class="self">self</span>.h * <span class="self">self</span>.w;
