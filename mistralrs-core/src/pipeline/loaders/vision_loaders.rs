@@ -30,6 +30,7 @@ use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
+use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -89,6 +90,8 @@ pub enum VisionLoaderType {
     LLaVA,
     #[serde(rename = "vllama")]
     VLlama,
+    #[serde(rename = "qwen2vl")]
+    Qwen2VL,
 }
 
 impl FromStr for VisionLoaderType {
@@ -100,7 +103,8 @@ impl FromStr for VisionLoaderType {
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
             "vllama" => Ok(Self::VLlama),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`.")),
+            "qwen2vl" => Ok(Self::Qwen2VL),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`.")),
         }
     }
 }
@@ -446,5 +450,61 @@ impl IsqModelLoader for VLlamaLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+}
+
+// ======================== Qwen2VL Loader
+
+/// [`VisionLoader`] for an Qwen2-VL model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct Qwen2VLLoader;
+
+impl VisionModelLoader for Qwen2VLLoader {
+    fn load(
+        &self,
+        config: &str,
+        _use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(Qwen2VLModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(MLlamaProcessor::new())
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
+    }
+}
+
+impl IsqModelLoader for Qwen2VLLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        todo!()
     }
 }

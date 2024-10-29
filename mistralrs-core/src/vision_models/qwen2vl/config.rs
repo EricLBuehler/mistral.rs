@@ -39,4 +39,6 @@ pub struct Config {
     pub max_window_layers: usize,
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
+    pub image_token_id: usize,
+    pub video_token_id: usize,
 }

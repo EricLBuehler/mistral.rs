@@ -4,7 +4,7 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
+    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -118,6 +118,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
+            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
         };
         Box::new(VisionLoader {
             inner: loader,

@@ -1,13 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use candle_nn::{Activation, Embedding, Linear, Module, VarBuilder};
 
 use crate::{
     attention::SdpaParams,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{CausalMasker, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
-    layers_masker::PastKvLenCache,
+    layers::{Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{
         extract_logits,
@@ -234,9 +233,10 @@ pub struct Qwen2VLTextModel {
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     lm_head: Linear,
-    cache: Cache,
-    max_seq_len: usize,
-    cfg: ModelConfigMetadata,
+    pub(super) cache: Cache,
+    pub(super) cfg: ModelConfigMetadata,
+    pub(super) device: Device,
+    pub(super) max_seq_len: usize,
 }
 
 impl Qwen2VLTextModel {
@@ -316,29 +316,24 @@ impl Qwen2VLTextModel {
                 sliding_window: cfg.sliding_window,
                 head_dim: None,
             },
+            device: vb.device().clone(),
         })
     }
 
-    pub fn forward(
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
+    pub fn forward_embeds(
         &self,
-        input_ids: &Tensor,
+        mut xs: Tensor,
+        attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
-            self.cfg.sliding_window,
-            xs.dtype(),
-            self.layers[0].self_attn.num_heads,
-        )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
                 &xs,

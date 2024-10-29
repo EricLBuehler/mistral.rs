@@ -1,5 +1,5 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, Sequential, VarBuilder};
+use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, VarBuilder};
 
 use crate::{
     layers::{Conv3dConfig, Conv3dNoBias},
@@ -9,7 +9,6 @@ use crate::{
 use super::config::VisionConfig;
 
 struct PatchEmbed {
-    cfg: VisionConfig,
     proj: Conv3dNoBias,
     in_channels: usize,
     patch_size: usize,
@@ -24,7 +23,6 @@ impl PatchEmbed {
             candle_core::bail!("Only support temporal patch size of 2");
         }
         Ok(Self {
-            cfg: cfg.clone(),
             proj: Conv3dNoBias::new(
                 cfg.in_channels,
                 cfg.embed_dim,
@@ -194,7 +192,8 @@ impl VisionBlock {
 
 struct PatchMerger {
     ln_q: LayerNorm,
-    mlp: Sequential,
+    mlp0: Linear,
+    mlp2: Linear,
     hidden_size: usize,
 }
 
@@ -206,17 +205,12 @@ impl PatchMerger {
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_size = context_dim * spatial_merge_size.pow(2);
-        let mut mlp = candle_nn::seq();
-        mlp = mlp.add(candle_nn::linear_no_bias(
-            hidden_size,
-            hidden_size,
-            vb.pp("mlp.0"),
-        )?);
-        mlp = mlp.add(candle_nn::Activation::Gelu);
-        mlp = mlp.add(candle_nn::linear_no_bias(hidden_size, dim, vb.pp("mlp.2"))?);
+        let mlp0 = candle_nn::linear_no_bias(hidden_size, hidden_size, vb.pp("mlp.0"))?;
+        let mlp2 = candle_nn::linear_no_bias(hidden_size, dim, vb.pp("mlp.2"))?;
         Ok(Self {
             ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
-            mlp,
+            mlp0,
+            mlp2,
             hidden_size,
         })
     }
@@ -224,7 +218,9 @@ impl PatchMerger {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         xs.apply(&self.ln_q)?
             .reshape(((), self.hidden_size))?
-            .apply(&self.mlp)
+            .apply(&self.mlp0)?
+            .gelu()?
+            .apply(&self.mlp2)
     }
 }
 
@@ -329,7 +325,7 @@ impl Qwen2VLVisionModel {
             .flatten_from(1)
     }
 
-    fn forward(&self, xs: &Tensor, grid_thw: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, grid_thw: &Tensor) -> Result<Tensor> {
         let mut xs = self.patch_embed.forward(xs)?;
         let rotary_pos_emb = self.rot_pos_emb(grid_thw)?;
 

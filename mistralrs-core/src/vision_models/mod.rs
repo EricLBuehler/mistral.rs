@@ -12,7 +12,7 @@ pub(crate) mod phi3;
 pub(crate) mod phi3_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
-pub(crate) mod qwen2;
+pub(crate) mod qwen2vl;
 pub(crate) use llava::llava15;
 pub(crate) use llava::llava_inputs_processor;
 pub(crate) use llava::llava_next;
