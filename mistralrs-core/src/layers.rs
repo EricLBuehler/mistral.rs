@@ -25,6 +25,7 @@ use crate::{
     cublaslt::CUBLASLT_HANDLE,
     gguf::Content,
     models::llama,
+    ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
     INHIBIT_GEMM_F16,
 };
@@ -619,6 +620,99 @@ impl Llama3RotaryEmbedding {
             }
             Self::Default(rope) => rope.forward(positions, positions_kernel, q, k, b_sz),
         }
+    }
+}
+
+// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L107
+#[derive(Debug, Clone)]
+pub struct Qwen2VLRotaryEmbedding {
+    cos: Tensor,
+    sin: Tensor,
+    mrope_section: Vec<usize>,
+}
+
+impl Qwen2VLRotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+        dtype: DType,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let theta: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let theta_len = theta.len();
+        let theta = Tensor::from_vec(theta, (1, 1, theta_len), device)?
+            .to_dtype(DType::F32)?
+            .repeat((3, 1, 1))?;
+        let idx_theta = Tensor::arange(0, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((1, max_position_embeddings, 1))?
+            .repeat((3, 1, 1))?
+            .matmul(&theta)?;
+        let cos = idx_theta.cos()?.to_dtype(dtype)?;
+        let sin = idx_theta.sin()?.to_dtype(dtype)?;
+        Ok(Self {
+            cos,
+            sin,
+            mrope_section,
+        })
+    }
+
+    fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+        let last_dim = xs.dim(D::Minus1)?;
+        let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
+        let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
+        Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
+    }
+
+    // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
+    pub fn forward(&self, positions: &[usize], q: &mut Tensor, k: &mut Tensor) -> Result<()> {
+        let mrope_scaling: Vec<_> =
+            [self.mrope_section.clone(), self.mrope_section.clone()].concat();
+        let cos = Tensor::cat(
+            &self
+                .cos
+                .split(&mrope_scaling, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .unsqueeze(1)?;
+        let sin = Tensor::cat(
+            &self
+                .sin
+                .split(&mrope_scaling, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .unsqueeze(1)?;
+
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let mut q_embeds = Vec::new();
+        let mut k_embeds = Vec::new();
+        for (i, offset) in positions.iter().enumerate() {
+            let cos = cos.narrow(0, *offset, seq_len)?;
+            let sin = sin.narrow(0, *offset, seq_len)?;
+            let q = q.i(i)?.unsqueeze(0)?.contiguous()?;
+            let k = k.i(i)?.unsqueeze(0)?.contiguous()?;
+            let q_embed = ((&q * &cos)? + (Self::rotate_half(&q)? * &sin))?;
+            let k_embed = ((&k * &cos)? + (Self::rotate_half(&k)? * &sin))?;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+
+        *q = Tensor::cat(&q_embeds, 0)?;
+        *k = Tensor::cat(&k_embeds, 0)?;
+        Ok(())
     }
 }
 

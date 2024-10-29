@@ -1,14 +1,10 @@
 use candle_core::Result;
-use candle_nn::{Embedding, VarBuilder};
+use candle_nn::VarBuilder;
 use config::Config;
 use text::Qwen2VLTextModel;
 use vision::Qwen2VLVisionModel;
 
-use crate::{
-    layers::{RmsNorm, RotaryEmbedding},
-    paged_attention::AttentionImplementation,
-    pipeline::NormalLoadingMetadata,
-};
+use crate::{paged_attention::AttentionImplementation, pipeline::NormalLoadingMetadata};
 
 mod config;
 mod text;

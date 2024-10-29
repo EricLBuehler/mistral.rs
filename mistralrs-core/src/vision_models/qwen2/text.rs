@@ -6,7 +6,7 @@ use candle_nn::{Activation, Embedding, Linear, Module, VarBuilder};
 use crate::{
     attention::SdpaParams,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{CausalMasker, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{
@@ -56,14 +56,14 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
 
 impl Attention {
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
         paged_attn: Option<PagedAttention>,
@@ -102,7 +102,6 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -113,37 +112,25 @@ impl Attention {
         let k = self.k_proj.forward(&xs)?;
         let v = self.v_proj.forward(&xs)?;
 
-        let mut q = q.reshape((b_sz * q_len, self.num_heads, self.head_dim))?;
-        let mut k = k.reshape((b_sz * q_len, self.num_kv_heads, self.head_dim))?;
-        let v = if q_len != 1 {
-            v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
+        let (mut q, mut k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?
+            let q = q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?;
+            (q, k, v)
         };
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && q_len != 1 {
-            q = q
-                .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.num_heads, q_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?
-                .contiguous()?;
-        }
+        self.rotary_emb.forward(seqlen_offsets, &mut q, &mut k)?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
@@ -191,7 +178,7 @@ pub struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
         paged_attn: Option<PagedAttention>,
@@ -219,7 +206,6 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -230,7 +216,6 @@ impl DecoderLayer {
             &xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
             kv_cache,
             metadata,
             flash_params,
@@ -258,7 +243,7 @@ impl Qwen2VLTextModel {
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
-        is_gptx: bool,
+        _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -274,13 +259,13 @@ impl Qwen2VLTextModel {
             let device = &normal_loading_metadata.real_device;
             ropes.insert(
                 device.location(),
-                Arc::new(RotaryEmbedding::new(
+                Arc::new(Qwen2VLRotaryEmbedding::new(
                     cfg.rope_theta as f32,
                     head_dim,
                     cfg.max_position_embeddings,
                     device,
-                    is_gptx,
                     vb_m.dtype(),
+                    cfg.rope_scaling.mrope_section.clone(),
                 )?),
             );
         }
@@ -338,7 +323,6 @@ impl Qwen2VLTextModel {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -363,7 +347,6 @@ impl Qwen2VLTextModel {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 &mut cache[i],
                 metadata
                     .as_mut()
