@@ -1,5 +1,5 @@
 use candle_core::{DType, Result, Tensor, D};
-use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, Sequential, VarBuilder};
 
 use super::config::VisionConfig;
 
@@ -82,7 +82,12 @@ impl VisionAttention {
             head_dim: dim / num_heads,
         })
     }
-    fn forward(&self, xs: &Tensor, cu_seqlens: &Tensor, rotary_pos_emb: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        cu_seqlens: Vec<u32>,
+        rotary_pos_emb: &Tensor,
+    ) -> Result<Tensor> {
         let seq_len = xs.dim(0)?;
         let (q, k, v) = {
             let qkv = self
@@ -99,11 +104,27 @@ impl VisionAttention {
 
         let mut attention_mask =
             Tensor::full(f32::MIN, (1, seq_len, seq_len), q.device())?.to_dtype(q.dtype())?;
-        for i in 0..cu_seqlens.dim(0)? {
-            todo!()
+        for i in 1..cu_seqlens.len() {
+            let a = cu_seqlens[i - 1] as usize;
+            let b = cu_seqlens[i] as usize;
+            attention_mask = attention_mask.slice_assign(
+                &[&.., &(a..b), &(a..b)],
+                &Tensor::zeros((1, b - a, b - a), q.dtype(), q.device())?,
+            )?;
         }
 
-        todo!()
+        let q = q.transpose(0, 1)?;
+        let k = k.transpose(0, 1)?;
+        let v = v.transpose(0, 1)?;
+
+        let att = {
+            let att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
+            let att = (att + attention_mask)?;
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            att.matmul(&v)?.transpose(0, 1)?.reshape((seq_len, ()))?
+        };
+
+        self.proj.forward(&att)
     }
 }
 
@@ -132,7 +153,12 @@ impl VisionBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor, cu_seqlens: &Tensor, rotary_pos_emb: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        cu_seqlens: Vec<u32>,
+        rotary_pos_emb: &Tensor,
+    ) -> Result<Tensor> {
         let xs = (xs
             + self
                 .attn
@@ -141,10 +167,59 @@ impl VisionBlock {
     }
 }
 
-pub struct Qwen2VLVisionModel {}
+struct PatchMerger {
+    ln_q: LayerNorm,
+    mlp: Sequential,
+    hidden_size: usize,
+}
+
+impl PatchMerger {
+    pub fn new(
+        dim: usize,
+        context_dim: usize,
+        spatial_merge_size: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let hidden_size = context_dim * spatial_merge_size.pow(2);
+        let mut mlp = candle_nn::seq();
+        mlp = mlp.add(candle_nn::linear_no_bias(
+            hidden_size,
+            hidden_size,
+            vb.pp("mlp.0"),
+        )?);
+        mlp = mlp.add(candle_nn::Activation::Gelu);
+        mlp = mlp.add(candle_nn::linear_no_bias(hidden_size, dim, vb.pp("mlp.2"))?);
+        Ok(Self {
+            ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
+            mlp,
+            hidden_size,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.ln_q)?
+            .reshape(((), self.hidden_size))?
+            .apply(&self.mlp)
+    }
+}
+
+pub struct Qwen2VLVisionModel {
+    blocks: Vec<VisionBlock>,
+    patch_merger: PatchMerger,
+}
 
 impl Qwen2VLVisionModel {
     pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let mut blocks = Vec::new();
+        for i in 0..cfg.depth {
+            blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")))?);
+        }
+        let patch_merger = PatchMerger::new(
+            cfg.hidden_size,
+            cfg.embed_dim,
+            cfg.spatial_merge_size,
+            vb.pp("patch_merger"),
+        )?;
         todo!()
     }
 }
