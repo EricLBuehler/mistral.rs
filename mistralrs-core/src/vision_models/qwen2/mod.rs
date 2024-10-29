@@ -2,6 +2,7 @@ use candle_core::Result;
 use candle_nn::{Embedding, VarBuilder};
 use config::Config;
 use text::Qwen2VLTextModel;
+use vision::Qwen2VLVisionModel;
 
 use crate::{
     layers::{RmsNorm, RotaryEmbedding},
@@ -15,6 +16,7 @@ mod vision;
 
 pub struct Qwen2VLModel {
     model: Qwen2VLTextModel,
+    vision: Qwen2VLVisionModel,
 }
 
 impl Qwen2VLModel {
@@ -27,11 +29,12 @@ impl Qwen2VLModel {
     ) -> Result<Self> {
         let model = Qwen2VLTextModel::new(
             cfg,
-            vb.pp("model"),
+            vb.clone(),
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        Ok(Self { model })
+        let vision = Qwen2VLVisionModel::new(&cfg.vision_config, vb.pp("vision"))?;
+        Ok(Self { model, vision })
     }
 }

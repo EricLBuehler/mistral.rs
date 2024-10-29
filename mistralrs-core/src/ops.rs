@@ -576,6 +576,7 @@ impl TopKLastDimOp for Tensor {
 
 pub trait RepeatInterleaveOp {
     fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor>;
+    fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor>;
 }
 
 impl RepeatInterleaveOp for Tensor {
@@ -589,6 +590,26 @@ impl RepeatInterleaveOp for Tensor {
             self.device(),
         )?;
         self.index_select(&indices, dim)
+    }
+
+    fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor> {
+        let xs = self.flatten_all()?;
+        if repeats.len() != xs.dim(0)? {
+            candle_core::bail!(
+                "repeats ({}) must match flattened self length ({})",
+                repeats.len(),
+                xs.dim(0)?
+            );
+        }
+        // For metal
+        assert!(self.dtype().is_float());
+        let indices = Tensor::new(
+            (0..xs.dim(0)?)
+                .flat_map(|i| vec![i as u32; repeats[i] as usize])
+                .collect::<Vec<_>>(),
+            xs.device(),
+        )?;
+        xs.index_select(&indices, 0)
     }
 }
 

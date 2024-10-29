@@ -1,21 +1,56 @@
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, Sequential, VarBuilder};
+
+use crate::{
+    layers::{Conv3dConfig, Conv3dNoBias},
+    ops::RepeatInterleaveOp,
+};
 
 use super::config::VisionConfig;
 
 struct PatchEmbed {
     cfg: VisionConfig,
-    proj: (),
+    proj: Conv3dNoBias,
+    in_channels: usize,
+    patch_size: usize,
+    temporal_patch_size: usize,
+    embed_dim: usize,
 }
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L272
 impl PatchEmbed {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        todo!("Need conv3d!");
+        if cfg.temporal_patch_size != 2 {
+            candle_core::bail!("Only support temporal patch size of 2");
+        }
         Ok(Self {
             cfg: cfg.clone(),
-            proj: (),
+            proj: Conv3dNoBias::new(
+                cfg.in_channels,
+                cfg.embed_dim,
+                [cfg.temporal_patch_size, cfg.patch_size, cfg.patch_size],
+                Conv3dConfig {
+                    stride: cfg.patch_size,
+                    ..Default::default()
+                },
+                vb,
+            )?,
+            in_channels: cfg.in_channels,
+            patch_size: cfg.patch_size,
+            temporal_patch_size: cfg.temporal_patch_size,
+            embed_dim: cfg.embed_dim,
         })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = xs.reshape((
+            (),
+            self.in_channels,
+            self.temporal_patch_size,
+            self.patch_size,
+            self.patch_size,
+        ))?;
+        xs.apply(&self.proj)?.reshape(((), self.embed_dim))
     }
 }
 
@@ -82,12 +117,7 @@ impl VisionAttention {
             head_dim: dim / num_heads,
         })
     }
-    fn forward(
-        &self,
-        xs: &Tensor,
-        cu_seqlens: Vec<u32>,
-        rotary_pos_emb: &Tensor,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, cu_seqlens: &[u32], rotary_pos_emb: &Tensor) -> Result<Tensor> {
         let seq_len = xs.dim(0)?;
         let (q, k, v) = {
             let qkv = self
@@ -153,12 +183,7 @@ impl VisionBlock {
         })
     }
 
-    fn forward(
-        &self,
-        xs: &Tensor,
-        cu_seqlens: Vec<u32>,
-        rotary_pos_emb: &Tensor,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, cu_seqlens: &[u32], rotary_pos_emb: &Tensor) -> Result<Tensor> {
         let xs = (xs
             + self
                 .attn
@@ -203,9 +228,37 @@ impl PatchMerger {
     }
 }
 
+struct VisionRotaryEmbedding {
+    inv_freq: Tensor,
+}
+
+impl VisionRotaryEmbedding {
+    const THETA: f32 = 10000.;
+
+    fn new(dim: usize, device: &Device) -> Result<Self> {
+        let inv_freq = (0..dim)
+            .into_iter()
+            .step_by(2)
+            .map(|i| 1f32 / Self::THETA.powf(i as f32 / dim as f32))
+            .collect::<Vec<_>>();
+        let inv_freq_len = inv_freq.len();
+        Ok(Self {
+            inv_freq: Tensor::from_vec(inv_freq, (inv_freq_len, 1), device)?,
+        })
+    }
+
+    fn make_embeds(&self, seqlen: usize) -> Result<Tensor> {
+        let seq = Tensor::arange(0f32, seqlen as f32, self.inv_freq.device())?.unsqueeze(0)?;
+        seq.matmul(&self.inv_freq)
+    }
+}
+
 pub struct Qwen2VLVisionModel {
     blocks: Vec<VisionBlock>,
     patch_merger: PatchMerger,
+    patch_embed: PatchEmbed,
+    rotary_pos_emb: VisionRotaryEmbedding,
+    spatial_merge_size: usize,
 }
 
 impl Qwen2VLVisionModel {
@@ -214,12 +267,84 @@ impl Qwen2VLVisionModel {
         for i in 0..cfg.depth {
             blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")))?);
         }
+
         let patch_merger = PatchMerger::new(
             cfg.hidden_size,
             cfg.embed_dim,
             cfg.spatial_merge_size,
-            vb.pp("patch_merger"),
+            vb.pp("merger"),
         )?;
-        todo!()
+
+        let patch_embed = PatchEmbed::new(cfg, vb.pp("patch_embed"))?;
+
+        let head_dim = cfg.embed_dim / cfg.num_heads;
+        let rotary_pos_emb = VisionRotaryEmbedding::new(head_dim / 2, vb.device())?;
+
+        Ok(Self {
+            blocks,
+            patch_embed,
+            patch_merger,
+            rotary_pos_emb,
+            spatial_merge_size: cfg.spatial_merge_size,
+        })
+    }
+
+    fn rot_pos_emb(&self, grid_thw: &Tensor) -> Result<Tensor> {
+        let mut pos_ids = Vec::new();
+        for thw in grid_thw.to_vec2::<u32>()? {
+            let (t, h, w) = (thw[0], thw[1], thw[2]);
+            let mut hpos_ids = Tensor::arange(0, h, grid_thw.device())?
+                .unsqueeze(1)?
+                .repeat((1, w as usize))?;
+            hpos_ids = hpos_ids.reshape((
+                h as usize / self.spatial_merge_size,
+                self.spatial_merge_size,
+                w as usize / self.spatial_merge_size,
+                self.spatial_merge_size,
+            ))?;
+            hpos_ids = hpos_ids.permute((0, 2, 1, 3))?;
+            hpos_ids = hpos_ids.flatten_all()?;
+
+            let mut wpos_ids = Tensor::arange(0, w, grid_thw.device())?
+                .unsqueeze(1)?
+                .repeat((h as usize, 1))?;
+            wpos_ids = wpos_ids.reshape((
+                h as usize / self.spatial_merge_size,
+                self.spatial_merge_size,
+                w as usize / self.spatial_merge_size,
+                self.spatial_merge_size,
+            ))?;
+            wpos_ids = wpos_ids.permute((0, 2, 1, 3))?;
+            wpos_ids = wpos_ids.flatten_all()?;
+
+            pos_ids.push(Tensor::stack(&[hpos_ids, wpos_ids], D::Minus1)?.repeat((t as usize, 1))?);
+        }
+        let pos_ids = Tensor::cat(&pos_ids, 0)?;
+        let max_grid_size = grid_thw.i((.., 1..))?.max(0)?.max(0)?.to_scalar::<u32>()?;
+        let rotary_pos_emb_full = self.rotary_pos_emb.make_embeds(max_grid_size as usize)?;
+
+        assert_eq!(pos_ids.rank(), 2);
+        rotary_pos_emb_full
+            .index_select(&pos_ids.squeeze(D::Minus1)?, 0)?
+            .flatten_from(1)
+    }
+
+    fn forward(&self, xs: &Tensor, grid_thw: &Tensor) -> Result<Tensor> {
+        let mut xs = self.patch_embed.forward(xs)?;
+        let rotary_pos_emb = self.rot_pos_emb(grid_thw)?;
+
+        let grid_thw = grid_thw.to_device(&Device::Cpu)?;
+        let cu_seqlens = (grid_thw.i((.., 1))? * grid_thw.i((.., 2))?)?
+            .repeat_interleave_flat(grid_thw.i((.., 0))?.to_vec1::<u32>()?)?
+            .to_dtype(DType::F32)?
+            .cumsum(0)?
+            .pad_with_zeros(0, 1, 0)?
+            .to_vec1::<u32>()?;
+
+        for blk in &self.blocks {
+            xs = blk.forward(&xs, &cu_seqlens, &rotary_pos_emb)?;
+        }
+
+        self.patch_merger.forward(&xs)
     }
 }
