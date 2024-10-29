@@ -574,6 +574,24 @@ impl TopKLastDimOp for Tensor {
     }
 }
 
+pub trait RepeatInterleaveOp {
+    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor>;
+}
+
+impl RepeatInterleaveOp for Tensor {
+    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor> {
+        // For metal
+        assert!(self.dtype().is_float());
+        let indices = Tensor::new(
+            (0..self.dim(dim)?)
+                .flat_map(|i| vec![i as u32; repeats])
+                .collect::<Vec<_>>(),
+            self.device(),
+        )?;
+        self.index_select(&indices, dim)
+    }
+}
+
 mod tests {
     #[test]
     fn test_topk() {
@@ -793,5 +811,27 @@ mod tests {
                 [1, 6]
             ]
         );
+    }
+
+    #[test]
+    fn test_repeat_interleave() -> candle_core::Result<()> {
+        use crate::ops::RepeatInterleaveOp;
+        use candle_core::{Device, Tensor};
+
+        let input = Tensor::new(
+            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
+            &Device::Cpu,
+        )?;
+
+        let repeat_interleaved = input.repeat_interleave(2, 2)?;
+        assert_eq!(
+            repeat_interleaved.to_vec3::<f32>()?,
+            vec![vec![
+                vec![1., 1., 2., 2., 3., 3.],
+                vec![4., 4., 5., 5., 6., 6.]
+            ]]
+        );
+
+        Ok(())
     }
 }
