@@ -1,28 +1,41 @@
-use std::{any::Any, num::NonZeroUsize, sync::Arc};
+use std::{
+    any::Any,
+    num::NonZeroUsize,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::Result;
-use candle_core::{Context, Device, Tensor};
+use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
 };
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use crate::{
     pipeline::{
-        text_models_inputs_processor::PagedAttentionMeta, InputProcessorOutput, InputsProcessor,
-        InputsProcessorType, MessagesAction, Processor,
+        text_models_inputs_processor::{
+            self, get_completion_input, get_prompt_input, PagedAttentionMeta,
+        },
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
+        ModelInputs,
     },
 };
 
+use super::Qwen2VLVisionSpecificArgs;
+
 // Input processor
-struct Qwen2VLImageProcessor {}
+struct Qwen2VLImageProcessor {
+    // To represent uninitialized, we do this. Should always be init by the time this is read.
+    merge_size: RwLock<Option<usize>>,
+}
 // Processor
 pub struct Qwen2VLProcessor;
 
@@ -34,15 +47,27 @@ impl Qwen2VLProcessor {
 
 impl Processor for Qwen2VLProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Qwen2VLImageProcessor {})
+        Arc::new(Qwen2VLImageProcessor {
+            merge_size: RwLock::new(None),
+        })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[]
+        &["<|image_pad|>", "<|video_pad|>", "<|placeholder|>"]
     }
 
     fn template_action(&self) -> MessagesAction {
         MessagesAction::Keep
+    }
+}
+
+fn replace_first_occurance(text: &str, to_replace: &str, replacement: &str) -> String {
+    if let Some(pos) = text.find(to_replace) {
+        let mut result = text.to_string();
+        result.replace_range(pos..pos + to_replace.len(), replacement);
+        result
+    } else {
+        text.to_string()
     }
 }
 
@@ -60,10 +85,224 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
-        paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
+        mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
-        todo!()
+        if is_xlora {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Cannot make inputs for X-LoRA vision model.",
+            ))));
+        }
+        if no_kv_cache {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Vision model must have kv cache.",
+            ))));
+        }
+        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        if prompt_batchsize.is_some() {
+            warn!("`prompt_batchsize` is set. MLlama does not support prompt batching.");
+        }
+        let Some(tokenizer) = tokenizer else {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "MLlamaInputProcessor requires a specified tokenizer.",
+            ))));
+        };
+
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    positions_kernel,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = if is_prompt {
+            get_prompt_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                last_n_context_len,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
+        } else {
+            get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
+        };
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, image_grid_thw, video_grid_thw) = if has_images {
+            let mut pixel_values_accum = Vec::new();
+            let mut image_grid_thw_accum = Vec::new();
+            let mut video_grid_thw_accum = Vec::new();
+
+            let mut detok_seqs = tokenizer
+                .decode_batch(
+                    &input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks())
+                        .collect::<Vec<_>>(),
+                    false,
+                )
+                .expect("Detokenization failed!");
+
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask: _,
+                    image_sizes: _,
+                    num_img_tokens: _,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw,
+                    video_grid_thw,
+                } = self
+                    .preprocess(
+                        seq.take_images()
+                            .expect("Need to have images by this point."),
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
+                    .expect("Preprocessing failed");
+                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
+                image_grid_thw_accum.push(image_grid_thw.map(|img| img.unsqueeze(0).unwrap()));
+                video_grid_thw_accum.push(video_grid_thw.map(|vid| vid.unsqueeze(0).unwrap()));
+            }
+
+            let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
+                None
+            } else {
+                Some(
+                    image_grid_thw_accum
+                        .into_iter()
+                        .map(|img| img.unwrap())
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            let video_grid_thw_accum = if video_grid_thw_accum.iter().any(|img| img.is_none()) {
+                None
+            } else {
+                Some(
+                    video_grid_thw_accum
+                        .into_iter()
+                        .map(|img| img.unwrap())
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
+                let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                let mut index = 0;
+                for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                    while text.contains("<|image_pad|>") {
+                        *text = replace_first_occurance(
+                            &text,
+                            "<|image_pad|>",
+                            &"<|placeholder|>".repeat(
+                                image_grid_thw_accum[batch]
+                                    .squeeze(0)
+                                    .unwrap()
+                                    .i(index)
+                                    .unwrap()
+                                    .to_vec1::<u32>()
+                                    .unwrap()
+                                    .iter()
+                                    .product::<u32>() as usize
+                                    / merge_length,
+                            ),
+                        );
+                        index += 1;
+                    }
+                    *text = text.replace("<|placeholder|>", "<|image_pad|>");
+                }
+            }
+
+            if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
+                let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                let mut index = 0;
+                for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                    while text.contains("<|video_pad|>") {
+                        *text = replace_first_occurance(
+                            &text,
+                            "<|video_pad|>",
+                            &"<|placeholder|>".repeat(
+                                video_grid_thw_accum[batch]
+                                    .squeeze(0)
+                                    .unwrap()
+                                    .i(index)
+                                    .unwrap()
+                                    .to_vec1::<u32>()
+                                    .unwrap()
+                                    .iter()
+                                    .product::<u32>() as usize
+                                    / merge_length,
+                            ),
+                        );
+                        index += 1;
+                    }
+                    *text = text.replace("<|placeholder|>", "<|video_pad|>");
+                }
+            }
+
+            (
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                image_grid_thw_accum.map(|img| Tensor::cat(&img, 0).unwrap()),
+                video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
+            )
+        } else {
+            (None, None, None)
+        };
+
+        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+            input_ids: input,
+            seqlen_offsets: positions,
+            seqlen_offsets_kernel: positions_kernel,
+            context_lens,
+            position_ids,
+            pixel_values,
+            model_specific_args: Box::new(Qwen2VLVisionSpecificArgs {
+                image_grid_thw,
+                video_grid_thw,
+            }),
+            paged_attn_meta,
+            flash_meta,
+        });
+        Box::new(std::iter::once(Ok(InputProcessorOutput {
+            inputs,
+            seq_indices,
+        })))
     }
 }
 
