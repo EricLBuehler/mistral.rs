@@ -1,8 +1,8 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, Activation, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 use crate::{
-    layers::{Conv3dConfig, Conv3dNoBias},
+    layers::{Activation, Conv3dConfig, Conv3dNoBias},
     ops::RepeatInterleaveOp,
 };
 
@@ -31,7 +31,7 @@ impl PatchEmbed {
                     stride: cfg.patch_size,
                     ..Default::default()
                 },
-                vb,
+                vb.pp("proj"),
             )?,
             in_channels: cfg.in_channels,
             patch_size: cfg.patch_size,
@@ -185,7 +185,7 @@ impl VisionBlock {
         let xs = (xs
             + self
                 .attn
-                .forward(&self.norm1.forward(&xs)?, cu_seqlens, rotary_pos_emb)?)?;
+                .forward(&self.norm1.forward(xs)?, cu_seqlens, rotary_pos_emb)?)?;
         &xs + self.mlp.forward(&self.norm2.forward(&xs)?)?
     }
 }
@@ -233,7 +233,6 @@ impl VisionRotaryEmbedding {
 
     fn new(dim: usize, device: &Device) -> Result<Self> {
         let inv_freq = (0..dim)
-            .into_iter()
             .step_by(2)
             .map(|i| 1f32 / Self::THETA.powf(i as f32 / dim as f32))
             .collect::<Vec<_>>();

@@ -583,6 +583,7 @@ impl RepeatInterleaveOp for Tensor {
     fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor> {
         // For metal
         assert!(self.dtype().is_float());
+        #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
             (0..self.dim(dim)?)
                 .flat_map(|i| vec![i as u32; repeats])
@@ -603,6 +604,7 @@ impl RepeatInterleaveOp for Tensor {
         }
         // For metal
         assert!(self.dtype().is_float());
+        #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
             (0..xs.dim(0)?)
                 .flat_map(|i| vec![i as u32; repeats[i] as usize])

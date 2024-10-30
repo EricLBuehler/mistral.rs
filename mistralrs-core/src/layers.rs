@@ -666,7 +666,7 @@ impl Qwen2VLRotaryEmbedding {
                 .repeat((3, position_ids.dim(1)?, 1, 1))?;
         let position_ids_expanded = position_ids.unsqueeze(2)?;
         let freqs = inv_freq_expanded
-            .matmul(&position_ids_expanded)?
+            .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
             .transpose(2, 3)?;
         let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         let cos = emb.cos()?;
@@ -680,7 +680,8 @@ impl Qwen2VLRotaryEmbedding {
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-        .unsqueeze(1)?;
+        .unsqueeze(1)?
+        .to_dtype(q.dtype())?;
         let sin = Tensor::cat(
             &sin.split(&mrope_scaling, D::Minus1)?
                 .into_iter()
@@ -689,10 +690,11 @@ impl Qwen2VLRotaryEmbedding {
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-        .unsqueeze(1)?;
+        .unsqueeze(1)?
+        .to_dtype(q.dtype())?;
 
-        *q = ((&*q * &cos)? + (Self::rotate_half(&q)? * &sin))?;
-        *k = ((&*k * &cos)? + (Self::rotate_half(&k)? * &sin))?;
+        *q = (q.broadcast_mul(&cos)? + Self::rotate_half(q)?.broadcast_mul(&sin))?;
+        *k = (k.broadcast_mul(&cos)? + Self::rotate_half(k)?.broadcast_mul(&sin))?;
         Ok(())
     }
 }
@@ -979,6 +981,7 @@ pub enum Activation {
     LeakyRelu(f64),
     #[serde(alias = "gelu_pytorch_tanh")]
     GeluPytorchTanh,
+    QuickGelu,
 }
 
 impl Module for Activation {
@@ -999,6 +1002,7 @@ impl Module for Activation {
             &Self::Elu(alpha) => xs.elu(alpha),
             &Self::LeakyRelu(negative_slope) => candle_nn::ops::leaky_relu(xs, negative_slope),
             Self::GeluPytorchTanh => xs.gelu(),
+            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }

@@ -1,12 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use candle_nn::{Activation, Embedding, Linear, Module, VarBuilder};
+use candle_nn::{Embedding, Linear, Module, VarBuilder};
 
 use crate::{
     attention::SdpaParams,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{Activation, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{
         extract_logits,
@@ -107,9 +107,9 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(&xs)?;
-        let k = self.k_proj.forward(&xs)?;
-        let v = self.v_proj.forward(&xs)?;
+        let q = self.q_proj.forward(xs)?;
+        let k = self.k_proj.forward(xs)?;
+        let v = self.v_proj.forward(xs)?;
 
         let (mut q, mut k, v) = if q_len != 1 {
             let q = q
@@ -232,7 +232,7 @@ pub struct Qwen2VLTextModel {
     embed_tokens: Embedding,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
-    lm_head: Linear,
+    pub lm_head: Linear,
     pub(super) cache: Cache,
     pub(super) cfg: ModelConfigMetadata,
     pub(super) device: Device,
@@ -345,7 +345,7 @@ impl Qwen2VLTextModel {
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
                 flash_params,
-            )?
+            )?;
         }
         let xs = xs.apply(&self.norm)?;
         extract_logits(&self.lm_head.forward(&xs)?, context_lens)

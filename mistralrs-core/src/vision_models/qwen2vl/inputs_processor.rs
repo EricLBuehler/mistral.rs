@@ -228,7 +228,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 for (batch, text) in detok_seqs.iter_mut().enumerate() {
                     while text.contains("<|image_pad|>") {
                         *text = replace_first_occurance(
-                            &text,
+                            text,
                             "<|image_pad|>",
                             &"<|placeholder|>".repeat(
                                 image_grid_thw_accum[batch]
@@ -255,7 +255,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 for (batch, text) in detok_seqs.iter_mut().enumerate() {
                     while text.contains("<|video_pad|>") {
                         *text = replace_first_occurance(
-                            &text,
+                            text,
                             "<|video_pad|>",
                             &"<|placeholder|>".repeat(
                                 video_grid_thw_accum[batch]
@@ -451,8 +451,8 @@ impl Qwen2VLImageProcessor {
 }
 
 impl ImagePreProcessor for Qwen2VLImageProcessor {
-    const DEFAULT_MEAN: [f64; 3] = todo!();
-    const DEFAULT_STD: [f64; 3] = todo!();
+    const DEFAULT_MEAN: [f64; 3] = [0.48145466, 0.4578275, 0.40821073];
+    const DEFAULT_STD: [f64; 3] = [0.26862954, 0.26130258, 0.27577711];
 
     fn preprocess(
         &self,

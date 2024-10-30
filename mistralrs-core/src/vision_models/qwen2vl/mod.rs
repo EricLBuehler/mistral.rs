@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
@@ -56,7 +58,7 @@ impl Qwen2VLModel {
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let vision = Qwen2VLVisionModel::new(&cfg.vision_config, vb.pp("vision"))?;
+        let vision = Qwen2VLVisionModel::new(&cfg.vision_config, vb.pp("visual"))?;
         Ok(Self {
             text,
             vision,
@@ -168,7 +170,7 @@ impl Qwen2VLModel {
                     let llm_grid_w = w / self.spatial_merge_size as u32;
                     let text_len = ed - st;
 
-                    let st_idx = if llm_pos_ids.len() > 0 {
+                    let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
                         last.max(0)?.to_scalar::<u32>()? + 1
                     } else {
@@ -200,7 +202,7 @@ impl Qwen2VLModel {
                 }
 
                 if st < input_tokens.len() {
-                    let st_idx = if llm_pos_ids.len() > 0 {
+                    let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
                         last.max(0)?.to_scalar::<u32>()? + 1
                     } else {
@@ -240,7 +242,7 @@ impl Qwen2VLModel {
             // transformers uses ==1 because their attn mask is 1 for not masked, we use bias where 0 is not masked
             // convert to transformers compat here!
             let attention_mask = attention_mask.ne(0f64)?;
-            let position_ids = (attention_mask.to_dtype(DType::I64)?.cumsum(D::Minus1)? - 1f64)?;
+            let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
             let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
             let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
 
@@ -263,6 +265,7 @@ impl Qwen2VLModel {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -275,22 +278,22 @@ impl Qwen2VLModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let (input_embeds, attention_mask) = if pixel_values.is_some()
-            || pixel_values_videos.is_some()
-        {
-            let mut xs = self.text.embed_tokens(input_ids)?;
-
+        let attention_mask = {
             let cache = self.text.cache.lock();
-            let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+            CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
                 input_ids,
                 metadata
                     .as_ref()
                     .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                     .unwrap_or(&*cache as &dyn PastKvLenCache),
                 self.text.cfg.sliding_window,
-                xs.dtype(),
+                self.text.lm_head.weight().dtype(),
                 self.text.cfg.num_attn_heads,
-            )?;
+            )?
+        };
+
+        let input_embeds = if pixel_values.is_some() || pixel_values_videos.is_some() {
+            let mut xs = self.text.embed_tokens(input_ids)?;
 
             if let Some(pixel_values) = pixel_values {
                 let image_embeds = self.vision.forward(
@@ -320,11 +323,12 @@ impl Qwen2VLModel {
                 xs = video_mask.where_cond(&video_embeds, &xs)?;
             }
 
-            (xs, attention_mask)
+            xs
         } else {
-            let xs = self.text.embed_tokens(input_ids)?;
-            (xs, None)
+            self.text.embed_tokens(input_ids)?
         };
+
+        dbg!(&input_ids);
 
         let (mut position_ids, mrope_position_deltas) = self.get_rope_index(
             input_ids,
@@ -334,7 +338,7 @@ impl Qwen2VLModel {
         )?;
 
         if attention_mask.is_some() {
-            position_ids = (position_ids + mrope_position_deltas.unsqueeze(0)?)?;
+            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
         }
 
         self.text.forward_embeds(

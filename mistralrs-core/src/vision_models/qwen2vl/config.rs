@@ -1,15 +1,22 @@
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/configuration_qwen2_vl.py
 
-use candle_nn::Activation;
+use crate::layers::Activation;
+
+use crate::serde_default_fn;
+
+serde_default_fn!(Activation, default_vision_hidden_act, Activation::QuickGelu);
+serde_default_fn!(usize, default_in_channels, 3);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
     pub depth: usize,
     pub embed_dim: usize,
     pub hidden_size: usize,
+    #[serde(default = "default_vision_hidden_act")]
     pub hidden_act: Activation,
     pub mlp_ratio: f64,
     pub num_heads: usize,
+    #[serde(default = "default_in_channels")]
     pub in_channels: usize,
     pub patch_size: usize,
     pub spatial_merge_size: usize,
