@@ -882,7 +882,7 @@ mod tests {
 
         let repeat_interleaved = input.repeat_interleave_flat(vec![1u32, 2u32, 3u32, 4u32])?;
         assert_eq!(
-            repeat_interleaved.to_vec1::<f32>()?,
+            repeat_interleaved.to_vec1::<f64>()?,
             vec![1., 2., 2., 3., 3., 3., 4., 4., 4., 4.]
         );
 
