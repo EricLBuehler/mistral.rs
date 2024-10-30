@@ -273,6 +273,7 @@ impl Qwen2VLModel {
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
+        seqlens: Vec<usize>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -328,18 +329,57 @@ impl Qwen2VLModel {
             self.text.embed_tokens(input_ids)?
         };
 
-        dbg!(&input_ids);
+        let position_ids = if attention_mask.is_some() {
+            let mut ropeidx_attn_mask_bs = Vec::new();
+            let max_seqlens = *seqlens.iter().max().unwrap();
+            for len in seqlens {
+                ropeidx_attn_mask_bs.push(Tensor::new(
+                    [vec![1f32; len], vec![0f32; max_seqlens - len]].concat(),
+                    input_ids.device(),
+                )?);
+            }
+            let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
 
-        let (mut position_ids, mrope_position_deltas) = self.get_rope_index(
-            input_ids,
-            image_grid_thw.as_ref(),
-            video_grid_thw.as_ref(),
-            attention_mask.as_ref(),
-        )?;
+            let (mut position_ids, mrope_position_deltas) = self.get_rope_index(
+                input_ids,
+                image_grid_thw.as_ref(),
+                video_grid_thw.as_ref(),
+                Some(&ropeidx_attn_mask),
+            )?;
 
-        if attention_mask.is_some() {
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-        }
+
+            position_ids
+        } else {
+            let mut ropeidx_attn_mask_bs = Vec::new();
+            let max_seqlens = *seqlens.iter().max().unwrap();
+            for len in seqlens {
+                ropeidx_attn_mask_bs.push(Tensor::new(
+                    [vec![1f32; len], vec![0f32; max_seqlens - len]].concat(),
+                    input_ids.device(),
+                )?);
+            }
+            let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
+
+            let (_, mrope_position_deltas) = self.get_rope_index(
+                input_ids,
+                image_grid_thw.as_ref(),
+                video_grid_thw.as_ref(),
+                Some(&ropeidx_attn_mask),
+            )?;
+
+            let mut position_ids = Tensor::new(
+                seqlen_offsets.iter().map(|x| *x as u32).collect::<Vec<_>>(),
+                input_ids.device(),
+            )?
+            .reshape((1, (), 1))?
+            .repeat((3, 1, 1))?
+            .to_dtype(DType::F32)?;
+
+            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
+
+            position_ids
+        };
 
         self.text.forward_embeds(
             input_embeds,
@@ -355,6 +395,7 @@ impl Qwen2VLModel {
 pub(crate) struct Qwen2VLVisionSpecificArgs {
     image_grid_thw: Option<Tensor>,
     video_grid_thw: Option<Tensor>,
+    seqlens: Vec<usize>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -373,6 +414,7 @@ impl VisionModel for Qwen2VLModel {
         let Qwen2VLVisionSpecificArgs {
             image_grid_thw,
             video_grid_thw,
+            seqlens,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
@@ -390,6 +432,7 @@ impl VisionModel for Qwen2VLModel {
             pixel_values_video,
             image_grid_thw,
             video_grid_thw,
+            seqlens,
             seqlen_offsets,
             context_lens,
             metadata,

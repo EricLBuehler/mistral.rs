@@ -159,6 +159,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
+        let seqlens = input_seqs
+            .iter()
+            .map(|seq| seq.prompt_tokens())
+            .collect::<Vec<_>>();
+
         let (pixel_values, image_grid_thw, video_grid_thw) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
@@ -276,6 +281,13 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 }
             }
 
+            for (detok, seq) in detok_seqs.into_iter().zip(input_seqs) {
+                let toks = tokenizer
+                    .encode(detok, true)
+                    .expect("Detokenization failed!");
+                seq.set_toks(toks.get_ids().to_vec());
+            }
+
             (
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 image_grid_thw_accum.map(|img| Tensor::cat(&img, 0).unwrap()),
@@ -295,6 +307,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             model_specific_args: Box::new(Qwen2VLVisionSpecificArgs {
                 image_grid_thw,
                 video_grid_thw,
+                seqlens,
             }),
             paged_attn_meta,
             flash_meta,
