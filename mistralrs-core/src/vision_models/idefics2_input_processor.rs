@@ -208,10 +208,13 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
                     num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
                 } = self
                     .preprocess(
                         seq.take_images()
                             .expect("Need to have images by this point."),
+                        vec![],
                         config,
                         device,
                         (usize::MAX, usize::MAX), // Don't use it here...
@@ -256,10 +259,13 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
         (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
+        assert!(videos.is_empty());
+
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
 
@@ -364,6 +370,8 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             aspect_ratio_ids: None,
             aspect_ratio_mask: None,
             num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
         })
     }
 }

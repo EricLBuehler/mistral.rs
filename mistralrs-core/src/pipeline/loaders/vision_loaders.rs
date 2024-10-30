@@ -30,7 +30,7 @@ use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
-use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel};
+use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -491,7 +491,7 @@ impl VisionModelLoader for Qwen2VLLoader {
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(MLlamaProcessor::new())
+        Arc::new(Qwen2VLProcessor::new())
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: Qwen2VLConfig = serde_json::from_str(config)?;

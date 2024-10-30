@@ -144,8 +144,16 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
                     num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
                 } = self
-                    .preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
+                    .preprocess(
+                        imgs.clone(),
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX),
+                    )
                     .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
@@ -372,6 +380,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
     fn preprocess(
         &self,
         images: Vec<image::DynamicImage>,
+        videos: Vec<Vec<image::DynamicImage>>,
         config: &preprocessor_config::PreProcessorConfig,
         device: &candle_core::Device,
         (_, _): (usize, usize),
@@ -379,6 +388,8 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
+        assert!(videos.is_empty());
+
         let resized_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;
         let image = images[0].clone();
         let original_size = image.dimensions();
@@ -432,6 +443,8 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             aspect_ratio_ids: None,
             aspect_ratio_mask: None,
             num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
         })
     }
 }

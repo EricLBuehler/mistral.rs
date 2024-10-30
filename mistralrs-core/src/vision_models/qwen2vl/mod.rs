@@ -26,6 +26,7 @@ mod text;
 mod vision;
 
 pub(crate) use config::Config;
+pub(crate) use inputs_processor::Qwen2VLProcessor;
 
 pub struct Qwen2VLModel {
     text: Qwen2VLTextModel,
@@ -350,7 +351,6 @@ impl Qwen2VLModel {
 pub(crate) struct Qwen2VLVisionSpecificArgs {
     image_grid_thw: Option<Tensor>,
     video_grid_thw: Option<Tensor>,
-    pixel_values_video: Option<Tensor>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -369,10 +369,17 @@ impl VisionModel for Qwen2VLModel {
         let Qwen2VLVisionSpecificArgs {
             image_grid_thw,
             video_grid_thw,
-            pixel_values_video,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
+        let (pixel_values, pixel_values_video) = match (&image_grid_thw, &video_grid_thw) {
+            (Some(_), None) => (pixel_values, None),
+            (None, Some(_)) => (None, pixel_values),
+            (None, None) => (None, None),
+            (Some(_), Some(_)) => {
+                candle_core::bail!("Images and videos cannot be provided together.")
+            }
+        };
         self.forward(
             input_ids,
             pixel_values,

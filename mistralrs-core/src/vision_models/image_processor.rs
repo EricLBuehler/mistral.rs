@@ -10,6 +10,7 @@ use super::preprocessor_config::PreProcessorConfig;
 #[allow(dead_code)]
 pub(crate) struct PreprocessedImages {
     /// Without batch size, safe to unsqueeze & concat in dim0
+    /// For QwenVL2: may be vision pixel values, depending on if image or video thw are specified
     pub(crate) pixel_values: Tensor,
     /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) pixel_attention_mask: Option<Tensor>,
@@ -21,6 +22,10 @@ pub(crate) struct PreprocessedImages {
     pub(crate) aspect_ratio_mask: Option<Tensor>,
     /// Without batch size
     pub(crate) num_tiles: Option<Vec<usize>>,
+    /// Without batch size, safe to unsqueeze & concat in dim0
+    pub(crate) image_grid_thw: Option<Tensor>,
+    /// Without batch size, safe to unsqueeze & concat in dim0
+    pub(crate) video_grid_thw: Option<Tensor>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)
@@ -30,10 +35,12 @@ pub trait ImagePreProcessor: InputsProcessor {
 
     /// Preprocess the images for a specific batch.
     /// `(bs, max_num_images)`, max_num_images is the max images per batches.
+    /// Pixel values are in [0, 255]
     #[allow(clippy::too_many_arguments)]
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
         batch_info: (usize, usize),
