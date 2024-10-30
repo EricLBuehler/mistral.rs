@@ -41,4 +41,5 @@ pub struct Config {
     pub rope_scaling: MRopeScaling,
     pub image_token_id: usize,
     pub video_token_id: usize,
+    pub vision_start_token_id: usize,
 }

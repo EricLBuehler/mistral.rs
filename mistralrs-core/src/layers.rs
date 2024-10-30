@@ -626,8 +626,7 @@ impl Llama3RotaryEmbedding {
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L107
 #[derive(Debug, Clone)]
 pub struct Qwen2VLRotaryEmbedding {
-    cos: Tensor,
-    sin: Tensor,
+    inv_freq: Tensor,
     mrope_section: Vec<usize>,
 }
 
@@ -635,29 +634,17 @@ impl Qwen2VLRotaryEmbedding {
     pub fn new(
         base: f32,
         head_dim: usize,
-        max_position_embeddings: usize,
         device: &Device,
-        dtype: DType,
         mrope_section: Vec<usize>,
     ) -> Result<Self> {
-        let theta: Vec<_> = (0..head_dim)
+        let inv_freq: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
-        let theta_len = theta.len();
-        let theta = Tensor::from_vec(theta, (1, 1, theta_len), device)?
-            .to_dtype(DType::F32)?
-            .repeat((3, 1, 1))?;
-        let idx_theta = Tensor::arange(0, max_position_embeddings as u32, device)?
-            .to_dtype(DType::F32)?
-            .reshape((1, max_position_embeddings, 1))?
-            .repeat((3, 1, 1))?
-            .matmul(&theta)?;
-        let cos = idx_theta.cos()?.to_dtype(dtype)?;
-        let sin = idx_theta.sin()?.to_dtype(dtype)?;
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
         Ok(Self {
-            cos,
-            sin,
+            inv_freq,
             mrope_section,
         })
     }
@@ -670,13 +657,23 @@ impl Qwen2VLRotaryEmbedding {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
-    pub fn forward(&self, positions: &[usize], q: &mut Tensor, k: &mut Tensor) -> Result<()> {
+    pub fn forward(&self, position_ids: &Tensor, q: &mut Tensor, k: &mut Tensor) -> Result<()> {
         let mrope_scaling: Vec<_> =
             [self.mrope_section.clone(), self.mrope_section.clone()].concat();
+        let inv_freq_expanded =
+            self.inv_freq
+                .reshape((1, 1, (), 1))?
+                .repeat((3, position_ids.dim(1)?, 1, 1))?;
+        let position_ids_expanded = position_ids.unsqueeze(2)?;
+        let freqs = inv_freq_expanded
+            .matmul(&position_ids_expanded)?
+            .transpose(2, 3)?;
+        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
+        let cos = emb.cos()?;
+        let sin = emb.sin()?;
+
         let cos = Tensor::cat(
-            &self
-                .cos
-                .split(&mrope_scaling, D::Minus1)?
+            &cos.split(&mrope_scaling, D::Minus1)?
                 .into_iter()
                 .enumerate()
                 .map(|(i, m)| m.i(i % 3))
@@ -685,9 +682,7 @@ impl Qwen2VLRotaryEmbedding {
         )?
         .unsqueeze(1)?;
         let sin = Tensor::cat(
-            &self
-                .sin
-                .split(&mrope_scaling, D::Minus1)?
+            &sin.split(&mrope_scaling, D::Minus1)?
                 .into_iter()
                 .enumerate()
                 .map(|(i, m)| m.i(i % 3))
@@ -696,22 +691,8 @@ impl Qwen2VLRotaryEmbedding {
         )?
         .unsqueeze(1)?;
 
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let mut q_embeds = Vec::new();
-        let mut k_embeds = Vec::new();
-        for (i, offset) in positions.iter().enumerate() {
-            let cos = cos.narrow(0, *offset, seq_len)?;
-            let sin = sin.narrow(0, *offset, seq_len)?;
-            let q = q.i(i)?.unsqueeze(0)?.contiguous()?;
-            let k = k.i(i)?.unsqueeze(0)?.contiguous()?;
-            let q_embed = ((&q * &cos)? + (Self::rotate_half(&q)? * &sin))?;
-            let k_embed = ((&k * &cos)? + (Self::rotate_half(&k)? * &sin))?;
-            q_embeds.push(q_embed);
-            k_embeds.push(k_embed);
-        }
-
-        *q = Tensor::cat(&q_embeds, 0)?;
-        *k = Tensor::cat(&k_embeds, 0)?;
+        *q = ((&*q * &cos)? + (Self::rotate_half(&q)? * &sin))?;
+        *k = ((&*k * &cos)? + (Self::rotate_half(&k)? * &sin))?;
         Ok(())
     }
 }

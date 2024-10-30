@@ -100,7 +100,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        position_ids: &Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -129,7 +129,7 @@ impl Attention {
             (q, k, v)
         };
 
-        self.rotary_emb.forward(seqlen_offsets, &mut q, &mut k)?;
+        self.rotary_emb.forward(position_ids, &mut q, &mut k)?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
@@ -204,7 +204,7 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        position_ids: &Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -214,7 +214,7 @@ impl DecoderLayer {
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
-            seqlen_offsets,
+            position_ids,
             kv_cache,
             metadata,
             flash_params,
@@ -262,9 +262,7 @@ impl Qwen2VLTextModel {
                 Arc::new(Qwen2VLRotaryEmbedding::new(
                     cfg.rope_theta as f32,
                     head_dim,
-                    cfg.max_position_embeddings,
                     device,
-                    vb_m.dtype(),
                     cfg.rope_scaling.mrope_section.clone(),
                 )?),
             );
@@ -328,7 +326,7 @@ impl Qwen2VLTextModel {
         &self,
         mut xs: Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        position_ids: &Tensor,
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -341,7 +339,7 @@ impl Qwen2VLTextModel {
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
-                seqlen_offsets,
+                position_ids,
                 &mut cache[i],
                 metadata
                     .as_mut()
