@@ -602,8 +602,6 @@ impl RepeatInterleaveOp for Tensor {
                 xs.dim(0)?
             );
         }
-        // For metal
-        assert!(self.dtype().is_float());
         #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
             (0..xs.dim(0)?)

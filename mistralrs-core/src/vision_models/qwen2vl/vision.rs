@@ -95,7 +95,8 @@ fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
         .repeat((1, 1, 2))?
         .unsqueeze(0)?
         .to_dtype(DType::F32)?;
-    ((&xs * cos) + (rotate_half(&xs)? * sin)?)?.to_dtype(orig_ty)
+    // ((&xs * cos) + (rotate_half(&xs)? * sin)?)?.to_dtype(orig_ty)
+    (xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin))?.to_dtype(orig_ty)
 }
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
@@ -124,7 +125,7 @@ impl VisionAttention {
                 .reshape((seq_len, 3, self.num_heads, ()))?
                 .permute((1, 0, 2, 3))?
                 .chunk(3, 0)?;
-            (qkv[0].clone(), qkv[1].clone(), qkv[2].clone())
+            (qkv[0].squeeze(0)?, qkv[1].squeeze(0)?, qkv[2].squeeze(0)?)
         };
 
         let q = apply_rotary_pos_emb_vision(&q.unsqueeze(0)?, rotary_pos_emb)?.squeeze(0)?;
@@ -146,10 +147,13 @@ impl VisionAttention {
         let v = v.transpose(0, 1)?;
 
         let att = {
-            let att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
-            let att = (att + attention_mask)?;
+            let att = (q.contiguous()?.matmul(&k.transpose(1, 2)?.contiguous()?)?
+                / (self.head_dim as f64).sqrt())?;
+            let att = att.broadcast_add(&attention_mask)?;
             let att = candle_nn::ops::softmax_last_dim(&att)?;
-            att.matmul(&v)?.transpose(0, 1)?.reshape((seq_len, ()))?
+            att.matmul(&v.contiguous()?)?
+                .transpose(0, 1)?
+                .reshape((seq_len, ()))?
         };
 
         self.proj.forward(&att)
@@ -238,13 +242,14 @@ impl VisionRotaryEmbedding {
             .collect::<Vec<_>>();
         let inv_freq_len = inv_freq.len();
         Ok(Self {
-            inv_freq: Tensor::from_vec(inv_freq, (inv_freq_len, 1), device)?,
+            inv_freq: Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?,
         })
     }
 
     fn make_embeds(&self, seqlen: usize) -> Result<Tensor> {
-        let seq = Tensor::arange(0f32, seqlen as f32, self.inv_freq.device())?.unsqueeze(0)?;
-        seq.matmul(&self.inv_freq)
+        let seq =
+            Tensor::arange(0f32, seqlen as f32, self.inv_freq.device())?.unsqueeze(D::Minus1)?;
+        seq.broadcast_matmul(&self.inv_freq)
     }
 }
 
@@ -320,12 +325,15 @@ impl Qwen2VLVisionModel {
 
         assert_eq!(pos_ids.rank(), 2);
         rotary_pos_emb_full
-            .index_select(&pos_ids.squeeze(D::Minus1)?, 0)?
+            .index_select(&pos_ids.flatten_all()?, 0)?
+            .reshape((pos_ids.dim(0)?, pos_ids.dim(1)?, ()))?
             .flatten_from(1)
     }
 
     pub fn forward(&self, xs: &Tensor, grid_thw: &Tensor) -> Result<Tensor> {
-        let mut xs = self.patch_embed.forward(xs)?;
+        let mut xs = self
+            .patch_embed
+            .forward(&xs.to_dtype(self.patch_merger.mlp0.weight().dtype())?)?;
         let rotary_pos_emb = self.rot_pos_emb(grid_thw)?;
 
         let grid_thw = grid_thw.to_device(&Device::Cpu)?;
@@ -333,6 +341,7 @@ impl Qwen2VLVisionModel {
             .repeat_interleave_flat(grid_thw.i((.., 0))?.to_vec1::<u32>()?)?
             .to_dtype(DType::F32)?
             .cumsum(0)?
+            .to_dtype(DType::U32)?
             .pad_with_zeros(0, 1, 0)?
             .to_vec1::<u32>()?;
 

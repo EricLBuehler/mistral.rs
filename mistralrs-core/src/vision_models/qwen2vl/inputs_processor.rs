@@ -201,8 +201,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     )
                     .expect("Preprocessing failed");
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                image_grid_thw_accum.push(image_grid_thw.map(|img| img.unsqueeze(0).unwrap()));
-                video_grid_thw_accum.push(video_grid_thw.map(|vid| vid.unsqueeze(0).unwrap()));
+                image_grid_thw_accum.push(image_grid_thw); //.map(|img| img.unsqueeze(0).unwrap()));
+                video_grid_thw_accum.push(video_grid_thw); //.map(|vid| vid.unsqueeze(0).unwrap()));
             }
 
             let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
@@ -371,7 +371,7 @@ impl Qwen2VLImageProcessor {
         let mut resized_width_latest = width;
 
         for mut image in images {
-            if config.do_resize.is_some_and(|x| x) {
+            if config.do_resize.is_none() || config.do_resize.is_some_and(|x| x) {
                 let (resized_height, resized_width) = self.smart_resize(
                     height as usize,
                     width as usize,
@@ -430,7 +430,9 @@ impl Qwen2VLImageProcessor {
             .temporal_patch_size
             .context("Require `temporal_patch_size")?;
         let patch_size = config.patch_size.context("Require `patch_size")?;
-        let merge_size = config.patch_size.context("Require `merge_size")?;
+        let merge_size = config.merge_size.context("Require `merge_size")?;
+        // Important to write it!
+        *self.merge_size.write().unwrap() = Some(merge_size);
         // Image
         if patches.dim(0)? == 1 {
             patches = patches.repeat((temporal_patch_size, 1, 1, 1))?;
@@ -519,6 +521,6 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 video_grid_thw: Some(vision_grid_thw),
             });
         }
-        todo!()
+        unreachable!()
     }
 }
