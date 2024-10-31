@@ -81,7 +81,7 @@ impl Qwen2VLModel {
             let total_input_ids = input_ids.clone();
             let mut position_ids = Tensor::zeros(
                 (3, input_ids.dim(0)?, input_ids.dim(1)?),
-                input_ids.dtype(),
+                DType::I64,
                 input_ids.device(),
             )?;
             let mut mrope_position_deltas = Vec::new();
@@ -94,17 +94,26 @@ impl Qwen2VLModel {
                 .enumerate()
             {
                 if let Some(attention_mask) = attention_mask {
-                    // transformers uses ==1 because their attn mask is 1 for not masked, we use bias where 0 is not masked
-                    input_ids = input_ids.gather(
-                        &attention_mask.i(i)?.eq(0.)?.nonzero()?.squeeze(D::Minus1)?,
-                        0,
-                    )?
+                    let indices = attention_mask
+                        .i(i)?
+                        .eq(1.)?
+                        .nonzero()?
+                        .squeeze(D::Minus1)?
+                        .to_dtype(DType::I64)?;
+                    input_ids = input_ids
+                        .i(i)?
+                        .to_dtype(DType::F32)?
+                        .index_select(&indices, 0)?
+                        .to_dtype(input_ids.dtype())?;
                 }
                 let vision_start_indices = input_ids
                     .eq(self.vision_start_token_id as f64)?
                     .nonzero()?
                     .squeeze(1)?;
-                let vision_tokens = input_ids.gather(&(vision_start_indices + 1.)?, 0)?;
+                let vision_tokens = input_ids
+                    .to_dtype(DType::F32)?
+                    .index_select(&(vision_start_indices + 1.)?.to_dtype(DType::I64)?, 0)?
+                    .to_dtype(input_ids.dtype())?;
                 let image_nums = vision_tokens
                     .eq(self.image_token_id as f64)?
                     .to_dtype(DType::F32)?
@@ -172,31 +181,32 @@ impl Qwen2VLModel {
 
                     let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
-                        last.max(0)?.to_scalar::<u32>()? + 1
+                        last.max(0)?.to_scalar::<i64>()? + 1
                     } else {
                         0
                     };
                     llm_pos_ids.push(
-                        Tensor::arange(st_idx, text_len as u32 + st_idx, input_ids.device())?
-                            .unsqueeze(D::Minus1)?
+                        Tensor::arange(st_idx, text_len as i64 + st_idx, input_ids.device())?
+                            .unsqueeze(0)?
                             .repeat((3, 1))?,
                     );
 
-                    let t_idx = Tensor::arange(0, llm_grid_t, input_ids.device())?
+                    let t_idx = Tensor::arange(0, llm_grid_t as i64, input_ids.device())?
                         .reshape(((), 1))?
                         .repeat((1, llm_grid_h as usize * llm_grid_w as usize))?
                         .flatten_all()?;
-                    let h_idx = Tensor::arange(0, llm_grid_h, input_ids.device())?
+                    let h_idx = Tensor::arange(0, llm_grid_h as i64, input_ids.device())?
                         .reshape((1, (), 1))?
                         .repeat((llm_grid_t as usize, 1, llm_grid_w as usize))?
                         .flatten_all()?;
-                    let w_idx = Tensor::arange(0, llm_grid_w, input_ids.device())?
+                    let w_idx = Tensor::arange(0, llm_grid_w as i64, input_ids.device())?
                         .reshape((1, 1, ()))?
                         .repeat((llm_grid_t as usize, llm_grid_h as usize, 1))?
                         .flatten_all()?;
                     llm_pos_ids.push(
-                        (Tensor::stack(&[t_idx, h_idx, w_idx], 0)?
-                            + (text_len + st_idx as usize) as f64)?,
+                        (Tensor::stack(&[t_idx, h_idx, w_idx], 0)?.to_dtype(DType::F32)?
+                            + (text_len + st_idx as usize) as f64)?
+                            .to_dtype(DType::I64)?,
                     );
                     st = ed + (llm_grid_t * llm_grid_h * llm_grid_w) as usize;
                 }
@@ -204,21 +214,31 @@ impl Qwen2VLModel {
                 if st < input_tokens.len() {
                     let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
-                        last.max(0)?.to_scalar::<u32>()? + 1
+                        last.max(0)?.max(0)?.to_scalar::<i64>()? + 1
                     } else {
                         0
                     };
                     let text_len = (input_tokens.len() - st) as u32;
                     llm_pos_ids.push(
-                        Tensor::arange(st_idx, text_len + st_idx, input_ids.device())?
-                            .reshape((1, ()))?
-                            .repeat((3, 1))?,
+                        Tensor::arange(
+                            st_idx as i64,
+                            text_len as i64 + st_idx as i64,
+                            input_ids.device(),
+                        )?
+                        .reshape((1, ()))?
+                        .repeat((3, 1))?,
                     );
                 }
 
                 let llm_positions = Tensor::cat(&llm_pos_ids, 1)?.reshape((3, ()))?;
-                // transformers uses ==1 because their attn mask is 1 for not masked, we use bias where 0 is not masked
-                let positions_mask = attention_mask.as_ref().unwrap().i(i)?.eq(0f64)?;
+                let positions_mask = attention_mask
+                    .as_ref()
+                    .unwrap()
+                    .i(i)?
+                    .eq(1f64)?
+                    .unsqueeze(0)?
+                    .repeat((3, 1))?;
+
                 position_ids = position_ids.slice_assign(
                     &[&.., &i, &..],
                     &positions_mask
@@ -226,8 +246,8 @@ impl Qwen2VLModel {
                         .unsqueeze(1)?,
                 )?;
                 mrope_position_deltas.push(
-                    llm_positions.max(0)?.max(0)?.to_scalar::<u32>()? + 1
-                        - total_input_ids.i(i)?.dim(0)? as u32,
+                    llm_positions.max(0)?.max(0)?.to_scalar::<i64>()? + 1
+                        - total_input_ids.i(i)?.dim(0)? as i64,
                 );
             }
             let mrope_position_deltas_len = mrope_position_deltas.len();
@@ -239,9 +259,6 @@ impl Qwen2VLModel {
             .unsqueeze(1)?;
             Ok((position_ids, mrope_position_deltas))
         } else if let Some(attention_mask) = attention_mask {
-            // transformers uses ==1 because their attn mask is 1 for not masked, we use bias where 0 is not masked
-            // convert to transformers compat here!
-            let attention_mask = attention_mask.ne(0f64)?;
             let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
             let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
             let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
@@ -250,16 +267,16 @@ impl Qwen2VLModel {
             let mrope_position_deltas =
                 ((max_position_ids + 1.)? - attention_mask.dim(D::Minus1)? as f64)?;
 
-            Ok((position_ids, mrope_position_deltas))
+            Ok((
+                position_ids.to_dtype(DType::I64)?,
+                mrope_position_deltas.to_dtype(DType::I64)?,
+            ))
         } else {
-            let position_ids = Tensor::arange(0u32, input_ids.dim(1)? as u32, input_ids.device())?
+            let position_ids = Tensor::arange(0i64, input_ids.dim(1)? as i64, input_ids.device())?
                 .reshape((1, 1, ()))?
                 .repeat((3, input_ids.dim(0)?, 1))?;
-            let mrope_position_deltas = Tensor::zeros(
-                (input_ids.dim(0)?, 1),
-                input_ids.dtype(),
-                input_ids.device(),
-            )?;
+            let mrope_position_deltas =
+                Tensor::zeros((input_ids.dim(0)?, 1), DType::I64, input_ids.device())?;
 
             Ok((position_ids, mrope_position_deltas))
         }
@@ -274,6 +291,8 @@ impl Qwen2VLModel {
         image_grid_thw: Option<Tensor>,
         video_grid_thw: Option<Tensor>,
         seqlens: Vec<usize>,
+        continuous_img_pad: Vec<Vec<(usize, usize)>>,
+        continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -303,11 +322,19 @@ impl Qwen2VLModel {
                         .as_ref()
                         .context("pixel_values require image_grid_thw")?,
                 )?;
-                let image_mask = input_ids
-                    .eq(self.image_token_id as f64)?
-                    .unsqueeze(D::Minus1)?
-                    .broadcast_as(xs.shape())?;
-                xs = image_mask.where_cond(&image_embeds, &xs)?;
+
+                for (batch, batch_ids) in continuous_img_pad.into_iter().enumerate() {
+                    let mut last_end = 0;
+                    for (start, end) in batch_ids {
+                        xs = xs.slice_assign(
+                            &[&batch, &(start..end), &..],
+                            &image_embeds
+                                .i((last_end..last_end + (end - start), ..))?
+                                .unsqueeze(0)?,
+                        )?;
+                        last_end = end;
+                    }
+                }
             }
 
             if let Some(pixel_values_videos) = pixel_values_videos {
@@ -317,11 +344,19 @@ impl Qwen2VLModel {
                         .as_ref()
                         .context("pixel_values_videos require video_grid_thw")?,
                 )?;
-                let video_mask = input_ids
-                    .eq(self.video_token_id as f64)?
-                    .unsqueeze(D::Minus1)?
-                    .broadcast_as(xs.shape())?;
-                xs = video_mask.where_cond(&video_embeds, &xs)?;
+
+                for (batch, batch_ids) in continuous_vid_pad.into_iter().enumerate() {
+                    let mut last_end = 0;
+                    for (start, end) in batch_ids {
+                        xs = xs.slice_assign(
+                            &[&batch, &(start..end), &..],
+                            &video_embeds
+                                .i((last_end..last_end + (end - start), ..))?
+                                .unsqueeze(0)?,
+                        )?;
+                        last_end = end;
+                    }
+                }
             }
 
             xs
@@ -346,6 +381,7 @@ impl Qwen2VLModel {
                 video_grid_thw.as_ref(),
                 Some(&ropeidx_attn_mask),
             )?;
+            println!("{mrope_position_deltas}");
 
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
 
@@ -361,6 +397,7 @@ impl Qwen2VLModel {
             }
             let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
 
+            dbg!(&input_ids, image_grid_thw.as_ref());
             let (_, mrope_position_deltas) = self.get_rope_index(
                 input_ids,
                 image_grid_thw.as_ref(),
@@ -369,12 +406,12 @@ impl Qwen2VLModel {
             )?;
 
             let mut position_ids = Tensor::new(
-                seqlen_offsets.iter().map(|x| *x as u32).collect::<Vec<_>>(),
+                seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
                 input_ids.device(),
             )?
             .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?
-            .to_dtype(DType::F32)?;
+            .repeat((3, 1, 1))?;
+            println!("{mrope_position_deltas}");
 
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
 
@@ -396,6 +433,8 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     image_grid_thw: Option<Tensor>,
     video_grid_thw: Option<Tensor>,
     seqlens: Vec<usize>,
+    continuous_img_pad: Vec<Vec<(usize, usize)>>,
+    continuous_vid_pad: Vec<Vec<(usize, usize)>>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -415,6 +454,8 @@ impl VisionModel for Qwen2VLModel {
             image_grid_thw,
             video_grid_thw,
             seqlens,
+            continuous_img_pad,
+            continuous_vid_pad,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
@@ -433,6 +474,8 @@ impl VisionModel for Qwen2VLModel {
             image_grid_thw,
             video_grid_thw,
             seqlens,
+            continuous_img_pad,
+            continuous_vid_pad,
             seqlen_offsets,
             context_lens,
             metadata,

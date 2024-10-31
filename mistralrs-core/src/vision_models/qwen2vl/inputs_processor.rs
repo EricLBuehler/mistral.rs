@@ -71,6 +71,28 @@ fn replace_first_occurance(text: &str, to_replace: &str, replacement: &str) -> S
     }
 }
 
+fn find_sequences(nums: &[u32], needle: u32) -> Vec<(usize, usize)> {
+    let mut sequences = Vec::new();
+    let mut start = None;
+
+    for (i, &num) in nums.iter().enumerate() {
+        if num == needle {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(s) = start {
+            sequences.push((s, i));
+            start = None;
+        }
+    }
+
+    if let Some(s) = start {
+        sequences.push((s, nums.len()));
+    }
+
+    sequences
+}
+
 impl InputsProcessor for Qwen2VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -159,12 +181,14 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
-        let seqlens = input_seqs
-            .iter()
-            .map(|seq| seq.prompt_tokens())
-            .collect::<Vec<_>>();
-
-        let (pixel_values, image_grid_thw, video_grid_thw) = if has_images {
+        let (
+            new_input,
+            pixel_values,
+            image_grid_thw,
+            video_grid_thw,
+            continuous_img_pad,
+            continuous_vid_pad,
+        ) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
             let mut video_grid_thw_accum = Vec::new();
@@ -192,7 +216,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     video_grid_thw,
                 } = self
                     .preprocess(
-                        seq.take_images()
+                        seq.clone_images()
                             .expect("Need to have images by this point."),
                         vec![],
                         config,
@@ -227,75 +251,123 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 )
             };
 
-            if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
-                let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
-                let mut index = 0;
-                for (batch, text) in detok_seqs.iter_mut().enumerate() {
-                    while text.contains("<|image_pad|>") {
-                        *text = replace_first_occurance(
-                            text,
-                            "<|image_pad|>",
-                            &"<|placeholder|>".repeat(
-                                image_grid_thw_accum[batch]
-                                    .squeeze(0)
-                                    .unwrap()
-                                    .i(index)
-                                    .unwrap()
-                                    .to_vec1::<u32>()
-                                    .unwrap()
-                                    .iter()
-                                    .product::<u32>() as usize
-                                    / merge_length,
-                            ),
-                        );
-                        index += 1;
+            if is_prompt {
+                if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
+                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                    let mut index = 0;
+                    for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                        while text.contains("<|image_pad|>") {
+                            *text = replace_first_occurance(
+                                text,
+                                "<|image_pad|>",
+                                &"<|placeholder|>".repeat(
+                                    image_grid_thw_accum[batch]
+                                        .i(index)
+                                        .unwrap()
+                                        .to_vec1::<u32>()
+                                        .unwrap()
+                                        .iter()
+                                        .product::<u32>()
+                                        as usize
+                                        / merge_length,
+                                ),
+                            );
+                            index += 1;
+                        }
+                        *text = text.replace("<|placeholder|>", "<|image_pad|>");
                     }
-                    *text = text.replace("<|placeholder|>", "<|image_pad|>");
+                }
+
+                if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
+                    let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
+                    let mut index = 0;
+                    for (batch, text) in detok_seqs.iter_mut().enumerate() {
+                        while text.contains("<|video_pad|>") {
+                            *text = replace_first_occurance(
+                                text,
+                                "<|video_pad|>",
+                                &"<|placeholder|>".repeat(
+                                    video_grid_thw_accum[batch]
+                                        .i(index)
+                                        .unwrap()
+                                        .to_vec1::<u32>()
+                                        .unwrap()
+                                        .iter()
+                                        .product::<u32>()
+                                        as usize
+                                        / merge_length,
+                                ),
+                            );
+                            index += 1;
+                        }
+                        *text = text.replace("<|placeholder|>", "<|video_pad|>");
+                    }
                 }
             }
-
-            if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
-                let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
-                let mut index = 0;
-                for (batch, text) in detok_seqs.iter_mut().enumerate() {
-                    while text.contains("<|video_pad|>") {
-                        *text = replace_first_occurance(
-                            text,
-                            "<|video_pad|>",
-                            &"<|placeholder|>".repeat(
-                                video_grid_thw_accum[batch]
-                                    .squeeze(0)
-                                    .unwrap()
-                                    .i(index)
-                                    .unwrap()
-                                    .to_vec1::<u32>()
-                                    .unwrap()
-                                    .iter()
-                                    .product::<u32>() as usize
-                                    / merge_length,
-                            ),
-                        );
-                        index += 1;
-                    }
-                    *text = text.replace("<|placeholder|>", "<|video_pad|>");
-                }
+            if let Some(image_grid_thw_accum) = &image_grid_thw_accum {
+                println!("{}", &image_grid_thw_accum[0]);
             }
 
-            for (detok, seq) in detok_seqs.into_iter().zip(input_seqs) {
+            let mut all_ids = Vec::new();
+            let mut all_continuous_img_pad = Vec::new();
+            let mut all_continuous_vid_pad = Vec::new();
+            for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
                 let toks = tokenizer
                     .encode(detok, true)
                     .expect("Detokenization failed!");
-                seq.set_toks(toks.get_ids().to_vec());
+
+                let ids = toks.get_ids().to_vec();
+                all_ids.push(ids.clone());
+
+                let img_pad = tokenizer
+                    .encode("<|image_pad|>", false)
+                    .expect("Detokenization failed!")
+                    .get_ids()
+                    .to_vec();
+                let continuous_img_pad = find_sequences(&ids, img_pad[0]);
+                all_continuous_img_pad.push(continuous_img_pad);
+
+                let vid_pad = tokenizer
+                    .encode("<|video_pad|>", false)
+                    .expect("Detokenization failed!")
+                    .get_ids()
+                    .to_vec();
+                let continuous_vid_pad = find_sequences(&ids, vid_pad[0]);
+                all_continuous_vid_pad.push(continuous_vid_pad);
+
+                seq.set_toks(ids);
+            }
+            let mut all_ids_new = Vec::new();
+            let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
+            for ids in all_ids {
+                let pad = max_len - ids.len();
+                all_ids_new
+                    .push(Tensor::new([ids, vec![0; pad]].concat(), input.device()).unwrap());
             }
 
             (
+                Some(Tensor::stack(&all_ids_new, 0).unwrap()),
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 image_grid_thw_accum.map(|img| Tensor::cat(&img, 0).unwrap()),
                 video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
+                all_continuous_img_pad,
+                all_continuous_vid_pad,
             )
         } else {
-            (None, None, None)
+            (None, None, None, None, vec![], vec![])
         };
+
+        let input = if let (Some(new_input), true) = (new_input, is_prompt) {
+            new_input
+        } else {
+            input
+        };
+        let pixel_values = if is_prompt { pixel_values } else { None };
+
+        let seqlens = input_seqs
+            .iter()
+            .map(|seq| seq.prompt_tokens())
+            .collect::<Vec<_>>();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -308,6 +380,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 image_grid_thw,
                 video_grid_thw,
                 seqlens,
+                continuous_img_pad,
+                continuous_vid_pad,
             }),
             paged_attn_meta,
             flash_meta,

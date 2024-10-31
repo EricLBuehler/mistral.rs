@@ -718,6 +718,10 @@ impl Sequence {
         self.input_images.take()
     }
 
+    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.clone()
+    }
+
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_deref()
     }
