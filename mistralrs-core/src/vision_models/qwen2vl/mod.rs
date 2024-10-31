@@ -286,6 +286,7 @@ impl Qwen2VLModel {
     pub fn forward(
         &self,
         input_ids: &Tensor,
+        input_ids_full: &Tensor,
         pixel_values: Option<Tensor>,
         pixel_values_videos: Option<Tensor>,
         image_grid_thw: Option<Tensor>,
@@ -381,7 +382,6 @@ impl Qwen2VLModel {
                 video_grid_thw.as_ref(),
                 Some(&ropeidx_attn_mask),
             )?;
-            println!("{mrope_position_deltas}");
 
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
 
@@ -397,9 +397,8 @@ impl Qwen2VLModel {
             }
             let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
 
-            dbg!(&input_ids, image_grid_thw.as_ref());
             let (_, mrope_position_deltas) = self.get_rope_index(
-                input_ids,
+                input_ids_full,
                 image_grid_thw.as_ref(),
                 video_grid_thw.as_ref(),
                 Some(&ropeidx_attn_mask),
@@ -411,7 +410,6 @@ impl Qwen2VLModel {
             )?
             .reshape((1, (), 1))?
             .repeat((3, 1, 1))?;
-            println!("{mrope_position_deltas}");
 
             position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
 
@@ -430,6 +428,7 @@ impl Qwen2VLModel {
 }
 
 pub(crate) struct Qwen2VLVisionSpecificArgs {
+    input_ids_full: Tensor,
     image_grid_thw: Option<Tensor>,
     video_grid_thw: Option<Tensor>,
     seqlens: Vec<usize>,
@@ -451,6 +450,7 @@ impl VisionModel for Qwen2VLModel {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen2VLVisionSpecificArgs {
+            input_ids_full,
             image_grid_thw,
             video_grid_thw,
             seqlens,
@@ -469,6 +469,7 @@ impl VisionModel for Qwen2VLModel {
         };
         self.forward(
             input_ids,
+            &input_ids_full,
             pixel_values,
             pixel_values_video,
             image_grid_thw,

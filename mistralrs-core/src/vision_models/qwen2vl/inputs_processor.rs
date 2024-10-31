@@ -304,9 +304,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     }
                 }
             }
-            if let Some(image_grid_thw_accum) = &image_grid_thw_accum {
-                println!("{}", &image_grid_thw_accum[0]);
-            }
 
             let mut all_ids = Vec::new();
             let mut all_continuous_img_pad = Vec::new();
@@ -357,11 +354,12 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             (None, None, None, None, vec![], vec![])
         };
 
-        let input = if let (Some(new_input), true) = (new_input, is_prompt) {
-            new_input
-        } else {
-            input
+        let (input, input_ids_full) = match (new_input, is_prompt) {
+            (Some(new_input), true) => (new_input.clone(), new_input),
+            (Some(new_input), false) => (input, new_input),
+            (None, _) => (input.clone(), input.clone()),
         };
+
         let pixel_values = if is_prompt { pixel_values } else { None };
 
         let seqlens = input_seqs
@@ -377,6 +375,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             position_ids,
             pixel_values,
             model_specific_args: Box::new(Qwen2VLVisionSpecificArgs {
+                input_ids_full,
                 image_grid_thw,
                 video_grid_thw,
                 seqlens,
