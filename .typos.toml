@@ -5,7 +5,8 @@ extend-ignore-identifiers-re = [
     "arange",
     "Nd",
     "nin",
-    "cudaDevAttrMaxSharedMemoryPerBlockOptin"
+    "cudaDevAttrMaxSharedMemoryPerBlockOptin",
+    "_thw"
 ]
 
 [files]

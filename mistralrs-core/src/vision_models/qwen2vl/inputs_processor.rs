@@ -61,7 +61,7 @@ impl Processor for Qwen2VLProcessor {
     }
 }
 
-fn replace_first_occurance(text: &str, to_replace: &str, replacement: &str) -> String {
+fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
     if let Some(pos) = text.find(to_replace) {
         let mut result = text.to_string();
         result.replace_range(pos..pos + to_replace.len(), replacement);
@@ -272,7 +272,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
                         while text.contains("<|image_pad|>") {
-                            *text = replace_first_occurance(
+                            *text = replace_first_occurrence(
                                 text,
                                 "<|image_pad|>",
                                 &"<|placeholder|>".repeat(
@@ -298,7 +298,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
                         while text.contains("<|video_pad|>") {
-                            *text = replace_first_occurance(
+                            *text = replace_first_occurrence(
                                 text,
                                 "<|video_pad|>",
                                 &"<|placeholder|>".repeat(

@@ -291,8 +291,8 @@ impl Qwen2VLVisionModel {
 
     fn rot_pos_emb(&self, grid_thw: &Tensor) -> Result<Tensor> {
         let mut pos_ids = Vec::new();
-        for thw in grid_thw.to_vec2::<u32>()? {
-            let (t, h, w) = (thw[0], thw[1], thw[2]);
+        for i_thw in grid_thw.to_vec2::<u32>()? {
+            let (t, h, w) = (i_thw[0], i_thw[1], i_thw[2]);
             let mut hpos_ids = Tensor::arange(0, h, grid_thw.device())?
                 .unsqueeze(1)?
                 .repeat((1, w as usize))?;
