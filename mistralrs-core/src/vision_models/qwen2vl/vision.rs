@@ -2,7 +2,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 use crate::{
-    layers::{Activation, Conv3dConfig, Conv3dNoBias},
+    layers::{Activation, Conv3dConfig, Conv3dNoBias, FusedBiasLinear},
     ops::RepeatInterleaveOp,
 };
 
@@ -54,16 +54,16 @@ impl PatchEmbed {
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L314
 struct VisionMlp {
-    fc1: Linear,
-    fc2: Linear,
+    fc1: FusedBiasLinear,
+    fc2: FusedBiasLinear,
     act: Activation,
 }
 
 impl VisionMlp {
     fn new(dim: usize, hidden_dim: usize, act: Activation, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            fc1: candle_nn::linear(dim, hidden_dim, vb.pp("fc1"))?,
-            fc2: candle_nn::linear(hidden_dim, dim, vb.pp("fc2"))?,
+            fc1: candle_nn::linear(dim, hidden_dim, vb.pp("fc1"))?.try_into()?,
+            fc2: candle_nn::linear(hidden_dim, dim, vb.pp("fc2"))?.try_into()?,
             act,
         })
     }
@@ -101,7 +101,7 @@ fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
 struct VisionAttention {
-    qkv: Linear,
+    qkv: FusedBiasLinear,
     proj: Linear,
     num_heads: usize,
     head_dim: usize,
@@ -110,7 +110,7 @@ struct VisionAttention {
 impl VisionAttention {
     fn new(dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            qkv: candle_nn::linear(dim, dim * 3, vb.pp("qkv"))?,
+            qkv: candle_nn::linear(dim, dim * 3, vb.pp("qkv"))?.try_into()?,
             proj: candle_nn::linear_no_bias(dim, dim, vb.pp("proj"))?,
             num_heads,
             head_dim: dim / num_heads,
@@ -306,7 +306,7 @@ impl Qwen2VLVisionModel {
             hpos_ids = hpos_ids.flatten_all()?;
 
             let mut wpos_ids = Tensor::arange(0, w, grid_thw.device())?
-                .unsqueeze(1)?
+                .unsqueeze(0)?
                 .repeat((h as usize, 1))?;
             wpos_ids = wpos_ids.reshape((
                 h as usize / self.spatial_merge_size,

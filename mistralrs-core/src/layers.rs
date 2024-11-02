@@ -1064,8 +1064,8 @@ impl Conv3dNoBias {
         };
 
         Ok(Self {
-            conv2d_1: Conv2d::new(w1, None, cfg),
-            conv2d_2: Conv2d::new(w2, None, cfg),
+            conv2d_1: Conv2d::new(w1.contiguous()?, None, cfg),
+            conv2d_2: Conv2d::new(w2.contiguous()?, None, cfg),
         })
     }
 }

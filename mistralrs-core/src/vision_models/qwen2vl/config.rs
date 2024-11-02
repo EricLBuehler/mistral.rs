@@ -43,7 +43,8 @@ pub struct Config {
     pub rope_theta: f64,
     pub use_sliding_window: bool,
     pub sliding_window: Option<usize>,
-    pub max_window_layers: usize,
+    #[serde(rename = "max_window_layers")]
+    pub _max_window_layers: usize,
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
     pub image_token_id: usize,

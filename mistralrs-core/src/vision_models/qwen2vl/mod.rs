@@ -376,14 +376,12 @@ impl Qwen2VLModel {
             }
             let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
 
-            let (mut position_ids, mrope_position_deltas) = self.get_rope_index(
+            let (position_ids, _) = self.get_rope_index(
                 input_ids,
                 image_grid_thw.as_ref(),
                 video_grid_thw.as_ref(),
                 Some(&ropeidx_attn_mask),
             )?;
-
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
 
             position_ids
         } else {
@@ -416,14 +414,15 @@ impl Qwen2VLModel {
             position_ids
         };
 
-        self.text.forward_embeds(
+        let out = self.text.forward_embeds(
             input_embeds,
             attention_mask.as_ref(),
             &position_ids,
             context_lens,
             metadata,
             flash_params,
-        )
+        )?;
+        Ok(out)
     }
 }
 

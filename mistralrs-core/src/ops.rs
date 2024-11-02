@@ -624,7 +624,7 @@ impl SplitOp for Tensor {
         let mut index = 0;
         for split in splits {
             split_res.push(self.narrow(dim, index, *split)?);
-            index = *split;
+            index += *split;
         }
         Ok(split_res)
     }

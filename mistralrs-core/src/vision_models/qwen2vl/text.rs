@@ -1,12 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module, VarBuilder};
 
 use crate::{
     attention::SdpaParams,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{Activation, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{Activation, FusedBiasLinear, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{
         extract_logits,
@@ -17,6 +17,30 @@ use crate::{
 };
 
 use super::config::Config;
+
+struct Qwen2VLRmsNorm {
+    w: Tensor,
+    eps: f64,
+}
+
+impl Qwen2VLRmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            w: vb.get((size,), "weight")?,
+            eps,
+        })
+    }
+}
+
+impl Module for Qwen2VLRmsNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let initial_type = xs.dtype();
+        let mut xs = xs.to_dtype(DType::F32)?;
+        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
+        xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
+        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
+    }
+}
 
 struct Mlp {
     gate_proj: Linear,
@@ -48,9 +72,9 @@ impl Mlp {
 }
 
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    q_proj: FusedBiasLinear,
+    k_proj: FusedBiasLinear,
+    v_proj: FusedBiasLinear,
     o_proj: Linear,
     num_heads: usize,
     num_kv_heads: usize,
@@ -71,9 +95,12 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = candle_nn::linear(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        let q_proj =
+            candle_nn::linear(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?.try_into()?;
+        let k_proj =
+            candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?.try_into()?;
+        let v_proj =
+            candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?.try_into()?;
         let o_proj = candle_nn::linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
             q_proj,
@@ -171,8 +198,8 @@ impl Attention {
 pub struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: Qwen2VLRmsNorm,
+    post_attention_layernorm: Qwen2VLRmsNorm,
 }
 
 impl DecoderLayer {
@@ -185,8 +212,8 @@ impl DecoderLayer {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), paged_attn)?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = RmsNorm::new(
+            Qwen2VLRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = Qwen2VLRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -230,7 +257,7 @@ impl DecoderLayer {
 
 pub struct Qwen2VLTextModel {
     embed_tokens: Embedding,
-    norm: RmsNorm,
+    norm: Qwen2VLRmsNorm,
     layers: Vec<DecoderLayer>,
     pub lm_head: Linear,
     pub(super) cache: Cache,
@@ -292,7 +319,7 @@ impl Qwen2VLTextModel {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), paged_attn)?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = Qwen2VLRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = if !cfg.tie_word_embeddings {
             candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
         } else {
