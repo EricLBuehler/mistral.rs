@@ -649,17 +649,8 @@ impl Qwen2VLRotaryEmbedding {
         })
     }
 
-    fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-        let last_dim = xs.dim(D::Minus1)?;
-        let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-        let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-        Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-    }
-
-    // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
-    pub fn forward(&self, position_ids: &Tensor, q: &mut Tensor, k: &mut Tensor) -> Result<()> {
-        let mrope_scaling: Vec<_> =
-            [self.mrope_section.clone(), self.mrope_section.clone()].concat();
+    /// (cos, sin)
+    pub fn compute_cos_sin(&self, position_ids: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
         let inv_freq_expanded =
             self.inv_freq
                 .reshape((1, 1, (), 1))?
@@ -668,33 +659,42 @@ impl Qwen2VLRotaryEmbedding {
         let freqs = inv_freq_expanded
             .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
             .transpose(2, 3)?;
-        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        let cos = emb.cos()?;
-        let sin = emb.sin()?;
+        let cos = freqs.cos()?;
+        let sin = freqs.sin()?;
 
         let cos = Tensor::cat(
-            &cos.split(&mrope_scaling, D::Minus1)?
+            &cos.split(&self.mrope_section, D::Minus1)?
                 .into_iter()
                 .enumerate()
                 .map(|(i, m)| m.i(i % 3))
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-        .unsqueeze(1)?
-        .to_dtype(q.dtype())?;
+        .squeeze(0)?
+        .to_dtype(dtype)?;
         let sin = Tensor::cat(
-            &sin.split(&mrope_scaling, D::Minus1)?
+            &sin.split(&self.mrope_section, D::Minus1)?
                 .into_iter()
                 .enumerate()
                 .map(|(i, m)| m.i(i % 3))
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-        .unsqueeze(1)?
-        .to_dtype(q.dtype())?;
+        .squeeze(0)?
+        .to_dtype(dtype)?;
 
-        *q = (q.broadcast_mul(&cos)? + Self::rotate_half(q)?.broadcast_mul(&sin))?;
-        *k = (k.broadcast_mul(&cos)? + Self::rotate_half(k)?.broadcast_mul(&sin))?;
+        Ok((cos, sin))
+    }
+
+    // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
+    pub fn forward(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &mut Tensor,
+        k: &mut Tensor,
+    ) -> Result<()> {
+        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
     }
 }

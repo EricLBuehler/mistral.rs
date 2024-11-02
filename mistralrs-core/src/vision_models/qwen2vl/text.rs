@@ -137,7 +137,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        position_ids: &Tensor,
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -166,7 +166,7 @@ impl Attention {
             (q, k, v)
         };
 
-        self.rotary_emb.forward(position_ids, &mut q, &mut k)?;
+        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => {
@@ -249,7 +249,7 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        position_ids: &Tensor,
+        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -259,7 +259,7 @@ impl DecoderLayer {
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
-            position_ids,
+            cos_sin,
             kv_cache,
             metadata,
             flash_params,
@@ -405,6 +405,10 @@ impl Qwen2VLTextModel {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut cache = self.cache.lock();
+        let cos_sin = self.layers[0]
+            .self_attn
+            .rotary_emb
+            .compute_cos_sin(position_ids, xs.dtype())?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = layer.forward(
                 &xs,
@@ -412,7 +416,7 @@ impl Qwen2VLTextModel {
                     .as_ref()
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
-                position_ids,
+                &cos_sin,
                 &mut cache[i],
                 metadata
                     .as_mut()
