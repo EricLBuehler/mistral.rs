@@ -207,6 +207,9 @@ pub struct Sequence {
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
     input_images: Option<Vec<image::DynamicImage>>,
+    pub cached_pixel_values: Option<Tensor>,
+    pub cached_img_thw: Option<Tensor>,
+    pub cached_vid_thw: Option<Tensor>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -339,6 +342,9 @@ impl Sequence {
             image_gen_response_format,
             sequence_stepping_type,
             diffusion_params,
+            cached_pixel_values: None,
+            cached_img_thw: None,
+            cached_vid_thw: None,
         }
     }
 

@@ -8,7 +8,8 @@ use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
-    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensor, Transforms
+    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensor,
+    Transforms,
 };
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -203,26 +204,41 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 .expect("Detokenization failed!");
 
             for seq in input_seqs.iter_mut() {
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw,
-                    video_grid_thw,
-                } = self
-                    .preprocess(
-                        seq.clone_images()
-                            .expect("Need to have images by this point."),
-                        vec![],
-                        config,
-                        device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
-                    )
-                    .expect("Preprocessing failed");
+                let (pixel_values, image_grid_thw, video_grid_thw) =
+                    if let Some(cached_pixel_values) = &seq.cached_pixel_values {
+                        (
+                            cached_pixel_values.clone(),
+                            seq.cached_img_thw.clone(),
+                            seq.cached_vid_thw.clone(),
+                        )
+                    } else {
+                        let PreprocessedImages {
+                            pixel_values,
+                            pixel_attention_mask: _,
+                            image_sizes: _,
+                            num_img_tokens: _,
+                            aspect_ratio_ids: _,
+                            aspect_ratio_mask: _,
+                            num_tiles: _,
+                            image_grid_thw,
+                            video_grid_thw,
+                        } = self
+                            .preprocess(
+                                seq.clone_images()
+                                    .expect("Need to have images by this point."),
+                                vec![],
+                                config,
+                                device,
+                                (usize::MAX, usize::MAX), // Don't use it here...
+                            )
+                            .expect("Preprocessing failed");
+
+                        seq.cached_pixel_values = Some(pixel_values.clone());
+                        seq.cached_img_thw = image_grid_thw.clone();
+                        seq.cached_vid_thw = video_grid_thw.clone();
+                        (pixel_values, image_grid_thw, video_grid_thw)
+                    };
+
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
                 image_grid_thw_accum.push(image_grid_thw); //.map(|img| img.unsqueeze(0).unwrap()));
                 video_grid_thw_accum.push(video_grid_thw); //.map(|vid| vid.unsqueeze(0).unwrap()));

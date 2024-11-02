@@ -220,13 +220,9 @@ impl Qwen2VLModel {
                     };
                     let text_len = (input_tokens.len() - st) as u32;
                     llm_pos_ids.push(
-                        Tensor::arange(
-                            st_idx as i64,
-                            text_len as i64 + st_idx as i64,
-                            input_ids.device(),
-                        )?
-                        .reshape((1, ()))?
-                        .repeat((3, 1))?,
+                        Tensor::arange(st_idx, text_len as i64 + st_idx, input_ids.device())?
+                            .reshape((1, ()))?
+                            .repeat((3, 1))?,
                     );
                 }
 
