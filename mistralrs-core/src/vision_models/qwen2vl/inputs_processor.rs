@@ -8,8 +8,7 @@ use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
-    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
-    Transforms,
+    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensor, Transforms
 };
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -465,11 +464,8 @@ impl Qwen2VLImageProcessor {
                 );
             }
 
-            // In transformers they rescale from [0, 255] to [0, 1]
-            // at the end of resize:
-            // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/image_transforms.py#L340
             let to_tensor_rescale = Transforms {
-                input: &ToTensorNoNorm,
+                input: &ToTensor,
                 inner_transforms: &[],
             };
             let image = image.apply(to_tensor_rescale, device)?;
