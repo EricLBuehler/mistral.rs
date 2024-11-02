@@ -4,7 +4,8 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
+    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -52,6 +53,8 @@ pub struct VisionPipeline {
     preprocessor_config: Arc<PreProcessorConfig>,
     topology: Option<Topology>,
     silent: bool,
+    prefixer: Arc<dyn VisionPromptPrefixer>,
+
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
@@ -365,6 +368,7 @@ impl Loader for VisionLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
             processor,
+            prefixer: self.inner.prefixer(),
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
@@ -515,7 +519,10 @@ impl Pipeline for VisionPipeline {
     }
     fn category(&self) -> ModelCategory {
         let has_conv2d = self.model.has_conv2d();
-        ModelCategory::Vision { has_conv2d }
+        ModelCategory::Vision {
+            has_conv2d,
+            prefixer: self.prefixer.clone(),
+        }
     }
 }
 

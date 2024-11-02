@@ -652,7 +652,7 @@ impl Pipeline for SpeculativePipeline {
         }
     }
     fn category(&self) -> ModelCategory {
-        self.category
+        self.category.clone()
     }
 }
 

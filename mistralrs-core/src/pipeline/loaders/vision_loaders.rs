@@ -17,7 +17,7 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
+use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -74,6 +74,7 @@ pub trait VisionModelLoader: IsqModelLoader {
         preprocessor_config: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self) -> bool;
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -115,6 +116,15 @@ impl FromStr for VisionLoaderType {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Phi3VLoader;
+
+pub struct Phi3VPrefixer;
+
+impl VisionPromptPrefixer for Phi3VPrefixer {
+    fn prefix_image(&self, image_index: usize, prompt: &str) -> String {
+        // Image indexing starts at 0.
+        format!("<|image_{}|>{prompt}", image_index + 1)
+    }
+}
 
 impl VisionModelLoader for Phi3VLoader {
     fn load(
@@ -158,6 +168,9 @@ impl VisionModelLoader for Phi3VLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Phi3VPrefixer)
+    }
 }
 
 impl IsqModelLoader for Phi3VLoader {
@@ -180,6 +193,15 @@ impl IsqModelLoader for Phi3VLoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Idefics2Loader;
+
+pub struct Idefics2Prefixer;
+
+impl VisionPromptPrefixer for Idefics2Prefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        // Chat template does it
+        prompt.to_string()
+    }
+}
 
 impl VisionModelLoader for Idefics2Loader {
     fn load(
@@ -227,6 +249,9 @@ impl VisionModelLoader for Idefics2Loader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Idefics2Prefixer)
+    }
 }
 
 impl IsqModelLoader for Idefics2Loader {
@@ -252,6 +277,14 @@ impl IsqModelLoader for Idefics2Loader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVANextLoader;
+
+pub struct LLaVANextPrefixer;
+
+impl VisionPromptPrefixer for LLaVANextPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<image>{prompt}")
+    }
+}
 
 impl VisionModelLoader for LLaVANextLoader {
     fn load(
@@ -296,6 +329,9 @@ impl VisionModelLoader for LLaVANextLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(LLaVANextPrefixer)
+    }
 }
 
 impl IsqModelLoader for LLaVANextLoader {
@@ -321,6 +357,14 @@ impl IsqModelLoader for LLaVANextLoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVALoader;
+
+pub struct LLaVAPrefixer;
+
+impl VisionPromptPrefixer for LLaVAPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<image>{prompt}")
+    }
+}
 
 impl VisionModelLoader for LLaVALoader {
     fn load(
@@ -365,6 +409,9 @@ impl VisionModelLoader for LLaVALoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(LLaVAPrefixer)
+    }
 }
 
 impl IsqModelLoader for LLaVALoader {
@@ -390,6 +437,14 @@ impl IsqModelLoader for LLaVALoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct VLlamaLoader;
+
+pub struct VLlamaPrefixer;
+
+impl VisionPromptPrefixer for VLlamaPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<|image|>{prompt}")
+    }
+}
 
 impl VisionModelLoader for VLlamaLoader {
     fn load(
@@ -434,6 +489,9 @@ impl VisionModelLoader for VLlamaLoader {
     fn supports_paged_attention(&self) -> bool {
         false
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(VLlamaPrefixer)
+    }
 }
 
 impl IsqModelLoader for VLlamaLoader {
@@ -459,6 +517,14 @@ impl IsqModelLoader for VLlamaLoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Qwen2VLLoader;
+
+pub struct Qwen2VLPrefixer;
+
+impl VisionPromptPrefixer for Qwen2VLPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<|vision_start|><|image_pad|><|vision_end|>{prompt}")
+    }
+}
 
 impl VisionModelLoader for Qwen2VLLoader {
     fn load(
@@ -501,10 +567,24 @@ impl VisionModelLoader for Qwen2VLLoader {
     fn supports_paged_attention(&self) -> bool {
         false
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Qwen2VLPrefixer)
+    }
 }
 
 impl IsqModelLoader for Qwen2VLLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
     }
 }
