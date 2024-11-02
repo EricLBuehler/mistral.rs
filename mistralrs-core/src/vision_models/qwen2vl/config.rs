@@ -1,5 +1,7 @@
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/configuration_qwen2_vl.py
 
+use mistralrs_quant::QuantizedConfig;
+
 use crate::layers::Activation;
 
 use crate::serde_default_fn;
@@ -50,4 +52,5 @@ pub struct Config {
     pub image_token_id: usize,
     pub video_token_id: usize,
     pub vision_start_token_id: usize,
+    pub quantization_config: Option<QuantizedConfig>,
 }

@@ -304,7 +304,7 @@ impl Qwen2VLModel {
                     .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                     .unwrap_or(&*cache as &dyn PastKvLenCache),
                 self.text.cfg.sliding_window,
-                self.text.lm_head.weight().dtype(),
+                self.text.norm.weight().dtype(),
                 self.text.cfg.num_attn_heads,
             )?
         };
@@ -502,10 +502,10 @@ impl IsqModel for Qwen2VLModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        todo!()
+        self.text.get_layers()
     }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        self.text.residual_tensors()
     }
 }
 

@@ -1,51 +1,29 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Linear, Module, VarBuilder};
+use candle_core::{Device, Result, Tensor};
+use candle_nn::{Embedding, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     attention::SdpaParams,
+    device_map::DeviceMapper,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{Activation, FusedBiasLinear, Qwen2VLRotaryEmbedding, Sdpa},
+    layers::{Activation, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, NormalLoadingMetadata,
+        Cache, IsqModel, NormalLoadingMetadata,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::Config;
 
-struct Qwen2VLRmsNorm {
-    w: Tensor,
-    eps: f64,
-}
-
-impl Qwen2VLRmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        Ok(Self {
-            w: vb.get((size,), "weight")?,
-            eps,
-        })
-    }
-}
-
-impl Module for Qwen2VLRmsNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let initial_type = xs.dtype();
-        let mut xs = xs.to_dtype(DType::F32)?;
-        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
-        xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
-        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
-    }
-}
-
 struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act_fn: Activation,
 }
 
@@ -53,9 +31,24 @@ impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = candle_nn::linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
-        let up_proj = candle_nn::linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
-        let down_proj = candle_nn::linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
+        let gate_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("gate_proj"),
+        )?;
+        let up_proj = mistralrs_quant::linear_no_bias(
+            hidden_sz,
+            intermediate_sz,
+            &cfg.quantization_config,
+            vb.pp("up_proj"),
+        )?;
+        let down_proj = mistralrs_quant::linear_no_bias(
+            intermediate_sz,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
         Ok(Self {
             gate_proj,
             up_proj,
@@ -72,10 +65,10 @@ impl Mlp {
 }
 
 struct Attention {
-    q_proj: FusedBiasLinear,
-    k_proj: FusedBiasLinear,
-    v_proj: FusedBiasLinear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -95,13 +88,30 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj =
-            candle_nn::linear(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?.try_into()?;
-        let k_proj =
-            candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?.try_into()?;
-        let v_proj =
-            candle_nn::linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?.try_into()?;
-        let o_proj = candle_nn::linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
+        let q_proj = mistralrs_quant::linear(
+            hidden_sz,
+            num_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            hidden_sz,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -198,8 +208,8 @@ impl Attention {
 pub struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
-    input_layernorm: Qwen2VLRmsNorm,
-    post_attention_layernorm: Qwen2VLRmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -207,13 +217,21 @@ impl DecoderLayer {
         rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
         cfg: &Config,
         vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), paged_attn)?;
-        let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
+        let self_attn = Attention::new(
+            rotary_emb,
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
+        )?;
+        let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm =
-            Qwen2VLRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = Qwen2VLRmsNorm::new(
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -257,9 +275,10 @@ impl DecoderLayer {
 
 pub struct Qwen2VLTextModel {
     embed_tokens: Embedding,
-    norm: Qwen2VLRmsNorm,
+    pub(super) norm: RmsNorm,
     layers: Vec<DecoderLayer>,
-    pub lm_head: Linear,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
+    lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: Cache,
     pub(super) cfg: ModelConfigMetadata,
     pub(super) device: Device,
@@ -274,6 +293,7 @@ impl Qwen2VLTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens =
@@ -282,8 +302,10 @@ impl Qwen2VLTextModel {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         let mut ropes = HashMap::new();
-        for _layer_idx in 0..cfg.num_hidden_layers {
-            let device = &normal_loading_metadata.real_device;
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
                 Arc::new(Qwen2VLRotaryEmbedding::new(
@@ -299,7 +321,9 @@ impl Qwen2VLTextModel {
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let device = &normal_loading_metadata.real_device;
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
             let rotary_emb = ropes
                 .get(&device.location())
                 .expect("No RoPE for device location!")
@@ -316,14 +340,35 @@ impl Qwen2VLTextModel {
                     None,
                 )?),
             };
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), paged_attn)?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                &*mapper,
+                layer_idx,
+                normal_loading_metadata.loading_isq,
+                paged_attn,
+            )?;
             layers.push(layer)
         }
-        let norm = Qwen2VLRmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
         let lm_head = if !cfg.tie_word_embeddings {
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         } else {
-            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
         };
 
         Ok(Self {
@@ -333,6 +378,7 @@ impl Qwen2VLTextModel {
             lm_head,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
+            mapper,
             cfg: ModelConfigMetadata {
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
@@ -376,5 +422,45 @@ impl Qwen2VLTextModel {
         }
         let xs = xs.apply(&self.norm)?;
         extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+    }
+}
+
+impl IsqModel for Qwen2VLTextModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
+            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
+            tensors.push((&mut layer.mlp.up_proj, Some(i)));
+            tensors.push((&mut layer.mlp.down_proj, Some(i)));
+        }
+        (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
