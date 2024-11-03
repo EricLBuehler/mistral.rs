@@ -31,8 +31,6 @@ pub(crate) use inputs_processor::Qwen2VLProcessor;
 pub struct Qwen2VLModel {
     text: Qwen2VLTextModel,
     vision: Qwen2VLVisionModel,
-    image_token_id: usize,
-    video_token_id: usize,
     spatial_merge_size: usize,
 }
 
@@ -63,8 +61,6 @@ impl Qwen2VLModel {
         Ok(Self {
             text,
             vision,
-            image_token_id: cfg.image_token_id,
-            video_token_id: cfg.video_token_id,
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
         })
     }
@@ -78,8 +74,8 @@ impl Qwen2VLModel {
         video_grid_thw: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         attention_mask_indices: Option<&Tensor>,
-        image_nums: Vec<usize>,
-        video_nums: Vec<usize>,
+        image_tok_ids_indices: Vec<Vec<usize>>,
+        video_tok_ids_indices: Vec<Vec<usize>>,
     ) -> Result<(Tensor, Tensor)> {
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
             let total_input_ids = input_ids.clone();
@@ -104,35 +100,26 @@ impl Qwen2VLModel {
                         .index_select(&attention_mask_indices.squeeze(0)?, 0)?
                         .to_dtype(input_ids.dtype())?;
                 }
-                let image_nums = image_nums[i];
-                let vision_nums = video_nums[i];
-                let input_tokens = input_ids.to_vec1::<u32>()?;
+                let image_nums = image_tok_ids_indices[i].len();
+                let vision_nums = video_tok_ids_indices[i].len();
 
                 let mut llm_pos_ids: Vec<Tensor> = Vec::new();
                 let mut st = 0;
                 let (mut remain_images, mut remain_videos) = (image_nums, vision_nums);
+                let mut image_tok_indices_idx = 0;
+                let mut video_tok_indices_idx = 0;
                 for _ in 0..(image_nums + vision_nums) {
-                    let ed_image = if input_tokens.contains(&(self.image_token_id as u32))
-                        && remain_images > 0
-                    {
-                        input_tokens[st..]
-                            .iter()
-                            .position(|p| *p == self.image_token_id as u32)
-                            .context("Image token not found")?
-                            + st
+                    let ed_image = if !image_tok_ids_indices[i].is_empty() && remain_images > 0 {
+                        image_tok_indices_idx += 1;
+                        image_tok_ids_indices[i][image_tok_indices_idx - 1]
                     } else {
-                        input_tokens.len() + 1
+                        input_ids.dim(0)? + 1
                     };
-                    let ed_video = if input_tokens.contains(&(self.video_token_id as u32))
-                        && remain_videos > 0
-                    {
-                        input_tokens[st..]
-                            .iter()
-                            .position(|p| *p == self.video_token_id as u32)
-                            .context("Image token not found")?
-                            + st
+                    let ed_video = if !video_tok_ids_indices[i].is_empty() && remain_videos > 0 {
+                        video_tok_indices_idx += 1;
+                        video_tok_ids_indices[i][video_tok_indices_idx - 1]
                     } else {
-                        input_tokens.len() + 1
+                        input_ids.dim(0)? + 1
                     };
                     let (ed, llm_grid_t, h, w) = if ed_image < ed_video {
                         let t = image_grid_thw.as_ref().unwrap().i((image_index, 0))?;
@@ -195,14 +182,14 @@ impl Qwen2VLModel {
                     st = ed + (llm_grid_t * llm_grid_h * llm_grid_w) as usize;
                 }
 
-                if st < input_tokens.len() {
+                if st < input_ids.dim(0)? {
                     let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
                         last.max(0)?.max(0)?.to_scalar::<i64>()? + 1
                     } else {
                         0
                     };
-                    let text_len = (input_tokens.len() - st) as u32;
+                    let text_len = (input_ids.dim(0)? - st) as u32;
                     llm_pos_ids.push(
                         Tensor::arange(st_idx, text_len as i64 + st_idx, input_ids.device())?
                             .reshape((1, ()))?
@@ -274,8 +261,8 @@ impl Qwen2VLModel {
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-        image_nums: Vec<usize>,
-        video_nums: Vec<usize>,
+        image_tok_ids_indices: Vec<Vec<usize>>,
+        video_tok_ids_indices: Vec<Vec<usize>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
@@ -370,8 +357,8 @@ impl Qwen2VLModel {
             video_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
             Some(&ropeidx_attn_mask_indices),
-            image_nums,
-            video_nums,
+            image_tok_ids_indices,
+            video_tok_ids_indices,
         )?;
 
         let position_ids = if attention_mask.is_some() {
@@ -407,8 +394,8 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     seqlens: Vec<usize>,
     continuous_img_pad: Vec<Vec<(usize, usize)>>,
     continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-    image_nums: Vec<usize>,
-    video_nums: Vec<usize>,
+    image_tok_ids_indices: Vec<Vec<usize>>,
+    video_tok_ids_indices: Vec<Vec<usize>>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -431,8 +418,8 @@ impl VisionModel for Qwen2VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
-            image_nums,
-            video_nums,
+            image_tok_ids_indices,
+            video_tok_ids_indices,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
@@ -454,8 +441,8 @@ impl VisionModel for Qwen2VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
-            image_nums,
-            video_nums,
+            image_tok_ids_indices,
+            video_tok_ids_indices,
             seqlen_offsets,
             context_lens,
             flash_params,

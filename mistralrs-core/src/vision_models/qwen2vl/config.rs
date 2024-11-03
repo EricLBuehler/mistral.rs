@@ -45,13 +45,11 @@ pub struct Config {
     pub rope_theta: f64,
     pub use_sliding_window: bool,
     pub sliding_window: Option<usize>,
-    #[serde(rename = "max_window_layers")]
-    pub _max_window_layers: usize,
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
-    pub image_token_id: usize,
-    pub video_token_id: usize,
-    #[serde(rename = "vision_start_token_id")]
-    pub _vision_start_token_id: usize,
     pub quantization_config: Option<QuantizedConfig>,
+    // pub image_token_id: usize,
+    // pub video_token_id: usize,
+    // pub vision_start_token_id: usize,
+    // pub max_window_layers: usize,
 }
