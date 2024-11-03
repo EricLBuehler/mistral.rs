@@ -58,9 +58,16 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate_proj.forward(xs)?.apply(&self.act_fn)?;
-        let rhs = self.up_proj.forward(xs)?;
-        self.down_proj.forward(&(lhs * rhs)?)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
+        let rhs = self.up_proj.forward(&xs)?;
+        self.down_proj
+            .forward(&(lhs * rhs)?)?
+            .to_dtype(original_dtype)
     }
 }
 
@@ -144,9 +151,19 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let mut q = self.q_proj.forward(&xs)?;
+        let mut k = self.k_proj.forward(&xs)?;
+        let mut v = self.v_proj.forward(&xs)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         let (mut q, mut k, v) = if q_len != 1 {
             let q = q
@@ -196,12 +213,19 @@ impl Attention {
             }
         };
 
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
+        }
         attn_output = if attention_mask.is_some() {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        self.o_proj.forward(&attn_output)
+        let mut res = self.o_proj.forward(&attn_output)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -229,12 +253,15 @@ impl DecoderLayer {
             paged_attn,
         )?;
         let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         Ok(Self {
             self_attn,
@@ -296,8 +323,11 @@ impl Qwen2VLTextModel {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let embed_tokens = candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
@@ -351,7 +381,11 @@ impl Qwen2VLTextModel {
             )?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
         let lm_head = if !cfg.tie_word_embeddings {
             mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
@@ -387,7 +421,7 @@ impl Qwen2VLTextModel {
                 sliding_window: cfg.sliding_window,
                 head_dim: None,
             },
-            device: vb.device().clone(),
+            device: normal_loading_metadata.real_device.clone(),
         })
     }
 
@@ -409,7 +443,9 @@ impl Qwen2VLTextModel {
             .self_attn
             .rotary_emb
             .compute_cos_sin(position_ids, xs.dtype())?;
+
         for (i, layer) in self.layers.iter().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask
@@ -422,9 +458,13 @@ impl Qwen2VLTextModel {
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
                 flash_params,
-            )?;
+            )?
         }
-        let xs = xs.apply(&self.norm)?;
+        let xs = xs.to_device(&self.device)?;
+        let mut xs = xs.apply(&self.norm)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
         extract_logits(&self.lm_head.forward(&xs)?, context_lens)
     }
 }

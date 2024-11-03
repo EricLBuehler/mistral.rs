@@ -51,6 +51,11 @@ impl Qwen2VLModel {
             // TODO!
             candle_core::bail!("Sliding window is unsupported for now!");
         }
+        let vision = Qwen2VLVisionModel::new(
+            &cfg.vision_config,
+            vb.pp("visual")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         let text = Qwen2VLTextModel::new(
             cfg,
             vb.clone(),
@@ -58,7 +63,6 @@ impl Qwen2VLModel {
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let vision = Qwen2VLVisionModel::new(&cfg.vision_config, vb.pp("visual"))?;
         Ok(Self {
             text,
             vision,
