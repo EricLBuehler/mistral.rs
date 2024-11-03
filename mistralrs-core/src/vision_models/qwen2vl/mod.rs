@@ -326,7 +326,7 @@ impl Qwen2VLModel {
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,
                         )?;
-                        last_end = end;
+                        last_end = end - start;
                     }
                 }
             }
@@ -348,7 +348,7 @@ impl Qwen2VLModel {
                                 .i((last_end..last_end + (end - start), ..))?
                                 .unsqueeze(0)?,
                         )?;
-                        last_end = end;
+                        last_end = end - start;
                     }
                 }
             }

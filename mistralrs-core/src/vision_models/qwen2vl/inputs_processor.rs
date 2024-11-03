@@ -452,13 +452,19 @@ impl Qwen2VLImageProcessor {
         images: Vec<DynamicImage>,
         config: &PreProcessorConfig,
         device: &Device,
+        (mut height, mut width): (u32, u32),
     ) -> candle_core::Result<(Tensor, (u32, u32, u32))> {
         let mut processed_images = Vec::new();
-        let (width, height) = images[0].dimensions();
-        let mut resized_height_latest = height;
-        let mut resized_width_latest = width;
 
         for mut image in images {
+            image = image.resize_exact(
+                height,
+                width,
+                config
+                    .resampling
+                    .map(|resample| Some(resample).to_filter())
+                    .unwrap_or(Ok(FilterType::CatmullRom))?,
+            );
             if config.do_resize.is_none() || config.do_resize.is_some_and(|x| x) {
                 let (resized_height, resized_width) = self.smart_resize(
                     height as usize,
@@ -468,8 +474,8 @@ impl Qwen2VLImageProcessor {
                     config.min_pixels.context("Require `min_pixels`")?,
                     config.max_pixels.context("Require `max_pixels`")?,
                 )?;
-                resized_height_latest = resized_height as u32;
-                resized_width_latest = resized_width as u32;
+                height = resized_height as u32;
+                width = resized_width as u32;
                 image = image.resize_exact(
                     resized_width as u32,
                     resized_height as u32,
@@ -524,8 +530,8 @@ impl Qwen2VLImageProcessor {
         }
         let channel = patches.dim(1)?;
         let grid_t = patches.dim(0)? / temporal_patch_size;
-        let grid_h = resized_height_latest as usize / patch_size;
-        let grid_w = resized_width_latest as usize / patch_size;
+        let grid_h = height as usize / patch_size;
+        let grid_w = width as usize / patch_size;
         patches = patches.reshape(&[
             grid_t,
             temporal_patch_size,
@@ -566,8 +572,21 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
         let mut vision_grid_thw = Vec::new();
 
         if !images.is_empty() {
+            let mut height = 0;
+            let mut width = 0;
+            for image in &images {
+                let (w, h) = image.dimensions();
+                if w > width {
+                    width = w;
+                }
+                if h > height {
+                    height = h;
+                }
+            }
+
             for image in images {
-                let (patches, (t, h, w)) = self.preprocess_inner(vec![image], config, device)?;
+                let (patches, (t, h, w)) =
+                    self.preprocess_inner(vec![image], config, device, (height, width))?;
                 pixel_values.push(patches);
                 vision_grid_thw.push(Tensor::new(&[t, h, w], device)?);
             }
@@ -587,8 +606,21 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
         }
 
         if !videos.is_empty() {
+            let mut height = 0;
+            let mut width = 0;
+            for image in &videos {
+                let (w, h) = image[0].dimensions();
+                if w > width {
+                    width = w;
+                }
+                if h > height {
+                    height = h;
+                }
+            }
+
             for images in videos {
-                let (patches, (t, h, w)) = self.preprocess_inner(images, config, device)?;
+                let (patches, (t, h, w)) =
+                    self.preprocess_inner(images, config, device, (height, width))?;
                 pixel_values.push(patches);
                 vision_grid_thw.push(Tensor::new(&[t, h, w], device)?);
             }

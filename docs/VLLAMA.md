@@ -77,7 +77,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image|>What is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
