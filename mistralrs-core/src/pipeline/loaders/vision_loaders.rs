@@ -522,7 +522,12 @@ pub struct Qwen2VLPrefixer;
 
 impl VisionPromptPrefixer for Qwen2VLPrefixer {
     fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("<|vision_start|><|image_pad|><|vision_end|>{prompt}")
+        format!(
+            "{}{}{}{prompt}",
+            Qwen2VLProcessor::VISION_START,
+            Qwen2VLProcessor::IMAGE_PAD,
+            Qwen2VLProcessor::VISION_END
+        )
     }
 }
 

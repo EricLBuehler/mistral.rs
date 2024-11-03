@@ -51,6 +51,7 @@ pub struct Config {
     pub rope_scaling: MRopeScaling,
     pub image_token_id: usize,
     pub video_token_id: usize,
-    pub vision_start_token_id: usize,
+    #[serde(rename = "vision_start_token_id")]
+    pub _vision_start_token_id: usize,
     pub quantization_config: Option<QuantizedConfig>,
 }

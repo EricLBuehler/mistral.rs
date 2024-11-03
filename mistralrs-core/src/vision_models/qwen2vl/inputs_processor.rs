@@ -40,6 +40,12 @@ struct Qwen2VLImageProcessor {
 pub struct Qwen2VLProcessor;
 
 impl Qwen2VLProcessor {
+    pub const VISION_START: &str = "<|vision_start|>";
+    pub const VISION_END: &str = "<|vision_end|>";
+    pub const IMAGE_PAD: &str = "<|image_pad|>";
+    pub const VIDEO_PAD: &str = "<|video_pad|>";
+    pub const PLACEHOLDER: &str = "<|placeholder|>";
+
     pub fn new() -> Self {
         Self
     }
@@ -53,7 +59,7 @@ impl Processor for Qwen2VLProcessor {
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &["<|image_pad|>", "<|video_pad|>", "<|placeholder|>"]
+        &[Self::IMAGE_PAD, Self::VIDEO_PAD, Self::PLACEHOLDER]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -193,6 +199,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             video_grid_thw,
             continuous_img_pad,
             continuous_vid_pad,
+            image_nums,
+            video_nums,
         ) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
@@ -271,16 +279,39 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 )
             };
 
+            let mut image_nums = Vec::new();
+            let mut video_nums = Vec::new();
+            for seq in input_seqs.iter() {
+                let prompt = seq.get_initial_prompt();
+                let ids = tokenizer
+                    .encode(prompt, true)
+                    .expect("Tokenization failed!");
+
+                let img_pad = tokenizer
+                    .encode(Qwen2VLProcessor::IMAGE_PAD, false)
+                    .expect("Detokenization failed!")
+                    .get_ids()
+                    .to_vec();
+                image_nums.push(ids.get_ids().iter().filter(|&&t| t == img_pad[0]).count());
+
+                let vid_pad = tokenizer
+                    .encode(Qwen2VLProcessor::VIDEO_PAD, false)
+                    .expect("Detokenization failed!")
+                    .get_ids()
+                    .to_vec();
+                video_nums.push(ids.get_ids().iter().filter(|&&t| t == vid_pad[0]).count());
+            }
+
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
                     let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
-                        while text.contains("<|image_pad|>") {
+                        while text.contains(Qwen2VLProcessor::IMAGE_PAD) {
                             *text = replace_first_occurrence(
                                 text,
-                                "<|image_pad|>",
-                                &"<|placeholder|>".repeat(
+                                Qwen2VLProcessor::IMAGE_PAD,
+                                &Qwen2VLProcessor::PLACEHOLDER.repeat(
                                     image_grid_thw_accum[batch]
                                         .i(index)
                                         .unwrap()
@@ -294,7 +325,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             );
                             index += 1;
                         }
-                        *text = text.replace("<|placeholder|>", "<|image_pad|>");
+                        *text = text
+                            .replace(Qwen2VLProcessor::PLACEHOLDER, Qwen2VLProcessor::IMAGE_PAD);
                     }
                 }
 
@@ -302,11 +334,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
                     let mut index = 0;
                     for (batch, text) in detok_seqs.iter_mut().enumerate() {
-                        while text.contains("<|video_pad|>") {
+                        while text.contains(Qwen2VLProcessor::VIDEO_PAD) {
                             *text = replace_first_occurrence(
                                 text,
-                                "<|video_pad|>",
-                                &"<|placeholder|>".repeat(
+                                Qwen2VLProcessor::VIDEO_PAD,
+                                &Qwen2VLProcessor::PLACEHOLDER.repeat(
                                     video_grid_thw_accum[batch]
                                         .i(index)
                                         .unwrap()
@@ -320,7 +352,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             );
                             index += 1;
                         }
-                        *text = text.replace("<|placeholder|>", "<|video_pad|>");
+                        *text = text
+                            .replace(Qwen2VLProcessor::PLACEHOLDER, Qwen2VLProcessor::VIDEO_PAD);
                     }
                 }
             }
@@ -337,7 +370,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 all_ids.push(ids.clone());
 
                 let img_pad = tokenizer
-                    .encode("<|image_pad|>", false)
+                    .encode(Qwen2VLProcessor::IMAGE_PAD, false)
                     .expect("Detokenization failed!")
                     .get_ids()
                     .to_vec();
@@ -345,7 +378,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 all_continuous_img_pad.push(continuous_img_pad);
 
                 let vid_pad = tokenizer
-                    .encode("<|video_pad|>", false)
+                    .encode(Qwen2VLProcessor::VIDEO_PAD, false)
                     .expect("Detokenization failed!")
                     .get_ids()
                     .to_vec();
@@ -369,9 +402,20 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
                 all_continuous_img_pad,
                 all_continuous_vid_pad,
+                image_nums,
+                video_nums,
             )
         } else {
-            (None, None, None, None, vec![], vec![])
+            (
+                None,
+                None,
+                None,
+                None,
+                vec![],
+                vec![],
+                vec![0; input_seqs.len()],
+                vec![0; input_seqs.len()],
+            )
         };
 
         let (input, input_ids_full) = match (new_input, is_prompt) {
@@ -401,6 +445,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,
+                image_nums,
+                video_nums,
             }),
             paged_attn_meta,
             flash_meta,
