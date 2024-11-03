@@ -11,11 +11,10 @@ use vision::Qwen2VLVisionModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    dummy_paged_attention::ModelConfigMetadata,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
-    paged_attention::AttentionImplementation,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, IsqModel, NormalLoadingMetadata, VisionModel,

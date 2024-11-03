@@ -7,9 +7,8 @@ use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    dummy_paged_attention::ModelConfigMetadata,
     layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
-    paged_attention::AttentionImplementation,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits, text_models_inputs_processor::FlashParams, Cache, IsqModel,
         NormalLoadingMetadata,
