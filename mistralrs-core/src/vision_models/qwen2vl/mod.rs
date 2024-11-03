@@ -296,22 +296,15 @@ impl Qwen2VLModel {
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let attention_mask = {
-            let cache = self.text.cache.lock();
-            CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
-                input_ids,
-                metadata
-                    .as_ref()
-                    .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                    .unwrap_or(&*cache as &dyn PastKvLenCache),
-                self.text.cfg.sliding_window,
-                self.text.norm.weight().dtype(),
-                self.text.cfg.num_attn_heads,
-            )?
-        };
+        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+            input_ids,
+            &seqlen_offsets as &dyn PastKvLenCache,
+            self.text.cfg.sliding_window,
+            self.text.dtype,
+            self.text.cfg.num_attn_heads,
+        )?;
 
         let input_embeds = if pixel_values.is_some() || pixel_values_videos.is_some() {
             let mut xs = self.text.embed_tokens(input_ids)?;
@@ -419,7 +412,6 @@ impl Qwen2VLModel {
             attention_mask.as_ref(),
             &position_ids,
             context_lens,
-            metadata,
             flash_params,
         )?;
         Ok(out)
@@ -445,7 +437,7 @@ impl VisionModel for Qwen2VLModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen2VLVisionSpecificArgs {
@@ -478,7 +470,6 @@ impl VisionModel for Qwen2VLModel {
             continuous_vid_pad,
             seqlen_offsets,
             context_lens,
-            metadata,
             flash_params,
         )
     }

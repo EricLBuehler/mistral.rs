@@ -74,6 +74,35 @@ impl Module for RmsNorm {
 }
 
 #[derive(Debug, Clone)]
+pub struct F32RmsNorm {
+    w: Tensor,
+    eps: f64,
+}
+
+impl F32RmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            w: vb.get((size,), "weight")?,
+            eps,
+        })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.w
+    }
+}
+
+impl Module for F32RmsNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let initial_type = xs.dtype();
+        let mut xs = xs.to_dtype(DType::F32)?;
+        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
+        xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
+        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct QRmsNorm {
     eps: f64,
     weight: Tensor,

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
@@ -8,12 +8,11 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     dummy_paged_attention::ModelConfigMetadata,
-    layers::{Activation, Qwen2VLRotaryEmbedding, RmsNorm, Sdpa},
-    paged_attention::{AttentionImplementation, PagedAttention},
+    layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
+    paged_attention::AttentionImplementation,
     pipeline::{
-        extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata,
+        extract_logits, text_models_inputs_processor::FlashParams, Cache, IsqModel,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -80,17 +79,11 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
-    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
 
 impl Attention {
-    fn new(
-        rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
-        cfg: &Config,
-        vb: VarBuilder,
-        paged_attn: Option<PagedAttention>,
-    ) -> Result<Self> {
+    fn new(rotary_emb: Arc<Qwen2VLRotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -128,7 +121,6 @@ impl Attention {
             num_kv_heads,
             head_dim,
             rotary_emb,
-            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
                 use_flash_attn: false,
@@ -146,7 +138,6 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         cos_sin: &(Tensor, Tensor),
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -185,32 +176,18 @@ impl Attention {
 
         self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
 
-        let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?
-            }
-            None => {
-                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let mut attn_output = {
+            let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(flash_params),
-                    &self.sdpa_params,
-                )?
-            }
+            Sdpa.run_attention(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask,
+                Some(flash_params),
+                &self.sdpa_params,
+            )?
+            .to_dtype(q.dtype())?
         };
 
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -232,8 +209,8 @@ impl Attention {
 pub struct DecoderLayer {
     self_attn: Attention,
     mlp: Mlp,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: F32RmsNorm,
+    post_attention_layernorm: F32RmsNorm,
 }
 
 impl DecoderLayer {
@@ -244,21 +221,19 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
-            paged_attn,
         )?;
         let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -278,19 +253,13 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         cos_sin: &(Tensor, Tensor),
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            cos_sin,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(&xs, attention_mask, cos_sin, kv_cache, flash_params)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -302,13 +271,14 @@ impl DecoderLayer {
 
 pub struct Qwen2VLTextModel {
     embed_tokens: Embedding,
-    pub(super) norm: RmsNorm,
+    pub(super) norm: F32RmsNorm,
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: Cache,
     pub(super) cfg: ModelConfigMetadata,
     pub(super) device: Device,
+    pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
 }
 
@@ -320,6 +290,9 @@ impl Qwen2VLTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
+            candle_core::bail!("Expected eager attention implementation");
+        }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
@@ -358,18 +331,6 @@ impl Qwen2VLTextModel {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
-            let paged_attn = match &attention_mechanism {
-                AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    device,
-                    None,
-                )?),
-            };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -377,11 +338,10 @@ impl Qwen2VLTextModel {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
-                paged_attn,
             )?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(
+        let norm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
@@ -422,6 +382,7 @@ impl Qwen2VLTextModel {
                 head_dim: None,
             },
             device: normal_loading_metadata.real_device.clone(),
+            dtype: vb.dtype(),
         })
     }
 
@@ -435,7 +396,6 @@ impl Qwen2VLTextModel {
         attention_mask: Option<&Tensor>,
         position_ids: &Tensor,
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut cache = self.cache.lock();
@@ -454,9 +414,6 @@ impl Qwen2VLTextModel {
                     .as_ref(),
                 &cos_sin,
                 &mut cache[i],
-                metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
                 flash_params,
             )?
         }
