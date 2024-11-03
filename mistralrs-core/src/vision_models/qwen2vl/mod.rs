@@ -141,6 +141,7 @@ impl Qwen2VLModel {
                             .iter()
                             .position(|p| *p == self.image_token_id as u32)
                             .context("Image token not found")?
+                            + st
                     } else {
                         input_tokens.len() + 1
                     };
@@ -151,6 +152,7 @@ impl Qwen2VLModel {
                             .iter()
                             .position(|p| *p == self.video_token_id as u32)
                             .context("Image token not found")?
+                            + st
                     } else {
                         input_tokens.len() + 1
                     };
@@ -185,7 +187,7 @@ impl Qwen2VLModel {
 
                     let st_idx = if !llm_pos_ids.is_empty() {
                         let last = llm_pos_ids.last().unwrap();
-                        last.max(0)?.to_scalar::<i64>()? + 1
+                        last.max(0)?.max(0)?.to_scalar::<i64>()? + 1
                     } else {
                         0
                     };
