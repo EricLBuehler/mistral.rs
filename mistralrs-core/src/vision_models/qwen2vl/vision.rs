@@ -69,7 +69,9 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.fc2.forward(&self.act.forward(&self.fc1.forward(xs)?)?)
+        self.fc2
+            .forward(&self.act.forward(&self.fc1.forward(&xs.unsqueeze(0)?)?)?)?
+            .squeeze(0)
     }
 }
 
@@ -121,7 +123,7 @@ impl VisionAttention {
         let (q, k, v) = {
             let qkv = self
                 .qkv
-                .forward(xs)?
+                .forward(&xs.unsqueeze(0)?)?
                 .reshape((seq_len, 3, self.num_heads, ()))?
                 .permute((1, 0, 2, 3))?
                 .chunk(3, 0)?;

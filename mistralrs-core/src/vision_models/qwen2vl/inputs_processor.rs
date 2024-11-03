@@ -124,6 +124,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         if prompt_batchsize.is_some() {
             warn!("`prompt_batchsize` is set. MLlama does not support prompt batching.");
         }
+        if input_seqs.len() != 1 {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Qwen2-VL only supports batch size = 1",
+            ))));
+        }
         let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",
