@@ -147,13 +147,17 @@ impl VisionAttention {
         let v = v.transpose(0, 1)?;
 
         let att = {
-            let att = (q.contiguous()?.matmul(&k.transpose(1, 2)?.contiguous()?)?
+            let att = (q
+                .contiguous()?
+                .to_dtype(DType::F32)?
+                .matmul(&k.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?)?
                 / (self.head_dim as f64).sqrt())?;
-            let att = att.broadcast_add(&attention_mask)?;
+            let att = att.broadcast_add(&attention_mask.to_dtype(DType::F32)?)?;
             let att = candle_nn::ops::softmax_last_dim(&att)?;
-            att.matmul(&v.contiguous()?)?
+            att.matmul(&v.contiguous()?.to_dtype(DType::F32)?)?
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
+                .to_dtype(xs.dtype())?
         };
 
         self.proj.forward(&att)

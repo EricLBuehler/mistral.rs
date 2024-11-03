@@ -180,10 +180,12 @@ impl Attention {
             let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
             Sdpa.run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
+                &q.contiguous()?.to_dtype(DType::F32)?,
+                &k.contiguous()?.to_dtype(DType::F32)?,
+                &v.contiguous()?.to_dtype(DType::F32)?,
+                attention_mask
+                    .map(|mask| mask.to_dtype(DType::F32).unwrap())
+                    .as_ref(),
                 Some(flash_params),
                 &self.sdpa_params,
             )?
