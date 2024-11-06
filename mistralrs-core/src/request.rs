@@ -16,7 +16,9 @@ use tokio::sync::mpsc::Sender;
 /// Control the constraint with Regex or Yacc.
 pub enum Constraint {
     Regex(String),
-    Yacc(String),
+    Lark(String),
+    JsonSchema(serde_json::Value),
+    Llguidance(serde_json::Value),
     None,
 }
 

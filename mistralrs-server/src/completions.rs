@@ -200,8 +200,10 @@ fn parse_request(
             is_streaming,
             suffix: oairequest.suffix,
             constraint: match oairequest.grammar {
-                Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
                 Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+                Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
+                Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
+                Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
                 None => Constraint::None,
             },
             adapters: oairequest.adapters,

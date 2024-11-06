@@ -72,8 +72,12 @@ fn default_response_format() -> ImageGenerationResponseFormat {
 pub enum Grammar {
     #[serde(rename = "regex")]
     Regex(String),
-    #[serde(rename = "yacc")]
-    Yacc(String),
+    #[serde(rename = "json_schema")]
+    JsonSchema(serde_json::Value),
+    #[serde(rename = "llguidance")]
+    Llguidance(serde_json::Value),
+    #[serde(rename = "lark")]
+    Lark(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
