@@ -79,7 +79,7 @@ safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
-llguidance_parser = { git = "https://github.com/microsoft/llguidance", rev = "8b9945d2af76a9c0a0b773ccc254ef532f25cacf" }
+llguidance_parser = { git = "https://github.com/microsoft/llguidance", rev = "0a968f7443e7e22e989fb51900da283ec6017c36" }
 toktrie = { git = "https://github.com/microsoft/toktrie", rev = "6172936f8c965d2050a53d14de0e3410ecc78ad1" }
 toktrie_hf_tokenizers = { git = "https://github.com/microsoft/toktrie", rev = "6172936f8c965d2050a53d14de0e3410ecc78ad1" }
 
