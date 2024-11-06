@@ -2203,6 +2203,7 @@ checksum = "643cb0b8d4fcc284004d5fd0d67ccf61dfffadb7f75e1e71bc420f4688a3a704"
 [[package]]
 name = "llguidance_parser"
 version = "0.3.0"
+source = "git+https://github.com/microsoft/llguidance?rev=8b9945d2af76a9c0a0b773ccc254ef532f25cacf#8b9945d2af76a9c0a0b773ccc254ef532f25cacf"
 dependencies = [
  "anyhow",
  "cbindgen",
@@ -4444,6 +4445,7 @@ dependencies = [
 [[package]]
 name = "toktrie"
 version = "0.1.0"
+source = "git+https://github.com/microsoft/toktrie?rev=6172936f8c965d2050a53d14de0e3410ecc78ad1#6172936f8c965d2050a53d14de0e3410ecc78ad1"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4456,6 +4458,7 @@ dependencies = [
 [[package]]
 name = "toktrie_hf_tokenizers"
 version = "0.1.0"
+source = "git+https://github.com/microsoft/toktrie?rev=6172936f8c965d2050a53d14de0e3410ecc78ad1#6172936f8c965d2050a53d14de0e3410ecc78ad1"
 dependencies = [
  "anyhow",
  "log",

@@ -7,9 +7,6 @@ members = [
     "mistralrs-bench",
     "mistralrs-vision",
     "mistralrs-quant",
-    "external/toktrie/core",
-    "external/toktrie/hf_tokenizers",
-    "external/llguidance/parser",
 ]
 exclude = [
     "mistralrs-paged_attn",
@@ -53,7 +50,3 @@ url = "2.5.2"
 data-url = "0.3.1"
 buildstructor = "0.5.4"
 float8 = "0.1.1"
-
-[patch.'https://github.com/microsoft/toktrie']
-toktrie = { path = "external/toktrie/core" }
-toktrie_hf_tokenizers = { path = "external/toktrie/hf_tokenizers" }
