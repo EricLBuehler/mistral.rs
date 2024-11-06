@@ -666,14 +666,14 @@ impl Engine {
         let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
             None => (vec![], vec![]),
             Some(StopTokens::Ids(ref i)) => {
-                let tok_trie = {
+                let tok_env = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    pipeline.get_metadata().tok_trie.clone()
+                    pipeline.get_metadata().tok_env.clone()
                 };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
-                    if let Some(tok_trie) = tok_trie.as_ref() {
-                        let tok_trie = tok_trie.tok_trie();
+                    if let Some(tok_env) = tok_env.as_ref() {
+                        let tok_trie = tok_env.tok_trie();
                         if tok_trie.has_extensions(tok_trie.token(*id)) {
                             request
                                 .response
@@ -692,11 +692,11 @@ impl Engine {
                 let mut stop_toks = Vec::new();
                 let mut stop_strings: Vec<String> = Vec::new();
 
-                let (tok_trie, tokenizer) = {
+                let (tok_env, tokenizer) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let tok_trie = pipeline.get_metadata().tok_trie.clone();
+                    let tok_env = pipeline.get_metadata().tok_env.clone();
                     let tokenizer = pipeline.tokenizer();
-                    (tok_trie, tokenizer)
+                    (tok_env, tokenizer)
                 };
 
                 for stop_txt in s {
@@ -717,8 +717,8 @@ impl Engine {
                         .to_vec();
 
                     if toks.len() == 1 {
-                        if tok_trie.as_ref().is_some_and(|tok_trie| {
-                            let tok_trie = tok_trie.tok_trie();
+                        if tok_env.as_ref().is_some_and(|tok_env| {
+                            let tok_trie = tok_env.tok_trie();
                             tok_trie.has_extensions(tok_trie.token(toks[0]))
                         }) {
                             stop_strings.push(stop_txt.clone());
@@ -775,7 +775,7 @@ impl Engine {
         for response_index in 0..request.sampling_params.n_choices {
             let trie = get_mut_arcmutex!(self.pipeline)
                 .get_metadata()
-                .tok_trie
+                .tok_env
                 .clone();
             let recognizer = match Self::build_sequence_recognizer(&trie, &request.constraint) {
                 Ok(recognizer) => recognizer,

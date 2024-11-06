@@ -339,7 +339,7 @@ impl Loader for VisionLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie = build_tok_env(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -350,7 +350,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: Some(tok_trie),
+                tok_env: Some(tok_env),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,

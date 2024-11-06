@@ -23,7 +23,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     seq.add_token(
         logprobs.clone(),
         this.get_metadata()
-            .tok_trie
+            .tok_env
             .as_ref()
             .ok_or(candle_core::Error::Msg(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"

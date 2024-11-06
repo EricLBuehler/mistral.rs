@@ -66,7 +66,7 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     /// Only None if it doesnt make sense for the model
-    pub tok_trie: Option<toktrie::TokEnv>,
+    pub tok_env: Option<toktrie::TokEnv>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
