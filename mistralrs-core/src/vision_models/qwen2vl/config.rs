@@ -48,8 +48,8 @@ pub struct Config {
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
     pub quantization_config: Option<QuantizedConfig>,
-    // pub image_token_id: usize,
-    // pub video_token_id: usize,
+    pub image_token_id: u32,
+    pub video_token_id: u32,
     // pub vision_start_token_id: usize,
     // pub max_window_layers: usize,
 }

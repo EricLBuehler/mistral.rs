@@ -102,6 +102,20 @@ fn find_sequences(nums: &[u32], needle: u32) -> Vec<(usize, usize)> {
     sequences
 }
 
+// index + needle length
+fn find_substring_indices(haystack: &str, needle: &str) -> Vec<usize> {
+    let mut indices = Vec::new();
+    let mut start = 0;
+
+    while let Some(pos) = haystack[start..].find(needle) {
+        let index = start + pos;
+        indices.push(index + needle.len());
+        start = index + needle.len(); // Move past the last found occurrence
+    }
+
+    indices
+}
+
 impl InputsProcessor for Qwen2VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -202,8 +216,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             video_grid_thw,
             continuous_img_pad,
             continuous_vid_pad,
-            image_tok_ids_indices,
-            video_tok_ids_indices,
+            input_ids_searching,
+            image_nums,
+            video_nums,
         ) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
@@ -282,41 +297,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 )
             };
 
-            let mut image_tok_ids_indices = Vec::new();
-            let mut video_tok_ids_indices = Vec::new();
-            for seq in input_seqs.iter() {
-                let prompt = seq.get_initial_prompt();
-                let ids = tokenizer
-                    .encode(prompt, true)
-                    .expect("Tokenization failed!");
-
-                let img_pad = tokenizer
-                    .encode(Qwen2VLProcessor::IMAGE_PAD, false)
-                    .expect("Detokenization failed!")
-                    .get_ids()
-                    .to_vec();
-                image_tok_ids_indices.push(
-                    ids.get_ids()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, &x)| if x == img_pad[0] { Some(index) } else { None })
-                        .collect::<Vec<_>>(),
-                );
-
-                let vid_pad = tokenizer
-                    .encode(Qwen2VLProcessor::VIDEO_PAD, false)
-                    .expect("Detokenization failed!")
-                    .get_ids()
-                    .to_vec();
-                video_tok_ids_indices.push(
-                    ids.get_ids()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, &x)| if x == vid_pad[0] { Some(index) } else { None })
-                        .collect::<Vec<_>>(),
-                );
-            }
-
             if is_prompt {
                 if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
                     let merge_length = self.merge_size.read().unwrap().unwrap().pow(2);
@@ -377,6 +357,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             let mut all_continuous_img_pad = Vec::new();
             let mut all_continuous_vid_pad = Vec::new();
             for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
+                seq.set_initial_prompt(detok.clone());
+
                 let toks = tokenizer
                     .encode(detok, true)
                     .expect("Detokenization failed!");
@@ -402,6 +384,39 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
                 seq.set_toks(ids);
             }
+
+            let mut input_ids_searching = Vec::new();
+            let mut image_nums = Vec::new();
+            let mut video_nums = Vec::new();
+            for seq in input_seqs.iter() {
+                let prompt = seq.get_initial_prompt();
+                let match_indices = find_substring_indices(prompt, Qwen2VLProcessor::VISION_START);
+                image_nums.push(
+                    match_indices
+                        .iter()
+                        .filter(|&&idx| {
+                            prompt[idx..idx + Qwen2VLProcessor::IMAGE_PAD.len()]
+                                == *Qwen2VLProcessor::IMAGE_PAD
+                        })
+                        .count(),
+                );
+                video_nums.push(
+                    match_indices
+                        .iter()
+                        .filter(|&&idx| {
+                            prompt[idx..idx + Qwen2VLProcessor::VIDEO_PAD.len()]
+                                == *Qwen2VLProcessor::VIDEO_PAD
+                        })
+                        .count(),
+                );
+
+                let ids = tokenizer
+                    .encode(prompt, true)
+                    .expect("Tokenization failed!");
+
+                input_ids_searching.push(ids.get_ids().to_vec());
+            }
+
             let mut all_ids_new = Vec::new();
             let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
             for ids in all_ids {
@@ -417,8 +432,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
                 all_continuous_img_pad,
                 all_continuous_vid_pad,
-                image_tok_ids_indices,
-                video_tok_ids_indices,
+                input_ids_searching,
+                image_nums,
+                video_nums,
             )
         } else {
             (
@@ -429,7 +445,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 vec![],
                 vec![],
                 vec![vec![]; input_seqs.len()],
-                vec![vec![]; input_seqs.len()],
+                vec![0],
+                vec![0],
             )
         };
 
@@ -460,8 +477,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,
-                image_tok_ids_indices,
-                video_tok_ids_indices,
+                input_ids_searching,
+                image_nums,
+                video_nums,
             }),
             paged_attn_meta,
             flash_meta,

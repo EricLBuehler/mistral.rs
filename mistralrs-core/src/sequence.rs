@@ -453,6 +453,10 @@ impl Sequence {
         &self.prompt
     }
 
+    pub fn set_initial_prompt(&mut self, new: String) {
+        self.prompt = new;
+    }
+
     /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens.clone_from(&toks);

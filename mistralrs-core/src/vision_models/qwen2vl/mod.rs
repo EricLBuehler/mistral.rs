@@ -32,6 +32,8 @@ pub struct Qwen2VLModel {
     text: Qwen2VLTextModel,
     vision: Qwen2VLVisionModel,
     spatial_merge_size: usize,
+    image_token_id: u32,
+    video_token_id: u32,
 }
 
 impl Qwen2VLModel {
@@ -62,6 +64,8 @@ impl Qwen2VLModel {
             text,
             vision,
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
+            image_token_id: cfg.image_token_id,
+            video_token_id: cfg.video_token_id,
         })
     }
 
@@ -74,8 +78,9 @@ impl Qwen2VLModel {
         video_grid_thw: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         attention_mask_indices: Option<&Tensor>,
-        image_tok_ids_indices: Vec<Vec<usize>>,
-        video_tok_ids_indices: Vec<Vec<usize>>,
+        input_ids_searching: Vec<Vec<u32>>,
+        image_nums: Vec<usize>,
+        video_nums: Vec<usize>,
     ) -> Result<(Tensor, Tensor)> {
         if image_grid_thw.is_some() || video_grid_thw.is_some() {
             let total_input_ids = input_ids.clone();
@@ -100,24 +105,32 @@ impl Qwen2VLModel {
                         .index_select(&attention_mask_indices.squeeze(0)?, 0)?
                         .to_dtype(input_ids.dtype())?;
                 }
-                let image_nums = image_tok_ids_indices[i].len();
-                let vision_nums = video_tok_ids_indices[i].len();
+                let image_nums = image_nums[i];
+                let vision_nums = video_nums[i];
 
                 let mut llm_pos_ids: Vec<Tensor> = Vec::new();
                 let mut st = 0;
                 let (mut remain_images, mut remain_videos) = (image_nums, vision_nums);
-                let mut image_tok_indices_idx = 0;
-                let mut video_tok_indices_idx = 0;
                 for _ in 0..(image_nums + vision_nums) {
-                    let ed_image = if !image_tok_ids_indices[i].is_empty() && remain_images > 0 {
-                        image_tok_indices_idx += 1;
-                        image_tok_ids_indices[i][image_tok_indices_idx - 1]
+                    let ed_image = if input_ids_searching[i].contains(&self.image_token_id)
+                        && remain_images > 0
+                    {
+                        input_ids_searching[i][st..]
+                            .iter()
+                            .position(|&t| t == self.image_token_id)
+                            .unwrap()
+                            + st
                     } else {
                         input_ids.dim(0)? + 1
                     };
-                    let ed_video = if !video_tok_ids_indices[i].is_empty() && remain_videos > 0 {
-                        video_tok_indices_idx += 1;
-                        video_tok_ids_indices[i][video_tok_indices_idx - 1]
+                    let ed_video = if input_ids_searching[i].contains(&self.video_token_id)
+                        && remain_videos > 0
+                    {
+                        input_ids_searching[i][st..]
+                            .iter()
+                            .position(|&t| t == self.video_token_id)
+                            .unwrap()
+                            + st
                     } else {
                         input_ids.dim(0)? + 1
                     };
@@ -261,8 +274,9 @@ impl Qwen2VLModel {
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-        image_tok_ids_indices: Vec<Vec<usize>>,
-        video_tok_ids_indices: Vec<Vec<usize>>,
+        input_ids_searching: Vec<Vec<u32>>,
+        image_nums: Vec<usize>,
+        video_nums: Vec<usize>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
@@ -357,8 +371,9 @@ impl Qwen2VLModel {
             video_grid_thw.as_ref(),
             Some(&ropeidx_attn_mask),
             Some(&ropeidx_attn_mask_indices),
-            image_tok_ids_indices,
-            video_tok_ids_indices,
+            input_ids_searching,
+            image_nums,
+            video_nums,
         )?;
 
         let position_ids = if attention_mask.is_some() {
@@ -394,8 +409,9 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     seqlens: Vec<usize>,
     continuous_img_pad: Vec<Vec<(usize, usize)>>,
     continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-    image_tok_ids_indices: Vec<Vec<usize>>,
-    video_tok_ids_indices: Vec<Vec<usize>>,
+    input_ids_searching: Vec<Vec<u32>>,
+    image_nums: Vec<usize>,
+    video_nums: Vec<usize>,
 }
 
 impl VisionModel for Qwen2VLModel {
@@ -418,8 +434,9 @@ impl VisionModel for Qwen2VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
-            image_tok_ids_indices,
-            video_tok_ids_indices,
+            input_ids_searching,
+            image_nums,
+            video_nums,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
@@ -441,8 +458,9 @@ impl VisionModel for Qwen2VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
-            image_tok_ids_indices,
-            video_tok_ids_indices,
+            input_ids_searching,
+            image_nums,
+            video_nums,
             seqlen_offsets,
             context_lens,
             flash_params,
