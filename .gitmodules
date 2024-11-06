@@ -1,0 +1,6 @@
+[submodule "external/llguidance"]
+	path = external/llguidance
+	url = https://github.com/microsoft/llguidance
+[submodule "external/toktrie"]
+	path = external/toktrie
+	url = https://github.com/microsoft/toktrie
