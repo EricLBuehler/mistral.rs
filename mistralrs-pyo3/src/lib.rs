@@ -646,16 +646,16 @@ impl Runner {
                     ));
                 }
                 Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("yacc".to_string()) {
+            } else if request.grammar_type == Some("lark".to_string()) {
                 if request.grammar.is_none() {
                     return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
-                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+                Constraint::Lark(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
                 return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `yacc`",
+                    "Grammar type is specified but is not `regex` or `lark`",
                 ));
             } else {
                 Constraint::None
@@ -908,16 +908,16 @@ impl Runner {
                     ));
                 }
                 Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("yacc".to_string()) {
+            } else if request.grammar_type == Some("lark".to_string()) {
                 if request.grammar.is_none() {
                     return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
-                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
+                Constraint::Lark(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
                 return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `yacc`",
+                    "Grammar type is specified but is not `regex` or `lark`",
                 ));
             } else {
                 Constraint::None

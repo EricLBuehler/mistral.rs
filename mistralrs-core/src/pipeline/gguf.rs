@@ -1,4 +1,5 @@
 use super::cache_manager::DefaultCacheManager;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
@@ -8,8 +9,6 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -484,7 +483,7 @@ impl Loader for GGUFLoader {
             Model::Starcoder2(ref p) => p.max_seq_len,
             Model::Qwen2(ref p) => p.max_seq_len,
         };
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_trie = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::Phi2(ref model) => model.cache.lock().len(),

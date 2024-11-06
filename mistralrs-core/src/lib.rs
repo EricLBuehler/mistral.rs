@@ -23,7 +23,6 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Sender};
 
-mod aici;
 mod cuda;
 mod device_map;
 mod engine;

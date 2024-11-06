@@ -579,26 +579,8 @@ impl Pipeline for SpeculativePipeline {
                     )
                     .await?;
                     match seq.recognizer {
-                        SequenceRecognizer::Regex(ref mut rx) => {
-                            get_mut_arcmutex!(self.target)
-                                .get_metadata()
-                                .tok_trie
-                                .as_ref()
-                                .ok_or(candle_core::Error::Msg(
-                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
-                                ))?
-                                .append_token(rx.as_mut(), accepted.token)
-                                .map_err(candle_core::Error::msg)?;
-                        }
-                        SequenceRecognizer::Cfg(ref mut cfg) => {
-                            get_mut_arcmutex!(self.target)
-                                .get_metadata()
-                                .tok_trie
-                                .as_ref()
-                                .ok_or(candle_core::Error::Msg(
-                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
-                                ))?
-                                .append_token(cfg.as_mut(), accepted.token)
+                        SequenceRecognizer::Llguidance(ref mut llg) => {
+                            llg.commit_token(Some(accepted.token))
                                 .map_err(candle_core::Error::msg)?;
                         }
                         SequenceRecognizer::None => {}

@@ -8,10 +8,9 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use super::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -356,7 +355,7 @@ impl Loader for GGMLLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_trie = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.lock().len(),
             Model::XLoraLlama(ref model) => model.cache.lock().len(),

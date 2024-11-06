@@ -8,12 +8,13 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::Receiver, Mutex};
+use toktrie::TokEnv;
 
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     pipeline::{
-        text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
-        CacheInstruction,
+        llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
+        text_models_inputs_processor::PagedAttentionMeta,
+        AdapterInstruction, CacheBackendMetadata, CacheInstruction,
     },
     request::NormalRequest,
     response::CompletionChoice,
@@ -455,15 +456,19 @@ impl Engine {
         }
     }
 
-    fn build_sequence_recognizer(constraint: &Constraint) -> anyhow::Result<SequenceRecognizer> {
-        let recognizer = match constraint {
-            Constraint::Regex(rx) => {
-                SequenceRecognizer::Regex(StackRecognizer::from(RecRx::from_rx(rx, None)?).into())
-            }
-            Constraint::Yacc(cfg) => SequenceRecognizer::Cfg(CfgParser::from_yacc(cfg)?.into()),
-            Constraint::None => SequenceRecognizer::None,
-        };
-        Ok(recognizer)
+    fn build_sequence_recognizer(
+        tok_env: &Option<TokEnv>,
+        constraint: &Constraint,
+    ) -> anyhow::Result<SequenceRecognizer> {
+        if let Some(grm) = llg_grammar_from_constraint(constraint)? {
+            let tok_env = tok_env
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("No token environment found."))?;
+            let llg = constraint_from_llg_grammar(tok_env.clone(), grm)?;
+            Ok(SequenceRecognizer::Llguidance(Box::new(llg)))
+        } else {
+            Ok(SequenceRecognizer::None)
+        }
     }
 
     async fn handle_request(&mut self, request: Request) {
@@ -668,6 +673,7 @@ impl Engine {
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
                     if let Some(tok_trie) = tok_trie.as_ref() {
+                        let tok_trie = tok_trie.tok_trie();
                         if tok_trie.has_extensions(tok_trie.token(*id)) {
                             request
                                 .response
@@ -712,6 +718,7 @@ impl Engine {
 
                     if toks.len() == 1 {
                         if tok_trie.as_ref().is_some_and(|tok_trie| {
+                            let tok_trie = tok_trie.tok_trie();
                             tok_trie.has_extensions(tok_trie.token(toks[0]))
                         }) {
                             stop_strings.push(stop_txt.clone());
@@ -766,7 +773,11 @@ impl Engine {
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
-            let recognizer = match Self::build_sequence_recognizer(&request.constraint) {
+            let trie = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .tok_trie
+                .clone();
+            let recognizer = match Self::build_sequence_recognizer(&trie, &request.constraint) {
                 Ok(recognizer) => recognizer,
                 Err(err) => {
                     request
@@ -785,11 +796,6 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
-            let trie = get_mut_arcmutex!(self.pipeline)
-                .get_metadata()
-                .tok_trie
-                .as_ref()
-                .map(|x| (**x).clone());
             let seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -816,7 +822,6 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
-                trie,
                 matcher.clone(),
                 image_generation_format,
                 seq_step_type,

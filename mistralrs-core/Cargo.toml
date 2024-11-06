@@ -79,6 +79,9 @@ safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
+llguidance_parser = { path = "../external/llguidance/parser" }
+toktrie = { path = "../external/toktrie/core" }
+toktrie_hf_tokenizers = { path = "../external/toktrie/hf_tokenizers" }
 
 [features]
 pyo3_macros = ["pyo3"]

@@ -12,8 +12,7 @@ use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
+use super::llg::build_tok_env;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -426,7 +425,7 @@ impl Loader for NormalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_trie = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;

@@ -1,5 +1,6 @@
 use super::cache_manager::DefaultCacheManager;
 use super::isq::UqffFullSer;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
@@ -7,8 +8,6 @@ use super::{
     TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::sampling::sample_and_add_toks;
@@ -340,7 +339,7 @@ impl Loader for VisionLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_trie = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = model.cache().lock().len();
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;

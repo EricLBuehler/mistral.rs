@@ -568,7 +568,6 @@ fn new_dummy_seq(
         None, // TODO incorrect for PagedAttention
         None,
         None,
-        None,
         SeqStepType::PromptAndDecode,
         None,
     )

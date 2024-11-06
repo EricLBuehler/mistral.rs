@@ -7,9 +7,7 @@ use tokio::sync::{
     mpsc::{error::SendError, Sender},
     Mutex, MutexGuard,
 };
-
 use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
     pipeline::DiffusionGenerationParams,
     response::CompletionChoice,
@@ -25,7 +23,6 @@ use crate::{
     ChatCompletionResponse, Usage,
 };
 use candle_core::Tensor;
-use regex_automata::util::primitives::StateID;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -68,8 +65,7 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Regex(Box<StackRecognizer<StateID, RecRx>>),
-    Cfg(Box<CfgParser>),
+    Llguidance(Box<llguidance_parser::Constraint>),
     None,
 }
 
@@ -173,9 +169,6 @@ pub struct Sequence {
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
     diffusion_params: Option<DiffusionGenerationParams>,
 
-    // Grammars
-    pub(crate) tok_trie: Option<TokTrie>,
-
     // Completion requests
     suffix: Option<String>,
     prefix: Option<String>,
@@ -275,7 +268,6 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
@@ -334,7 +326,6 @@ impl Sequence {
             adapters,
             input_images,
             custom_metadata,
-            tok_trie,
             tools,
             image_gen_response_format,
             sequence_stepping_type,

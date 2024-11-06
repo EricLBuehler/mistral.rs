@@ -4,7 +4,6 @@ use candle_core::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
-    get_bias_if_not_allowed,
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer},
@@ -30,6 +29,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
                     .to_string(),
             ))?
+            .tok_trie()
             .decode(&[logprobs.token]),
         &is_done,
     );
@@ -325,25 +325,23 @@ pub async fn sample_sequence(
     };
 
     let bias_if_not_allowed = match &mut seq.recognizer {
-        SequenceRecognizer::Regex(ref mut rx) => {
-            get_bias_if_not_allowed!(seq.tok_trie, rx.as_mut(), first_lobprobs_response.token)
-        }
-        SequenceRecognizer::Cfg(ref mut cfg) => {
-            get_bias_if_not_allowed!(seq.tok_trie, cfg.as_mut(), first_lobprobs_response.token)
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            let bias = llg.compute_mask().map_err(candle_core::Error::msg)?;
+            if let Some(mask) = &bias.sample_mask {
+                if mask.is_allowed(first_lobprobs_response.token) {
+                    None
+                } else {
+                    Some(mask)
+                }
+            } else {
+                None
+            }
         }
         SequenceRecognizer::None => None,
     };
     let second_logprobs_response = match bias_if_not_allowed {
         Some(token_set) => {
-            let mut acc = vec![
-                -f32::INFINITY;
-                seq.tok_trie
-                    .as_ref()
-                    .ok_or(candle_core::Error::Msg(
-                        "TokTrie must be present in pipeline if bias is calculated".to_string()
-                    ))?
-                    .vocab_size()
-            ];
+            let mut acc = vec![-f32::INFINITY; token_set.len()];
             token_set.apply_to(&mut acc);
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
@@ -374,20 +372,10 @@ pub async fn sample_sequence(
         None => first_lobprobs_response,
     };
 
-    if add_to_trie && seq.tok_trie.is_some() {
+    if add_to_trie {
         match seq.recognizer {
-            SequenceRecognizer::Regex(ref mut rx) => {
-                seq.tok_trie
-                    .as_ref()
-                    .unwrap()
-                    .append_token(rx.as_mut(), second_logprobs_response.token)
-                    .map_err(candle_core::Error::msg)?;
-            }
-            SequenceRecognizer::Cfg(ref mut cfg) => {
-                seq.tok_trie
-                    .as_ref()
-                    .unwrap()
-                    .append_token(cfg.as_mut(), second_logprobs_response.token)
+            SequenceRecognizer::Llguidance(ref mut llg) => {
+                llg.commit_token(Some(second_logprobs_response.token))
                     .map_err(candle_core::Error::msg)?;
             }
             SequenceRecognizer::None => {}

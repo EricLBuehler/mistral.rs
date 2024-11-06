@@ -14,9 +14,9 @@ mod processing;
 mod sampling;
 mod speculative;
 mod vision;
+pub(crate) mod llg;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
-use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::diffusion_models::response::send_responses;
 use crate::paged_attention::{CacheConfig, CacheEngine};
@@ -66,7 +66,7 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     /// Only None if it doesnt make sense for the model
-    pub tok_trie: Option<Arc<TokTrie>>,
+    pub tok_trie: Option<toktrie::TokEnv>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
