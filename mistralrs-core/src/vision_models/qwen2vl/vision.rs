@@ -83,28 +83,17 @@ fn rotate_half(xs: &Tensor) -> Result<Tensor> {
 }
 
 fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
-    let orig_ty = xs.dtype();
     let xs = xs.to_dtype(DType::F32)?;
-    let cos = freqs
-        .cos()?
-        .unsqueeze(1)?
-        .repeat((1, 1, 2))?
-        .unsqueeze(0)?
-        .to_dtype(DType::F32)?;
-    let sin = freqs
-        .sin()?
-        .unsqueeze(1)?
-        .repeat((1, 1, 2))?
-        .unsqueeze(0)?
-        .to_dtype(DType::F32)?;
-    // ((&xs * cos) + (rotate_half(&xs)? * sin)?)?.to_dtype(orig_ty)
-    (xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin))?.to_dtype(orig_ty)
+    let cos = freqs.cos()?;
+    let sin = freqs.sin()?;
+
+    xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin)
 }
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
 struct VisionAttention {
     qkv: FusedBiasLinear,
-    proj: Linear,
+    proj: FusedBiasLinear,
     num_heads: usize,
     head_dim: usize,
 }
@@ -113,7 +102,7 @@ impl VisionAttention {
     fn new(dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             qkv: candle_nn::linear(dim, dim * 3, vb.pp("qkv"))?.try_into()?,
-            proj: candle_nn::linear_no_bias(dim, dim, vb.pp("proj"))?,
+            proj: candle_nn::linear(dim, dim, vb.pp("proj"))?.try_into()?,
             num_heads,
             head_dim: dim / num_heads,
         })
@@ -130,33 +119,33 @@ impl VisionAttention {
             (qkv[0].squeeze(0)?, qkv[1].squeeze(0)?, qkv[2].squeeze(0)?)
         };
 
-        let q = apply_rotary_pos_emb_vision(&q.unsqueeze(0)?, rotary_pos_emb)?.squeeze(0)?;
-        let k = apply_rotary_pos_emb_vision(&k.unsqueeze(0)?, rotary_pos_emb)?.squeeze(0)?;
+        let q = apply_rotary_pos_emb_vision(&q.unsqueeze(0)?, rotary_pos_emb)?
+            .squeeze(0)?
+            .to_dtype(q.dtype())?;
+        let k = apply_rotary_pos_emb_vision(&k.unsqueeze(0)?, rotary_pos_emb)?
+            .squeeze(0)?
+            .to_dtype(q.dtype())?;
 
-        let mut attention_mask =
-            Tensor::full(f32::MIN, (1, seq_len, seq_len), q.device())?.to_dtype(q.dtype())?;
+        let mut attention_mask = Tensor::full(f32::MIN, (1, seq_len, seq_len), q.device())?;
         for i in 1..cu_seqlens.len() {
             let a = cu_seqlens[i - 1] as usize;
             let b = cu_seqlens[i] as usize;
             attention_mask = attention_mask.slice_assign(
                 &[&.., &(a..b), &(a..b)],
-                &Tensor::zeros((1, b - a, b - a), q.dtype(), q.device())?,
+                &Tensor::zeros((1, b - a, b - a), DType::F32, q.device())?,
             )?;
         }
 
-        let q = q.transpose(0, 1)?;
-        let k = k.transpose(0, 1)?;
-        let v = v.transpose(0, 1)?;
+        let q = q.transpose(0, 1)?.contiguous()?;
+        let k = k.transpose(0, 1)?.contiguous()?;
+        let v = v.transpose(0, 1)?.contiguous()?;
 
         let att = {
-            let att = (q
-                .contiguous()?
-                .to_dtype(DType::F32)?
-                .matmul(&k.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?)?
-                / (self.head_dim as f64).sqrt())?;
-            let att = att.broadcast_add(&attention_mask.to_dtype(DType::F32)?)?;
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            att.matmul(&v.contiguous()?.to_dtype(DType::F32)?)?
+            let att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
+            let att = att.broadcast_add(&attention_mask.to_dtype(q.dtype())?)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
+            att.matmul(&v)?
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
                 .to_dtype(xs.dtype())?
@@ -215,8 +204,8 @@ impl PatchMerger {
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_size = context_dim * spatial_merge_size.pow(2);
-        let mlp0 = candle_nn::linear_no_bias(hidden_size, hidden_size, vb.pp("mlp.0"))?;
-        let mlp2 = candle_nn::linear_no_bias(hidden_size, dim, vb.pp("mlp.2"))?;
+        let mlp0 = candle_nn::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;
+        let mlp2 = candle_nn::linear(hidden_size, dim, vb.pp("mlp.2"))?;
         Ok(Self {
             ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
             mlp0,
@@ -341,6 +330,11 @@ impl Qwen2VLVisionModel {
             .patch_embed
             .forward(&xs.to_dtype(self.patch_merger.mlp0.weight().dtype())?)?;
         let rotary_pos_emb = self.rot_pos_emb(grid_thw)?;
+        let rotary_pos_emb = rotary_pos_emb
+            .unsqueeze(1)?
+            .repeat((1, 1, 2))?
+            .unsqueeze(0)?
+            .to_dtype(DType::F32)?;
 
         let grid_thw = grid_thw.to_device(&Device::Cpu)?;
         let cu_seqlens = (grid_thw.i((.., 1))? * grid_thw.i((.., 2))?)?

@@ -700,7 +700,8 @@ impl Qwen2VLRotaryEmbedding {
             D::Minus1,
         )?
         .squeeze(0)?
-        .to_dtype(dtype)?;
+        .to_dtype(dtype)?
+        .contiguous()?;
         let sin = Tensor::cat(
             &sin.split(&self.mrope_section, D::Minus1)?
                 .into_iter()
@@ -710,7 +711,8 @@ impl Qwen2VLRotaryEmbedding {
             D::Minus1,
         )?
         .squeeze(0)?
-        .to_dtype(dtype)?;
+        .to_dtype(dtype)?
+        .contiguous()?;
 
         Ok((cos, sin))
     }

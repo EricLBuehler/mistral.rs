@@ -8,8 +8,7 @@ use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
-    ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensor,
-    Transforms,
+    ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -556,23 +555,10 @@ impl Qwen2VLImageProcessor {
             let image = image.apply(to_tensor_rescale, device)?;
 
             let transforms = TensorTransforms {
-                inner_transforms: &[
-                    &config
-                        .do_rescale
-                        .is_some_and(|x| x)
-                        .then_some(())
-                        .map(|_| Rescale {
-                            factor: config.rescale_factor,
-                        }),
-                    &config
-                        .do_normalize
-                        .is_some_and(|x| x)
-                        .then_some(())
-                        .map(|_| Normalize {
-                            mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
-                            std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
-                        }),
-                ],
+                inner_transforms: &[&Normalize {
+                    mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                    std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                }],
             };
             let image = <Tensor as ApplyTensorTransforms>::apply(&image, transforms, device)?;
 
