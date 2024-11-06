@@ -326,23 +326,35 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            let bias = llg.compute_mask().map_err(candle_core::Error::msg)?;
-            if let Some(mask) = &bias.sample_mask {
+            let step_res = llg.compute_mask().map_err(candle_core::Error::msg)?;
+            if let Some(mask) = &step_res.sample_mask {
                 if mask.is_allowed(first_lobprobs_response.token) {
                     None
                 } else {
-                    Some(mask)
+                    let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
+                    mask.iter_set_entries(|idx| {
+                        if idx < acc.len() {
+                            acc[idx] = 0.0;
+                        }
+                    });
+
+                    Some(acc)
                 }
             } else {
-                None
+                if step_res.is_stop() {
+                    let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
+                    let trie = llg.tok_trie();
+                    acc[trie.eos_token() as usize] = 0.0;
+                    Some(acc)
+                } else {
+                    None
+                }
             }
         }
         SequenceRecognizer::None => None,
     };
     let second_logprobs_response = match bias_if_not_allowed {
-        Some(token_set) => {
-            let mut acc = vec![-f32::INFINITY; token_set.len()];
-            token_set.apply_to(&mut acc);
+        Some(acc) => {
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
 
             let ctx_clone = seq.get_toks().to_vec();
