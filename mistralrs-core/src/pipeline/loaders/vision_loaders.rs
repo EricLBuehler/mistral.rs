@@ -72,6 +72,7 @@ pub trait VisionModelLoader: IsqModelLoader {
         model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self) -> bool;
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
@@ -158,6 +159,7 @@ impl VisionModelLoader for Phi3VLoader {
         _model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
@@ -235,10 +237,12 @@ impl VisionModelLoader for Idefics2Loader {
         _model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Idefics2Processor::new(
             processor_config.unwrap(),
             preprocessor_config,
+            max_edge,
         ))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
@@ -318,6 +322,7 @@ impl VisionModelLoader for LLaVANextLoader {
         model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
@@ -398,6 +403,7 @@ impl VisionModelLoader for LLaVALoader {
         model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVAProcessor::new(model_config))
     }
@@ -478,6 +484,7 @@ impl VisionModelLoader for VLlamaLoader {
         _model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(MLlamaProcessor::new())
     }
@@ -561,8 +568,9 @@ impl VisionModelLoader for Qwen2VLLoader {
         _model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Qwen2VLProcessor::new())
+        Arc::new(Qwen2VLProcessor::new(max_edge))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: Qwen2VLConfig = serde_json::from_str(config)?;

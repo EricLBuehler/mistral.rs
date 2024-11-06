@@ -44,6 +44,7 @@ pub enum VisionArchitecture {
     LLaVANext,
     LLaVA,
     VLlama,
+    Qwen2VL,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -54,6 +55,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::LLaVANext => VisionLoaderType::LLaVANext,
             VisionArchitecture::LLaVA => VisionLoaderType::LLaVA,
             VisionArchitecture::VLlama => VisionLoaderType::VLlama,
+            VisionArchitecture::Qwen2VL => VisionLoaderType::Qwen2VL,
         }
     }
 }
@@ -294,6 +296,7 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
+        max_edge = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -303,6 +306,7 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
+        max_edge: Option<u32>,
     },
 
     #[pyo3(constructor = (

@@ -29,22 +29,30 @@ use super::{
 };
 
 // Input processor
-pub struct Idefics2ImageProcessor;
+pub struct Idefics2ImageProcessor {
+    max_edge: Option<u32>,
+}
 // Processor
 pub struct Idefics2Processor {
     config: ProcessorConfig,
     preprocessor_config: PreProcessorConfig,
     fake_image_token: &'static str,
     image_token: &'static str,
+    max_edge: Option<u32>,
 }
 
 impl Idefics2Processor {
-    pub fn new(config: ProcessorConfig, preprocessor_config: PreProcessorConfig) -> Self {
+    pub fn new(
+        config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Self {
         Self {
             config,
             preprocessor_config,
             fake_image_token: "<fake_token_around_image>",
             image_token: "<image>",
+            max_edge,
         }
     }
 }
@@ -101,7 +109,9 @@ impl Processor for Idefics2Processor {
     }
 
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Idefics2ImageProcessor)
+        Arc::new(Idefics2ImageProcessor {
+            max_edge: self.max_edge,
+        })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
@@ -307,6 +317,10 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
 
                 *image = image.resize_exact(w as u32, h as u32, config.resampling.to_filter()?);
             }
+        }
+
+        if let Some(max_edge) = self.max_edge {
+            images = mistralrs_vision::pad_to_max_edge(&images, max_edge);
         }
 
         let mut max_h = 0;

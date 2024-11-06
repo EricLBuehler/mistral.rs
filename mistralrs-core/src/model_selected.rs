@@ -375,6 +375,11 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        #[arg(short = 'e', long)]
+        max_edge: Option<u32>,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

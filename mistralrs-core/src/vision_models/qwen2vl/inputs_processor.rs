@@ -34,9 +34,12 @@ use super::Qwen2VLVisionSpecificArgs;
 struct Qwen2VLImageProcessor {
     // To represent uninitialized, we do this. Should always be init by the time this is read.
     merge_size: RwLock<Option<usize>>,
+    max_edge: Option<u32>,
 }
 // Processor
-pub struct Qwen2VLProcessor;
+pub struct Qwen2VLProcessor {
+    max_edge: Option<u32>,
+}
 
 impl Qwen2VLProcessor {
     pub const VISION_START: &str = "<|vision_start|>";
@@ -45,8 +48,8 @@ impl Qwen2VLProcessor {
     pub const VIDEO_PAD: &str = "<|video_pad|>";
     pub const PLACEHOLDER: &str = "<|placeholder|>";
 
-    pub fn new() -> Self {
-        Self
+    pub fn new(max_edge: Option<u32>) -> Self {
+        Self { max_edge }
     }
 }
 
@@ -54,6 +57,7 @@ impl Processor for Qwen2VLProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Qwen2VLImageProcessor {
             merge_size: RwLock::new(None),
+            max_edge: self.max_edge,
         })
     }
 
@@ -611,7 +615,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
 
     fn preprocess(
         &self,
-        images: Vec<DynamicImage>,
+        mut images: Vec<DynamicImage>,
         videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
@@ -621,6 +625,10 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
         let mut vision_grid_thw = Vec::new();
 
         if !images.is_empty() {
+            if let Some(max_edge) = self.max_edge {
+                images = mistralrs_vision::pad_to_max_edge(&images, max_edge);
+            }
+
             let mut height = 0;
             let mut width = 0;
             for image in &images {

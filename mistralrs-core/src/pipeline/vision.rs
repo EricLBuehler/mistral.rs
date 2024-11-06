@@ -96,6 +96,7 @@ pub struct VisionSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub max_edge: Option<u32>,
 }
 
 impl VisionLoaderBuilder {
@@ -282,9 +283,12 @@ impl Loader for VisionLoader {
             .as_ref()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
-        let processor =
-            self.inner
-                .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
+        let processor = self.inner.get_processor(
+            &config,
+            processor_config,
+            preprocessor_config.clone(),
+            self.config.max_edge,
+        ); //There are always some repos that don't properly handle config position, for example... LLaVA
 
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
