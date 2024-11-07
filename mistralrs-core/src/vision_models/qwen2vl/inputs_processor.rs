@@ -663,7 +663,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 let (patches, (t, h, w)) =
                     self.preprocess_inner(vec![image], config, device, (height, width))?;
                 pixel_values.push(patches);
-                vision_grid_thw.push(Tensor::new(&[t, h, w], device)?);
+                vision_grid_thw.push(Tensor::new(&[t, h, w], &Device::Cpu)?);
             }
             let pixel_values = Tensor::stack(&pixel_values, 0)?;
             let vision_grid_thw = Tensor::stack(&vision_grid_thw, 0)?;
@@ -697,7 +697,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 let (patches, (t, h, w)) =
                     self.preprocess_inner(images, config, device, (height, width))?;
                 pixel_values.push(patches);
-                vision_grid_thw.push(Tensor::new(&[t, h, w], device)?);
+                vision_grid_thw.push(Tensor::new(&[t, h, w], &Device::Cpu)?);
             }
             let pixel_values = Tensor::stack(&pixel_values, 0)?;
             let vision_grid_thw = Tensor::stack(&vision_grid_thw, 0)?;

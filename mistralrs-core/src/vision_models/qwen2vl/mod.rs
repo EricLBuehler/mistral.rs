@@ -109,6 +109,8 @@ impl Qwen2VLModel {
                 let vision_nums = video_nums[i];
 
                 let mut llm_pos_ids: Vec<Tensor> = Vec::new();
+                let mut max_last_llm_pos_ids = None;
+                let mut max_llm_pos_ids = 0;
                 let mut st = 0;
                 let (mut remain_images, mut remain_videos) = (image_nums, vision_nums);
                 for _ in 0..(image_nums + vision_nums) {
@@ -163,12 +165,9 @@ impl Qwen2VLModel {
                     let llm_grid_w = w / self.spatial_merge_size as u32;
                     let text_len = ed - st;
 
-                    let st_idx = if !llm_pos_ids.is_empty() {
-                        let last = llm_pos_ids.last().unwrap();
-                        last.max(0)?.max(0)?.to_scalar::<i64>()? + 1
-                    } else {
-                        0
-                    };
+                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
+                    // max_last_llm_pos_ids = Some(text_len as i64 + st_idx);
+                    max_llm_pos_ids = max_llm_pos_ids.max(text_len as i64 + st_idx);
                     llm_pos_ids.push(
                         Tensor::arange(st_idx, text_len as i64 + st_idx, input_ids.device())?
                             .unsqueeze(0)?
@@ -187,6 +186,11 @@ impl Qwen2VLModel {
                         .reshape((1, 1, ()))?
                         .repeat((llm_grid_t as usize, llm_grid_h as usize, 1))?
                         .flatten_all()?;
+                    max_last_llm_pos_ids = Some(
+                        *[llm_grid_t, llm_grid_h, llm_grid_w].iter().max().unwrap() as i64
+                            + (text_len as i64 + st_idx),
+                    );
+                    max_llm_pos_ids = max_llm_pos_ids.max(max_last_llm_pos_ids.unwrap());
                     llm_pos_ids.push(
                         (Tensor::stack(&[t_idx, h_idx, w_idx], 0)?.to_dtype(DType::F32)?
                             + (text_len + st_idx as usize) as f64)?
@@ -196,13 +200,10 @@ impl Qwen2VLModel {
                 }
 
                 if st < input_ids.dim(0)? {
-                    let st_idx = if !llm_pos_ids.is_empty() {
-                        let last = llm_pos_ids.last().unwrap();
-                        last.max(0)?.max(0)?.to_scalar::<i64>()? + 1
-                    } else {
-                        0
-                    };
+                    let st_idx = max_last_llm_pos_ids.unwrap_or(0);
                     let text_len = (input_ids.dim(0)? - st) as u32;
+                    // max_last_llm_pos_ids = Some(text_len as i64 + st_idx);
+                    max_llm_pos_ids = max_llm_pos_ids.max(text_len as i64 + st_idx);
                     llm_pos_ids.push(
                         Tensor::arange(st_idx, text_len as i64 + st_idx, input_ids.device())?
                             .reshape((1, ()))?
@@ -225,10 +226,8 @@ impl Qwen2VLModel {
                         .where_cond(&llm_positions, &position_ids.i((.., i, ..))?)?
                         .unsqueeze(1)?,
                 )?;
-                mrope_position_deltas.push(
-                    llm_positions.max(0)?.max(0)?.to_scalar::<i64>()? + 1
-                        - total_input_ids.i(i)?.dim(0)? as i64,
-                );
+                mrope_position_deltas
+                    .push(max_llm_pos_ids + 1 - total_input_ids.i(i)?.dim(0)? as i64);
             }
             let mrope_position_deltas_len = mrope_position_deltas.len();
             let mrope_position_deltas = Tensor::from_vec(

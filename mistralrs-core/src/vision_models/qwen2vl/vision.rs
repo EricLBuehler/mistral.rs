@@ -287,11 +287,11 @@ impl Qwen2VLVisionModel {
         })
     }
 
-    fn rot_pos_emb(&self, grid_thw: &Tensor) -> Result<Tensor> {
+    fn rot_pos_emb(&self, grid_thw: &Tensor, device: &Device) -> Result<Tensor> {
         let mut pos_ids = Vec::new();
         for i_thw in grid_thw.to_vec2::<u32>()? {
             let (t, h, w) = (i_thw[0], i_thw[1], i_thw[2]);
-            let mut hpos_ids = Tensor::arange(0, h, grid_thw.device())?
+            let mut hpos_ids = Tensor::arange(0, h, device)?
                 .unsqueeze(1)?
                 .repeat((1, w as usize))?;
             hpos_ids = hpos_ids.reshape((
@@ -303,7 +303,7 @@ impl Qwen2VLVisionModel {
             hpos_ids = hpos_ids.permute((0, 2, 1, 3))?;
             hpos_ids = hpos_ids.flatten_all()?;
 
-            let mut wpos_ids = Tensor::arange(0, w, grid_thw.device())?
+            let mut wpos_ids = Tensor::arange(0, w, device)?
                 .unsqueeze(0)?
                 .repeat((h as usize, 1))?;
             wpos_ids = wpos_ids.reshape((
@@ -332,7 +332,7 @@ impl Qwen2VLVisionModel {
         let mut xs = self
             .patch_embed
             .forward(&xs.to_dtype(self.patch_merger.mlp0.weight().dtype())?)?;
-        let rotary_pos_emb = self.rot_pos_emb(grid_thw)?;
+        let rotary_pos_emb = self.rot_pos_emb(grid_thw, xs.device())?;
         let rotary_pos_emb = rotary_pos_emb
             .unsqueeze(1)?
             .repeat((1, 1, 2))?
