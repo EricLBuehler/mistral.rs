@@ -18,7 +18,7 @@ fn resize_image_to_max_edge(img: &DynamicImage, max_edge: u32) -> DynamicImage {
     let new_height = (height as f32 * scale) as u32;
 
     // Resize the image
-    img.resize_exact(new_width, new_height, FilterType::CatmullRom)
+    img.resize_exact(new_width, new_height, FilterType::Lanczos3)
 }
 
 /// 1) Resize the images to the maximum edge length - preserving aspect ratio
