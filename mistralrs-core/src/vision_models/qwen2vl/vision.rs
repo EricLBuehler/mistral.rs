@@ -149,7 +149,7 @@ impl VisionAttention {
                 .to_dtype(xs.dtype())?
         };
 
-        self.proj.forward(&att)
+        self.proj.forward(&att.unsqueeze(0)?)?.squeeze(0)
     }
 }
 
@@ -218,11 +218,13 @@ impl PatchMerger {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.ln_q)?
+        xs.unsqueeze(0)?
+            .apply(&self.ln_q)?
             .reshape(((), self.hidden_size))?
             .apply(&self.mlp0)?
             .gelu()?
-            .apply(&self.mlp2)
+            .apply(&self.mlp2)?
+            .squeeze(0)
     }
 }
 
