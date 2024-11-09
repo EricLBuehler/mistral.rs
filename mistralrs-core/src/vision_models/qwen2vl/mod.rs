@@ -51,7 +51,8 @@ impl Qwen2VLModel {
         let vision = Qwen2VLVisionModel::new(
             &cfg.vision_config,
             vb.pp("visual")
-                .set_device(normal_loading_metadata.real_device.clone()),
+                .set_device(normal_loading_metadata.real_device.clone())
+                .set_dtype(DType::F32),
         )?;
         let text = Qwen2VLTextModel::new(
             cfg,
@@ -292,12 +293,15 @@ impl Qwen2VLModel {
             let mut xs = self.text.embed_tokens(input_ids)?;
 
             if let Some(pixel_values) = pixel_values {
-                let image_embeds = self.vision.forward(
-                    &pixel_values,
-                    image_grid_thw
-                        .as_ref()
-                        .context("pixel_values require image_grid_thw")?,
-                )?;
+                let image_embeds = self
+                    .vision
+                    .forward(
+                        &pixel_values,
+                        image_grid_thw
+                            .as_ref()
+                            .context("pixel_values require image_grid_thw")?,
+                    )?
+                    .to_dtype(self.text.dtype)?;
 
                 for (batch, batch_ids) in continuous_img_pad.into_iter().enumerate() {
                     let mut last_end = 0;

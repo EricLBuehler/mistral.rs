@@ -72,9 +72,8 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.fc2
-            .forward(&self.act.forward(&self.fc1.forward(&xs.unsqueeze(0)?)?)?)?
-            .squeeze(0)
+        let fc1 = self.act.forward(&self.fc1.forward(&xs.unsqueeze(0)?)?)?;
+        self.fc2.forward(&fc1)?.squeeze(0)
     }
 }
 
@@ -134,21 +133,9 @@ impl VisionAttention {
             .squeeze(0)?
             .to_dtype(q.dtype())?;
 
-        q = q
-            .transpose(0, 1)?
-            .contiguous()?
-            .to_device(&Device::Cpu)?
-            .to_dtype(DType::F32)?;
-        k = k
-            .transpose(0, 1)?
-            .contiguous()?
-            .to_device(&Device::Cpu)?
-            .to_dtype(DType::F32)?;
-        v = v
-            .transpose(0, 1)?
-            .contiguous()?
-            .to_device(&Device::Cpu)?
-            .to_dtype(DType::F32)?;
+        q = q.transpose(0, 1)?.contiguous()?;
+        k = k.transpose(0, 1)?.contiguous()?;
+        v = v.transpose(0, 1)?.contiguous()?;
 
         let att = {
             let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
@@ -156,13 +143,11 @@ impl VisionAttention {
                 Some(m) => att.broadcast_add(m)?,
                 None => att,
             };
-            att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
-                .to_dtype(q.dtype())?;
+            att = candle_nn::ops::softmax_last_dim(&att)?;
             att.matmul(&v)?
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
                 .to_dtype(xs.dtype())?
-                .to_device(xs.device())?
         };
 
         self.proj.forward(&att.unsqueeze(0)?)?.squeeze(0)
@@ -371,14 +356,14 @@ impl Qwen2VLVisionModel {
             &[0, len] if len == seq_len as u32 => None,
             cu_seqlens => {
                 let mut attention_mask =
-                    Tensor::full(f32::MIN, (1, seq_len, seq_len), &Device::Cpu)?
+                    Tensor::full(f32::MIN, (1, seq_len, seq_len), xs.device())?
                         .to_dtype(DType::F32)?;
                 for i in 1..cu_seqlens.len() {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
                         &[&.., &(a..b), &(a..b)],
-                        &Tensor::zeros((1, b - a, b - a), DType::F32, &Device::Cpu)?,
+                        &Tensor::zeros((1, b - a, b - a), DType::F32, xs.device())?,
                     )?;
                 }
                 Some(attention_mask)
