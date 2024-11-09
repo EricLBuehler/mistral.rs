@@ -117,7 +117,7 @@ impl VisionAttention {
         rotary_pos_emb: &Tensor,
     ) -> Result<Tensor> {
         let seq_len = xs.dim(0)?;
-        let (q, k, v) = {
+        let (mut q, mut k, mut v) = {
             let qkv = self
                 .qkv
                 .forward(&xs.unsqueeze(0)?)?
@@ -127,24 +127,24 @@ impl VisionAttention {
             (qkv[0].squeeze(0)?, qkv[1].squeeze(0)?, qkv[2].squeeze(0)?)
         };
 
-        let q = apply_rotary_pos_emb_vision(&q.unsqueeze(0)?, rotary_pos_emb)?
+        q = apply_rotary_pos_emb_vision(&q.unsqueeze(0)?, rotary_pos_emb)?
             .squeeze(0)?
             .to_dtype(q.dtype())?;
-        let k = apply_rotary_pos_emb_vision(&k.unsqueeze(0)?, rotary_pos_emb)?
+        k = apply_rotary_pos_emb_vision(&k.unsqueeze(0)?, rotary_pos_emb)?
             .squeeze(0)?
             .to_dtype(q.dtype())?;
 
-        let q = q.transpose(0, 1)?.contiguous()?;
-        let k = k.transpose(0, 1)?.contiguous()?;
-        let v = v.transpose(0, 1)?.contiguous()?;
+        q = q.transpose(0, 1)?.contiguous()?;
+        k = k.transpose(0, 1)?.contiguous()?;
+        v = v.transpose(0, 1)?.contiguous()?;
 
         let att = {
-            let att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
-            let att = match attention_mask {
+            let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt()).unwrap();
+            att = match attention_mask {
                 Some(m) => att.broadcast_add(m)?,
                 None => att,
             };
-            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+            att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
                 .to_dtype(q.dtype())?;
             att.matmul(&v)?
                 .transpose(0, 1)?
