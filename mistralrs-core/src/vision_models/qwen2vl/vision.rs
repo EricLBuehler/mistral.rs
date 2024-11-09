@@ -151,7 +151,7 @@ impl VisionAttention {
             .to_dtype(DType::F32)?;
 
         let att = {
-            let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt()).unwrap();
+            let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
             att = match attention_mask {
                 Some(m) => att.broadcast_add(m)?,
                 None => att,
@@ -372,13 +372,13 @@ impl Qwen2VLVisionModel {
             cu_seqlens => {
                 let mut attention_mask =
                     Tensor::full(f32::MIN, (1, seq_len, seq_len), &Device::Cpu)?
-                        .to_dtype(xs.dtype())?;
+                        .to_dtype(DType::F32)?;
                 for i in 1..cu_seqlens.len() {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
                         &[&.., &(a..b), &(a..b)],
-                        &Tensor::zeros((1, b - a, b - a), xs.dtype(), &Device::Cpu)?,
+                        &Tensor::zeros((1, b - a, b - a), DType::F32, &Device::Cpu)?,
                     )?;
                 }
                 Some(attention_mask)
