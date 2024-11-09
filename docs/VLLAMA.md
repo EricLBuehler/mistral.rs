@@ -111,10 +111,9 @@ cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="llama-vision",
@@ -210,7 +209,7 @@ MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="MODEL_ID",
+        model_id=MODEL_ID,
         arch=VisionArchitecture.VLlama,
     ),
 )

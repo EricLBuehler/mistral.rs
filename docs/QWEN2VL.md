@@ -30,26 +30,34 @@ Mistral.rs supports interactive mode for vision models! It is an easy way to int
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a vllama
+cargo run --features ... --release -- -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
 ```
 
 2) Say hello!
 ```
 > Hello!
-How can I assist you today?
+Hello! How can I assist you today?
 ```
 
 3) Pass the model an image and ask a question.
 
 ```
 > Hello!
-Hello! How can I help you today?
-> \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg What mountain is this?
-This is Mount Washington, located in the White Mountains of New Hampshire, USA. It is the highest peak in the state and the northeastern United States. The mountain is known for its severe weather conditions and high winds, earning it the nickname "The White Elephant."
+Hello! How can I assist you today?
+> \image https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg What type of flower is this? Give some fun facts.
+flowers are a type of flowering plant that produce flowers that are typically used for decoration, pollination, and reproduction. there are many different types of flowers, each with its own unique characteristics and uses. here are some fun facts about camellias:
+
+  * camellias are native to china and have been cultivated for over 2,000 years.
+  * camellias are known for their long blooming season, with some varieties blooming continuously for months.
+  * camellias come in a wide variety of colors, including red, pink, white, and yellow.
+  * camellias are also known for their fragrant blooms, which can be enjoyed by both humans and animals.
+  * camellias are often used in gardens and parks as a decorative element, and are also popular in landscaping and horticulture.
+
+camellias are also known for their resilience and ability to thrive in a variety of conditions, making them a popular choice for gardeners and landscapers. they require well-draining soil and full sun or partial shade, and can be grown in containers or in the ground. overall, camellias are a beautiful and versatile flower that can add beauty and interest to any garden or landscape.
 ```
 
 ## HTTP server
-You can find this example [here](../examples/server/llama_vision.py).
+You can find this example [here](../examples/server/qwen2vl.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -58,29 +66,21 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
-<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+<img src="https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg" alt="Mount Washington">
 
 **Prompt:**
 ```
-What is shown in this image? Write a detailed response analyzing the scene.
+What type of flower is this? Give some fun facts.
 ```
 
 **Output:**
 ```
-The image shows Mount Washington, the highest peak in the Northeastern United States, located in the White Mountains of New Hampshire. The scene captures the mountain's rugged terrain and varied landscape features. 
+flowers are a beautiful addition to any garden or outdoor space. They come in many different colors and shapes, and can be used for both decorative purposes and as sources of pollination for bees and other insects.
 
-In the foreground, there are dense forests of coniferous trees, primarily spruce and fir, which are typical of the region's boreal forest ecosystem. The trees are densely packed, indicating a high level of vegetation cover and biodiversity.
+One fun fact about camellias is that they are native to Japan, but were introduced to Europe in the 17th century by Portuguese sailors who brought them back from their voyages around the world. Camellias have been popular as ornamental plants since then, with many varieties available for cultivation.
 
-Moving upwards, the image reveals rocky outcroppings and boulders scattered across the slope, indicating the mountain's geological history of glacial activity. The presence of these rocks suggests that the area was once covered by ice sheets during the last ice age, which carved out the landscape and left behind a mix of boulders and talus slopes.
-
-In the mid-ground, the image shows a series of ridges and valleys, which are characteristic of the mountain's glacially sculpted terrain. These features were formed by the movement of ice sheets that carved out U-shaped valleys and left behind a series of rounded hills and ridges.
-
-At the summit, there is a prominent observation tower or weather station, which is likely used for scientific research and weather monitoring. The structure is situated at an elevation of approximately 6,288 feet (1,917 meters) above sea level, making it one of the highest points in the region.
-
-The image also captures the atmospheric conditions on Mount Washington, with clouds and mist visible in the background. The mountain's unique location in a region where cold Arctic air meets warm moist air from the Gulf Stream creates a unique microclimate known as the "Home Rule," where extreme weather conditions can occur.
-
-Overall, the image showcases the diverse geological and ecological features of Mount Washington, highlighting its role as a significant natural landmark in the Northeastern United States.
+Camellias also have interesting cultural significance in Japan, where they are often associated with good fortune and prosperity. In Chinese culture, camellias symbolize longevity and immortality.
+In conclusion, camellias are beautiful flowers that add color and interest to gardens or outdoor spaces. They come in many different colors and shapes, making them a popular choice for gardeners everywhere!
 ```
 
 ---
@@ -91,19 +91,18 @@ Overall, the image showcases the diverse geological and ecological features of M
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+cargo run --release --features ... -- --port 1234 -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
 ```
 
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="llama-vision",
+    model="qwen2vl",
     messages=[
         {
             "role": "user",
@@ -111,12 +110,12 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                        "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "What type of flower is this? Give some fun facts.",
                 },
             ],
         },
@@ -137,36 +136,37 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/llama_vision/main.rs).
+You can find this example [here](../mistralrs/examples/qwen2vl/main.rs).
 
 ```rust
 use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
-const MODEL_ID: &str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
+const MODEL_ID: &str = "Qwen/Qwen2-VL-2B-Instruct";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new(MODEL_ID, VisionLoaderType::VLlama)
+        VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Qwen2VL)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_vllama_image_message(
+    let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
+        "What type of flower is this? Give some fun facts.",
         image,
-    );
+        &model
+    )?;
 
     let response = model.send_chat_request(messages).await?;
 
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/llama_vision.py).
+You can find this example [here](../examples/python/qwen2vl.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -192,18 +192,18 @@ This example demonstrates loading and sending a chat completion request with an 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
-MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
+MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="MODEL_ID",
-        arch=VisionArchitecture.VLlama,
+        model_id=MODEL_ID,
+        arch=VisionArchitecture.Qwen2VL,
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="llama-vision",
+        model="qwen2vl",
         messages=[
             {
                 "role": "user",
@@ -211,12 +211,12 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                            "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
                         },
                     },
                     {
                         "type": "text",
-                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What type of flower is this? Give some fun facts.",
                     },
                 ],
             }
@@ -233,15 +233,3 @@ print(res.usage)
 
 - You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
 - You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
-
-## UQFF models
-[UQFF](UQFF.md) is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations! The key advantage over GGUF is the flexibility to store multiple quantizations in one file.
-
-We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF)) for this Llama 3.2 Vision model.
-
-You can use these UQFF files to easily use quantized versions of Llama 3.2 Vision.
-
-For example:
-```
-./mistralrs-server -i vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct -a vllama --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
-```
