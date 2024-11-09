@@ -342,6 +342,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            max_edge,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -349,6 +350,7 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                max_edge,
             },
             chat_template,
             tokenizer_json,

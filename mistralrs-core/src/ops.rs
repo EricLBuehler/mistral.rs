@@ -1,6 +1,6 @@
 use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
-    Tensor, WithDType, D,
+    backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
+    Result, Shape, Tensor, WithDType, D,
 };
 
 use std::{
@@ -574,6 +574,62 @@ impl TopKLastDimOp for Tensor {
     }
 }
 
+pub trait RepeatInterleaveOp {
+    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor>;
+    fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor>;
+}
+
+impl RepeatInterleaveOp for Tensor {
+    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor> {
+        // For metal
+        assert!(self.dtype().is_float());
+        #[allow(clippy::cast_possible_truncation)]
+        let indices = Tensor::new(
+            (0..self.dim(dim)?)
+                .flat_map(|i| vec![i as u32; repeats])
+                .collect::<Vec<_>>(),
+            self.device(),
+        )?;
+        self.index_select(&indices, dim)
+    }
+
+    fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor> {
+        let xs = self.flatten_all()?;
+        if repeats.len() != xs.dim(0)? {
+            candle_core::bail!(
+                "repeats ({}) must match flattened self length ({})",
+                repeats.len(),
+                xs.dim(0)?
+            );
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let indices = Tensor::new(
+            (0..xs.dim(0)?)
+                .flat_map(|i| vec![i as u32; repeats[i] as usize])
+                .collect::<Vec<_>>(),
+            xs.device(),
+        )?;
+        xs.index_select(&indices, 0)
+    }
+}
+
+pub trait SplitOp {
+    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor>>;
+}
+
+impl SplitOp for Tensor {
+    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor>> {
+        let dim = dim.to_index(self.shape(), "split")?;
+        let mut split_res = Vec::new();
+        let mut index = 0;
+        for split in splits {
+            split_res.push(self.narrow(dim, index, *split)?);
+            index += *split;
+        }
+        Ok(split_res)
+    }
+}
+
 mod tests {
     #[test]
     fn test_topk() {
@@ -793,5 +849,43 @@ mod tests {
                 [1, 6]
             ]
         );
+    }
+
+    #[test]
+    fn test_repeat_interleave() -> candle_core::Result<()> {
+        use crate::ops::RepeatInterleaveOp;
+        use candle_core::{Device, Tensor};
+
+        let input = Tensor::new(
+            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
+            &Device::Cpu,
+        )?;
+
+        let repeat_interleaved = input.repeat_interleave(2, 2)?;
+        assert_eq!(
+            repeat_interleaved.to_vec3::<f32>()?,
+            vec![vec![
+                vec![1., 1., 2., 2., 3., 3.],
+                vec![4., 4., 5., 5., 6., 6.]
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repeat_interleave_flat() -> candle_core::Result<()> {
+        use crate::ops::RepeatInterleaveOp;
+        use candle_core::{Device, Tensor};
+
+        let input = Tensor::new(vec![1., 2., 3., 4.], &Device::Cpu)?;
+
+        let repeat_interleaved = input.repeat_interleave_flat(vec![1u32, 2u32, 3u32, 4u32])?;
+        assert_eq!(
+            repeat_interleaved.to_vec1::<f64>()?,
+            vec![1., 2., 2., 3., 3., 3., 4., 4., 4., 4.]
+        );
+
+        Ok(())
     }
 }

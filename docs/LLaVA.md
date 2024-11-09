@@ -63,7 +63,9 @@ cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_temp
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="llava_next",

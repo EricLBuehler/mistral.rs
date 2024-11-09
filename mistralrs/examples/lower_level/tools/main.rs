@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
             let result = get_weather(input);
             // Add tool call message from assistant so it knows what it called
             messages.push(IndexMap::from([
-                ("role".to_string(), Either::Left("asistant".to_string())),
+                ("role".to_string(), Either::Left("assistant".to_string())),
                 (
                     "content".to_string(),
                     Either::Left(

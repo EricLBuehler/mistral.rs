@@ -1,17 +1,18 @@
 use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
+const MODEL_ID: &str = "Qwen/Qwen2-VL-2B-Instruct";
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new("llava-hf/llava-1.5-7b-hf", VisionLoaderType::LLaVA)
+    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Qwen2VL)
         .with_isq(IsqType::Q4K)
-        .with_chat_template("chat_templates/vicuna.json")
         .with_logging()
         .build()
         .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -20,7 +21,7 @@ async fn main() -> Result<()> {
 
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
+        "What type of flower is this? Give some fun facts.",
         image,
         &model,
     )?;

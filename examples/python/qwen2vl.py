@@ -1,18 +1,17 @@
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
-# MODEL_ID = "meta-llama/Llama-3.2-11B-Vision-Instruct"
-MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
+MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 
 runner = Runner(
     which=Which.VisionPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.VLlama,
+        arch=VisionArchitecture.Qwen2VL,
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="llama-vision",
+        model="qwen2vl",
         messages=[
             {
                 "role": "user",
@@ -20,12 +19,12 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
+                            "url": "https://www.garden-treasures.com/cdn/shop/products/IMG_6245.jpg"
                         },
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "What type of flower is this? Give some fun facts.",
                     },
                 ],
             }

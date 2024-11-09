@@ -58,8 +58,8 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
 - `\image <image URL or local path here> <message here>`: 
-    Add a message paired with an image. You are responsible for prefixing the message with anything the model
-    requires.
+    Add a message paired with an image. The image will be fed to the model as if it were the first item in this prompt.
+    You do not need to modify your prompt for specific models.
     Ex: `\image path/to/image.jpg Describe what is in this image.`
 "#;
 
@@ -234,6 +234,16 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
 
+    let prefixer = match &mistralrs.config().category {
+        ModelCategory::Text | ModelCategory::Diffusion => {
+            panic!("`add_image_message` expects a vision model.")
+        }
+        ModelCategory::Vision {
+            has_conv2d: _,
+            prefixer,
+        } => prefixer,
+    };
+
     let sampling_params = SamplingParams {
         temperature: Some(0.1),
         top_k: Some(32),
@@ -315,6 +325,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                     }
                 };
                 let message = parts.collect::<Vec<_>>().join(" ");
+                let message = prefixer.prefix_image(images.len(), &message);
 
                 let image = util::parse_image_url(url)
                     .await

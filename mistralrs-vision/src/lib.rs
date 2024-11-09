@@ -23,9 +23,12 @@
 use candle_core::{Device, Result, Tensor};
 use image::DynamicImage;
 mod ops;
+mod pad;
 mod transforms;
 pub(crate) mod utils;
+
 pub use ops::{get_resize_image_size, make_pixel_mask, pad};
+pub use pad::pad_to_max_edge;
 pub use transforms::{InterpolateResize, Normalize, Rescale, ToTensor, ToTensorNoNorm};
 
 /// A transform over an image. The input may vary but the output is always a Tensor.

@@ -281,6 +281,10 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        max_edge: Option<u32>,
     },
 }
 
@@ -615,6 +619,7 @@ fn loader_from_selected(
             topology,
             write_uqff,
             from_uqff,
+            max_edge,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -622,6 +627,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                max_edge,
             },
             args.chat_template,
             args.tokenizer_json,

@@ -6,10 +6,11 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{Linear, Module};
+use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
+use candle_nn::Linear;
 
 use crate::{
+    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
@@ -18,7 +19,10 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct UnquantLinear(Linear);
+pub struct UnquantLinear {
+    w: Tensor,
+    b: Option<Tensor>,
+}
 
 impl QuantMethod for UnquantLinear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
@@ -31,12 +35,67 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. } => unreachable!(),
-            QuantMethodConfig::Unquantized(l) => Ok(Self(l)),
+            QuantMethodConfig::Unquantized(l) => Ok(Self {
+                w: l.weight().clone(),
+                b: l.bias().cloned(),
+            }),
         }
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        self.0.forward(a)
+        // Batch matrix multiplication
+        maybe_init_cublas_lt_wrapper();
+
+        let w = match *a.dims() {
+            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
+            [bsize, _, _] => self.w.broadcast_left(bsize)?,
+            _ => self.w.clone(),
+        };
+
+        if let Some(b) = self.b.as_ref() {
+            let mut tgt_shape = a.dims().to_vec();
+            tgt_shape[a.dims().len() - 1] = w.dim(D::Minus2)?;
+            let b = b.broadcast_as(Shape::from_dims(&tgt_shape))?;
+
+            match a.device().location() {
+                DeviceLocation::Cuda { .. } => {
+                    // Try to use cublaslt, otherwise fallback to gemm
+                    if let (Device::Cuda(_), Some(cublaslt)) =
+                        (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
+                    {
+                        cublaslt
+                            .batch_matmul(
+                                a,
+                                &w,
+                                Some(&b.t()?.contiguous()?),
+                                None,
+                                Some(1.0),
+                                None,
+                                None,
+                            )?
+                            .t()
+                    } else {
+                        let mut out = b.contiguous()?;
+                        a.matmul_with_alpha_beta(&w, &mut out, None)?;
+                        Ok(out)
+                    }
+                }
+                DeviceLocation::Metal { .. } => {
+                    let mut out = b.contiguous()?.to_dtype(DType::F32)?;
+                    a.to_dtype(DType::F32)?
+                        .matmul_with_alpha_beta(&w.to_dtype(DType::F32)?.t()?, &mut out, None)
+                        .unwrap();
+                    out.to_dtype(a.dtype())
+                }
+                DeviceLocation::Cpu => {
+                    let mut out = b.contiguous()?;
+                    a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+                    Ok(out)
+                }
+            }
+        } else {
+            a.matmul(&w.t()?)
+        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -44,14 +103,14 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(Self(Linear::new(
-            (self.0.weight() + delta)?,
-            self.0.bias().cloned(),
-        ))))
+        Ok(Arc::new(Self {
+            w: (&self.w + delta)?,
+            b: self.b.clone(),
+        }))
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
-        (self.0.weight().dtype(), self.0.weight().device().clone())
+        (self.w.dtype(), self.w.device().clone())
     }
 
     fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
@@ -84,8 +143,8 @@ impl QuantMethod for UnquantLinear {
                     round_zeros: false,
                     channel_wise: true,
                 };
-                let res = HqqLayer::quantize(&self.0.weight().to_device(&device)?, &device, cfg)?;
-                if let Some(bias) = self.0.bias() {
+                let res = HqqLayer::quantize(&self.w.to_device(&device)?, &device, cfg)?;
+                if let Some(bias) = &self.b {
                     let bias = bias
                         .to_device(&device)?
                         .to_dtype(res.dtype_and_device().0)?;
@@ -109,19 +168,18 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_1,
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
-                let res = generate_isq!(self.0.weight(), device, dtype, n_quantized);
+                let res = generate_isq!(self.w, device, dtype, n_quantized);
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
                     b: self
-                        .0
-                        .bias()
-                        .cloned()
+                        .b
+                        .as_ref()
                         .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
                 })?))
             }
             Some(IsqType::F8E4M3) => {
-                let w = self.0.weight().to_device(&device)?;
-                let b = if let Some(b) = self.0.bias() {
+                let w = self.w.to_device(&device)?;
+                let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)
                 } else {
                     None
@@ -132,8 +190,8 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
-                let w = self.0.weight().to_device(&device)?;
-                let b = if let Some(b) = self.0.bias() {
+                let w = self.w.to_device(&device)?;
+                let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)
                 } else {
                     None
@@ -169,7 +227,7 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
-        Some((self.0.weight().clone(), self.0.bias().cloned()))
+        Some((self.w.clone(), self.b.clone()))
     }
 }
 
@@ -203,12 +261,12 @@ impl QuantizedSerde for UnquantLinear {
         buffer.push(QuantizedSerdeType::Unquant as u8);
 
         // Has bias
-        buffer.push(self.0.bias().is_some() as u8);
+        buffer.push(self.b.is_some() as u8);
 
         // Weight
-        serialize_tensor(&mut buffer, self.0.weight())?;
+        serialize_tensor(&mut buffer, &self.w)?;
 
-        if let Some(bias) = self.0.bias() {
+        if let Some(bias) = &self.b {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -245,6 +303,6 @@ impl QuantizedSerde for UnquantLinear {
             None
         };
 
-        Ok(Arc::new(Self(Linear::new(w, b))))
+        Ok(Arc::new(Self { w, b }))
     }
 }

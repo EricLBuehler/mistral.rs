@@ -87,6 +87,7 @@ class VisionArchitecture(Enum):
     LLaVANext = "LLaVANext"
     LLaVA = "LLaVA"
     VLlama = "VLlama"
+    Qwen2VL = "Qwen2VL"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -222,6 +223,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        max_edge: int | None = None
 
     @dataclass
     class DiffusionPlain:

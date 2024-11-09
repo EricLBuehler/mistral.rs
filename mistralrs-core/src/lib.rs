@@ -79,7 +79,7 @@ pub use pipeline::{
     MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
     Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
@@ -109,6 +109,7 @@ static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 pub struct MistralRsConfig {
     pub kind: ModelKind,
     pub device: Device,
+    pub category: ModelCategory,
 }
 
 /// The MistralRs struct handles sending requests to the engine.
@@ -298,7 +299,7 @@ impl MistralRs {
         let category = pipeline.try_lock().unwrap().category();
         let model_supports_reduced_gemm = match category {
             ModelCategory::Text => true,
-            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+            ModelCategory::Vision { has_conv2d, .. } => !has_conv2d,
             ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
@@ -331,7 +332,11 @@ impl MistralRs {
 
         let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
         let device = pipeline.try_lock().unwrap().device();
-        let config = MistralRsConfig { kind, device };
+        let config = MistralRsConfig {
+            kind,
+            device,
+            category: category.clone(),
+        };
 
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
@@ -443,7 +448,7 @@ impl MistralRs {
     }
 
     pub fn get_model_category(&self) -> ModelCategory {
-        self.category
+        self.category.clone()
     }
 
     pub fn next_request_id(&self) -> usize {

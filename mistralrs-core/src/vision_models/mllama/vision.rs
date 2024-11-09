@@ -1,18 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::ops::Mul;
+use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
+use mistralrs_quant::QuantMethod;
 
 use crate::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
-    pipeline::IsqModel,
-    utils::unvarbuilder::UnVarBuilder,
+    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -141,22 +139,22 @@ impl MLlamaVisionAttention {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("o_proj"),
@@ -215,24 +213,26 @@ impl MLlamaVisionAttention {
 
 struct MLlamaMlp {
     act: VisionActivation,
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl MLlamaMlp {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: FusedBiasLinear::try_from(linear(
+            fc1: mistralrs_quant::linear(
                 cfg.hidden_size,
                 cfg.intermediate_size,
+                &None,
                 vb.pp("fc1"),
-            )?)?,
-            fc2: FusedBiasLinear::try_from(linear(
+            )?,
+            fc2: mistralrs_quant::linear(
                 cfg.intermediate_size,
                 cfg.hidden_size,
+                &None,
                 vb.pp("fc2"),
-            )?)?,
+            )?,
         })
     }
 

@@ -23,8 +23,8 @@ pub use normal_loaders::{
 };
 
 pub use vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VLlamaLoader, VisionLoaderType,
-    VisionModel, VisionModelLoader,
+    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{
