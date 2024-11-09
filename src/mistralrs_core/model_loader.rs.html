@@ -405,6 +405,8 @@
 <a href="#405" id="405">405</a>
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
@@ -788,6 +790,7 @@
             topology,
             write_uqff,
             from_uqff,
+            max_edge,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -795,6 +798,7 @@
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 write_uqff,
                 from_uqff,
+                max_edge,
             },
             args.chat_template,
             tokenizer_json,

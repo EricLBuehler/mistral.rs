@@ -292,6 +292,12 @@
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -321,7 +327,7 @@
 <span class="kw">pub use </span>hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 <span class="kw">pub use </span>unquantized::UnquantLinear;
 
-<span class="kw">use </span>candle_nn::{Linear, VarBuilder};
+<span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -521,6 +527,12 @@
     <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
         <span class="prelude-val">None
     </span>}
+}
+
+<span class="kw">impl </span>Module <span class="kw">for dyn </span>QuantMethod {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">Self</span>::forward(<span class="self">self</span>, xs)
+    }
 }
 
 <span class="kw">pub fn </span>linear_no_bias(

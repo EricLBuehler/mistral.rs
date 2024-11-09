@@ -392,6 +392,11 @@
 <a href="#392" id="392">392</a>
 <a href="#393" id="393">393</a>
 <a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::path::PathBuf;
 
 <span class="kw">use </span>clap::Subcommand;
@@ -769,6 +774,11 @@
         <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         </span><span class="attr">#[arg(short, long)]
         </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+
+        <span class="doccomment">/// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        </span><span class="attr">#[arg(short = <span class="string">'e'</span>, long)]
+        </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     },
 
     <span class="doccomment">/// Select a diffusion plain model, without quantization or adapters

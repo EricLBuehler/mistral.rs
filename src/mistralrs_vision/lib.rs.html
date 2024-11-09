@@ -77,6 +77,9 @@
 <a href="#77" id="77">77</a>
 <a href="#78" id="78">78</a>
 <a href="#79" id="79">79</a>
+<a href="#80" id="80">80</a>
+<a href="#81" id="81">81</a>
+<a href="#82" id="82">82</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides vision utilities for mistral.rs inspired by torchvision.
 //! In particular, it represents transformations on some `Self` type which are applied
 //! sequentially.
@@ -102,9 +105,12 @@
 </span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::DynamicImage;
 <span class="kw">mod </span>ops;
+<span class="kw">mod </span>pad;
 <span class="kw">mod </span>transforms;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>utils;
+
 <span class="kw">pub use </span>ops::{get_resize_image_size, make_pixel_mask, pad};
+<span class="kw">pub use </span>pad::pad_to_max_edge;
 <span class="kw">pub use </span>transforms::{InterpolateResize, Normalize, Rescale, ToTensor, ToTensorNoNorm};
 
 <span class="doccomment">/// A transform over an image. The input may vary but the output is always a Tensor.

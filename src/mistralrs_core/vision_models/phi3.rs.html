@@ -1264,6 +1264,50 @@
 <a href="#1264" id="1264">1264</a>
 <a href="#1265" id="1265">1265</a>
 <a href="#1266" id="1266">1266</a>
+<a href="#1267" id="1267">1267</a>
+<a href="#1268" id="1268">1268</a>
+<a href="#1269" id="1269">1269</a>
+<a href="#1270" id="1270">1270</a>
+<a href="#1271" id="1271">1271</a>
+<a href="#1272" id="1272">1272</a>
+<a href="#1273" id="1273">1273</a>
+<a href="#1274" id="1274">1274</a>
+<a href="#1275" id="1275">1275</a>
+<a href="#1276" id="1276">1276</a>
+<a href="#1277" id="1277">1277</a>
+<a href="#1278" id="1278">1278</a>
+<a href="#1279" id="1279">1279</a>
+<a href="#1280" id="1280">1280</a>
+<a href="#1281" id="1281">1281</a>
+<a href="#1282" id="1282">1282</a>
+<a href="#1283" id="1283">1283</a>
+<a href="#1284" id="1284">1284</a>
+<a href="#1285" id="1285">1285</a>
+<a href="#1286" id="1286">1286</a>
+<a href="#1287" id="1287">1287</a>
+<a href="#1288" id="1288">1288</a>
+<a href="#1289" id="1289">1289</a>
+<a href="#1290" id="1290">1290</a>
+<a href="#1291" id="1291">1291</a>
+<a href="#1292" id="1292">1292</a>
+<a href="#1293" id="1293">1293</a>
+<a href="#1294" id="1294">1294</a>
+<a href="#1295" id="1295">1295</a>
+<a href="#1296" id="1296">1296</a>
+<a href="#1297" id="1297">1297</a>
+<a href="#1298" id="1298">1298</a>
+<a href="#1299" id="1299">1299</a>
+<a href="#1300" id="1300">1300</a>
+<a href="#1301" id="1301">1301</a>
+<a href="#1302" id="1302">1302</a>
+<a href="#1303" id="1303">1303</a>
+<a href="#1304" id="1304">1304</a>
+<a href="#1305" id="1305">1305</a>
+<a href="#1306" id="1306">1306</a>
+<a href="#1307" id="1307">1307</a>
+<a href="#1308" id="1308">1308</a>
+<a href="#1309" id="1309">1309</a>
+<a href="#1310" id="1310">1310</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -1271,7 +1315,7 @@
 </span><span class="kw">use </span>candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Shape, Tensor, D,
 };
-<span class="kw">use </span>candle_nn::{linear_b, VarBuilder};
+<span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 <span class="kw">use </span>std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -1282,8 +1326,8 @@
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
-        PhiRotaryEmbedding, RmsNorm, Sdpa,
+        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
+        Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -1364,21 +1408,30 @@
 }
 
 <span class="kw">trait </span>ModuleWithMetadata: Module + Debug + Send + Sync {
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device;
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType;
 }
 
-<span class="kw">impl </span>ModuleWithMetadata <span class="kw">for </span>FusedBiasLinear {
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
-        <span class="self">self</span>.w.device()
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>QuantMethodWrapper(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
+
+<span class="kw">impl </span>Module <span class="kw">for </span>QuantMethodWrapper {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.<span class="number">0</span>.forward(xs)
+    }
+}
+
+<span class="kw">impl </span>ModuleWithMetadata <span class="kw">for </span>QuantMethodWrapper {
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+        <span class="self">self</span>.<span class="number">0</span>.unquant_weight_bias().unwrap().<span class="number">0</span>.device().clone()
     }
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
-        <span class="self">self</span>.w.dtype()
+        <span class="self">self</span>.<span class="number">0</span>.unquant_weight_bias().unwrap().<span class="number">0</span>.dtype()
     }
 }
 
 <span class="kw">impl </span>ModuleWithMetadata <span class="kw">for </span>candle_nn::Activation {
-    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
@@ -1830,47 +1883,82 @@
         <span class="kw">let </span>layers: Vec&lt;Box&lt;<span class="kw">dyn </span>ModuleWithMetadata&gt;&gt; =
             <span class="kw">match </span>(projection_cls.as_str(), use_hd_transform) {
                 (<span class="string">"linear"</span>, <span class="kw">_</span>) =&gt; {
-                    <span class="kw">let </span>a = linear_b(image_dim_out, hidden_size, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection"</span>))<span class="question-mark">?</span>;
-                    tensors.push((<span class="string">"img_projection.weight"</span>.to_string(), a.weight().clone()));
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                    <span class="kw">let </span>a = mistralrs_quant::linear_b(
+                        image_dim_out,
+                        hidden_size,
+                        <span class="bool-val">true</span>,
+                        <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                        vb.pp(<span class="string">"img_projection"</span>),
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>(a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push((<span class="string">"img_projection.weight"</span>.to_string(), a_w));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a_b {
                         tensors.push((<span class="string">"img_projection.bias"</span>.to_string(), b));
                     }
-                    <span class="macro">vec!</span>[Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>)]
+                    <span class="macro">vec!</span>[Box::new(QuantMethodWrapper(a))]
                 }
                 (<span class="string">"mlp"</span>, <span class="bool-val">true</span>) =&gt; {
                     <span class="kw">let </span>dim_proj = hidden_size;
-                    <span class="kw">let </span>a = linear_b(image_dim_out * <span class="number">4</span>, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.0"</span>))<span class="question-mark">?</span>;
-                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a.weight().clone()));
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                    <span class="kw">let </span>a = mistralrs_quant::linear_b(
+                        image_dim_out * <span class="number">4</span>,
+                        dim_proj,
+                        <span class="bool-val">true</span>,
+                        <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                        vb.pp(<span class="string">"img_projection.0"</span>),
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>(a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a_w));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a_b {
                         tensors.push((<span class="string">"img_projection.0.bias"</span>.to_string(), b));
                     }
-                    <span class="kw">let </span>b = linear_b(dim_proj, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.2"</span>))<span class="question-mark">?</span>;
-                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b.weight().clone()));
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b.bias().cloned() {
+                    <span class="kw">let </span>b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        <span class="bool-val">true</span>,
+                        <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                        vb.pp(<span class="string">"img_projection.2"</span>),
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>(b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b_w));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b_b {
                         tensors.push((<span class="string">"img_projection.2.bias"</span>.to_string(), b));
                     }
                     <span class="macro">vec!</span>[
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(b)<span class="question-mark">?</span>),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 (<span class="string">"mlp"</span>, <span class="bool-val">false</span>) =&gt; {
                     <span class="kw">let </span>dim_proj = hidden_size;
-                    <span class="kw">let </span>a = linear_b(image_dim_out, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.0"</span>))<span class="question-mark">?</span>;
-                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a.weight().clone()));
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a.bias().cloned() {
+                    <span class="kw">let </span>a = mistralrs_quant::linear_b(
+                        image_dim_out,
+                        dim_proj,
+                        <span class="bool-val">true</span>,
+                        <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                        vb.pp(<span class="string">"img_projection.0"</span>),
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>(a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push((<span class="string">"img_projection.0.weight"</span>.to_string(), a_w));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = a_b {
                         tensors.push((<span class="string">"img_projection.0.bias"</span>.to_string(), b));
                     }
-                    <span class="kw">let </span>b = linear_b(dim_proj, dim_proj, <span class="bool-val">true</span>, vb.pp(<span class="string">"img_projection.2"</span>))<span class="question-mark">?</span>;
-                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b.weight().clone()));
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b.bias().cloned() {
+                    <span class="kw">let </span>b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        <span class="bool-val">true</span>,
+                        <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                        vb.pp(<span class="string">"img_projection.2"</span>),
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>(b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push((<span class="string">"img_projection.2.weight"</span>.to_string(), b_w));
+                    <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = b_b {
                         tensors.push((<span class="string">"img_projection.2.bias"</span>.to_string(), b));
                     }
                     <span class="macro">vec!</span>[
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(a)<span class="question-mark">?</span>),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::&lt;FusedBiasLinear&gt;::try_into(b)<span class="question-mark">?</span>),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 <span class="kw">_ </span>=&gt; {
@@ -2054,21 +2142,21 @@
                 <span class="kw">for </span>img <span class="kw">in </span>output_imgs {
                     <span class="kw">let </span>layerout = <span class="self">self
                         </span>.layers
-                        .forward(<span class="kw-2">&amp;</span>img.to_device(target_dev)<span class="question-mark">?</span>.to_dtype(target_dtype)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+                        .forward(<span class="kw-2">&amp;</span>img.to_device(<span class="kw-2">&amp;</span>target_dev)<span class="question-mark">?</span>.to_dtype(target_dtype)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
                     image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = <span class="prelude-val">Some</span>(Either::Left(image_set_tensor_inner));
             } <span class="kw">else if </span>pixel_values.dims().len() == <span class="number">4 </span>{
                 <span class="kw">let </span>tt = <span class="self">self
                     </span>.get_image_features(pixel_values)<span class="question-mark">?
-                    </span>.to_device(target_dev)<span class="question-mark">?
+                    </span>.to_device(<span class="kw-2">&amp;</span>target_dev)<span class="question-mark">?
                     </span>.to_dtype(target_dtype)<span class="question-mark">?
                     </span>.reshape(((), <span class="self">self</span>.image_dim_out))<span class="question-mark">?</span>;
                 <span class="kw">let </span>image_set_tensor_inner = <span class="self">self</span>.layers.forward(<span class="kw-2">&amp;</span>tt)<span class="question-mark">?</span>;
                 image_set_tensor = <span class="prelude-val">Some</span>(Either::Right(image_set_tensor_inner));
             } <span class="kw">else if </span>pixel_values.dims().len() == <span class="number">3 </span>{
                 <span class="kw">let </span>tt = pixel_values
-                    .to_device(target_dev)<span class="question-mark">?
+                    .to_device(<span class="kw-2">&amp;</span>target_dev)<span class="question-mark">?
                     </span>.to_dtype(target_dtype)<span class="question-mark">?
                     </span>.reshape(((), <span class="self">self</span>.image_dim_out))<span class="question-mark">?</span>;
                 <span class="kw">let </span>image_set_tensor_inner = <span class="self">self</span>.layers.forward(<span class="kw-2">&amp;</span>tt)<span class="question-mark">?</span>;
@@ -2086,7 +2174,7 @@
                     <span class="kw">let </span><span class="kw-2">mut </span>idx = <span class="number">0</span>;
                     <span class="kw">for </span>(i, cnt) <span class="kw">in </span>output_lens.into_iter().enumerate() {
                         <span class="kw">let </span>img_set_tensor = image_set_tensors[i]
-                            .to_device(target_dev)<span class="question-mark">?
+                            .to_device(<span class="kw-2">&amp;</span>target_dev)<span class="question-mark">?
                             </span>.to_dtype(target_dtype)<span class="question-mark">?</span>;
                         <span class="comment">// hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
                         </span><span class="kw">let </span>p_0 = positions.i((idx, <span class="number">0</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
@@ -2106,7 +2194,7 @@
                         <span class="kw">let </span>cnt = <span class="self">self</span>.num_img_tokens;
                         <span class="kw">let </span>img_set_tensor = image_set_tensor
                             .i(i * cnt..(i + <span class="number">1</span>) * cnt)<span class="question-mark">?
-                            </span>.to_device(target_dev)<span class="question-mark">?
+                            </span>.to_device(<span class="kw-2">&amp;</span>target_dev)<span class="question-mark">?
                             </span>.to_dtype(target_dtype)<span class="question-mark">?</span>;
                         <span class="kw">let </span>p_0 = positions.i((idx, <span class="number">0</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
                         <span class="kw">let </span>p_1 = positions.i((idx, <span class="number">1</span>))<span class="question-mark">?</span>.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;

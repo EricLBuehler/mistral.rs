@@ -127,6 +127,60 @@
 <a href="#127" id="127">127</a>
 <a href="#128" id="128">128</a>
 <a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
 </pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
 
 </span><span class="attr">#![allow(unused_variables, unused_imports, dead_code)]
@@ -142,7 +196,7 @@
 </span><span class="kw">mod </span>matmul;
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-</span><span class="kw">pub use </span>api::{fused_batch_matmul_f8, CublasLt};
+</span><span class="kw">pub use </span>api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
 <span class="kw">pub enum </span>F8MatmulOutType {
     F8,
@@ -209,7 +263,7 @@
     ///
     /// The resulting tensor is of shape NxM
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
-    </span><span class="kw">pub fn </span>batch_matmul(
+    </span><span class="kw">pub fn </span>batch_matmul_f8(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         a: <span class="kw-2">&amp;</span>Tensor,
         b: <span class="kw-2">&amp;</span>Tensor,
@@ -242,6 +296,60 @@
                 bias,
                 inner_act,
                 out_dtype,
+                <span class="self">self</span>.cublaslt.clone(),
+            )<span class="question-mark">?</span>;
+
+            <span class="kw">if </span><span class="prelude-val">Some</span>(CandleActivation::Swiglu) == act {
+                result = candle_nn::ops::swiglu(<span class="kw-2">&amp;</span>result)<span class="question-mark">?</span>;
+            }
+            <span class="prelude-val">Ok</span>(result)
+        }
+        <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+        </span>{
+            <span class="macro">candle_core::bail!</span>(<span class="string">"`cuda` feature is not enabled"</span>)
+        }
+    }
+
+    <span class="doccomment">/// Fused batch matmul + add + Relu/Gelu activation using CublasLt.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Input tensor of size BxMxK
+    /// * `b` - Input tensor of size BxNxK
+    /// * `out` - Optional Output tensor of size BxNxK.
+    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `alpha` - Optional scaling factor for A*B
+    /// * `beta` - Optional scaling factor for C
+    /// * `bias` - Optional bias tensor of size M
+    /// * `act` - Optional Gelu or Relu activation. If set, will be added to the end result
+    ///
+    /// The resulting tensor is of shape NxM
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub fn </span>batch_matmul(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        a: <span class="kw-2">&amp;</span>Tensor,
+        b: <span class="kw-2">&amp;</span>Tensor,
+        out: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        alpha: <span class="prelude-ty">Option</span>&lt;f32&gt;,
+        beta: <span class="prelude-ty">Option</span>&lt;f32&gt;,
+        bias: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        act: <span class="prelude-ty">Option</span>&lt;CandleActivation&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+        </span>{
+            <span class="kw">let </span>inner_act = act.map(|a| <span class="kw">match </span>a {
+                CandleActivation::Relu =&gt; matmul::Activation::Relu,
+                CandleActivation::Gelu =&gt; matmul::Activation::Gelu,
+                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Unsupported activation in cublaslt matmul"</span>),
+            });
+            <span class="kw">let </span><span class="kw-2">mut </span>result = fused_batch_matmul(
+                a,
+                b,
+                out,
+                alpha,
+                beta,
+                bias,
+                inner_act,
                 <span class="self">self</span>.cublaslt.clone(),
             )<span class="question-mark">?</span>;
 

@@ -361,13 +361,19 @@
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
 <a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="comment">// Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
+</span><span class="kw">use </span>std::sync::Arc;
+
+<span class="comment">// Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 </span><span class="kw">use </span>candle_core::{IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
 <span class="kw">use </span>candle_nn::{Conv2dConfig, Module};
+<span class="kw">use </span>mistralrs_quant::QuantMethod;
 
-<span class="kw">use crate</span>::{layers::FusedBiasLinear, serde_default_fn, utils::unvarbuilder::UnVarBuilder};
+<span class="kw">use crate</span>::{serde_default_fn, utils::unvarbuilder::UnVarBuilder};
 
 <span class="attr">#[derive(Debug, Clone, Copy, serde::Deserialize)]
 </span><span class="kw">pub enum </span>Activation {
@@ -473,10 +479,10 @@
 
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">struct </span>ClipAttention {
-    k_proj: FusedBiasLinear,
-    v_proj: FusedBiasLinear,
-    q_proj: FusedBiasLinear,
-    out_proj: FusedBiasLinear,
+    k_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    v_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    q_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    out_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
@@ -486,18 +492,18 @@
     <span class="kw">fn </span>new(vs: candle_nn::VarBuilder, c: <span class="kw-2">&amp;</span>ClipConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_size = c.hidden_size;
         <span class="kw">let </span>num_attention_heads = c.num_attention_heads;
-        <span class="kw">let </span>k_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>q_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>out_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp(<span class="string">"out_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>k_proj = mistralrs_quant::linear(hidden_size, hidden_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>v_proj = mistralrs_quant::linear(hidden_size, hidden_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>q_proj = mistralrs_quant::linear(hidden_size, hidden_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>out_proj = mistralrs_quant::linear(hidden_size, hidden_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"out_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>head_dim = hidden_size / num_attention_heads;
         <span class="kw">let </span>scale = (head_dim <span class="kw">as </span>f64).powf(-<span class="number">0.5</span>);
 
         <span class="prelude-val">Ok</span>(ClipAttention {
-            k_proj: k_proj.try_into()<span class="question-mark">?</span>,
-            v_proj: v_proj.try_into()<span class="question-mark">?</span>,
-            q_proj: q_proj.try_into()<span class="question-mark">?</span>,
-            out_proj: out_proj.try_into()<span class="question-mark">?</span>,
+            k_proj,
+            v_proj,
+            q_proj,
+            out_proj,
             head_dim,
             scale,
             num_attention_heads,
@@ -550,19 +556,19 @@
 
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="kw">struct </span>ClipMlp {
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    fc2: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     activation: Activation,
 }
 
 <span class="kw">impl </span>ClipMlp {
     <span class="kw">fn </span>new(vs: candle_nn::VarBuilder, c: <span class="kw-2">&amp;</span>ClipConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>fc1 = candle_nn::linear(c.hidden_size, c.intermediate_size, vs.pp(<span class="string">"fc1"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>fc2 = candle_nn::linear(c.intermediate_size, c.hidden_size, vs.pp(<span class="string">"fc2"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>fc1 = mistralrs_quant::linear(c.hidden_size, c.intermediate_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"fc1"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>fc2 = mistralrs_quant::linear(c.intermediate_size, c.hidden_size, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vs.pp(<span class="string">"fc2"</span>))<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(ClipMlp {
-            fc1: fc1.try_into()<span class="question-mark">?</span>,
-            fc2: fc2.try_into()<span class="question-mark">?</span>,
+            fc1,
+            fc2,
             activation: c.hidden_act,
         })
     }

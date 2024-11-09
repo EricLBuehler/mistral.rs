@@ -248,6 +248,64 @@
 <a href="#248" id="248">248</a>
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
@@ -256,10 +314,11 @@
 };
 
 <span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
-<span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Linear, Module};
+<span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, <span class="prelude-ty">Result</span>, Shape, Tensor, D};
+<span class="kw">use </span>candle_nn::Linear;
 
 <span class="kw">use crate</span>::{
+    cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
@@ -268,7 +327,10 @@
 };
 
 <span class="attr">#[derive(Debug)]
-</span><span class="kw">pub struct </span>UnquantLinear(Linear);
+</span><span class="kw">pub struct </span>UnquantLinear {
+    w: Tensor,
+    b: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+}
 
 <span class="kw">impl </span>QuantMethod <span class="kw">for </span>UnquantLinear {
     <span class="kw">fn </span>new(method: QuantMethodConfig) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt;
@@ -281,12 +343,67 @@
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. } =&gt; <span class="macro">unreachable!</span>(),
-            QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>(l)),
+            QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                w: l.weight().clone(),
+                b: l.bias().cloned(),
+            }),
         }
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.<span class="number">0</span>.forward(a)
+        <span class="comment">// Batch matrix multiplication
+        </span>maybe_init_cublas_lt_wrapper();
+
+        <span class="kw">let </span>w = <span class="kw">match </span><span class="kw-2">*</span>a.dims() {
+            [b1, b2, <span class="kw">_</span>, <span class="kw">_</span>] =&gt; <span class="self">self</span>.w.broadcast_left((b1, b2))<span class="question-mark">?</span>,
+            [bsize, <span class="kw">_</span>, <span class="kw">_</span>] =&gt; <span class="self">self</span>.w.broadcast_left(bsize)<span class="question-mark">?</span>,
+            <span class="kw">_ </span>=&gt; <span class="self">self</span>.w.clone(),
+        };
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.b.as_ref() {
+            <span class="kw">let </span><span class="kw-2">mut </span>tgt_shape = a.dims().to_vec();
+            tgt_shape[a.dims().len() - <span class="number">1</span>] = w.dim(D::Minus2)<span class="question-mark">?</span>;
+            <span class="kw">let </span>b = b.broadcast_as(Shape::from_dims(<span class="kw-2">&amp;</span>tgt_shape))<span class="question-mark">?</span>;
+
+            <span class="kw">match </span>a.device().location() {
+                DeviceLocation::Cuda { .. } =&gt; {
+                    <span class="comment">// Try to use cublaslt, otherwise fallback to gemm
+                    </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) =
+                        (a.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap())
+                    {
+                        cublaslt
+                            .batch_matmul(
+                                a,
+                                <span class="kw-2">&amp;</span>w,
+                                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>b.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>),
+                                <span class="prelude-val">None</span>,
+                                <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
+                                <span class="prelude-val">None</span>,
+                                <span class="prelude-val">None</span>,
+                            )<span class="question-mark">?
+                            </span>.t()
+                    } <span class="kw">else </span>{
+                        <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>;
+                        a.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                        <span class="prelude-val">Ok</span>(out)
+                    }
+                }
+                DeviceLocation::Metal { .. } =&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+                    a.to_dtype(DType::F32)<span class="question-mark">?
+                        </span>.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)
+                        .unwrap();
+                    out.to_dtype(a.dtype())
+                }
+                DeviceLocation::Cpu =&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>;
+                    a.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w.t()<span class="question-mark">?</span>, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                    <span class="prelude-val">Ok</span>(out)
+                }
+            }
+        } <span class="kw">else </span>{
+            a.matmul(<span class="kw-2">&amp;</span>w.t()<span class="question-mark">?</span>)
+        }
     }
 
     <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {
@@ -294,14 +411,14 @@
     </span>}
 
     <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(Linear::new(
-            (<span class="self">self</span>.<span class="number">0</span>.weight() + delta)<span class="question-mark">?</span>,
-            <span class="self">self</span>.<span class="number">0</span>.bias().cloned(),
-        ))))
+        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
+            w: (<span class="kw-2">&amp;</span><span class="self">self</span>.w + delta)<span class="question-mark">?</span>,
+            b: <span class="self">self</span>.b.clone(),
+        }))
     }
 
     <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, candle_core::Device) {
-        (<span class="self">self</span>.<span class="number">0</span>.weight().dtype(), <span class="self">self</span>.<span class="number">0</span>.weight().device().clone())
+        (<span class="self">self</span>.w.dtype(), <span class="self">self</span>.w.device().clone())
     }
 
     <span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt; {
@@ -334,8 +451,8 @@
                     round_zeros: <span class="bool-val">false</span>,
                     channel_wise: <span class="bool-val">true</span>,
                 };
-                <span class="kw">let </span>res = HqqLayer::quantize(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+                <span class="kw">let </span>res = HqqLayer::quantize(<span class="kw-2">&amp;</span><span class="self">self</span>.w.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.b {
                     <span class="kw">let </span>bias = bias
                         .to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
                         </span>.to_dtype(res.dtype_and_device().<span class="number">0</span>)<span class="question-mark">?</span>;
@@ -359,19 +476,18 @@
                 | IsqType::Q8_1,
             ) =&gt; {
                 <span class="kw">let </span>dtype: GgmlDType = dtype.unwrap().try_into()<span class="question-mark">?</span>;
-                <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(<span class="self">self</span>.<span class="number">0</span>.weight(), device, dtype, n_quantized);
+                <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(<span class="self">self</span>.w, device, dtype, n_quantized);
                 <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
                     b: <span class="self">self
-                        </span>.<span class="number">0
-                        </span>.bias()
-                        .cloned()
+                        </span>.b
+                        .as_ref()
                         .map(|b| b.to_dtype(DType::F32).unwrap().to_device(<span class="kw-2">&amp;</span>device).unwrap()),
                 })<span class="question-mark">?</span>))
             }
             <span class="prelude-val">Some</span>(IsqType::F8E4M3) =&gt; {
-                <span class="kw">let </span>w = <span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+                <span class="kw">let </span>w = <span class="self">self</span>.w.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="kw-2">&amp;</span><span class="self">self</span>.b {
                     <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
@@ -382,8 +498,8 @@
                 })<span class="question-mark">?</span>))
             }
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>w = <span class="self">self</span>.<span class="number">0</span>.weight().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
-                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+                <span class="kw">let </span>w = <span class="self">self</span>.w.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;
+                <span class="kw">let </span>b = <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="kw-2">&amp;</span><span class="self">self</span>.b {
                     <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>)
                 } <span class="kw">else </span>{
                     <span class="prelude-val">None
@@ -419,7 +535,7 @@
     }
 
     <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
-        <span class="prelude-val">Some</span>((<span class="self">self</span>.<span class="number">0</span>.weight().clone(), <span class="self">self</span>.<span class="number">0</span>.bias().cloned()))
+        <span class="prelude-val">Some</span>((<span class="self">self</span>.w.clone(), <span class="self">self</span>.b.clone()))
     }
 }
 
@@ -453,12 +569,12 @@
         </span>buffer.push(QuantizedSerdeType::Unquant <span class="kw">as </span>u8);
 
         <span class="comment">// Has bias
-        </span>buffer.push(<span class="self">self</span>.<span class="number">0</span>.bias().is_some() <span class="kw">as </span>u8);
+        </span>buffer.push(<span class="self">self</span>.b.is_some() <span class="kw">as </span>u8);
 
         <span class="comment">// Weight
-        </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="self">self</span>.<span class="number">0</span>.weight())<span class="question-mark">?</span>;
+        </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.w)<span class="question-mark">?</span>;
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="self">self</span>.<span class="number">0</span>.bias() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.b {
             <span class="comment">// Bias
             </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, bias)<span class="question-mark">?</span>;
         }
@@ -495,7 +611,7 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(Linear::new(w, b))))
+        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ w, b }))
     }
 }
 </code></pre></div></section></main></body></html>

@@ -192,6 +192,16 @@
 <a href="#192" id="192">192</a>
 <a href="#193" id="193">193</a>
 <a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
@@ -208,6 +218,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -237,6 +248,7 @@
             prompt_batchsize: <span class="prelude-val">None</span>,
             chat_template: <span class="prelude-val">None</span>,
             tokenizer_json: <span class="prelude-val">None</span>,
+            max_edge: <span class="prelude-val">None</span>,
             loader_type,
             dtype: ModelDType::Auto,
             force_cpu: <span class="bool-val">false</span>,
@@ -328,6 +340,13 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+    /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+    </span><span class="kw">pub fn </span>from_max_edge(<span class="kw-2">mut </span><span class="self">self</span>, max_edge: u32) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.max_edge = <span class="prelude-val">Some</span>(max_edge);
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// Path to write a UQFF file to.
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
@@ -348,6 +367,7 @@
             topology: <span class="self">self</span>.topology,
             write_uqff: <span class="self">self</span>.write_uqff,
             from_uqff: <span class="self">self</span>.from_uqff,
+            max_edge: <span class="self">self</span>.max_edge,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

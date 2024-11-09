@@ -367,6 +367,28 @@
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
 <a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -398,22 +420,30 @@
 };
 
 <span class="comment">// Input processor
-</span><span class="kw">pub struct </span>Idefics2ImageProcessor;
+</span><span class="kw">pub struct </span>Idefics2ImageProcessor {
+    max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+}
 <span class="comment">// Processor
 </span><span class="kw">pub struct </span>Idefics2Processor {
     config: ProcessorConfig,
     preprocessor_config: PreProcessorConfig,
     fake_image_token: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
     image_token: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+    max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 }
 
 <span class="kw">impl </span>Idefics2Processor {
-    <span class="kw">pub fn </span>new(config: ProcessorConfig, preprocessor_config: PreProcessorConfig) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(
+        config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             config,
             preprocessor_config,
             fake_image_token: <span class="string">"&lt;fake_token_around_image&gt;"</span>,
             image_token: <span class="string">"&lt;image&gt;"</span>,
+            max_edge,
         }
     }
 }
@@ -470,7 +500,9 @@
     }
 
     <span class="kw">fn </span>inputs_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>InputsProcessor&gt; {
-        Arc::new(Idefics2ImageProcessor)
+        Arc::new(Idefics2ImageProcessor {
+            max_edge: <span class="self">self</span>.max_edge,
+        })
     }
 
     <span class="kw">fn </span>get_special_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="lifetime">'static </span>str] {
@@ -577,10 +609,13 @@
                     aspect_ratio_ids: <span class="kw">_</span>,
                     aspect_ratio_mask: <span class="kw">_</span>,
                     num_tiles: <span class="kw">_</span>,
+                    image_grid_thw: <span class="kw">_</span>,
+                    video_grid_thw: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
                             .expect(<span class="string">"Need to have images by this point."</span>),
+                        <span class="macro">vec!</span>[],
                         config,
                         device,
                         (usize::MAX, usize::MAX), <span class="comment">// Don't use it here...
@@ -625,10 +660,13 @@
     <span class="kw">fn </span>preprocess(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
+        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
         config: <span class="kw-2">&amp;</span>PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>Device,
         (_bs, _max_num_images): (usize, usize),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
+        <span class="macro">assert!</span>(videos.is_empty());
+
         <span class="kw">let </span><span class="kw-2">mut </span>patch_masks = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>pixel_values = Vec::new();
 
@@ -670,6 +708,10 @@
 
                 <span class="kw-2">*</span>image = image.resize_exact(w <span class="kw">as </span>u32, h <span class="kw">as </span>u32, config.resampling.to_filter()<span class="question-mark">?</span>);
             }
+        }
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(max_edge) = <span class="self">self</span>.max_edge {
+            images = mistralrs_vision::pad_to_max_edge(<span class="kw-2">&amp;</span>images, max_edge);
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>max_h = <span class="number">0</span>;
@@ -733,6 +775,8 @@
             aspect_ratio_ids: <span class="prelude-val">None</span>,
             aspect_ratio_mask: <span class="prelude-val">None</span>,
             num_tiles: <span class="prelude-val">None</span>,
+            image_grid_thw: <span class="prelude-val">None</span>,
+            video_grid_thw: <span class="prelude-val">None</span>,
         })
     }
 }

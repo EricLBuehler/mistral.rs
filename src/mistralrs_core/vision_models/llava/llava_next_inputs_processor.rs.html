@@ -435,6 +435,19 @@
 <a href="#435" id="435">435</a>
 <a href="#436" id="436">436</a>
 <a href="#437" id="437">437</a>
+<a href="#438" id="438">438</a>
+<a href="#439" id="439">439</a>
+<a href="#440" id="440">440</a>
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
@@ -581,8 +594,16 @@
                     aspect_ratio_ids: <span class="kw">_</span>,
                     aspect_ratio_mask: <span class="kw">_</span>,
                     num_tiles: <span class="kw">_</span>,
+                    image_grid_thw: <span class="kw">_</span>,
+                    video_grid_thw: <span class="kw">_</span>,
                 } = <span class="self">self
-                    </span>.preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
+                    </span>.preprocess(
+                        imgs.clone(),
+                        <span class="macro">vec!</span>[],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX),
+                    )
                     .expect(<span class="string">"Preprocessor failed"</span>);
                 <span class="kw">let </span>image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
@@ -809,6 +830,7 @@
     <span class="kw">fn </span>preprocess(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         images: Vec&lt;image::DynamicImage&gt;,
+        videos: Vec&lt;Vec&lt;image::DynamicImage&gt;&gt;,
         config: <span class="kw-2">&amp;</span>preprocessor_config::PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
@@ -816,6 +838,8 @@
         <span class="kw">if </span>images.len() &gt; <span class="number">1 </span>{
             <span class="macro">candle_core::bail!</span>(<span class="string">"Can only process one image per batch"</span>); <span class="comment">// This is no different from phi3_input_processor
         </span>};
+        <span class="macro">assert!</span>(videos.is_empty());
+
         <span class="kw">let </span>resized_size = <span class="kw-2">*</span>config.size.as_ref().unwrap().get(<span class="string">"shortest_edge"</span>).unwrap() <span class="kw">as </span>usize;
         <span class="kw">let </span>image = images[<span class="number">0</span>].clone();
         <span class="kw">let </span>original_size = image.dimensions();
@@ -869,6 +893,8 @@
             aspect_ratio_ids: <span class="prelude-val">None</span>,
             aspect_ratio_mask: <span class="prelude-val">None</span>,
             num_tiles: <span class="prelude-val">None</span>,
+            image_grid_thw: <span class="prelude-val">None</span>,
+            video_grid_thw: <span class="prelude-val">None</span>,
         })
     }
 }

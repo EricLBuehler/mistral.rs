@@ -1002,6 +1002,61 @@
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
 <a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a>
+<a href="#1021" id="1021">1021</a>
+<a href="#1022" id="1022">1022</a>
+<a href="#1023" id="1023">1023</a>
+<a href="#1024" id="1024">1024</a>
+<a href="#1025" id="1025">1025</a>
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a>
+<a href="#1030" id="1030">1030</a>
+<a href="#1031" id="1031">1031</a>
+<a href="#1032" id="1032">1032</a>
+<a href="#1033" id="1033">1033</a>
+<a href="#1034" id="1034">1034</a>
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a>
+<a href="#1048" id="1048">1048</a>
+<a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -1016,9 +1071,9 @@
 
 <span class="kw">use </span>candle_core::{
     quantized::{QMatMul, QTensor},
-    Context, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Shape, Tensor, D,
+    Context, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D,
 };
-<span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
+<span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
@@ -1026,9 +1081,9 @@
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_masker::CausalMasker;
 <span class="kw">pub use </span><span class="kw">crate</span>::layers_utils::repeat_kv;
 <span class="kw">use crate</span>::{
-    cublaslt::CUBLASLT_HANDLE,
     gguf::Content,
     models::llama,
+    ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
     INHIBIT_GEMM_F16,
 };
@@ -1073,6 +1128,35 @@
 <span class="kw">impl </span>Module <span class="kw">for </span>RmsNorm {
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         candle_nn::ops::rms_norm(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.weight, <span class="self">self</span>.eps <span class="kw">as </span>f32)
+    }
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub struct </span>F32RmsNorm {
+    w: Tensor,
+    eps: f64,
+}
+
+<span class="kw">impl </span>F32RmsNorm {
+    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            w: vb.get((size,), <span class="string">"weight"</span>)<span class="question-mark">?</span>,
+            eps,
+        })
+    }
+
+    <span class="kw">pub fn </span>weight(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Tensor {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.w
+    }
+}
+
+<span class="kw">impl </span>Module <span class="kw">for </span>F32RmsNorm {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>initial_type = xs.dtype();
+        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>var = xs.powf(<span class="number">2.</span>)<span class="question-mark">?</span>.mean_keepdim(D::Minus1)<span class="question-mark">?</span>;
+        xs = xs.broadcast_mul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>var + <span class="self">self</span>.eps)<span class="question-mark">?</span>.recip()<span class="question-mark">?</span>.sqrt()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        xs.to_dtype(initial_type)<span class="question-mark">?</span>.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.w)
     }
 }
 
@@ -1626,6 +1710,84 @@
     }
 }
 
+<span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L107
+</span><span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub struct </span>Qwen2VLRotaryEmbedding {
+    inv_freq: Tensor,
+    mrope_section: Vec&lt;usize&gt;,
+}
+
+<span class="kw">impl </span>Qwen2VLRotaryEmbedding {
+    <span class="kw">pub fn </span>new(
+        base: f32,
+        head_dim: usize,
+        device: <span class="kw-2">&amp;</span>Device,
+        mrope_section: Vec&lt;usize&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>inv_freq: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..head_dim)
+            .step_by(<span class="number">2</span>)
+            .map(|i| <span class="number">1f32 </span>/ base.powf(i <span class="kw">as </span>f32 / head_dim <span class="kw">as </span>f32))
+            .collect();
+        <span class="kw">let </span>inv_freq_len = inv_freq.len();
+        <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            inv_freq,
+            mrope_section,
+        })
+    }
+
+    <span class="doccomment">/// (cos, sin)
+    </span><span class="kw">pub fn </span>compute_cos_sin(<span class="kw-2">&amp;</span><span class="self">self</span>, position_ids: <span class="kw-2">&amp;</span>Tensor, dtype: DType) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
+        <span class="kw">let </span>inv_freq_expanded =
+            <span class="self">self</span>.inv_freq
+                .reshape((<span class="number">1</span>, <span class="number">1</span>, (), <span class="number">1</span>))<span class="question-mark">?
+                </span>.repeat((<span class="number">3</span>, position_ids.dim(<span class="number">1</span>)<span class="question-mark">?</span>, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>position_ids_expanded = position_ids.unsqueeze(<span class="number">2</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>freqs = inv_freq_expanded
+            .matmul(<span class="kw-2">&amp;</span>position_ids_expanded.to_dtype(inv_freq_expanded.dtype())<span class="question-mark">?</span>)<span class="question-mark">?
+            </span>.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>;
+        <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cos = Tensor::cat(
+            <span class="kw-2">&amp;</span>cos.split(<span class="kw-2">&amp;</span><span class="self">self</span>.mrope_section, D::Minus1)<span class="question-mark">?
+                </span>.into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % <span class="number">3</span>))
+                .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>,
+            D::Minus1,
+        )<span class="question-mark">?
+        </span>.squeeze(<span class="number">0</span>)<span class="question-mark">?
+        </span>.to_dtype(dtype)<span class="question-mark">?
+        </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>sin = Tensor::cat(
+            <span class="kw-2">&amp;</span>sin.split(<span class="kw-2">&amp;</span><span class="self">self</span>.mrope_section, D::Minus1)<span class="question-mark">?
+                </span>.into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % <span class="number">3</span>))
+                .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>,
+            D::Minus1,
+        )<span class="question-mark">?
+        </span>.squeeze(<span class="number">0</span>)<span class="question-mark">?
+        </span>.to_dtype(dtype)<span class="question-mark">?
+        </span>.contiguous()<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>((cos, sin))
+    }
+
+    <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
+    </span><span class="kw">pub fn </span>forward(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        (cos, sin): <span class="kw-2">&amp;</span>(Tensor, Tensor),
+        q: <span class="kw-2">&amp;mut </span>Tensor,
+        k: <span class="kw-2">&amp;mut </span>Tensor,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw-2">*</span>q = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, cos, sin)<span class="question-mark">?</span>;
+        <span class="kw-2">*</span>k = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>, cos, sin)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(())
+    }
+}
+
 <span class="doccomment">/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
 </span><span class="kw">pub struct </span>MatMul;
 
@@ -1675,57 +1837,6 @@
             matmul.forward_via_half(x)
         } <span class="kw">else </span>{
             matmul.forward(x)
-        }
-    }
-}
-
-<span class="doccomment">/// Linear layer with fused bias matmul.
-</span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>FusedBiasLinear {
-    <span class="kw">pub</span>(<span class="kw">crate</span>) w: Tensor,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) b: Tensor,
-}
-
-<span class="kw">impl </span>TryFrom&lt;Linear&gt; <span class="kw">for </span>FusedBiasLinear {
-    <span class="kw">type </span>Error = candle_core::Error;
-
-    <span class="kw">fn </span>try_from(x: Linear) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = x.bias() {
-            <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-                w: x.weight().clone(),
-                b: bias.clone(),
-            })
-        } <span class="kw">else </span>{
-            <span class="macro">candle_core::bail!</span>(<span class="string">"`FusedBiasLinear` expects a Linear layer with bias."</span>)
-        }
-    }
-}
-
-<span class="kw">impl </span>Module <span class="kw">for </span>FusedBiasLinear {
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>w = <span class="kw">match </span><span class="kw-2">*</span>x.dims() {
-            [b1, b2, <span class="kw">_</span>, <span class="kw">_</span>] =&gt; <span class="self">self</span>.w.broadcast_left((b1, b2))<span class="question-mark">?</span>,
-            [bsize, <span class="kw">_</span>, <span class="kw">_</span>] =&gt; <span class="self">self</span>.w.broadcast_left(bsize)<span class="question-mark">?</span>,
-            <span class="kw">_ </span>=&gt; <span class="self">self</span>.w.clone(),
-        };
-        <span class="kw">let </span><span class="kw-2">mut </span>tgt_shape = x.dims().to_vec();
-        tgt_shape[x.dims().len() - <span class="number">1</span>] = w.dim(D::Minus2)<span class="question-mark">?</span>;
-        <span class="kw">let </span>b = <span class="self">self</span>.b.broadcast_as(Shape::from_dims(<span class="kw-2">&amp;</span>tgt_shape))<span class="question-mark">?</span>;
-
-        <span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (x.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
-            cublaslt
-                .batch_matmul(
-                    x,
-                    <span class="kw-2">&amp;</span>w,
-                    <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>b.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>),
-                    <span class="prelude-val">None</span>,
-                    <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
-                    <span class="prelude-val">None</span>,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-                </span>.t()
-        } <span class="kw">else </span>{
-            x.matmul(<span class="kw-2">&amp;</span>w.t()<span class="question-mark">?</span>)<span class="question-mark">? </span>+ b
         }
     }
 }
@@ -1908,6 +2019,7 @@
     LeakyRelu(f64),
     <span class="attr">#[serde(alias = <span class="string">"gelu_pytorch_tanh"</span>)]
     </span>GeluPytorchTanh,
+    QuickGelu,
 }
 
 <span class="kw">impl </span>Module <span class="kw">for </span>Activation {
@@ -1928,82 +2040,80 @@
             <span class="kw-2">&amp;</span><span class="self">Self</span>::Elu(alpha) =&gt; xs.elu(alpha),
             <span class="kw-2">&amp;</span><span class="self">Self</span>::LeakyRelu(negative_slope) =&gt; candle_nn::ops::leaky_relu(xs, negative_slope),
             <span class="self">Self</span>::GeluPytorchTanh =&gt; xs.gelu(),
+            <span class="self">Self</span>::QuickGelu =&gt; xs * candle_nn::ops::sigmoid(<span class="kw-2">&amp;</span>(xs * <span class="number">1.702f64</span>)<span class="question-mark">?</span>),
         }
     }
 }
 
-<span class="kw">mod </span>tests {
+<span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+</span><span class="kw">pub struct </span>Conv3dConfig {
+    <span class="kw">pub </span>padding: usize,
+    <span class="kw">pub </span>stride: usize,
+    <span class="kw">pub </span>dilation: usize,
+    <span class="kw">pub </span>groups: usize,
+}
 
-    <span class="attr">#[test]
-    </span><span class="kw">fn </span>fused_bias_linear() {
-        <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Tensor};
-        <span class="kw">use </span>candle_nn::{Linear, Module};
+<span class="kw">impl </span>Default <span class="kw">for </span>Conv3dConfig {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            padding: <span class="number">0</span>,
+            stride: <span class="number">1</span>,
+            dilation: <span class="number">1</span>,
+            groups: <span class="number">1</span>,
+        }
+    }
+}
 
-        <span class="kw">use </span><span class="kw">crate</span>::cublaslt::setup_cublas_lt_wrapper;
-        <span class="kw">use </span><span class="kw">crate</span>::layers::FusedBiasLinear;
+<span class="kw">pub struct </span>Conv3dNoBias {
+    conv2d_1: Conv2d,
+    conv2d_2: Conv2d,
+}
 
-        <span class="kw">const </span>IN: usize = <span class="number">1921</span>;
-        <span class="kw">const </span>OUT: usize = <span class="number">4096</span>;
-        <span class="kw">const </span>INNER: usize = <span class="number">1024</span>;
+<span class="kw">impl </span>Conv3dNoBias {
+    <span class="kw">pub fn </span>new(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_sizes: [usize; <span class="number">3</span>],
+        cfg: Conv3dConfig,
+        vb: VarBuilder,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>ws = vb.get(
+            (
+                out_channels,
+                in_channels / cfg.groups,
+                kernel_sizes[<span class="number">0</span>],
+                kernel_sizes[<span class="number">1</span>],
+                kernel_sizes[<span class="number">2</span>],
+            ),
+            <span class="string">"weight"</span>,
+        )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>dev = Device::cuda_if_available(<span class="number">0</span>).unwrap();
-        setup_cublas_lt_wrapper();
+        <span class="comment">// Split on temporal dimension
+        // https://github.com/pytorch/pytorch/issues/139066
 
-        <span class="kw">let </span>inner_dtype = <span class="kw">if </span>dev.is_cuda() {
-            DType::BF16
-        } <span class="kw">else </span>{
-            DType::F32
+        </span><span class="kw">let </span>w1 = ws.i((.., .., <span class="number">0</span>, .., ..))<span class="question-mark">?</span>;
+        <span class="kw">let </span>w2 = ws.i((.., .., <span class="number">1</span>, .., ..))<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = Conv2dConfig {
+            padding: cfg.padding,
+            stride: cfg.stride,
+            dilation: cfg.dilation,
+            groups: cfg.groups,
         };
 
-        <span class="kw">let </span>w = Tensor::arange(<span class="number">0f32</span>, (OUT * IN) <span class="kw">as </span>f32, <span class="kw-2">&amp;</span>dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT, IN))
-            .unwrap();
-        <span class="kw">let </span>b = Tensor::arange(<span class="number">0f32</span>, OUT <span class="kw">as </span>f32, <span class="kw-2">&amp;</span>dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT,))
-            .unwrap();
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            conv2d_1: Conv2d::new(w1.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
+            conv2d_2: Conv2d::new(w2.contiguous()<span class="question-mark">?</span>, <span class="prelude-val">None</span>, cfg),
+        })
+    }
+}
 
-        <span class="kw">let </span>xs = Tensor::arange(<span class="number">0f32</span>, (INNER * IN) <span class="kw">as </span>f32, <span class="kw-2">&amp;</span>dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((<span class="number">1</span>, INNER, IN))
-            .unwrap();
+<span class="kw">impl </span>Module <span class="kw">for </span>Conv3dNoBias {
+    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>xs1 = xs.i((.., .., <span class="number">0</span>, .., ..))<span class="question-mark">?</span>;
+        <span class="kw">let </span>xs2 = xs.i((.., .., <span class="number">1</span>, .., ..))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>lin = Linear::new(w.clone(), <span class="prelude-val">Some</span>(b.clone()));
-        <span class="kw">let </span>truth_out = lin.forward(<span class="kw-2">&amp;</span>xs).unwrap();
-        <span class="kw">let </span>truth_y = truth_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::&lt;f32&gt;()
-            .unwrap();
-
-        <span class="kw">let </span>fused = FusedBiasLinear { w, b };
-        <span class="kw">let </span>fused_out = fused.forward(<span class="kw-2">&amp;</span>xs).unwrap();
-        <span class="kw">let </span>fused_y = fused_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::&lt;f32&gt;()
-            .unwrap();
-
-        <span class="macro">assert_eq!</span>(truth_out.shape(), fused_out.shape());
-        <span class="kw">if </span>truth_y != fused_y {
-            <span class="macro">panic!</span>(
-                <span class="string">"Truth does not match fused kernel. Diff fused - truth:\n{:#?}"</span>,
-                <span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>fused_out - <span class="kw-2">&amp;</span>truth_out)
-                    .unwrap()
-                    .i((<span class="number">0</span>, <span class="number">5</span>..<span class="number">10</span>, <span class="number">0</span>..<span class="number">5</span>))
-                    .unwrap()
-                    .to_dtype(DType::F32)
-                    .unwrap()
-                    .to_vec2::&lt;f32&gt;()
-            )
-        }
+        (<span class="self">self</span>.conv2d_1.forward(<span class="kw-2">&amp;</span>xs1)<span class="question-mark">? </span>+ <span class="self">self</span>.conv2d_2.forward(<span class="kw-2">&amp;</span>xs2)<span class="question-mark">?</span>)<span class="question-mark">?</span>.unsqueeze(<span class="number">2</span>)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -649,13 +649,26 @@
 <a href="#649" id="649">649</a>
 <a href="#650" id="650">650</a>
 <a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
+    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    XLoraPaths,
 };
 <span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
@@ -703,6 +716,8 @@
     preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
     topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     silent: bool,
+    prefixer: Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt;,
+
     <span class="comment">// For full UQFF serialization
     </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -744,6 +759,7 @@
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 }
 
 <span class="kw">impl </span>VisionLoaderBuilder {
@@ -769,6 +785,7 @@
             VisionLoaderType::LLaVANext =&gt; Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA =&gt; Box::new(LLaVALoader),
             VisionLoaderType::VLlama =&gt; Box::new(VLlamaLoader),
+            VisionLoaderType::Qwen2VL =&gt; Box::new(Qwen2VLLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -929,9 +946,12 @@
             .as_ref()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
 
-        <span class="kw">let </span>processor =
-            <span class="self">self</span>.inner
-                .get_processor(<span class="kw-2">&amp;</span>config, processor_config, preprocessor_config.clone()); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
+        <span class="kw">let </span>processor = <span class="self">self</span>.inner.get_processor(
+            <span class="kw-2">&amp;</span>config,
+            processor_config,
+            preprocessor_config.clone(),
+            <span class="self">self</span>.config.max_edge,
+        ); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
 
         </span><span class="kw">let </span>tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
@@ -1015,6 +1035,7 @@
                 prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
             }),
             processor,
+            prefixer: <span class="self">self</span>.inner.prefixer(),
             preprocessor_config: Arc::new(preprocessor_config),
             topology: <span class="self">self</span>.config.topology.clone(),
             silent,
@@ -1165,7 +1186,10 @@
     </span>}
     <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
         <span class="kw">let </span>has_conv2d = <span class="self">self</span>.model.has_conv2d();
-        ModelCategory::Vision { has_conv2d }
+        ModelCategory::Vision {
+            has_conv2d,
+            prefixer: <span class="self">self</span>.prefixer.clone(),
+        }
     }
 }
 

@@ -704,19 +704,17 @@
 <a href="#704" id="704">704</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::ops::Mul;
+</span><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
+<span class="kw">use </span>mistralrs_quant::QuantMethod;
 
 <span class="kw">use crate</span>::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
-    pipeline::IsqModel,
-    utils::unvarbuilder::UnVarBuilder,
+    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
 };
 
 <span class="kw">use super</span>::{MLlamaVisionConfig, VisionActivation};
@@ -845,22 +843,22 @@
     <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>MLlamaVisionConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            q_proj: linear_no_bias(
+            q_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp(<span class="string">"q_proj"</span>),
             )<span class="question-mark">?</span>,
-            k_proj: linear_no_bias(
+            k_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp(<span class="string">"k_proj"</span>),
             )<span class="question-mark">?</span>,
-            v_proj: linear_no_bias(
+            v_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp(<span class="string">"v_proj"</span>),
             )<span class="question-mark">?</span>,
-            o_proj: linear_no_bias(
+            o_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp(<span class="string">"o_proj"</span>),
@@ -919,24 +917,26 @@
 
 <span class="kw">struct </span>MLlamaMlp {
     act: VisionActivation,
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    fc2: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
 }
 
 <span class="kw">impl </span>MLlamaMlp {
     <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>MLlamaVisionConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             act: cfg.hidden_act,
-            fc1: FusedBiasLinear::try_from(linear(
+            fc1: mistralrs_quant::linear(
                 cfg.hidden_size,
                 cfg.intermediate_size,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
                 vb.pp(<span class="string">"fc1"</span>),
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-            fc2: FusedBiasLinear::try_from(linear(
+            )<span class="question-mark">?</span>,
+            fc2: mistralrs_quant::linear(
                 cfg.intermediate_size,
                 cfg.hidden_size,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
                 vb.pp(<span class="string">"fc2"</span>),
-            )<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+            )<span class="question-mark">?</span>,
         })
     }
 

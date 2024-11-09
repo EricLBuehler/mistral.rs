@@ -871,6 +871,14 @@
 <a href="#871" id="871">871</a>
 <a href="#872" id="872">872</a>
 <a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -1170,10 +1178,13 @@
                     aspect_ratio_ids,
                     aspect_ratio_mask,
                     num_tiles,
+                    image_grid_thw: <span class="kw">_</span>,
+                    video_grid_thw: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
                             .expect(<span class="string">"Need to have images by this point."</span>),
+                        <span class="macro">vec!</span>[],
                         config,
                         device,
                         (bs, max_num_images), <span class="comment">// Don't use it here...
@@ -1604,10 +1615,13 @@
     <span class="kw">fn </span>preprocess(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         images: Vec&lt;DynamicImage&gt;,
+        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
         config: <span class="kw-2">&amp;</span>PreProcessorConfig,
         device: <span class="kw-2">&amp;</span>Device,
         (bs, max_num_images): (usize, usize),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
+        <span class="macro">assert!</span>(videos.is_empty());
+
         <span class="kw">let </span><span class="kw-2">mut </span>sample_images = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>sample_aspect_ratios = Vec::new();
         <span class="kw">let </span>max_image_tiles = config
@@ -1741,6 +1755,8 @@
             aspect_ratio_ids: <span class="prelude-val">Some</span>(aspect_ratio_ids),
             aspect_ratio_mask: <span class="prelude-val">Some</span>(aspect_ratio_mask),
             num_tiles: <span class="prelude-val">Some</span>(num_tiles),
+            image_grid_thw: <span class="prelude-val">None</span>,
+            video_grid_thw: <span class="prelude-val">None</span>,
         })
     }
 }

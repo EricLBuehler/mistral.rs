@@ -498,6 +498,11 @@
 <a href="#498" id="498">498</a>
 <a href="#499" id="499">499</a>
 <a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::Device;
@@ -579,7 +584,7 @@
     MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 <span class="kw">pub use </span>request::{
     Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
@@ -609,6 +614,7 @@
 <span class="kw">pub struct </span>MistralRsConfig {
     <span class="kw">pub </span>kind: ModelKind,
     <span class="kw">pub </span>device: Device,
+    <span class="kw">pub </span>category: ModelCategory,
 }
 
 <span class="doccomment">/// The MistralRs struct handles sending requests to the engine.
@@ -798,7 +804,7 @@
         <span class="kw">let </span>category = pipeline.try_lock().unwrap().category();
         <span class="kw">let </span>model_supports_reduced_gemm = <span class="kw">match </span>category {
             ModelCategory::Text =&gt; <span class="bool-val">true</span>,
-            ModelCategory::Vision { has_conv2d } =&gt; !has_conv2d,
+            ModelCategory::Vision { has_conv2d, .. } =&gt; !has_conv2d,
             ModelCategory::Diffusion =&gt; <span class="bool-val">true</span>,
         };
         <span class="kw">if </span>!gemm_full_precision_f16.unwrap_or(<span class="bool-val">false</span>) &amp;&amp; model_supports_reduced_gemm {
@@ -831,7 +837,11 @@
 
         <span class="kw">let </span>kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
         <span class="kw">let </span>device = pipeline.try_lock().unwrap().device();
-        <span class="kw">let </span>config = MistralRsConfig { kind, device };
+        <span class="kw">let </span>config = MistralRsConfig {
+            kind,
+            device,
+            category: category.clone(),
+        };
 
         <span class="kw">let </span>engine_handler = thread::spawn(<span class="kw">move </span>|| {
             <span class="kw">let </span>rt = Runtime::new().unwrap();
@@ -943,7 +953,7 @@
     }
 
     <span class="kw">pub fn </span>get_model_category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
-        <span class="self">self</span>.category
+        <span class="self">self</span>.category.clone()
     }
 
     <span class="kw">pub fn </span>next_request_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
