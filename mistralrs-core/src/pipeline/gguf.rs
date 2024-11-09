@@ -387,7 +387,7 @@ impl Loader for GGUFLoader {
         // chat_template string literal. As a file, `self.chat_template`
         // overrides the file from `paths`.
         let (chat_template_file, chat_template_literal) =
-            match (paths.get_template_filename(), self.chat_template) {
+            match (paths.get_template_filename(), self.chat_template.clone()) {
                 // If chat_template is file, it overrides.
                 (_, Some(l)) if Path::new(&l).exists() => (Some(Path::new(&l).to_path_buf()), None),
                 // Otherwise, use the template file + chat_template literal (if provided).
@@ -476,7 +476,12 @@ impl Loader for GGUFLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let mut chat_template = get_chat_template(paths, &self.chat_template, gguf_chat_template);
+
+        let mut chat_template = get_chat_template(
+            paths,
+            &chat_template_file.map(|p| p.to_string_lossy().to_string()),
+            chat_template_literal,
+        );
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,
