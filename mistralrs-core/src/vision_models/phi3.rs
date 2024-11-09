@@ -5,7 +5,7 @@
 use candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
-use candle_nn::{linear_b, VarBuilder};
+use candle_nn::VarBuilder;
 use either::Either;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
@@ -16,8 +16,8 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
-        PhiRotaryEmbedding, RmsNorm, Sdpa,
+        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
+        Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -98,21 +98,30 @@ impl Config {
 }
 
 trait ModuleWithMetadata: Module + Debug + Send + Sync {
-    fn device(&self) -> &Device;
+    fn device(&self) -> Device;
     fn dtype(&self) -> DType;
 }
 
-impl ModuleWithMetadata for FusedBiasLinear {
-    fn device(&self) -> &Device {
-        self.w.device()
+#[derive(Debug)]
+struct QuantMethodWrapper(Arc<dyn QuantMethod>);
+
+impl Module for QuantMethodWrapper {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.0.forward(xs)
+    }
+}
+
+impl ModuleWithMetadata for QuantMethodWrapper {
+    fn device(&self) -> Device {
+        self.0.unquant_weight_bias().unwrap().0.device().clone()
     }
     fn dtype(&self) -> DType {
-        self.w.dtype()
+        self.0.unquant_weight_bias().unwrap().0.dtype()
     }
 }
 
 impl ModuleWithMetadata for candle_nn::Activation {
-    fn device(&self) -> &Device {
+    fn device(&self) -> Device {
         unreachable!()
     }
     fn dtype(&self) -> DType {
@@ -564,47 +573,82 @@ impl ImageEmbedding {
         let layers: Vec<Box<dyn ModuleWithMetadata>> =
             match (projection_cls.as_str(), use_hd_transform) {
                 ("linear", _) => {
-                    let a = linear_b(image_dim_out, hidden_size, true, vb.pp("img_projection"))?;
-                    tensors.push(("img_projection.weight".to_string(), a.weight().clone()));
-                    if let Some(b) = a.bias().cloned() {
+                    let a = mistralrs_quant::linear_b(
+                        image_dim_out,
+                        hidden_size,
+                        true,
+                        &None,
+                        vb.pp("img_projection"),
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
                         tensors.push(("img_projection.bias".to_string(), b));
                     }
-                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(a)?)]
+                    vec![Box::new(QuantMethodWrapper(a))]
                 }
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
-                    let a = linear_b(image_dim_out * 4, dim_proj, true, vb.pp("img_projection.0"))?;
-                    tensors.push(("img_projection.0.weight".to_string(), a.weight().clone()));
-                    if let Some(b) = a.bias().cloned() {
+                    let a = mistralrs_quant::linear_b(
+                        image_dim_out * 4,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.0"),
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.0.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
                         tensors.push(("img_projection.0.bias".to_string(), b));
                     }
-                    let b = linear_b(dim_proj, dim_proj, true, vb.pp("img_projection.2"))?;
-                    tensors.push(("img_projection.2.weight".to_string(), b.weight().clone()));
-                    if let Some(b) = b.bias().cloned() {
+                    let b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.2"),
+                    )?;
+                    let (b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.2.weight".to_string(), b_w));
+                    if let Some(b) = b_b {
                         tensors.push(("img_projection.2.bias".to_string(), b));
                     }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(a)?),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(b)?),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 ("mlp", false) => {
                     let dim_proj = hidden_size;
-                    let a = linear_b(image_dim_out, dim_proj, true, vb.pp("img_projection.0"))?;
-                    tensors.push(("img_projection.0.weight".to_string(), a.weight().clone()));
-                    if let Some(b) = a.bias().cloned() {
+                    let a = mistralrs_quant::linear_b(
+                        image_dim_out,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.0"),
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.0.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
                         tensors.push(("img_projection.0.bias".to_string(), b));
                     }
-                    let b = linear_b(dim_proj, dim_proj, true, vb.pp("img_projection.2"))?;
-                    tensors.push(("img_projection.2.weight".to_string(), b.weight().clone()));
-                    if let Some(b) = b.bias().cloned() {
+                    let b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.2"),
+                    )?;
+                    let (b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.2.weight".to_string(), b_w));
+                    if let Some(b) = b_b {
                         tensors.push(("img_projection.2.bias".to_string(), b));
                     }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(a)?),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(b)?),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 _ => {
@@ -788,21 +832,21 @@ impl ImageEmbedding {
                 for img in output_imgs {
                     let layerout = self
                         .layers
-                        .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?;
+                        .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
                     image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
                     .get_image_features(pixel_values)?
-                    .to_device(target_dev)?
+                    .to_device(&target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
                 let image_set_tensor_inner = self.layers.forward(&tt)?;
                 image_set_tensor = Some(Either::Right(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 3 {
                 let tt = pixel_values
-                    .to_device(target_dev)?
+                    .to_device(&target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
                 let image_set_tensor_inner = self.layers.forward(&tt)?;
@@ -820,7 +864,7 @@ impl ImageEmbedding {
                     let mut idx = 0;
                     for (i, cnt) in output_lens.into_iter().enumerate() {
                         let img_set_tensor = image_set_tensors[i]
-                            .to_device(target_dev)?
+                            .to_device(&target_dev)?
                             .to_dtype(target_dtype)?;
                         // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
@@ -840,7 +884,7 @@ impl ImageEmbedding {
                         let cnt = self.num_img_tokens;
                         let img_set_tensor = image_set_tensor
                             .i(i * cnt..(i + 1) * cnt)?
-                            .to_device(target_dev)?
+                            .to_device(&target_dev)?
                             .to_dtype(target_dtype)?;
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;

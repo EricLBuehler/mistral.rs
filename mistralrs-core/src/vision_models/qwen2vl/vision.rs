@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use mistralrs_quant::QuantMethod;
 
 use crate::{
-    layers::{Activation, Conv3dConfig, Conv3dNoBias, FusedBiasLinear},
+    layers::{Activation, Conv3dConfig, Conv3dNoBias},
     ops::RepeatInterleaveOp,
 };
 
@@ -54,16 +57,16 @@ impl PatchEmbed {
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L314
 struct VisionMlp {
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
     act: Activation,
 }
 
 impl VisionMlp {
     fn new(dim: usize, hidden_dim: usize, act: Activation, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            fc1: candle_nn::linear(dim, hidden_dim, vb.pp("fc1"))?.try_into()?,
-            fc2: candle_nn::linear(hidden_dim, dim, vb.pp("fc2"))?.try_into()?,
+            fc1: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("fc1"))?,
+            fc2: mistralrs_quant::linear(hidden_dim, dim, &None, vb.pp("fc2"))?,
             act,
         })
     }
@@ -92,8 +95,8 @@ fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
 struct VisionAttention {
-    qkv: FusedBiasLinear,
-    proj: FusedBiasLinear,
+    qkv: Arc<dyn QuantMethod>,
+    proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     head_dim: usize,
 }
@@ -101,8 +104,8 @@ struct VisionAttention {
 impl VisionAttention {
     fn new(dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
-            qkv: candle_nn::linear(dim, dim * 3, vb.pp("qkv"))?.try_into()?,
-            proj: candle_nn::linear(dim, dim, vb.pp("proj"))?.try_into()?,
+            qkv: mistralrs_quant::linear(dim, dim * 3, &None, vb.pp("qkv"))?,
+            proj: mistralrs_quant::linear(dim, dim, &None, vb.pp("proj"))?,
             num_heads,
             head_dim: dim / num_heads,
         })

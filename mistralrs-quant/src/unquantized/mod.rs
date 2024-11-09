@@ -76,17 +76,15 @@ impl QuantMethod for UnquantLinear {
                             .t()
                     } else {
                         let mut out = b.contiguous()?;
-                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+                        a.matmul_with_alpha_beta(&w, &mut out, None)?;
                         Ok(out)
                     }
                 }
                 DeviceLocation::Metal { .. } => {
                     let mut out = b.contiguous()?.to_dtype(DType::F32)?;
-                    a.to_dtype(DType::F32)?.matmul_with_alpha_beta(
-                        &w.t()?.to_dtype(DType::F32)?,
-                        &mut out,
-                        None,
-                    )?;
+                    a.to_dtype(DType::F32)?
+                        .matmul_with_alpha_beta(&w.to_dtype(DType::F32)?.t()?, &mut out, None)
+                        .unwrap();
                     out.to_dtype(a.dtype())
                 }
                 DeviceLocation::Cpu => {
@@ -96,7 +94,7 @@ impl QuantMethod for UnquantLinear {
                 }
             }
         } else {
-            a.matmul(&w)
+            a.matmul(&w.t()?)
         }
     }
 
