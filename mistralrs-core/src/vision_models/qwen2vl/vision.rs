@@ -134,9 +134,21 @@ impl VisionAttention {
             .squeeze(0)?
             .to_dtype(q.dtype())?;
 
-        q = q.transpose(0, 1)?.contiguous()?;
-        k = k.transpose(0, 1)?.contiguous()?;
-        v = v.transpose(0, 1)?.contiguous()?;
+        q = q
+            .transpose(0, 1)?
+            .contiguous()?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        k = k
+            .transpose(0, 1)?
+            .contiguous()?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        v = v
+            .transpose(0, 1)?
+            .contiguous()?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
 
         let att = {
             let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt()).unwrap();
@@ -150,6 +162,7 @@ impl VisionAttention {
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
                 .to_dtype(xs.dtype())?
+                .to_device(xs.device())?
         };
 
         self.proj.forward(&att.unsqueeze(0)?)?.squeeze(0)
@@ -358,14 +371,14 @@ impl Qwen2VLVisionModel {
             &[0, len] if len == seq_len as u32 => None,
             cu_seqlens => {
                 let mut attention_mask =
-                    Tensor::full(f32::MIN, (1, seq_len, seq_len), xs.device())?
+                    Tensor::full(f32::MIN, (1, seq_len, seq_len), &Device::Cpu)?
                         .to_dtype(xs.dtype())?;
                 for i in 1..cu_seqlens.len() {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
                         &[&.., &(a..b), &(a..b)],
-                        &Tensor::zeros((1, b - a, b - a), xs.dtype(), xs.device())?,
+                        &Tensor::zeros((1, b - a, b - a), xs.dtype(), &Device::Cpu)?,
                     )?;
                 }
                 Some(attention_mask)
