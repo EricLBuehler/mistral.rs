@@ -101,7 +101,7 @@ impl QuantMethod for FP8Linear {
                 let b = x;
 
                 handle
-                    .batch_matmul(
+                    .batch_matmul_f8(
                         &a,
                         &b,
                         &self.dequant_w_scale,

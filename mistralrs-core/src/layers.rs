@@ -797,7 +797,7 @@ impl TryFrom<Linear> for FusedBiasLinear {
         if let Some(bias) = x.bias() {
             Ok(Self {
                 w: x.weight().clone(),
-                b: bias.clone(),
+                b: bias.contiguous()?,
             })
         } else {
             candle_core::bail!("`FusedBiasLinear` expects a Linear layer with bias.")
@@ -829,7 +829,19 @@ impl Module for FusedBiasLinear {
                 )?
                 .t()
         } else {
-            x.matmul(&w.t()?)? + b
+            // if b.device().is_metal() {
+            let mut out = b.contiguous()?.to_dtype(DType::F32)?;
+            x.to_dtype(DType::F32)?.matmul_with_alpha_beta(
+                &w.t()?.to_dtype(DType::F32)?,
+                &mut out,
+                None,
+            )?;
+            out.to_dtype(x.dtype())
+            // } else {
+            //     let mut out = b.contiguous()?;
+            //     x.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+            //     Ok(out)
+            // }
         }
     }
 }
