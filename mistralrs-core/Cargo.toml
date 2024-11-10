@@ -21,7 +21,7 @@ candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", versio
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
-tokenizers = "0.19.1"
+tokenizers = "0.20.3"
 tqdm = "0.7.0"
 chrono = "0.4.34"
 minijinja = { version = "2.0.2", features = ["builtins", "json"] }

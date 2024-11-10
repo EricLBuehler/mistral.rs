@@ -238,9 +238,9 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         .with_model(bpe)
         .with_decoder(Decoder::ByteLevel(true, true, true))
         .build()?;
-    tokenizer.with_pre_tokenizer(pre_tokenizers::byte_level::ByteLevel::new(
+    tokenizer.with_pre_tokenizer(Some(pre_tokenizers::byte_level::ByteLevel::new(
         false, true, true,
-    ));
+    )));
     if add_bos_token.is_some_and(|x| x) {
         let mut special_toks = HashMap::new();
         special_toks.insert(
@@ -252,7 +252,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
             )
             .unwrap(),
         );
-        tokenizer.with_post_processor(
+        tokenizer.with_post_processor(Some(
             TemplateProcessing::builder()
                 .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
                 .unwrap()
@@ -261,9 +261,11 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
                 .special_tokens(special_toks)
                 .build()
                 .unwrap(),
-        );
+        ));
     } else {
-        tokenizer.with_post_processor(processors::byte_level::ByteLevel::new(true, false, true));
+        tokenizer.with_post_processor(Some(processors::byte_level::ByteLevel::new(
+            true, false, true,
+        )));
     }
 
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
@@ -288,11 +290,11 @@ impl TokenizerX {
         // Handle local enum to remote enum type:
         if let Some(decoder) = with_decoder {
             let d = DecoderWrapper::try_from(decoder)?;
-            tokenizer.with_decoder(d);
+            tokenizer.with_decoder(Some(d));
         }
         if let Some(normalizer) = with_normalizer {
             let n = NormalizerWrapper::try_from(normalizer)?;
-            tokenizer.with_normalizer(n);
+            tokenizer.with_normalizer(Some(n));
         }
 
         Ok(tokenizer)
