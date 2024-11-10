@@ -6,8 +6,8 @@ use mistralrs_core::{
     ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
-use serde_json::Value;
 use regex::Regex;
+use serde_json::Value;
 use std::{
     io::{self, Write},
     sync::{atomic::Ordering, Arc, Mutex},
