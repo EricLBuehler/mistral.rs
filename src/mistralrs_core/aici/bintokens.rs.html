@@ -241,7 +241,7 @@
                 )),
                 <span class="kw">_ </span>=&gt; n.clone(),
             };
-            hft.with_normalizer(n);
+            hft.with_normalizer(<span class="prelude-val">Some</span>(n));
         }
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(d) = hft.get_decoder() {

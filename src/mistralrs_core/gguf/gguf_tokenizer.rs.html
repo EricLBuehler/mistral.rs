@@ -559,6 +559,8 @@
 <a href="#559" id="559">559</a>
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
 </pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::atomic::Ordering};
@@ -799,9 +801,9 @@
         .with_model(bpe)
         .with_decoder(Decoder::ByteLevel(<span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>))
         .build()<span class="question-mark">?</span>;
-    tokenizer.with_pre_tokenizer(pre_tokenizers::byte_level::ByteLevel::new(
+    tokenizer.with_pre_tokenizer(<span class="prelude-val">Some</span>(pre_tokenizers::byte_level::ByteLevel::new(
         <span class="bool-val">false</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>,
-    ));
+    )));
     <span class="kw">if </span>add_bos_token.is_some_and(|x| x) {
         <span class="kw">let </span><span class="kw-2">mut </span>special_toks = HashMap::new();
         special_toks.insert(
@@ -813,7 +815,7 @@
             )
             .unwrap(),
         );
-        tokenizer.with_post_processor(
+        tokenizer.with_post_processor(<span class="prelude-val">Some</span>(
             TemplateProcessing::builder()
                 .try_single(<span class="macro">format!</span>(<span class="string">"{}:0 $A:0"</span>, p.tokens[bos <span class="kw">as </span>usize]))
                 .unwrap()
@@ -822,9 +824,11 @@
                 .special_tokens(special_toks)
                 .build()
                 .unwrap(),
-        );
+        ));
     } <span class="kw">else </span>{
-        tokenizer.with_post_processor(processors::byte_level::ByteLevel::new(<span class="bool-val">true</span>, <span class="bool-val">false</span>, <span class="bool-val">true</span>));
+        tokenizer.with_post_processor(<span class="prelude-val">Some</span>(processors::byte_level::ByteLevel::new(
+            <span class="bool-val">true</span>, <span class="bool-val">false</span>, <span class="bool-val">true</span>,
+        )));
     }
 
     <span class="kw">let </span>special_tokens = add_special_tokens(p, <span class="kw-2">&amp;mut </span>tokenizer, bos, eos, unk);
@@ -849,11 +853,11 @@
         <span class="comment">// Handle local enum to remote enum type:
         </span><span class="kw">if let </span><span class="prelude-val">Some</span>(decoder) = with_decoder {
             <span class="kw">let </span>d = DecoderWrapper::try_from(decoder)<span class="question-mark">?</span>;
-            tokenizer.with_decoder(d);
+            tokenizer.with_decoder(<span class="prelude-val">Some</span>(d));
         }
         <span class="kw">if let </span><span class="prelude-val">Some</span>(normalizer) = with_normalizer {
             <span class="kw">let </span>n = NormalizerWrapper::try_from(normalizer)<span class="question-mark">?</span>;
-            tokenizer.with_normalizer(n);
+            tokenizer.with_normalizer(<span class="prelude-val">Some</span>(n));
         }
 
         <span class="prelude-val">Ok</span>(tokenizer)
