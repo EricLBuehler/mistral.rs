@@ -554,12 +554,16 @@
 <a href="#554" id="554">554</a>
 <a href="#555" id="555">555</a>
 <a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, Loader, LoaderBuilder,
+    initialize_logging, paged_attn_supported, parse_isq_value, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType, Loader, LoaderBuilder,
     MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
     PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
     TokenSource, Usage,
@@ -850,6 +854,10 @@
     </span><span class="attr">#[arg(short, long, value_parser, value_delimiter = <span class="string">';'</span>)]
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
+    <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
+    </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+
     <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
     /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
@@ -1033,7 +1041,7 @@
         <span class="kw-2">&amp;</span>device,
         <span class="bool-val">false</span>,
         mapper,
-        <span class="prelude-val">None</span>,
+        args.in_situ_quant,
         cache_config,
     )<span class="question-mark">?</span>;
     <span class="macro">info!</span>(<span class="string">"Model loaded."</span>);
