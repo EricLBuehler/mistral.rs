@@ -1,6 +1,7 @@
 use tokio::sync::mpsc::Receiver;
 
-use mistralrs_core::{ChatCompletionChunkResponse, Response};
+use crate::response::{ChatCompletionChunkResponse, ChunkChoice};
+use mistralrs_core::Response;
 use pyo3::{exceptions::PyValueError, pyclass, pymethods, PyRef, PyRefMut, PyResult};
 
 #[pyclass]
@@ -33,7 +34,23 @@ impl ChatCompletionStreamer {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
                         this.is_done = true;
                     }
-                    Some(Ok(response))
+                    Some(Ok(ChatCompletionChunkResponse {
+                        id: response.id,
+                        created: response.created,
+                        model: response.model,
+                        system_fingerprint: response.system_fingerprint,
+                        object: response.object,
+                        choices: response
+                            .choices
+                            .into_iter()
+                            .map(|choice| ChunkChoice {
+                                finish_reason: choice.finish_reason.map(|r| r.to_string()),
+                                index: choice.index,
+                                delta: choice.delta,
+                                logprobs: choice.logprobs,
+                            })
+                            .collect::<Vec<_>>(),
+                    }))
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),

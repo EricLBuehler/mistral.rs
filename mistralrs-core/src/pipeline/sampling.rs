@@ -49,7 +49,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             role: "assistant".to_string(),
                         },
                         index: seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
+                        finish_reason: is_done,
                         logprobs: if seq.return_logprobs() {
                             Some(crate::ResponseLogprob {
                                 token: delta,
@@ -66,7 +66,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         crate::CompletionChunkChoice {
                             text: delta.clone(),
                             index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
+                            finish_reason: is_done,
                             logprobs: if seq.return_logprobs() {
                                 Some(crate::ResponseLogprob {
                                     token: delta,
@@ -162,6 +162,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 crate::sequence::StopReason::GeneratedImage => {
                     candle_core::bail!("Stop reason was `GeneratedImage`.")
                 }
+                crate::sequence::StopReason::Error => {
+                    candle_core::bail!("Stop reason was `Error`.")
+                }
             };
 
             if seq.get_mut_group().is_chat {
@@ -175,7 +178,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     tool_calls = calls;
                 }
                 let choice = crate::Choice {
-                    finish_reason: reason.to_string(),
+                    finish_reason: reason,
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
                         content: text_new,
@@ -187,7 +190,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 seq.add_choice_to_group(choice);
             } else {
                 let choice = crate::CompletionChoice {
-                    finish_reason: reason.to_string(),
+                    finish_reason: reason,
                     index: seq.get_response_index(),
                     text,
                     logprobs: None,

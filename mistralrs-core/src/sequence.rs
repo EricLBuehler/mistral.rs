@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -27,7 +28,7 @@ use crate::{
 use candle_core::Tensor;
 use regex_automata::util::primitives::StateID;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize)]
 pub enum StopReason {
     Eos,
     StopTok(u32),
@@ -39,6 +40,7 @@ pub enum StopReason {
     },
     Canceled,
     GeneratedImage,
+    Error,
 }
 
 impl Display for StopReason {
@@ -49,6 +51,7 @@ impl Display for StopReason {
             StopReason::StopTok(_) | StopReason::StopString { .. } => write!(f, "stop"),
             StopReason::Canceled => write!(f, "canceled"),
             StopReason::GeneratedImage => write!(f, "generated-image"),
+            StopReason::Error => write!(f, "stop"),
         }
     }
 }

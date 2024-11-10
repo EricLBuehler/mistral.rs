@@ -7,7 +7,7 @@ use std::{
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;
 
-use crate::{sampler::TopLogprob, tools::ToolCallResponse};
+use crate::{sampler::TopLogprob, sequence::StopReason, tools::ToolCallResponse};
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
 
@@ -69,44 +69,32 @@ pub struct Logprobs {
 
 generate_repr!(Logprobs);
 
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion choice.
 pub struct Choice {
-    pub finish_reason: String,
+    pub finish_reason: StopReason,
     pub index: usize,
     pub message: ResponseMessage,
     pub logprobs: Option<Logprobs>,
 }
 
-generate_repr!(Choice);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
-    pub finish_reason: Option<String>,
+    pub finish_reason: Option<StopReason>,
     pub index: usize,
     pub delta: Delta,
     pub logprobs: Option<ResponseLogprob>,
 }
 
-generate_repr!(ChunkChoice);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion streaming chunk choice.
 pub struct CompletionChunkChoice {
     pub text: String,
     pub index: usize,
     pub logprobs: Option<ResponseLogprob>,
-    pub finish_reason: Option<String>,
+    pub finish_reason: Option<StopReason>,
 }
-
-generate_repr!(CompletionChunkChoice);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
@@ -126,8 +114,6 @@ pub struct Usage {
 
 generate_repr!(Usage);
 
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible chat completion response.
 pub struct ChatCompletionResponse {
@@ -140,10 +126,6 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
 }
 
-generate_repr!(ChatCompletionResponse);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion streaming request chunk.
 pub struct ChatCompletionChunkResponse {
@@ -155,23 +137,15 @@ pub struct ChatCompletionChunkResponse {
     pub object: String,
 }
 
-generate_repr!(ChatCompletionChunkResponse);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Completion request choice.
 pub struct CompletionChoice {
-    pub finish_reason: String,
+    pub finish_reason: StopReason,
     pub index: usize,
     pub text: String,
     pub logprobs: Option<()>,
 }
 
-generate_repr!(CompletionChoice);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// An OpenAI compatible completion response.
 pub struct CompletionResponse {
@@ -184,10 +158,6 @@ pub struct CompletionResponse {
     pub usage: Usage,
 }
 
-generate_repr!(CompletionResponse);
-
-#[cfg_attr(feature = "pyo3_macros", pyclass)]
-#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Completion request choice.
 pub struct CompletionChunkResponse {
@@ -198,8 +168,6 @@ pub struct CompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
 }
-
-generate_repr!(CompletionChunkResponse);
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]

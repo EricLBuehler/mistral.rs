@@ -109,7 +109,7 @@ macro_rules! handle_pipeline_forward_error {
 
                     if seq.get_mut_group().is_chat {
                         let choice = Choice {
-                            finish_reason: "error".to_string(),
+                            finish_reason: StopReason::Error,
                             index: seq.get_response_index(),
                             message: ResponseMessage {
                                 content: Some(res),
@@ -121,7 +121,7 @@ macro_rules! handle_pipeline_forward_error {
                         seq.add_choice_to_group(choice);
                     } else {
                         let choice = CompletionChoice {
-                            finish_reason: "error".to_string(),
+                            finish_reason: StopReason::Error,
                             index: seq.get_response_index(),
                             text: res,
                             logprobs: None,
