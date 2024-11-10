@@ -129,9 +129,12 @@ impl InputsProcessor for Phi3InputsProcessor {
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
                     num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
                 } = self
                     .preprocess(
                         imgs,
+                        vec![],
                         config,
                         device,
                         (usize::MAX, usize::MAX), // Don't use it here...
@@ -461,12 +464,14 @@ impl ImagePreProcessor for Phi3InputsProcessor {
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
         (_, _): (usize, usize),
     ) -> Result<PreprocessedImages> {
         // If no images, will not call this.
         assert!(!images.is_empty());
+        assert!(videos.is_empty());
 
         let mut image_sizes = Vec::new();
         let mut padded_images = Vec::new();
@@ -550,6 +555,8 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             aspect_ratio_ids: None,
             aspect_ratio_mask: None,
             num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
         })
     }
 }

@@ -14,6 +14,7 @@ pub struct VisionModelBuilder {
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) max_edge: Option<u32>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -43,6 +44,7 @@ impl VisionModelBuilder {
             prompt_batchsize: None,
             chat_template: None,
             tokenizer_json: None,
+            max_edge: None,
             loader_type,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -128,6 +130,32 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Path to read a UQFF file from.
+    pub fn from_uqff(mut self, path: PathBuf) -> Self {
+        self.from_uqff = Some(path);
+        self
+    }
+
+    /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+    /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+    pub fn from_max_edge(mut self, max_edge: u32) -> Self {
+        self.max_edge = Some(max_edge);
+        self
+    }
+
+    /// Path to write a UQFF file to.
+    ///
+    /// The parent (part of the path excluding the filename) will determine where any other files
+    /// generated are written to. These can be used to load UQFF models standalone, and may include:
+    /// - `residual.safetensors`
+    /// - `tokenizer.json`
+    /// - `config.json`
+    /// - And others
+    pub fn write_uqff(mut self, path: PathBuf) -> Self {
+        self.write_uqff = Some(path);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -135,6 +163,7 @@ impl VisionModelBuilder {
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
+            max_edge: self.max_edge,
         };
 
         if self.with_logging {

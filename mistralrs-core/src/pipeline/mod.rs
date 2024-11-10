@@ -34,8 +34,8 @@ pub use loaders::{
     Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
     LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
-    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
+    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -191,12 +191,34 @@ pub trait AnyMoePipelineMixin {
     }
 }
 
-/// Category of the model.
-#[derive(PartialEq, Copy, Clone)]
+/// Category of the model. This can also be used to extract model-category specific tools,
+/// such as the vision model prompt prefixer.
+#[derive(Clone)]
 pub enum ModelCategory {
     Text,
-    Vision { has_conv2d: bool },
+    Vision {
+        has_conv2d: bool,
+        prefixer: Arc<dyn VisionPromptPrefixer>,
+    },
     Diffusion,
+}
+
+impl PartialEq for ModelCategory {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text, Self::Text) => true,
+            (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Diffusion, Self::Diffusion) => true,
+            (Self::Text, _) => false,
+            (Self::Vision { .. }, _) => false,
+            (Self::Diffusion, _) => false,
+        }
+    }
+}
+
+/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+pub trait VisionPromptPrefixer: Send + Sync {
+    fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
 }
 
 pub enum CacheBackendMetadata<'a> {

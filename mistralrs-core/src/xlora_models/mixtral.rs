@@ -3,7 +3,7 @@
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::Sdpa,
+    layers::{Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -16,7 +16,7 @@ use crate::{
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -932,6 +932,10 @@ impl IsqModel for XLoraModel {
             }
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 

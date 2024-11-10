@@ -14,7 +14,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -25,8 +25,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "20a57c4" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "20a57c4" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -36,8 +36,8 @@ intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 futures = "0.3"
-clap = { version = "4.5.1", features = ["derive"] }
-pyo3 = { version = "0.22.0", features = ["full", "extension-module", "either"] }
+clap = { version = "4.5.1", features = ["derive", "wrap_help"] }
+pyo3 = { version = "0.22.4", features = ["full", "extension-module", "either"] }
 tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
 # All features but avif, avif increases the msrv dramatically
@@ -49,3 +49,5 @@ rayon = "1.1.0"
 url = "2.5.2"
 data-url = "0.3.1"
 buildstructor = "0.5.4"
+float8 = "0.1.1"
+regex = "1.10.6"

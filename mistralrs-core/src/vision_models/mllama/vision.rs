@@ -1,16 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::ops::Mul;
+use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
+use mistralrs_quant::QuantMethod;
 
 use crate::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
+    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -28,8 +28,7 @@ impl MLlamaPrecomputedPositionEmbedding {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let num_patches = (cfg.image_size / cfg.patch_size).pow(2) + 1;
         Ok(Self {
-            // NOTE: Preapply the tanh
-            gate: vb.get((1,), "gate")?.tanh()?,
+            gate: vb.get((1,), "gate")?,
             embedding: vb.get((num_patches, cfg.hidden_size), "embedding")?,
             tile_embedding: embedding(
                 cfg.max_aspect_ratio_id() + 1,
@@ -45,7 +44,7 @@ impl MLlamaPrecomputedPositionEmbedding {
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L197
     fn forward(&self, hidden_state: &Tensor, aspect_ratio_ids: &Tensor) -> Result<Tensor> {
         // position embeddings
-        let mut gated_pos_embed = (1. - &self.gate)?.broadcast_mul(&self.embedding)?;
+        let mut gated_pos_embed = (1. - &self.gate.tanh()?)?.broadcast_mul(&self.embedding)?;
         let hidden_state = hidden_state.broadcast_add(&gated_pos_embed.reshape((
             1,
             1,
@@ -62,9 +61,19 @@ impl MLlamaPrecomputedPositionEmbedding {
             self.num_patches,
             self.hidden_size,
         ))?;
-        gated_pos_embed = self.gate.broadcast_mul(&tile_position_embedding)?;
+        gated_pos_embed = self.gate.tanh()?.broadcast_mul(&tile_position_embedding)?;
 
         hidden_state.broadcast_add(&gated_pos_embed)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_gpe = UnVarBuilder::new();
+
+        uvb_gpe.add_tensor("gate", self.gate.clone());
+        uvb_gpe.add_tensor("embedding", self.embedding.clone());
+        uvb_gpe.pp("tile_embedding").add(&self.tile_embedding);
+
+        uvb_gpe.to_safetensors()
     }
 }
 
@@ -84,8 +93,7 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
                 vb.pp("embedding"),
             )?,
             gate: if GATED {
-                // NOTE: Preapply the tanh
-                Some(vb.get((1,), "gate")?.tanh()?)
+                Some(vb.get((1,), "gate")?)
             } else {
                 None
             },
@@ -99,10 +107,21 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
         embeddings = embeddings.reshape(((), self.max_num_tiles, 1, self.hidden_size))?;
 
         if let Some(gate) = &self.gate {
-            embeddings = embeddings.broadcast_mul(gate)?;
+            embeddings = embeddings.broadcast_mul(&gate.tanh()?)?;
         }
 
         hidden_state.broadcast_add(&embeddings)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_ptpe = UnVarBuilder::new();
+
+        if let Some(gate) = self.gate.clone() {
+            uvb_ptpe.add_tensor("gate", gate);
+        }
+        uvb_ptpe.pp("embedding").add(&self.embedding);
+
+        uvb_ptpe.to_safetensors()
     }
 }
 
@@ -120,22 +139,22 @@ impl MLlamaVisionAttention {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: candle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("o_proj"),
@@ -174,16 +193,19 @@ impl MLlamaVisionAttention {
 
         let attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
+                &q.contiguous()?.to_dtype(DType::F32)?,
+                &k.contiguous()?.to_dtype(DType::F32)?,
+                &v.contiguous()?.to_dtype(DType::F32)?,
+                attention_mask
+                    .map(|m| m.to_dtype(DType::F32).unwrap())
+                    .as_ref(),
                 None,
                 &self.sdpa_params,
             )?
             .transpose(1, 2)?
             .contiguous()?
-            .reshape((bs, q_sq, ()))?;
+            .reshape((bs, q_sq, ()))?
+            .to_dtype(q.dtype())?;
 
         self.o_proj.forward(&attn_output)
     }
@@ -191,24 +213,26 @@ impl MLlamaVisionAttention {
 
 struct MLlamaMlp {
     act: VisionActivation,
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl MLlamaMlp {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: FusedBiasLinear::try_from(linear(
+            fc1: mistralrs_quant::linear(
                 cfg.hidden_size,
                 cfg.intermediate_size,
+                &None,
                 vb.pp("fc1"),
-            )?)?,
-            fc2: FusedBiasLinear::try_from(linear(
+            )?,
+            fc2: mistralrs_quant::linear(
                 cfg.intermediate_size,
                 cfg.hidden_size,
+                &None,
                 vb.pp("fc2"),
-            )?)?,
+            )?,
         })
     }
 
@@ -246,10 +270,8 @@ impl MLlamaVisionEncoderLayer {
                 mlp,
                 input_layernorm,
                 post_attention_layernorm,
-                // NOTE: Preapply the tanh
-                gate_attn: Some(vb.get((1,), "gate_attn")?.tanh()?),
-                // NOTE: Preapply the tanh
-                gate_ffn: Some(vb.get((1,), "gate_ffn")?.tanh()?),
+                gate_attn: Some(vb.get((1,), "gate_attn")?),
+                gate_ffn: Some(vb.get((1,), "gate_ffn")?),
             })
         } else {
             Ok(Self {
@@ -272,7 +294,7 @@ impl MLlamaVisionEncoderLayer {
         hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
 
         if let Some(gate) = &self.gate_attn {
-            hidden_state = gate.broadcast_mul(&hidden_state)?;
+            hidden_state = gate.broadcast_mul(&hidden_state.tanh()?)?;
         }
         hidden_state = (residual + hidden_state)?;
 
@@ -283,7 +305,7 @@ impl MLlamaVisionEncoderLayer {
         hidden_state = self.mlp.forward(&hidden_state)?;
 
         if let Some(gate) = &self.gate_ffn {
-            hidden_state = gate.broadcast_mul(&hidden_state)?;
+            hidden_state = gate.broadcast_mul(&hidden_state.tanh()?)?;
         }
         residual + hidden_state
     }
@@ -325,6 +347,36 @@ impl MLlamaVisionEncoder {
         }
         hidden_states.push(hidden_state.clone());
         Ok((hidden_state, hidden_states))
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb_t = UnVarBuilder::new();
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_t.pp("layers").pp(i);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+            if let Some(gate) = layer.gate_attn.clone() {
+                uvb_l.add_tensor("gate_attn", gate);
+            }
+            if let Some(gate) = layer.gate_ffn.clone() {
+                uvb_l.add_tensor("gate_ffn", gate);
+            }
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
+
+            let uvb_mlp = uvb_l.pp("mlp");
+            uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
+            uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
+        }
+
+        uvb_t.to_safetensors()
     }
 }
 
@@ -603,5 +655,50 @@ impl MLlamaVisionModel {
         let (bs, _, hidden_size) = hidden_state.dims3()?;
         let class_embedding = self.class_embedding.expand((bs, 1, hidden_size))?;
         Tensor::cat(&[class_embedding, hidden_state.clone()], 1)
+    }
+}
+
+impl IsqModel for MLlamaVisionModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn crate::device_map::DeviceMapper,
+    ) {
+        unreachable!("MLlamaVision model cannot be quantized.");
+    }
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_embedding").add(&self.patch_embedding);
+        uvb.add_tensor("class_embedding", self.class_embedding.clone());
+
+        // gated_positional_embedding
+        uvb.pp("gated_positional_embedding")
+            .extend(self.gated_positional_embedding.residual_tensors());
+
+        // pre_tile_positional_embedding
+        uvb.pp("pre_tile_positional_embedding")
+            .extend(self.pre_tile_positional_embedding.residual_tensors());
+
+        // post_tile_positional_embedding
+        uvb.pp("post_tile_positional_embedding")
+            .extend(self.post_tile_positional_embedding.residual_tensors());
+
+        uvb.pp("layernorm_pre").add(&self.layernorm_pre);
+        uvb.pp("layernorm_post").add(&self.layernorm_post);
+
+        // transformer
+        uvb.pp("transformer")
+            .extend(self.transformer.residual_tensors());
+
+        // global_transformer
+        uvb.pp("global_transformer")
+            .extend(self.global_transformer.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }

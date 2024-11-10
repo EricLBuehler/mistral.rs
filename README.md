@@ -1,3 +1,4 @@
+<a name="top"></a>
 <h1 align="center">
   mistral.rs
 </h1>
@@ -27,6 +28,9 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
+- Check out UQFF for prequantized models of various methods!
+    - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
+
 - 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
@@ -34,6 +38,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```
     ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+    ```
+
+- 🌟📷 Run the **Qwen2-VL** Model: [documentation and guide here](docs/QWEN2VL.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
     ```
 
 - 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
@@ -69,7 +79,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
 
-Mistal.rs supports several model categories:
+Mistral.rs supports several model categories:
 - Text to Text
 - Text+Image to Text: Vision (see [the docs](docs/VISION_MODELS.md))
 - Text to Image: Image Generation (see [the docs](docs/IMAGEGEN_MODELS.md))
@@ -90,7 +100,7 @@ Mistal.rs supports several model categories:
 **Quantization**:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
-- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit
+- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ: 4-bit and 8 bit, with ISQ support
 
 **Powerful**:
@@ -105,7 +115,7 @@ Mistal.rs supports several model categories:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
-- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, see some [models](docs/UQFF.md#list-of-models) which have already been converted.
+- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
 
@@ -139,6 +149,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |LLaVa Next|✅| |✅|✅|
 |LLaVa|✅| |✅|✅|
 |Llama 3.2 Vision|✅| |✅| |
+|Qwen2-VL|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -154,7 +165,7 @@ Rust multithreaded/async API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Installation including PyPI](mistralrs-pyo3/README.md)
+- [Installation including PyPI](mistralrs-pyo3/_README.md)
 - [Docs](mistralrs-pyo3/API.md)
 - [Examples](examples/python)
 - [Cookbook](examples/python/cookbook.ipynb)
@@ -199,9 +210,10 @@ Enabling features is done by passing `--features ...` to the build system. When 
 
 > Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.1)
 
-- Install the [Python package here](mistralrs-pyo3/README.md).
+- Install the [Python package here](mistralrs-pyo3/_README.md).
+- The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
 
-1) Install required packages
+1) Install required packages:
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
     - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
@@ -219,13 +231,13 @@ Enabling features is done by passing `--features ...` to the build system. When 
     huggingface-cli login
     ```
 
-4) Download the code
+4) Download the code:
     ```bash
     git clone https://github.com/EricLBuehler/mistral.rs.git
     cd mistral.rs
     ```
 
-5) Build or install
+5) Build or install:
     - Base build command
         ```bash
         cargo build --release
@@ -256,14 +268,14 @@ Enabling features is done by passing `--features ...` to the build system. When 
         ```bash
         cargo install --path mistralrs-server --features cuda
         ```
-6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
     
     *Example on Ubuntu:*
     ```
     cp ./target/release/mistralrs-server ./mistralrs-server
     ```
 
-7) Use our APIs and integrations 
+7) Use our APIs and integrations: 
     
     [APIs and integrations list](#apis-and-integrations)
 
@@ -376,8 +388,6 @@ please consider using the method demonstrated in examples below, where the token
 
 Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
-Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
-
 ### Architecture for plain models
 
 > Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
@@ -404,6 +414,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `llava_next`
 - `llava`
 - `vllama`
+- `qwen2vl`
 
 ### Supported GGUF architectures
 
@@ -413,6 +424,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `phi2`
 - `phi3`
 - `starcoder2`
+- `qwen2`
 
 **With adapters:**
 
@@ -586,3 +598,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
+
+<p align="right">
+  <a href="#top">⬆️ Back to Top</a>
+</p>

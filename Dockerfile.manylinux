@@ -1,0 +1,41 @@
+# x86_64 base
+FROM quay.io/pypa/manylinux2014_x86_64 AS base-amd64
+# x86_64 builder
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/rust-musl-cross:x86_64-musl AS builder-amd64
+
+# aarch64 base
+FROM quay.io/pypa/manylinux2014_aarch64 AS base-arm64
+# aarch64 cross compile builder
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/rust-musl-cross:aarch64-musl AS builder-arm64
+
+ARG TARGETARCH
+FROM builder-$TARGETARCH AS builder
+
+ENV PATH=/root/.cargo/bin:$PATH
+
+FROM base-$TARGETARCH
+
+ENV PATH=/root/.cargo/bin:$PATH
+# Add all supported python versions
+ENV PATH=/opt/python/cp38-cp38/bin:/opt/python/cp39-cp39/bin:/opt/python/cp310-cp310/bin:/opt/python/cp311-cp311/bin:/opt/python/cp312-cp312/bin:$PATH
+# Otherwise `cargo new` errors
+ENV USER=root
+
+RUN curl --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && yum install -y libffi-devel openssh-clients \
+    && python3.8 -m pip install --no-cache-dir cffi \
+    && python3.9 -m pip install --no-cache-dir cffi \
+    && python3.10 -m pip install --no-cache-dir cffi \
+    && python3.11 -m pip install --no-cache-dir cffi \
+    && python3.12 -m pip install --no-cache-dir cffi \
+    && mkdir /io
+
+RUN python3.12 -m pip install maturin
+
+WORKDIR /io
+
+RUN DEBIAN_FRONTEND=noninteractive yum install -y \
+    openssl-devel \
+    pkgconfig
+    
+ENTRYPOINT ["maturin"]

@@ -1,9 +1,8 @@
-from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.Plain(
-        model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        arch=Architecture.Mistral,
+        model_id="microsoft/Phi-3.5-mini-instruct",
     ),
     in_situ_quant="Q4K",
 )

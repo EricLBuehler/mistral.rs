@@ -58,7 +58,7 @@ impl ByteTokenizer {
                 )),
                 _ => n.clone(),
             };
-            hft.with_normalizer(n);
+            hft.with_normalizer(Some(n));
         }
 
         if let Some(d) = hft.get_decoder() {

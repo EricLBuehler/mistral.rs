@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.3.1", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.3.2", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
@@ -131,4 +131,12 @@ required-features = []
 
 [[example]]
 name = "llama_vision"
+required-features = []
+
+[[example]]
+name = "llama_vision_multiturn"
+required-features = []
+
+[[example]]
+name = "qwen2vl"
 required-features = []

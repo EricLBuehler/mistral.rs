@@ -14,6 +14,7 @@ use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::pipeline::VisionModel;
+use crate::utils::unvarbuilder::UnVarBuilder;
 use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
@@ -268,6 +269,24 @@ impl IsqModel for Model {
         &dyn DeviceMapper,
     ) {
         self.llm.get_layers()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        // MM projectors
+        uvb.pp("multi_modal_projector.linear_1")
+            .add(&self.mm_projector.linear_1);
+        uvb.pp("multi_modal_projector.linear_2")
+            .add(&self.mm_projector.linear_2);
+
+        // Vision tower
+        {
+            let uvb_vt = uvb.pp("vision_tower.vision_model");
+            uvb_vt.extend(self.clip_vision_tower.model.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }
 

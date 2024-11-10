@@ -45,14 +45,10 @@ How can I assist you today?
 
 3) Pass the model an image and ask a question.
 
-> [!NOTE]
-> In interactive mode, the Llama 3.2 vision models do not automatically add the image token!
-> It should be added to messages manually, and is of the formatt `<|image|>`.
-
 ```
 > Hello!
 How can I assist you today?
-> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg <|image|>What is this image?
+> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg What is this image?
 The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
 ```
 
@@ -60,9 +56,9 @@ The image shows a close-up view of a rose flower with dew drops on its petals. T
 ```
 > Hello!
 How can I assist you today?
-> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg <|image|>What is this image?
+> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg What is this image?
 The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
-> \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg <|image|>What mountain is this?
+> \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg What mountain is this?
 The image appears to be of Mount Washington, which is the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures. The mountain's summit reaches an elevation of approximately 6,288 feet (1,917 meters) above sea level.
 ```
 
@@ -81,7 +77,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Prompt:**
 ```
-<|image|>What is shown in this image? Write a detailed response analyzing the scene.
+What is shown in this image? Write a detailed response analyzing the scene.
 ```
 
 **Output:**
@@ -115,10 +111,9 @@ cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="llama-vision",
@@ -214,7 +209,7 @@ MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="MODEL_ID",
+        model_id=MODEL_ID,
         arch=VisionArchitecture.VLlama,
     ),
 )

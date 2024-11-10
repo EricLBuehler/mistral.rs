@@ -6,13 +6,13 @@ pub(crate) mod clip;
 pub(crate) mod idefics2;
 pub(crate) mod idefics2_input_processor;
 pub(crate) mod image_processor;
-pub(crate) mod mllama;
-
 pub(crate) mod llava;
+pub(crate) mod mllama;
 pub(crate) mod phi3;
 pub(crate) mod phi3_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
+pub(crate) mod qwen2vl;
 pub(crate) use llava::llava15;
 pub(crate) use llava::llava_inputs_processor;
 pub(crate) use llava::llava_next;

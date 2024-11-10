@@ -1,10 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
+use mistralrs_quant::QuantMethod;
 
-use crate::{layers::FusedBiasLinear, serde_default_fn};
+use crate::{serde_default_fn, utils::unvarbuilder::UnVarBuilder};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -110,10 +113,10 @@ impl Module for ClipVisionEmbeddings {
 
 #[derive(Clone, Debug)]
 struct ClipAttention {
-    k_proj: FusedBiasLinear,
-    v_proj: FusedBiasLinear,
-    q_proj: FusedBiasLinear,
-    out_proj: FusedBiasLinear,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    q_proj: Arc<dyn QuantMethod>,
+    out_proj: Arc<dyn QuantMethod>,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
@@ -123,18 +126,18 @@ impl ClipAttention {
     fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let hidden_size = c.hidden_size;
         let num_attention_heads = c.num_attention_heads;
-        let k_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp("v_proj"))?;
-        let q_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp("q_proj"))?;
-        let out_proj = candle_nn::linear(hidden_size, hidden_size, vs.pp("out_proj"))?;
+        let k_proj = mistralrs_quant::linear(hidden_size, hidden_size, &None, vs.pp("k_proj"))?;
+        let v_proj = mistralrs_quant::linear(hidden_size, hidden_size, &None, vs.pp("v_proj"))?;
+        let q_proj = mistralrs_quant::linear(hidden_size, hidden_size, &None, vs.pp("q_proj"))?;
+        let out_proj = mistralrs_quant::linear(hidden_size, hidden_size, &None, vs.pp("out_proj"))?;
         let head_dim = hidden_size / num_attention_heads;
         let scale = (head_dim as f64).powf(-0.5);
 
         Ok(ClipAttention {
-            k_proj: k_proj.try_into()?,
-            v_proj: v_proj.try_into()?,
-            q_proj: q_proj.try_into()?,
-            out_proj: out_proj.try_into()?,
+            k_proj,
+            v_proj,
+            q_proj,
+            out_proj,
             head_dim,
             scale,
             num_attention_heads,
@@ -187,19 +190,19 @@ impl ClipAttention {
 
 #[derive(Clone, Debug)]
 struct ClipMlp {
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
     activation: Activation,
 }
 
 impl ClipMlp {
     fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
-        let fc1 = candle_nn::linear(c.hidden_size, c.intermediate_size, vs.pp("fc1"))?;
-        let fc2 = candle_nn::linear(c.intermediate_size, c.hidden_size, vs.pp("fc2"))?;
+        let fc1 = mistralrs_quant::linear(c.hidden_size, c.intermediate_size, &None, vs.pp("fc1"))?;
+        let fc2 = mistralrs_quant::linear(c.intermediate_size, c.hidden_size, &None, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
-            fc1: fc1.try_into()?,
-            fc2: fc2.try_into()?,
+            fc1,
+            fc2,
             activation: c.hidden_act,
         })
     }
@@ -315,5 +318,49 @@ impl ClipVisionTransformer {
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());
         Ok(result)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("pre_layrnorm").add(&self.pre_layer_norm);
+        uvb.pp("post_layernorm").add(&self.final_layer_norm);
+
+        // vision embeddings
+        {
+            let uvb_emb = uvb.pp("embeddings");
+
+            uvb_emb.add_tensor("class_embedding", self.embeddings.class_embedding.clone());
+            uvb_emb
+                .pp("position_embedding")
+                .add(&self.embeddings.position_embedding);
+            uvb_emb
+                .pp("patch_embedding")
+                .add(&self.embeddings.patch_embedding);
+        }
+
+        // encoder
+        {
+            let uvb_enc = uvb.pp("encoder");
+
+            for (i, layer) in self.encoder.layers.iter().enumerate() {
+                let uvb_l = uvb_enc.pp("layers").pp(i);
+
+                uvb_l.pp("layer_norm1").add(&layer.layer_norm1);
+                uvb_l.pp("layer_norm2").add(&layer.layer_norm2);
+
+                let uvb_mlp = uvb_l.pp("mlp");
+                uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
+                uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
+
+                let uvb_attn = uvb_l.pp("self_attn");
+                uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+                uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+                uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+                uvb_attn.pp("out_proj").add(&layer.self_attn.out_proj);
+            }
+        }
+
+        uvb.to_safetensors()
     }
 }

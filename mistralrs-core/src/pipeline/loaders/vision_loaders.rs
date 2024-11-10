@@ -15,9 +15,9 @@ use serde::Deserialize;
 use super::NormalLoadingMetadata;
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::isq::{IsqModelLoader, WordEmbeddingsShim};
+use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator};
+use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -30,6 +30,7 @@ use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
+use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -71,8 +72,10 @@ pub trait VisionModelLoader: IsqModelLoader {
         model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self) -> bool;
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
@@ -89,6 +92,8 @@ pub enum VisionLoaderType {
     LLaVA,
     #[serde(rename = "vllama")]
     VLlama,
+    #[serde(rename = "qwen2vl")]
+    Qwen2VL,
 }
 
 impl FromStr for VisionLoaderType {
@@ -100,7 +105,8 @@ impl FromStr for VisionLoaderType {
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
             "vllama" => Ok(Self::VLlama),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vsllama`.")),
+            "qwen2vl" => Ok(Self::Qwen2VL),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`.")),
         }
     }
 }
@@ -111,6 +117,15 @@ impl FromStr for VisionLoaderType {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Phi3VLoader;
+
+pub struct Phi3VPrefixer;
+
+impl VisionPromptPrefixer for Phi3VPrefixer {
+    fn prefix_image(&self, image_index: usize, prompt: &str) -> String {
+        // Image indexing starts at 0.
+        format!("<|image_{}|>{prompt}", image_index + 1)
+    }
+}
 
 impl VisionModelLoader for Phi3VLoader {
     fn load(
@@ -144,6 +159,7 @@ impl VisionModelLoader for Phi3VLoader {
         _model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
@@ -154,31 +170,22 @@ impl VisionModelLoader for Phi3VLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Phi3VPrefixer)
+    }
 }
 
 impl IsqModelLoader for Phi3VLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut regexes = Vec::new();
-        if serde_json::from_str::<WordEmbeddingsShim>(config)?.tie_word_embeddings {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
-        // Attention
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
-        )?);
-        // MLP
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
-        )?);
-        Ok(regexes)
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate__up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
     }
 }
 
@@ -188,6 +195,15 @@ impl IsqModelLoader for Phi3VLoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct Idefics2Loader;
+
+pub struct Idefics2Prefixer;
+
+impl VisionPromptPrefixer for Idefics2Prefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        // Chat template does it
+        prompt.to_string()
+    }
+}
 
 impl VisionModelLoader for Idefics2Loader {
     fn load(
@@ -221,10 +237,12 @@ impl VisionModelLoader for Idefics2Loader {
         _model_config: &str,
         processor_config: Option<ProcessorConfig>,
         preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Idefics2Processor::new(
             processor_config.unwrap(),
             preprocessor_config,
+            max_edge,
         ))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
@@ -235,12 +253,14 @@ impl VisionModelLoader for Idefics2Loader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Idefics2Prefixer)
+    }
 }
 
 impl IsqModelLoader for Idefics2Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -261,6 +281,14 @@ impl IsqModelLoader for Idefics2Loader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVANextLoader;
+
+pub struct LLaVANextPrefixer;
+
+impl VisionPromptPrefixer for LLaVANextPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<image>{prompt}")
+    }
+}
 
 impl VisionModelLoader for LLaVANextLoader {
     fn load(
@@ -294,6 +322,7 @@ impl VisionModelLoader for LLaVANextLoader {
         model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
@@ -305,12 +334,14 @@ impl VisionModelLoader for LLaVANextLoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(LLaVANextPrefixer)
+    }
 }
 
 impl IsqModelLoader for LLaVANextLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -331,6 +362,14 @@ impl IsqModelLoader for LLaVANextLoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct LLaVALoader;
+
+pub struct LLaVAPrefixer;
+
+impl VisionPromptPrefixer for LLaVAPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<image>{prompt}")
+    }
+}
 
 impl VisionModelLoader for LLaVALoader {
     fn load(
@@ -364,6 +403,7 @@ impl VisionModelLoader for LLaVALoader {
         model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(LLaVAProcessor::new(model_config))
     }
@@ -375,12 +415,14 @@ impl VisionModelLoader for LLaVALoader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(LLaVAPrefixer)
+    }
 }
 
 impl IsqModelLoader for LLaVALoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            // Tie weights is unsupported for this model
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -401,6 +443,14 @@ impl IsqModelLoader for LLaVALoader {
 ///
 /// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
 pub struct VLlamaLoader;
+
+pub struct VLlamaPrefixer;
+
+impl VisionPromptPrefixer for VLlamaPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("<|image|>{prompt}")
+    }
+}
 
 impl VisionModelLoader for VLlamaLoader {
     fn load(
@@ -434,6 +484,7 @@ impl VisionModelLoader for VLlamaLoader {
         _model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(MLlamaProcessor::new())
     }
@@ -445,40 +496,108 @@ impl VisionModelLoader for VLlamaLoader {
     fn supports_paged_attention(&self) -> bool {
         false
     }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(VLlamaPrefixer)
+    }
 }
 
 impl IsqModelLoader for VLlamaLoader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut regexes = Vec::new();
-        if serde_json::from_str::<MLlamaConfig>(config)?
-            .text_config
-            .tie_word_embeddings
-        {
-            regexes.push(Regex::new(r"(embed_tokens|lm_head)\.(weight|bias)$")?);
-        } else {
-            regexes.push(Regex::new(r"lm_head\.(weight|bias)$")?);
-        }
-        // Attention
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
-        )?);
-        // MLP
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
-        )?);
-        regexes.push(Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?);
-        regexes.push(Regex::new(
-            r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
-        )?);
-        Ok(regexes)
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+// ======================== Qwen2VL Loader
+
+/// [`VisionLoader`] for an Qwen2-VL model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct Qwen2VLLoader;
+
+pub struct Qwen2VLPrefixer;
+
+impl VisionPromptPrefixer for Qwen2VLPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!(
+            "{}{}{}{prompt}",
+            Qwen2VLProcessor::VISION_START,
+            Qwen2VLProcessor::IMAGE_PAD,
+            Qwen2VLProcessor::VISION_END
+        )
+    }
+}
+
+impl VisionModelLoader for Qwen2VLLoader {
+    fn load(
+        &self,
+        config: &str,
+        _use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(Qwen2VLModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Qwen2VLProcessor::new(max_edge))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Qwen2VLConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
+    }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Qwen2VLPrefixer)
+    }
+}
+
+impl IsqModelLoader for Qwen2VLLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
     }
 }

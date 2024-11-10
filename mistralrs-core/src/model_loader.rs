@@ -381,6 +381,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            max_edge,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -388,6 +389,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                max_edge,
             },
             args.chat_template,
             tokenizer_json,

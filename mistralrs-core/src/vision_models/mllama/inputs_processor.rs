@@ -297,10 +297,13 @@ impl InputsProcessor for MLlamaImageProcessor {
                     aspect_ratio_ids,
                     aspect_ratio_mask,
                     num_tiles,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
                 } = self
                     .preprocess(
                         seq.take_images()
                             .expect("Need to have images by this point."),
+                        vec![],
                         config,
                         device,
                         (bs, max_num_images), // Don't use it here...
@@ -731,10 +734,13 @@ impl ImagePreProcessor for MLlamaImageProcessor {
     fn preprocess(
         &self,
         images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
         (bs, max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
+        assert!(videos.is_empty());
+
         let mut sample_images = Vec::new();
         let mut sample_aspect_ratios = Vec::new();
         let max_image_tiles = config
@@ -868,6 +874,8 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             aspect_ratio_ids: Some(aspect_ratio_ids),
             aspect_ratio_mask: Some(aspect_ratio_mask),
             num_tiles: Some(num_tiles),
+            image_grid_thw: None,
+            video_grid_thw: None,
         })
     }
 }

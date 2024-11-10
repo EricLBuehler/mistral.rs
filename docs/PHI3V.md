@@ -57,10 +57,9 @@ cargo run --release --features ... -- --port 1234 vision-plain -m microsoft/Phi-
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="phi3v",

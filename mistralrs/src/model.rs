@@ -151,4 +151,9 @@ impl Model {
 
         Ok(self.runner.get_sender()?.send(request).await?)
     }
+
+    /// Retrieve some information about this model.
+    pub fn config(&self) -> &MistralRsConfig {
+        self.runner.config()
+    }
 }

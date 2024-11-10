@@ -528,7 +528,8 @@ impl QuantMethod for HqqLayer {
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Gptq { .. }
-            | QuantMethodConfig::Dummy => {
+            | QuantMethodConfig::Dummy
+            | QuantMethodConfig::FP8 { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {

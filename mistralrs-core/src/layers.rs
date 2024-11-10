@@ -12,19 +12,19 @@ use std::{
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
-    Context, DType, Device, IndexOp, Result, Shape, Tensor, D,
+    Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
 use crate::{
-    cublaslt::CUBLASLT_HANDLE,
     gguf::Content,
     models::llama,
+    ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
     INHIBIT_GEMM_F16,
 };
@@ -49,14 +49,55 @@ impl RmsNorm {
         Ok(Self { eps, weight: w })
     }
 
+    /// Gemma uses weight + 1.0. Undo for UQFF generation.
+    pub fn undo_gemma(&self) -> Result<Self> {
+        Ok(Self {
+            eps: self.eps,
+            weight: (&self.weight - 1.0)?,
+        })
+    }
+
     pub fn from_w(w: Tensor, eps: f64) -> Result<Self> {
         Ok(Self { eps, weight: w })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
     }
 }
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct F32RmsNorm {
+    w: Tensor,
+    eps: f64,
+}
+
+impl F32RmsNorm {
+    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            w: vb.get((size,), "weight")?,
+            eps,
+        })
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.w
+    }
+}
+
+impl Module for F32RmsNorm {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let initial_type = xs.dtype();
+        let mut xs = xs.to_dtype(DType::F32)?;
+        let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
+        xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
+        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
     }
 }
 
@@ -90,7 +131,8 @@ pub struct PhiRotaryEmbedding {
     original_max_position_embeddings: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScaledRopeType {
     #[serde(alias = "su")]
     #[serde(alias = "longrope")]
@@ -112,7 +154,7 @@ impl FromStr for ScaledRopeType {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum PhiRopeScalingConfig {
     Classic {
@@ -393,7 +435,7 @@ pub enum Llama3RotaryEmbedding {
     Default(RotaryEmbedding),
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum Llama3RopeType {
     #[serde(rename = "llama3")]
     Llama3,
@@ -402,7 +444,7 @@ pub enum Llama3RopeType {
     Default,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Llama3RopeConfig {
     pub factor: f32,
     pub low_freq_factor: f32,
@@ -609,6 +651,84 @@ impl Llama3RotaryEmbedding {
     }
 }
 
+// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L107
+#[derive(Debug, Clone)]
+pub struct Qwen2VLRotaryEmbedding {
+    inv_freq: Tensor,
+    mrope_section: Vec<usize>,
+}
+
+impl Qwen2VLRotaryEmbedding {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+        Ok(Self {
+            inv_freq,
+            mrope_section,
+        })
+    }
+
+    /// (cos, sin)
+    pub fn compute_cos_sin(&self, position_ids: &Tensor, dtype: DType) -> Result<(Tensor, Tensor)> {
+        let inv_freq_expanded =
+            self.inv_freq
+                .reshape((1, 1, (), 1))?
+                .repeat((3, position_ids.dim(1)?, 1, 1))?;
+        let position_ids_expanded = position_ids.unsqueeze(2)?;
+        let freqs = inv_freq_expanded
+            .matmul(&position_ids_expanded.to_dtype(inv_freq_expanded.dtype())?)?
+            .transpose(2, 3)?;
+        let cos = freqs.cos()?;
+        let sin = freqs.sin()?;
+
+        let cos = Tensor::cat(
+            &cos.split(&self.mrope_section, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
+        let sin = Tensor::cat(
+            &sin.split(&self.mrope_section, D::Minus1)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, m)| m.i(i % 3))
+                .collect::<Result<Vec<_>>>()?,
+            D::Minus1,
+        )?
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
+
+        Ok((cos, sin))
+    }
+
+    // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L203
+    pub fn forward(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &mut Tensor,
+        k: &mut Tensor,
+    ) -> Result<()> {
+        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        Ok(())
+    }
+}
+
 /// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
 pub struct MatMul;
 
@@ -658,57 +778,6 @@ impl MatMul {
             matmul.forward_via_half(x)
         } else {
             matmul.forward(x)
-        }
-    }
-}
-
-/// Linear layer with fused bias matmul.
-#[derive(Debug, Clone)]
-pub struct FusedBiasLinear {
-    pub(crate) w: Tensor,
-    pub(crate) b: Tensor,
-}
-
-impl TryFrom<Linear> for FusedBiasLinear {
-    type Error = candle_core::Error;
-
-    fn try_from(x: Linear) -> Result<Self> {
-        if let Some(bias) = x.bias() {
-            Ok(Self {
-                w: x.weight().clone(),
-                b: bias.clone(),
-            })
-        } else {
-            candle_core::bail!("`FusedBiasLinear` expects a Linear layer with bias.")
-        }
-    }
-}
-
-impl Module for FusedBiasLinear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let w = match *x.dims() {
-            [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
-            [bsize, _, _] => self.w.broadcast_left(bsize)?,
-            _ => self.w.clone(),
-        };
-        let mut tgt_shape = x.dims().to_vec();
-        tgt_shape[x.dims().len() - 1] = w.dim(D::Minus2)?;
-        let b = self.b.broadcast_as(Shape::from_dims(&tgt_shape))?;
-
-        if let (Device::Cuda(_), Some(cublaslt)) = (x.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            cublaslt
-                .batch_matmul(
-                    x,
-                    &w,
-                    Some(&b.t()?.contiguous()?),
-                    None,
-                    Some(1.0),
-                    None,
-                    None,
-                )?
-                .t()
-        } else {
-            x.matmul(&w.t()?)? + b
         }
     }
 }
@@ -870,77 +939,121 @@ impl RotaryEmbedding {
     }
 }
 
-mod tests {
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Activation {
+    #[default]
+    #[serde(alias = "gelu")]
+    Gelu,
+    #[serde(alias = "gelu_new")]
+    NewGelu,
+    Relu,
+    Relu2,
+    Relu6,
+    Silu,
+    Sigmoid,
+    HardSigmoid,
+    Swiglu,
+    Swish,
+    HardSwish,
+    Elu(f64),
+    LeakyRelu(f64),
+    #[serde(alias = "gelu_pytorch_tanh")]
+    GeluPytorchTanh,
+    QuickGelu,
+}
 
-    #[test]
-    fn fused_bias_linear() {
-        use candle_core::{DType, Device, IndexOp, Tensor};
-        use candle_nn::{Linear, Module};
+impl Module for Activation {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Gelu => xs.gelu_erf(),
+            // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
+            Self::NewGelu => xs.gelu(),
+            Self::Relu => xs.relu(),
+            Self::Relu2 => xs.relu()?.sqr(),
+            Self::Relu6 => xs.clamp(0f32, 6f32),
+            Self::Silu => xs.silu(),
+            Self::Sigmoid => candle_nn::ops::sigmoid(xs),
+            Self::HardSigmoid => candle_nn::ops::hard_sigmoid(xs),
+            Self::Swiglu => candle_nn::ops::swiglu(xs),
+            Self::Swish => xs * candle_nn::ops::sigmoid(xs)?,
+            Self::HardSwish => xs * candle_nn::ops::hard_sigmoid(xs)?,
+            &Self::Elu(alpha) => xs.elu(alpha),
+            &Self::LeakyRelu(negative_slope) => candle_nn::ops::leaky_relu(xs, negative_slope),
+            Self::GeluPytorchTanh => xs.gelu(),
+            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+        }
+    }
+}
 
-        use crate::cublaslt::setup_cublas_lt_wrapper;
-        use crate::layers::FusedBiasLinear;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conv3dConfig {
+    pub padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
+    pub groups: usize,
+}
 
-        const IN: usize = 1921;
-        const OUT: usize = 4096;
-        const INNER: usize = 1024;
+impl Default for Conv3dConfig {
+    fn default() -> Self {
+        Self {
+            padding: 0,
+            stride: 1,
+            dilation: 1,
+            groups: 1,
+        }
+    }
+}
 
-        let dev = Device::cuda_if_available(0).unwrap();
-        setup_cublas_lt_wrapper();
+pub struct Conv3dNoBias {
+    conv2d_1: Conv2d,
+    conv2d_2: Conv2d,
+}
 
-        let inner_dtype = if dev.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
+impl Conv3dNoBias {
+    pub fn new(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_sizes: [usize; 3],
+        cfg: Conv3dConfig,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let ws = vb.get(
+            (
+                out_channels,
+                in_channels / cfg.groups,
+                kernel_sizes[0],
+                kernel_sizes[1],
+                kernel_sizes[2],
+            ),
+            "weight",
+        )?;
+
+        // Split on temporal dimension
+        // https://github.com/pytorch/pytorch/issues/139066
+
+        let w1 = ws.i((.., .., 0, .., ..))?;
+        let w2 = ws.i((.., .., 1, .., ..))?;
+
+        let cfg = Conv2dConfig {
+            padding: cfg.padding,
+            stride: cfg.stride,
+            dilation: cfg.dilation,
+            groups: cfg.groups,
         };
 
-        let w = Tensor::arange(0f32, (OUT * IN) as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT, IN))
-            .unwrap();
-        let b = Tensor::arange(0f32, OUT as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((OUT,))
-            .unwrap();
+        Ok(Self {
+            conv2d_1: Conv2d::new(w1.contiguous()?, None, cfg),
+            conv2d_2: Conv2d::new(w2.contiguous()?, None, cfg),
+        })
+    }
+}
 
-        let xs = Tensor::arange(0f32, (INNER * IN) as f32, &dev)
-            .unwrap()
-            .to_dtype(inner_dtype)
-            .unwrap()
-            .reshape((1, INNER, IN))
-            .unwrap();
+impl Module for Conv3dNoBias {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs1 = xs.i((.., .., 0, .., ..))?;
+        let xs2 = xs.i((.., .., 1, .., ..))?;
 
-        let lin = Linear::new(w.clone(), Some(b.clone()));
-        let truth_out = lin.forward(&xs).unwrap();
-        let truth_y = truth_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::<f32>()
-            .unwrap();
-
-        let fused = FusedBiasLinear { w, b };
-        let fused_out = fused.forward(&xs).unwrap();
-        let fused_y = fused_out
-            .to_dtype(DType::F32)
-            .unwrap()
-            .to_vec3::<f32>()
-            .unwrap();
-
-        assert_eq!(truth_out.shape(), fused_out.shape());
-        if truth_y != fused_y {
-            panic!(
-                "Truth does not match fused kernel. Diff fused - truth:\n{:#?}",
-                &(&fused_out - &truth_out)
-                    .unwrap()
-                    .i((0, 5..10, 0..5))
-                    .unwrap()
-                    .to_dtype(DType::F32)
-                    .unwrap()
-                    .to_vec2::<f32>()
-            )
-        }
+        (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
     }
 }

@@ -11,7 +11,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, Sdpa},
+    layers::{
+        Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
+        Sdpa,
+    },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -21,16 +24,16 @@ use crate::{
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
 
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/config.json
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
-    pub(crate) hidden_act: candle_nn::Activation,
+    pub(crate) hidden_act: Activation,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
     pub(crate) num_hidden_layers: usize,
@@ -250,7 +253,7 @@ struct Mlp {
     w1: Arc<dyn QuantMethod>,
     w2: Arc<dyn QuantMethod>,
     w3: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
 }
 
 impl Mlp {
@@ -731,6 +734,48 @@ impl IsqModel for Model {
             }
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
+    }
+
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 

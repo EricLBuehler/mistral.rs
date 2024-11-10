@@ -10,7 +10,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, MatMul, RotaryEmbedding, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -19,13 +19,13 @@ use crate::{
         Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     AnyMoeConfig, AnyMoeExpertType,
 };
 
 serde_default_fn!(bool, word_emb_default, false);
 
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
@@ -33,7 +33,7 @@ pub struct Config {
     pub(crate) num_hidden_layers: usize,
     pub(crate) num_attention_heads: usize,
     pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: candle_nn::Activation,
+    pub(crate) hidden_act: Activation,
     pub(crate) max_position_embeddings: usize,
     pub(crate) norm_epsilon: f64,
     pub(crate) rope_theta: f64,
@@ -51,7 +51,7 @@ pub struct Config {
 struct MLP {
     c_fc: Arc<dyn QuantMethod>,
     c_proj: Arc<dyn QuantMethod>,
-    act: candle_nn::Activation,
+    act: Activation,
     params: Vec<usize>,
 }
 
@@ -586,6 +586,24 @@ impl IsqModel for Model {
             );
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 

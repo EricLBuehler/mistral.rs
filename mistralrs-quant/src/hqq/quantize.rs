@@ -123,9 +123,9 @@ mod test {
             },
         )?;
 
-        let dequant = hqq.dequantize()?;
+        let _dequant = hqq.dequantize()?;
 
-        dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
+        // dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
         Ok(())
     }
 }

@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    fs::File,
     path::PathBuf,
     str::FromStr,
     sync::{atomic::AtomicUsize, Arc},
@@ -8,17 +9,21 @@ use std::{
 };
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{Context, Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use mistralrs_quant::{
-    GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
+    FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
+use tokenizers::Tokenizer;
 use tracing::info;
 
-use crate::{device_map::DeviceMapper, serde_default_fn, topology::LayerTopology, Topology};
+use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
+
+pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 
 /// Parse ISQ value: one of
 /// - `Q4_0`
@@ -54,10 +59,11 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "q8k" => IsqType::Q8K,
         "hqq8" => IsqType::HQQ8,
         "hqq4" => IsqType::HQQ4,
+        "fp8" => IsqType::F8E4M3,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -74,11 +80,12 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
                 | IsqType::Q5K
                 | IsqType::Q6K
                 | IsqType::HQQ8
-                | IsqType::HQQ4 // | IsqType::HQQ3
-                                // | IsqType::HQQ2
-                                // | IsqType::HQQ1
+                | IsqType::HQQ4
+                | IsqType::F8E4M3 // | IsqType::HQQ3
+                                  // | IsqType::HQQ2
+                                  // | IsqType::HQQ1
         ) {
-            return Err("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`".to_string());
         }
     }
     Ok(tp)
@@ -108,6 +115,15 @@ impl FromStr for IsqOrganization {
     }
 }
 
+pub struct UqffFullSer<'a> {
+    pub tokenizer: &'a Tokenizer,
+    pub template_filename: &'a Option<PathBuf>,
+    pub generation_config: Option<&'a PathBuf>,
+    pub config: String,
+    pub processor_filename: &'a Option<PathBuf>,
+    pub preprocessor_filename: &'a Option<PathBuf>,
+}
+
 pub trait IsqModel {
     /// Corresponds to `IsqOrganization::Default`
     #[allow(clippy::type_complexity)]
@@ -130,7 +146,19 @@ pub trait IsqModel {
         self.get_layers()
     }
 
+    /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
+    fn residual_tensors(&self) -> Vec<(String, Tensor)>;
+
+    /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers_moe_experts_only`].
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        None
+    }
+
     /// Quantize the model in-situ.
+    ///
+    /// This function will also create a UQFF file, or, if the model supports it (residual tensors are returned),
+    /// a full serialization is created.
+    #[allow(clippy::too_many_arguments)]
     fn quantize(
         &mut self,
         dtype: Option<IsqType>,
@@ -139,6 +167,7 @@ pub trait IsqModel {
         silent: bool,
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
+        full_ser: UqffFullSer<'_>,
     ) -> candle_core::Result<()> {
         {
             let (mut tensors, mapper) = match organization {
@@ -211,13 +240,14 @@ pub trait IsqModel {
             }
 
             let t_start = Instant::now();
-            #[cfg(not(feature = "metal"))]
-            {
-                use rayon::iter::IntoParallelRefIterator;
 
+            use rayon::iter::IntoParallelRefIterator;
+
+            // Get the MINIMUM of the max isq threads the quant method allows
+            #[cfg(not(feature = "metal"))]
+            let minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
-                // Get the MINIMUM of the max isq threads the quant method allows
-                let minimum_max_threads = tensors
+                tensors
                     .iter()
                     .map(|(q, _)| {
                         if let Some(dtype) = dtype {
@@ -229,117 +259,25 @@ pub trait IsqModel {
                         }
                     })
                     .min()
-                    .unwrap_or(current_rayon_threads);
-
-                info!("Applying ISQ on {minimum_max_threads} threads.");
-
-                let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(minimum_max_threads)
-                    .build()
-                    .map_err(candle_core::Error::msg)?;
-
-                pool.install(|| {
-                    use indicatif::ParallelProgressIterator;
-                    use rayon::iter::{
-                        IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
-                    };
-                    if silent {
-                        tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
-                            |((tensor, _), (device, dtype))| {
-                                **tensor = tensor
-                                    .clone()
-                                    .apply_isq(dtype, device.clone(), &n_quantized)
-                                    .unwrap();
-                                device.synchronize().unwrap();
-                            },
-                        );
-                    } else {
-                        tensors
-                            .par_iter_mut()
-                            .zip(devices_and_dtypes)
-                            .progress_with(bar)
-                            .for_each(|((tensor, _), (device, dtype))| {
-                                **tensor = tensor
-                                    .clone()
-                                    .apply_isq(dtype, device.clone(), &n_quantized)
-                                    .unwrap();
-                                device.synchronize().unwrap();
-                            });
-                    }
-                });
-
-                if let Some(serialized) = write_artifacts {
-                    info!(
-                        "Serializing {total_tensors} ISQ tensors to `{}`.",
-                        serialized.display()
-                    );
-
-                    if !serialized.extension().is_some_and(|ext| ext == "uqff") {
-                        candle_core::bail!(
-                            "UQFF output path extension must be {:?}",
-                            serialized.extension().as_ref().unwrap()
-                        );
-                    }
-
-                    let bar = ProgressBar::new(total_tensors as u64);
-                    bar.set_style(
-                        ProgressStyle::default_bar()
-                            .template(
-                                "[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})",
-                            )
-                            .unwrap()
-                            .progress_chars("#>-"),
-                    );
-
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(2)
-                        .build()
-                        .map_err(candle_core::Error::msg)?;
-
-                    let quantized_values = pool.install(|| {
-                        if silent {
-                            tensors
-                                .par_iter()
-                                .enumerate()
-                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                                .map(|(i, (layer, _))| {
-                                    Ok((
-                                        i.to_string(),
-                                        Tensor::new(
-                                            Cow::into_owned(layer.serialize()?),
-                                            &Device::Cpu,
-                                        )?,
-                                    ))
-                                })
-                                .collect::<candle_core::Result<Vec<_>>>()
-                        } else {
-                            tensors
-                                .par_iter()
-                                .enumerate()
-                                .progress_with(bar)
-                                .filter(|(_, (layer, _))| layer.isq_serde_supported())
-                                .map(|(i, (layer, _))| {
-                                    Ok((
-                                        i.to_string(),
-                                        Tensor::new(
-                                            Cow::into_owned(layer.serialize()?),
-                                            &Device::Cpu,
-                                        )?,
-                                    ))
-                                })
-                                .collect::<candle_core::Result<Vec<_>>>()
-                        }
-                    });
-
-                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
-                }
-            }
-
+                    .unwrap_or(current_rayon_threads)
+            };
             #[cfg(feature = "metal")]
-            {
-                use indicatif::ProgressIterator;
+            let minimum_max_threads = 1;
+
+            info!("Applying ISQ on {minimum_max_threads} threads.");
+
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(minimum_max_threads)
+                .build()
+                .map_err(candle_core::Error::msg)?;
+
+            pool.install(|| {
+                use indicatif::ParallelProgressIterator;
+                use rayon::iter::{
+                    IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+                };
                 if silent {
-                    tensors.iter_mut().zip(devices_and_dtypes).for_each(
+                    tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
                         |((tensor, _), (device, dtype))| {
                             **tensor = tensor
                                 .clone()
@@ -350,7 +288,7 @@ pub trait IsqModel {
                     );
                 } else {
                     tensors
-                        .iter_mut()
+                        .par_iter_mut()
                         .zip(devices_and_dtypes)
                         .progress_with(bar)
                         .for_each(|((tensor, _), (device, dtype))| {
@@ -361,33 +299,35 @@ pub trait IsqModel {
                             device.synchronize().unwrap();
                         });
                 }
+            });
 
-                if let Some(serialized) = write_artifacts {
-                    info!(
-                        "Serializing {total_tensors} ISQ tensors to `{}`.",
-                        serialized.display()
-                    );
+            if let Some(serialized) = write_artifacts {
+                info!(
+                    "Serializing {total_tensors} ISQ tensors to `{}`.",
+                    serialized.display()
+                );
 
-                    if !serialized.extension().is_some_and(|ext| ext == "uqff") {
-                        candle_core::bail!(
-                            "UQFF output path extension must be {:?}",
-                            serialized.extension().as_ref().unwrap()
-                        );
-                    }
+                if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                    candle_core::bail!("UQFF output path extension must be `.uqff`",);
+                }
 
-                    let bar = ProgressBar::new(total_tensors as u64);
-                    bar.set_style(
-                        ProgressStyle::default_bar()
-                            .template(
-                                "[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})",
-                            )
-                            .unwrap()
-                            .progress_chars("#>-"),
-                    );
+                let bar = ProgressBar::new(total_tensors as u64);
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{elapsed_precise}] [{bar:40.red/magenta}] {pos}/{len} ({eta})")
+                        .unwrap()
+                        .progress_chars("#>-"),
+                );
 
-                    let quantized_values = if silent {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(2)
+                    .build()
+                    .map_err(candle_core::Error::msg)?;
+
+                let quantized_values = pool.install(|| {
+                    if silent {
                         tensors
-                            .iter()
+                            .par_iter()
                             .enumerate()
                             .filter(|(_, (layer, _))| layer.isq_serde_supported())
                             .map(|(i, (layer, _))| {
@@ -399,7 +339,7 @@ pub trait IsqModel {
                             .collect::<candle_core::Result<Vec<_>>>()
                     } else {
                         tensors
-                            .iter()
+                            .par_iter()
                             .enumerate()
                             .progress_with(bar)
                             .filter(|(_, (layer, _))| layer.isq_serde_supported())
@@ -410,9 +350,99 @@ pub trait IsqModel {
                                 ))
                             })
                             .collect::<candle_core::Result<Vec<_>>>()
-                    };
+                    }
+                });
 
-                    safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+                let parent = serialized
+                    .parent()
+                    .context("Target UQFF path must have a filename!")?;
+
+                std::fs::create_dir_all(parent)?;
+
+                safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+
+                let residual = match organization {
+                    IsqOrganization::Default => self.residual_tensors(),
+                    IsqOrganization::MoeExpertsOnly => self
+                        .residual_tensors_moe_experts_only()
+                        .unwrap_or(self.residual_tensors()),
+                };
+
+                let residual_out = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+                let config_out = parent.join("config.json");
+                let tokenizer_out = parent.join("tokenizer.json");
+                let tokenizer_cfg_out = parent.join("tokenizer_config.json");
+                let gen_cfg_out = parent.join("generation_config.json");
+                let processor_out = parent.join("processor_config.json");
+                let preprocessor_out = parent.join("preprocessor_config.json");
+
+                info!(
+                    "Serializing {} residual tensors to `{}`.",
+                    residual.len(),
+                    residual_out.display()
+                );
+
+                safetensors::serialize_to_file(residual, &None, &residual_out)?;
+
+                let UqffFullSer {
+                    tokenizer,
+                    template_filename,
+                    generation_config,
+                    config,
+                    processor_filename,
+                    preprocessor_filename,
+                } = full_ser;
+
+                info!("Serializing configuration to `{}`.", config_out.display());
+
+                std::fs::write(config_out, config)?;
+
+                info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
+
+                serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
+                    .map_err(candle_core::Error::msg)?;
+
+                if let Some(template_filename) = template_filename {
+                    info!(
+                        "Serializing tokenizer config to `{}`.",
+                        tokenizer_cfg_out.display()
+                    );
+
+                    let template =
+                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&tokenizer_cfg_out, template)
+                        .map_err(candle_core::Error::msg)?;
+                }
+
+                if let Some(generation_config) = generation_config {
+                    info!(
+                        "Serializing generation config to `{}`.",
+                        gen_cfg_out.display()
+                    );
+
+                    let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                }
+
+                if let Some(processor_config) = processor_filename {
+                    info!(
+                        "Serializing processor config to `{}`.",
+                        processor_out.display()
+                    );
+
+                    let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                }
+
+                if let Some(preprocessor_config) = preprocessor_filename {
+                    info!(
+                        "Serializing preprocessor config to `{}`.",
+                        preprocessor_out.display()
+                    );
+
+                    let cfg =
+                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
@@ -511,6 +541,9 @@ pub trait IsqModel {
                             QuantizedSerdeType::Hqq => {
                                 HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
                             }
+                            QuantizedSerdeType::Fp8 => {
+                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
+                            }
                         };
                         *tensor = deserialized;
                     }
@@ -536,6 +569,9 @@ pub trait IsqModel {
                             }
                             QuantizedSerdeType::Hqq => {
                                 HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
+                            }
+                            QuantizedSerdeType::Fp8 => {
+                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
                             }
                         };
                         *tensor = deserialized;
@@ -567,12 +603,4 @@ pub(crate) trait IsqModelLoader {
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
-}
-
-serde_default_fn!(bool, word_emb_default, false);
-
-#[derive(Deserialize)]
-pub(crate) struct WordEmbeddingsShim {
-    #[serde(default = "word_emb_default")]
-    pub(crate) tie_word_embeddings: bool,
 }

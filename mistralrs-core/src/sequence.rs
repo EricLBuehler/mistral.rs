@@ -207,6 +207,9 @@ pub struct Sequence {
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
     input_images: Option<Vec<image::DynamicImage>>,
+    pub cached_pixel_values: Option<Tensor>,
+    pub cached_img_thw: Option<Tensor>,
+    pub cached_vid_thw: Option<Tensor>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -339,6 +342,9 @@ impl Sequence {
             image_gen_response_format,
             sequence_stepping_type,
             diffusion_params,
+            cached_pixel_values: None,
+            cached_img_thw: None,
+            cached_vid_thw: None,
         }
     }
 
@@ -445,6 +451,10 @@ impl Sequence {
 
     pub fn get_initial_prompt(&self) -> &str {
         &self.prompt
+    }
+
+    pub fn set_initial_prompt(&mut self, new: String) {
+        self.prompt = new;
     }
 
     /// This will also set prompt_len
@@ -716,6 +726,10 @@ impl Sequence {
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
         self.input_images.take()
+    }
+
+    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.clone()
     }
 
     pub fn images(&self) -> Option<&[image::DynamicImage]> {

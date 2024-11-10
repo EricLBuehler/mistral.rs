@@ -1,9 +1,11 @@
 use super::cache_manager::DefaultCacheManager;
+use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
     CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
     Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, XLoraPaths,
+    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    XLoraPaths,
 };
 use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
@@ -21,7 +23,7 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, get_write_uqff_paths, vision_normal_model_loader,
+    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
     AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
@@ -51,6 +53,14 @@ pub struct VisionPipeline {
     preprocessor_config: Arc<PreProcessorConfig>,
     topology: Option<Topology>,
     silent: bool,
+    prefixer: Arc<dyn VisionPromptPrefixer>,
+
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
+    processor_filename: Option<PathBuf>,
+    preprocessor_filename: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -65,6 +75,7 @@ pub struct VisionLoader {
     xlora_order: Option<Ordering>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
+    from_uqff: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -85,6 +96,7 @@ pub struct VisionSpecificConfig {
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub max_edge: Option<u32>,
 }
 
 impl VisionLoaderBuilder {
@@ -110,6 +122,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
+            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -122,6 +135,7 @@ impl VisionLoaderBuilder {
             xlora_order: None,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
+            from_uqff: RwLock::new(None),
         })
     }
 }
@@ -146,8 +160,12 @@ impl Loader for VisionLoader {
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
         *self
             .token_source
             .write()
@@ -265,9 +283,12 @@ impl Loader for VisionLoader {
             .as_ref()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
-        let processor =
-            self.inner
-                .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
+        let processor = self.inner.get_processor(
+            &config,
+            processor_config,
+            preprocessor_config.clone(),
+            self.config.max_edge,
+        ); //There are always some repos that don't properly handle config position, for example... LLaVA
 
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
@@ -289,14 +310,21 @@ impl Loader for VisionLoader {
                 silent,
                 IsqOrganization::Default,
                 self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: paths.get_processor_config(),
+                    preprocessor_filename: paths.get_preprocessor_config(),
+                },
             )?;
-        } else if let Some(mut from_uqff) = self.config.from_uqff.clone() {
-            from_uqff = get_write_uqff_paths!(from_uqff, self, silent);
+        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             model.load_from_artifacts(
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                &from_uqff,
+                from_uqff,
             )?;
         }
 
@@ -344,9 +372,15 @@ impl Loader for VisionLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
             }),
             processor,
+            prefixer: self.inner.prefixer(),
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
+            processor_filename: paths.get_processor_config().clone(),
+            preprocessor_filename: paths.get_preprocessor_config().clone(),
         })))
     }
 
@@ -382,6 +416,14 @@ impl IsqPipelineMixin for VisionPipeline {
                 self.silent,
                 IsqOrganization::Default,
                 None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                    processor_filename: &self.processor_filename,
+                    preprocessor_filename: &self.preprocessor_filename,
+                },
             )
             .map_err(anyhow::Error::msg)
     }
@@ -481,7 +523,10 @@ impl Pipeline for VisionPipeline {
     }
     fn category(&self) -> ModelCategory {
         let has_conv2d = self.model.has_conv2d();
-        ModelCategory::Vision { has_conv2d }
+        ModelCategory::Vision {
+            has_conv2d,
+            prefixer: self.prefixer.clone(),
+        }
     }
 }
 

@@ -9,9 +9,11 @@ use std::sync::{Mutex, Once};
 
 #[cfg(feature = "cuda")]
 mod api;
+#[cfg(feature = "cuda")]
+mod matmul;
 
 #[cfg(feature = "cuda")]
-use api::{fused_batch_matmul, fused_matmul, Activation, CublasLt};
+use api::{fused_batch_matmul, fused_matmul, CublasLt};
 
 static INIT: Once = Once::new();
 static mut CUBLASLT: Option<CublasLtWrapper> = None;
@@ -70,8 +72,8 @@ impl CublasLtWrapper {
         #[cfg(feature = "cuda")]
         {
             let inner_act = act.map(|a| match a {
-                CandleActivation::Relu => Activation::Relu,
-                CandleActivation::Gelu => Activation::Gelu,
+                CandleActivation::Relu => matmul::Activation::Relu,
+                CandleActivation::Gelu => matmul::Activation::Gelu,
                 _ => unreachable!("Unsupported activation in cublaslt matmul"),
             });
             let mut result = fused_batch_matmul(

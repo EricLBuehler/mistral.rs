@@ -5,7 +5,7 @@
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
-    layers::Sdpa,
+    layers::{Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
@@ -197,7 +197,7 @@ impl Attention {
 struct Mlp {
     gate_up_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     down_proj: Arc<dyn LinearLayerLike + Send + Sync>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     i_size: usize,
 }
 
@@ -711,6 +711,10 @@ impl IsqModel for Model {
             ));
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 

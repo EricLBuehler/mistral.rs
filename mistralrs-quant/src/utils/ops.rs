@@ -52,7 +52,18 @@ impl CustomOp2 for BitWiseOr {
         }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let vs2 = &s2.as_slice::<u8>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((start, end)) => &vs1[start..end],
+                    None => candle_core::bail!("Input tensor s1 must be contiguous"),
+                };
+                let vs2 = s2.as_slice::<u8>()?;
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((start, end)) => &vs2[start..end],
+                    None => candle_core::bail!("Input tensor s2 must be contiguous"),
+                };
+                if vs1.len() != vs2.len() {
+                    candle_core::bail!("Input tensors must have the same number of elements");
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
@@ -70,6 +81,7 @@ impl CustomOp2 for BitWiseOr {
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "bitwise-or")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "bitwise-or")),
             CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise-or")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise-or")),
         }
     }
     #[cfg(feature = "cuda")]
@@ -140,6 +152,9 @@ impl CustomOp2 for BitWiseOr {
             }
             DType::F64 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::F64, "bitwise-or"));
+            }
+            DType::F8E4M3 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "bitwise-or"));
             }
         };
         let dst = match s1.dtype() {
@@ -226,6 +241,7 @@ impl CustomOp1 for Leftshift {
             CpuStorage::F16(_) => Err(Error::UnsupportedDTypeForOp(DType::F16, "leftshifr")),
             CpuStorage::F32(_) => Err(Error::UnsupportedDTypeForOp(DType::F32, "leftshifr")),
             CpuStorage::F64(_) => Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshifr")),
+            CpuStorage::F8E4M3(_) => Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshifr")),
         }
     }
     #[cfg(feature = "cuda")]
@@ -268,6 +284,9 @@ impl CustomOp1 for Leftshift {
             }
             DType::F64 => {
                 return Err(Error::UnsupportedDTypeForOp(DType::F64, "leftshift"));
+            }
+            DType::F8E4M3 => {
+                return Err(Error::UnsupportedDTypeForOp(DType::F8E4M3, "leftshift"));
             }
         };
         let dst = match s1.dtype() {
@@ -389,5 +408,68 @@ mod tests {
         assert_eq!(av, [0b00001111]);
         assert_eq!(bv, [0b00001111]);
         assert_eq!(c, [0b11111111]);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn test_bitpack_8bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Eight;
+        let device = Device::Cpu;
+        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitpack_8bit() {
+        use crate::HqqBits;
+        use candle_core::DType;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Eight;
+        let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_dtype(DType::U8)
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn test_bitpack_4bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::Cpu;
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitpack_4bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
     }
 }
