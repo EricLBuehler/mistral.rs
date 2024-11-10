@@ -10,6 +10,9 @@ use candle_core::{
     DType, Device, Result, Tensor,
 };
 
+#[cfg(feature = "metal")]
+mod metal_kernels;
+
 mod cublaslt;
 mod dummy;
 mod fp8;

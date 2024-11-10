@@ -97,25 +97,28 @@ impl HqqLayer {
     }
 }
 
+#[cfg(test)]
 mod test {
-    #[cfg(all(feature = "cuda", test))]
     use candle_core::{Device, Result, Tensor};
 
-    #[cfg(all(feature = "cuda", test))]
     #[test]
     fn test_quantize_hqq() -> Result<()> {
         use candle_core::DType;
 
         use crate::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 
-        let dev = Device::new_cuda(0)?;
-        let data = Tensor::rand(0., 1., (3072, 3072), &dev)?.to_dtype(DType::F32)?;
+        #[cfg(not(feature = "metal"))]
+        let dev = Device::cuda_if_available(0)?;
+        #[cfg(not(feature = "cuda"))]
+        let dev = Device::new_metal(0)?;
+
+        let data = Tensor::rand(0f32, 1f32, (10, 10), &dev)?.to_dtype(DType::F32)?;
         let hqq = HqqLayer::quantize(
             &data,
             &dev,
             HqqConfig {
-                bits: HqqBits::Two,
-                group_size: 64.try_into()?,
+                bits: HqqBits::Three,
+                group_size: 10.try_into()?,
                 axis: HqqAxis::Zero,
                 optimization_steps: None,
                 round_zeros: false,
@@ -124,6 +127,11 @@ mod test {
         )?;
 
         let _dequant = hqq.dequantize()?;
+
+        // let dequant = hqq.dequantize()?;
+        // println!("DATA:\n{data}");
+        // println!("DEQUANT:\n{dequant}");
+        // println!("DIFF:\n{}", (&dequant - &data)?.abs()?);
 
         // dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
         Ok(())
