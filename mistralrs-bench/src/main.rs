@@ -2,8 +2,8 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, Loader, LoaderBuilder,
+    initialize_logging, paged_attn_supported, parse_isq_value, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType, Loader, LoaderBuilder,
     MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
     PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
     TokenSource, Usage,
@@ -294,6 +294,10 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
+    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    #[arg(long = "isq", value_parser = parse_isq_value)]
+    in_situ_quant: Option<IsqType>,
+
     /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
     /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
     #[arg(long = "pa-gpu-mem")]
@@ -477,7 +481,7 @@ fn main() -> anyhow::Result<()> {
         &device,
         false,
         mapper,
-        None,
+        args.in_situ_quant,
         cache_config,
     )?;
     info!("Model loaded.");
