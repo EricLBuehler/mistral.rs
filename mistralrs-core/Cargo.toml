@@ -74,7 +74,7 @@ mistralrs-quant = { version = "0.3.2", path = "../mistralrs-quant" }
 uuid = { version = "1.10.0", features = ["v4"] }
 schemars = "0.8.21"
 serde_yaml = "0.9.34"
-regex = "1.10.6"
+regex.workspace = true
 safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"

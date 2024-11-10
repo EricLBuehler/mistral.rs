@@ -6,6 +6,7 @@ use mistralrs_core::{
     ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
+use regex::Regex;
 use std::{
     io::{self, Write},
     sync::{atomic::Ordering, Arc, Mutex},
@@ -229,6 +230,32 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
     }
 }
 
+fn parse_image_path_and_message(input: &str) -> Option<(String, String)> {
+    // Regex to capture the image path and the following message
+    let re = Regex::new(r#"\\image\s+"([^"]+)"\s*(.*)|\\image\s+(\S+)\s*(.*)"#).unwrap();
+
+    if let Some(captures) = re.captures(input) {
+        // Capture either the quoted or unquoted path and the message
+        if let Some(path) = captures.get(1) {
+            if let Some(message) = captures.get(2) {
+                return Some((
+                    path.as_str().trim().to_string(),
+                    message.as_str().trim().to_string(),
+                ));
+            }
+        } else if let Some(path) = captures.get(3) {
+            if let Some(message) = captures.get(4) {
+                return Some((
+                    path.as_str().trim().to_string(),
+                    message.as_str().trim().to_string(),
+                ));
+            }
+        }
+    }
+
+    None
+}
+
 async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
@@ -312,22 +339,13 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 continue;
             }
             prompt if prompt.trim().starts_with(IMAGE_CMD) => {
-                let mut parts = prompt.trim().strip_prefix(IMAGE_CMD).unwrap().split(' ');
-                // No space??
-                if !parts.next().unwrap().is_empty() {
+                let Some((url, message)) = parse_image_path_and_message(prompt.trim()) else {
                     println!("Error: Adding an image message should be done with this format: `{IMAGE_CMD} path/to/image.jpg Describe what is in this image.`");
-                }
-                let url = match parts.next() {
-                    Some(p) => p.trim(),
-                    None => {
-                        println!("Error: Adding an image message should be done with this format: `{IMAGE_CMD} path/to/image.jpg Describe what is in this image.`");
-                        continue;
-                    }
+                    continue;
                 };
-                let message = parts.collect::<Vec<_>>().join(" ");
                 let message = prefixer.prefix_image(images.len(), &message);
 
-                let image = util::parse_image_url(url)
+                let image = util::parse_image_url(&url)
                     .await
                     .expect("Failed to read image from URL/path");
                 images.push(image);
@@ -502,5 +520,98 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
         );
 
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_image_path_and_message;
+
+    #[test]
+    fn test_parse_image_with_unquoted_path_and_message() {
+        let input = r#"\image image.jpg What is this"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(
+            result,
+            Some(("image.jpg".to_string(), "What is this".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_parse_image_with_quoted_path_and_message() {
+        let input = r#"\image "image name.jpg" What is this?"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(
+            result,
+            Some(("image name.jpg".to_string(), "What is this?".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_parse_image_with_only_unquoted_path() {
+        let input = r#"\image image.jpg"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, Some(("image.jpg".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_image_with_only_quoted_path() {
+        let input = r#"\image "image name.jpg""#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, Some(("image name.jpg".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_image_with_extra_spaces() {
+        let input = r#"\image    "image with spaces.jpg"    This is a test message with spaces  "#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(
+            result,
+            Some((
+                "image with spaces.jpg".to_string(),
+                "This is a test message with spaces".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_image_with_no_message() {
+        let input = r#"\image "image.jpg""#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, Some(("image.jpg".to_string(), "".to_string())));
+    }
+
+    #[test]
+    fn test_parse_image_missing_path() {
+        let input = r#"\image"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_image_invalid_command() {
+        let input = r#"\img "image.jpg" This should fail"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_image_with_non_image_text() {
+        let input = r#"Some random text without command"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_image_with_path_and_message_special_chars() {
+        let input = r#"\image "path with special chars @#$%^&*().jpg" This is a message with special chars !@#$%^&*()"#;
+        let result = parse_image_path_and_message(input);
+        assert_eq!(
+            result,
+            Some((
+                "path with special chars @#$%^&*().jpg".to_string(),
+                "This is a message with special chars !@#$%^&*()".to_string()
+            ))
+        );
     }
 }

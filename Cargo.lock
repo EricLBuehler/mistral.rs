@@ -2416,6 +2416,7 @@ dependencies = [
  "intel-mkl-src",
  "mistralrs-core",
  "once_cell",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
