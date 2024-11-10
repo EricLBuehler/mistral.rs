@@ -109,7 +109,7 @@ mod test {
 
         #[cfg(not(feature = "metal"))]
         let dev = Device::cuda_if_available(0)?;
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(feature = "metal")]
         let dev = Device::new_metal(0)?;
 
         let data = Tensor::rand(0f32, 1f32, (10, 10), &dev)?.to_dtype(DType::F32)?;

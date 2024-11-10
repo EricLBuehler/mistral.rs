@@ -12,10 +12,12 @@ use utils::{linear_split, EncoderProvider};
 use crate::set_params;
 
 const DEQUANTIZE: &str = include_str!("dequantize.metal");
+const BITWISE: &str = include_str!("bitwise.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Dequant,
+    Bitwise,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -66,6 +68,7 @@ impl Kernels {
     fn get_library_source(&self, source: Source) -> &'static str {
         match source {
             Source::Dequant => DEQUANTIZE,
+            Source::Bitwise => BITWISE,
         }
     }
 
@@ -322,6 +325,78 @@ pub fn call_dequant_3bit(
     set_params!(encoder, (weight, scale, zero, output, h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_bitwise_or(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    b: &Buffer,
+    length: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::U8 => "bitwise_or_uint8_t",
+        DType::U32 => "bitwise_or_uint32_t",
+        DType::I64 => "bitwise_or_int64_t",
+        DType::I32 => "bitwise_or_int",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::U8, DType::U32, DType::I64, DType::I32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (a, b, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_bitwise_leftshift(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    k: u32,
+    length: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::U8 => "bitwise_leftshift_uint8_t",
+        DType::U32 => "bitwise_leftshift_uint32_t",
+        DType::I64 => "bitwise_leftshift_int64_t",
+        DType::I32 => "bitwise_leftshift_int",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::U8, DType::U32, DType::I64, DType::I32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (a, output, k as u32));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
