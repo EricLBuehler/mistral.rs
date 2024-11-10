@@ -149,6 +149,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |LLaVa Next|✅| |✅|✅|
 |LLaVa|✅| |✅|✅|
 |Llama 3.2 Vision|✅| |✅| |
+|Qwen2-VL|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -413,6 +414,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `llava_next`
 - `llava`
 - `vllama`
+- `qwen2vl`
 
 ### Supported GGUF architectures
 
