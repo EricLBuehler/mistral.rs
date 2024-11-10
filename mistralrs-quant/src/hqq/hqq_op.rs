@@ -1,6 +1,6 @@
-use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp3, DType, Layout, Result, Shape, WithDType,
-};
+#[cfg(feature = "metal")]
+use candle_core::{backend::BackendStorage, DType};
+use candle_core::{CpuStorage, CustomOp3, Layout, Result, Shape, WithDType};
 
 /*
  8 bit
@@ -56,6 +56,7 @@ impl CustomOp3 for Dequant8Bit {
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
         }
     }
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         w: &candle_core::MetalStorage,
@@ -164,6 +165,7 @@ impl CustomOp3 for Dequant4Bit {
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
         }
     }
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         w: &candle_core::MetalStorage,
@@ -276,6 +278,7 @@ impl CustomOp3 for Dequant2Bit {
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
         }
     }
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         w: &candle_core::MetalStorage,
@@ -392,6 +395,7 @@ impl CustomOp3 for Dequant1Bit {
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
         }
     }
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         w: &candle_core::MetalStorage,
@@ -510,6 +514,7 @@ impl CustomOp3 for Dequant3Bit {
             (_, _) => candle_core::bail!("Dtype mismatch, expected one of f32, f16, bf16"),
         }
     }
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         w: &candle_core::MetalStorage,

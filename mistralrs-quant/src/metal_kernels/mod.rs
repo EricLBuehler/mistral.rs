@@ -80,13 +80,11 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = match source {
-                source => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
+            let lib = {
+                let source_content = self.get_library_source(source);
+                device
+                    .new_library_with_source(source_content, &CompileOptions::new())
+                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
