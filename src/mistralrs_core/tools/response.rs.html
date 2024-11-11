@@ -23,12 +23,28 @@
 <a href="#23" id="23">23</a>
 <a href="#24" id="24">24</a>
 <a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
+<a href="#27" id="27">27</a>
+<a href="#28" id="28">28</a>
+<a href="#29" id="29">29</a>
+<a href="#30" id="30">30</a>
+<a href="#31" id="31">31</a>
+<a href="#32" id="32">32</a>
+<a href="#33" id="33">33</a>
 </pre></div><pre class="rust"><code><span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3(get_all))]
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 #[serde(rename_all = <span class="string">"snake_case"</span>)]
 </span><span class="kw">pub enum </span>ToolCallType {
     Function,
+}
+
+<span class="kw">impl </span>std::fmt::Display <span class="kw">for </span>ToolCallType {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
+        <span class="kw">match </span><span class="self">self </span>{
+            ToolCallType::Function =&gt; <span class="macro">write!</span>(f, <span class="string">"function"</span>),
+        }
+    }
 }
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass)]

@@ -152,6 +152,11 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -238,8 +243,13 @@
                                 <span class="lifetime">'outer</span>: <span class="kw">for </span>content_row <span class="kw">in </span>rv {
                                     <span class="kw">for </span>(content_k, content_v) <span class="kw">in </span>content_row {
                                         <span class="kw">if </span>content_k == <span class="string">"text" </span>{
-                                            new_message.insert(k, Either::Left(content_v));
-                                            <span class="kw">break </span><span class="lifetime">'outer</span>;
+                                            <span class="kw">if let </span><span class="prelude-val">Some</span>(content_str) = content_v.as_str() {
+                                                new_message.insert(
+                                                    k,
+                                                    Either::Left(content_str.to_string()),
+                                                );
+                                                <span class="kw">break </span><span class="lifetime">'outer</span>;
+                                            }
                                         }
                                     }
                                 }
@@ -303,7 +313,7 @@
         <span class="kw-2">&amp;</span>[]
     }
     <span class="kw">fn </span>template_action(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }
 </code></pre></div></section></main></body></html>

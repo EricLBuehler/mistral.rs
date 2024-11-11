@@ -615,6 +615,7 @@
 <a href="#615" id="615">615</a>
 <a href="#616" id="616">616</a>
 <a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
@@ -624,6 +625,7 @@
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>regex::Regex;
+<span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     io::{<span class="self">self</span>, Write},
     sync::{atomic::Ordering, Arc, Mutex},
@@ -838,7 +840,7 @@ Commands:
             <span class="macro">println!</span>();
             <span class="macro">info!</span>(<span class="string">"Average T/s: {}"</span>, toks <span class="kw">as </span>f64 / time);
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
         assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));
@@ -1048,7 +1050,7 @@ Commands:
             <span class="macro">println!</span>();
             <span class="macro">info!</span>(<span class="string">"Average T/s: {}"</span>, toks <span class="kw">as </span>f64 / time);
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>assistant_message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         assistant_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
         assistant_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(assistant_output));

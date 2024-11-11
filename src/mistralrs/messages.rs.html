@@ -560,12 +560,67 @@
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Display, sync::Arc};
 
 <span class="kw">use super</span>::<span class="kw-2">*</span>;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>image::DynamicImage;
 <span class="kw">use </span>indexmap::IndexMap;
+<span class="kw">use </span>serde_json::{json, Value};
 
 <span class="doccomment">/// A type which can be used as a request.
 </span><span class="kw">pub trait </span>RequestLike {
@@ -769,10 +824,10 @@
             (
                 <span class="string">"content"</span>.to_string(),
                 Either::Right(<span class="macro">vec!</span>[
-                    IndexMap::from([(<span class="string">"type"</span>.to_string(), <span class="string">"image"</span>.to_string())]),
+                    IndexMap::from([(<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"image"</span>.to_string()))]),
                     IndexMap::from([
-                        (<span class="string">"type"</span>.to_string(), <span class="string">"text"</span>.to_string()),
-                        (<span class="string">"content"</span>.to_string(), text.to_string()),
+                        (<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"text"</span>.to_string())),
+                        (<span class="string">"content"</span>.to_string(), Value::String(text.to_string())),
                     ]),
                 ]),
             ),
@@ -923,10 +978,63 @@
         }
     }
 
-    <span class="kw">pub fn </span>add_message(<span class="kw-2">mut </span><span class="self">self</span>, role: TextMessageRole, text: <span class="kw">impl </span>ToString) -&gt; <span class="self">Self </span>{
+    <span class="doccomment">/// Add a message to the request.
+    ///
+    /// For messages with tool calls, use [`Self::add_message_with_tool_call`].
+    /// For messages with tool outputs, use [`Self::add_tool_message`].
+    </span><span class="kw">pub fn </span>add_message(<span class="kw-2">mut </span><span class="self">self</span>, role: TextMessageRole, text: <span class="kw">impl </span>ToString) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.messages.push(IndexMap::from([
             (<span class="string">"role"</span>.to_string(), Either::Left(role.to_string())),
             (<span class="string">"content"</span>.to_string(), Either::Left(text.to_string())),
+        ]));
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Add a message with the output of a tool call.
+    </span><span class="kw">pub fn </span>add_tool_message(<span class="kw-2">mut </span><span class="self">self</span>, tool_content: <span class="kw">impl </span>ToString, tool_id: <span class="kw">impl </span>ToString) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.messages.push(IndexMap::from([
+            (
+                <span class="string">"role"</span>.to_string(),
+                Either::Left(TextMessageRole::Tool.to_string()),
+            ),
+            (
+                <span class="string">"content"</span>.to_string(),
+                Either::Left(tool_content.to_string()),
+            ),
+            (
+                <span class="string">"tool_call_id"</span>.to_string(),
+                Either::Left(tool_id.to_string()),
+            ),
+        ]));
+        <span class="self">self
+    </span>}
+
+    <span class="kw">pub fn </span>add_message_with_tool_call(
+        <span class="kw-2">mut </span><span class="self">self</span>,
+        role: TextMessageRole,
+        text: <span class="kw">impl </span>ToString,
+        tool_calls: Vec&lt;ToolCallResponse&gt;,
+    ) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>tool_messages = tool_calls
+            .iter()
+            .map(|t| {
+                IndexMap::from([
+                    (<span class="string">"id"</span>.to_string(), Value::String(t.id.clone())),
+                    (<span class="string">"type"</span>.to_string(), Value::String(t.tp.to_string())),
+                    (
+                        <span class="string">"function"</span>.to_string(),
+                        <span class="macro">json!</span>({
+                            <span class="string">"name"</span>: t.function.name,
+                            <span class="string">"arguments"</span>: t.function.arguments,
+                        }),
+                    ),
+                ])
+            })
+            .collect();
+        <span class="self">self</span>.messages.push(IndexMap::from([
+            (<span class="string">"role"</span>.to_string(), Either::Left(role.to_string())),
+            (<span class="string">"content"</span>.to_string(), Either::Left(text.to_string())),
+            (<span class="string">"function"</span>.to_string(), Either::Right(tool_messages)),
         ]));
         <span class="self">self
     </span>}

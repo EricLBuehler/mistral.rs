@@ -148,10 +148,12 @@
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
+<span class="kw">use </span>serde_json::Value;
 
 <span class="kw">use crate</span>::{
     response::Response,
@@ -178,7 +180,7 @@
     B64Json,
 }
 
-<span class="kw">pub type </span>MessageContent = Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;;
+<span class="kw">pub type </span>MessageContent = Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;;
 
 <span class="attr">#[derive(Clone, Debug)]
 </span><span class="doccomment">/// Message or messages for a [`Request`].

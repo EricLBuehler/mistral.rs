@@ -801,6 +801,7 @@
 <a href="#801" id="801">801</a>
 <a href="#802" id="802">802</a>
 <a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -1364,6 +1365,7 @@
     <span class="kw">use </span><span class="kw">crate</span>::MessageContent;
     <span class="kw">use </span>either::Either;
     <span class="kw">use </span>indexmap::IndexMap;
+    <span class="kw">use </span>serde_json::Value;
 
     <span class="macro">macro_rules!</span> hashmap {
         (@single $(<span class="macro-nonterminal">$x</span>:tt)<span class="kw-2">*</span>) =&gt; (());
@@ -1375,7 +1377,7 @@
                 <span class="kw">let </span>_cap = <span class="macro">hashmap!</span>(@count $(<span class="macro-nonterminal">$key</span>),<span class="kw-2">*</span>);
                 <span class="kw">let </span><span class="kw-2">mut </span>_map = ::indexmap::IndexMap::with_capacity(_cap);
                 $(
-                    <span class="kw">let _ </span>= _map.insert(<span class="macro-nonterminal">$key</span>, <span class="macro-nonterminal">$value</span>);
+                    <span class="kw">let _ </span>= _map.insert(<span class="macro-nonterminal">$key</span>, Value::String(<span class="macro-nonterminal">$value</span>));
                 )*
                 _map
             }
@@ -1480,7 +1482,7 @@
         ];
         <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
         <span class="kw">for </span>[role, content] <span class="kw">in </span>messages {
-            <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+            <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
                 IndexMap::new();
             message.insert(<span class="string">"role"</span>.to_string(), Either::Left(role.to_string()));
             message.insert(<span class="string">"content"</span>.to_string(), Either::Left(content.to_string()));
@@ -1514,7 +1516,7 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>inputs = Vec::new();
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"system"</span>.to_string()));
         message.insert(
@@ -1526,7 +1528,7 @@
         );
         inputs.push(message);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
         message.insert(
@@ -1543,7 +1545,7 @@
         );
         inputs.push(message);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
         message.insert(
@@ -1555,7 +1557,7 @@
         );
         inputs.push(message);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
         message.insert(
@@ -1572,7 +1574,7 @@
         );
         inputs.push(message);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"assistant"</span>.to_string()));
         message.insert(
@@ -1584,7 +1586,7 @@
         );
         inputs.push(message);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+        <span class="kw">let </span><span class="kw-2">mut </span>message: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
             IndexMap::new();
         message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
         message.insert(

@@ -412,7 +412,11 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<span class="kw">use </span>std::{
     collections::HashMap,
     env,
     error::Error,
@@ -587,7 +591,7 @@
                     Either::Left(content) =&gt; {
                         <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
                             String,
-                            Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;,
+                            Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;,
                         &gt; = IndexMap::new();
                         message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
                         message_map
@@ -648,7 +652,7 @@
                         }
                         <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
                             String,
-                            Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;,
+                            Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;,
                         &gt; = IndexMap::new();
                         message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
                         <span class="kw">let </span>(content, url) = <span class="kw">if </span>items[<span class="number">0</span>] == <span class="string">"text" </span>{
@@ -657,13 +661,15 @@
                             get_content_and_url(<span class="number">1</span>, <span class="number">0</span>, image_messages)<span class="question-mark">?
                         </span>};
 
-                        <span class="kw">let </span><span class="kw-2">mut </span>content_map = Vec::new();
+                        <span class="kw">let </span><span class="kw-2">mut </span>content_map: Vec&lt;IndexMap&lt;String, Value&gt;&gt; = Vec::new();
                         <span class="kw">let </span><span class="kw-2">mut </span>content_image_map = IndexMap::new();
-                        content_image_map.insert(<span class="string">"type"</span>.to_string(), <span class="string">"image"</span>.to_string());
+                        content_image_map
+                            .insert(<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"image"</span>.to_string()));
                         content_map.push(content_image_map);
                         <span class="kw">let </span><span class="kw-2">mut </span>content_text_map = IndexMap::new();
-                        content_text_map.insert(<span class="string">"type"</span>.to_string(), <span class="string">"text"</span>.to_string());
-                        content_text_map.insert(<span class="string">"text"</span>.to_string(), content);
+                        content_text_map
+                            .insert(<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"text"</span>.to_string()));
+                        content_text_map.insert(<span class="string">"text"</span>.to_string(), Value::String(content));
                         content_map.push(content_text_map);
 
                         message_map.insert(<span class="string">"content"</span>.to_string(), Either::Right(content_map));
@@ -690,7 +696,7 @@
         }
         Either::Right(prompt) =&gt; {
             <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
-            <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, String&gt;&gt;&gt;&gt; =
+            <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;String, Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;&gt; =
                 IndexMap::new();
             message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
             message_map.insert(<span class="string">"content"</span>.to_string(), Either::Left(prompt));
