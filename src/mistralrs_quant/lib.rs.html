@@ -298,6 +298,9 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -309,6 +312,9 @@
     quantized::{GgmlDType, QTensor},
     DType, Device, <span class="prelude-ty">Result</span>, Tensor,
 };
+
+<span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+</span><span class="kw">mod </span>metal_kernels;
 
 <span class="kw">mod </span>cublaslt;
 <span class="kw">mod </span>dummy;

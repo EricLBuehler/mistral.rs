@@ -129,6 +129,12 @@
 <a href="#129" id="129">129</a>
 <a href="#130" id="130">130</a>
 <a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 
 <span class="kw">use </span><span class="kw">crate</span>::hqq::optimize::OptResults;
@@ -228,25 +234,28 @@
     }
 }
 
-<span class="kw">mod </span>test {
-    <span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, test))]
-    </span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="attr">#[cfg(test)]
+</span><span class="kw">mod </span>test {
+    <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 
-    <span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, test))]
-    #[test]
+    <span class="attr">#[test]
     </span><span class="kw">fn </span>test_quantize_hqq() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">use </span>candle_core::DType;
 
         <span class="kw">use crate</span>::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 
-        <span class="kw">let </span>dev = Device::new_cuda(<span class="number">0</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>data = Tensor::rand(<span class="number">0.</span>, <span class="number">1.</span>, (<span class="number">3072</span>, <span class="number">3072</span>), <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+        <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+        </span><span class="kw">let </span>dev = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
+        <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+        </span><span class="kw">let </span>dev = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>data = Tensor::rand(<span class="number">0f32</span>, <span class="number">1f32</span>, (<span class="number">10</span>, <span class="number">10</span>), <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
         <span class="kw">let </span>hqq = HqqLayer::quantize(
             <span class="kw-2">&amp;</span>data,
             <span class="kw-2">&amp;</span>dev,
             HqqConfig {
-                bits: HqqBits::Two,
-                group_size: <span class="number">64</span>.try_into()<span class="question-mark">?</span>,
+                bits: HqqBits::Three,
+                group_size: <span class="number">10</span>.try_into()<span class="question-mark">?</span>,
                 axis: HqqAxis::Zero,
                 optimization_steps: <span class="prelude-val">None</span>,
                 round_zeros: <span class="bool-val">false</span>,
@@ -254,10 +263,13 @@
             },
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>_dequant = hqq.dequantize()<span class="question-mark">?</span>;
+        <span class="kw">let </span>dequant = hqq.dequantize()<span class="question-mark">?</span>;
+        <span class="macro">println!</span>(<span class="string">"Initial:\n{data}"</span>);
+        <span class="macro">println!</span>(<span class="string">"Dequantized:\n{dequant}"</span>);
+        <span class="comment">// println!("Difference:\n{}", (&amp;dequant - &amp;data)?.abs()?);
 
-        <span class="comment">// dbg!(&amp;(&amp;dequant - &amp;data)?.abs()?.mean_all()?);
-        </span><span class="prelude-val">Ok</span>(())
+        </span><span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>dequant - <span class="kw-2">&amp;</span>data)<span class="question-mark">?</span>.abs()<span class="question-mark">?</span>.mean_all()<span class="question-mark">?</span>);
+        <span class="prelude-val">Ok</span>(())
     }
 }
 </code></pre></div></section></main></body></html>
