@@ -5,6 +5,7 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -683,7 +684,7 @@ impl Runner {
                             Either::Left(content) => {
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -760,7 +761,7 @@ impl Runner {
                                 }
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -774,11 +775,13 @@ impl Runner {
 
                                 let mut content_map = Vec::new();
                                 let mut content_image_map = IndexMap::new();
-                                content_image_map.insert("type".to_string(), "image".to_string());
+                                content_image_map
+                                    .insert("type".to_string(), Value::String("image".to_string()));
                                 content_map.push(content_image_map);
                                 let mut content_text_map = IndexMap::new();
-                                content_text_map.insert("type".to_string(), "text".to_string());
-                                content_text_map.insert("text".to_string(), content);
+                                content_text_map
+                                    .insert("type".to_string(), Value::String("text".to_string()));
+                                content_text_map.insert("text".to_string(), Value::String(content));
                                 content_map.push(content_text_map);
 
                                 message_map
@@ -808,7 +811,7 @@ impl Runner {
                     let mut messages = Vec::new();
                     let mut message_map: IndexMap<
                         String,
-                        Either<String, Vec<IndexMap<String, String>>>,
+                        Either<String, Vec<IndexMap<String, Value>>>,
                     > = IndexMap::new();
                     message_map.insert("role".to_string(), Either::Left("user".to_string()));
                     message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
