@@ -126,14 +126,12 @@ mod test {
             },
         )?;
 
-        let _dequant = hqq.dequantize()?;
+        let dequant = hqq.dequantize()?;
+        println!("Initial:\n{data}");
+        println!("Dequantized:\n{dequant}");
+        // println!("Difference:\n{}", (&dequant - &data)?.abs()?);
 
-        // let dequant = hqq.dequantize()?;
-        // println!("DATA:\n{data}");
-        // println!("DEQUANT:\n{dequant}");
-        // println!("DIFF:\n{}", (&dequant - &data)?.abs()?);
-
-        // dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
+        dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
         Ok(())
     }
 }

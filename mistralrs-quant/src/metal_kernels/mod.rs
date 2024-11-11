@@ -394,7 +394,7 @@ pub fn call_bitwise_leftshift(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (a, output, k as u32));
+    set_params!(encoder, (a, output, k));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
