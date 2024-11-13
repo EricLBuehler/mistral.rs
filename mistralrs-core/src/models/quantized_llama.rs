@@ -655,14 +655,13 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let mask = CausalMasker.make_causal_mask_matrix(
             x,
             metadata
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             DType::F32,
-            self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {

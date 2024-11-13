@@ -347,12 +347,7 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
-            input_ids,
-            &*cache,
-            DType::F32,
-            self.layers[0].n_head,
-        )?;
+        let mask = CausalMasker.make_causal_mask_matrix(input_ids, &*cache, DType::F32)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let residual = &xs;

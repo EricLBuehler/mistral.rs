@@ -411,14 +411,13 @@ impl Llama {
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
         let mut cache = self.kv_cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
