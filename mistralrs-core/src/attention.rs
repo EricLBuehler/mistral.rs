@@ -93,7 +93,7 @@ fn naive_sdpa(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
     if let Some(mask) = mask {
-        let mut att = MatMul.matmul(&q.contiguous()?, &k.t()?.contiguous()?)?;
+        let mut att = MatMul.matmul(&q, &k.t()?)?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -101,14 +101,9 @@ fn naive_sdpa(
         }
 
         let att = candle_nn::ops::attn_softmax_last_dim(&att, mask, 1. / (head_dim as f32).sqrt())?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        MatMul.matmul(&att, &v.contiguous()?)
+        MatMul.matmul(&att, &v)
     } else {
-        let mut att = MatMul.matmul_affine_div(
-            &q.contiguous()?,
-            &k.t()?.contiguous()?,
-            (head_dim as f64).sqrt(),
-        )?;
+        let mut att = MatMul.matmul_affine_div(&q, &k.t()?, (head_dim as f64).sqrt())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -120,8 +115,7 @@ fn naive_sdpa(
             None => att,
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        MatMul.matmul(&att, &v.contiguous()?)
+        MatMul.matmul(&att, &v)
     }
 }
 
