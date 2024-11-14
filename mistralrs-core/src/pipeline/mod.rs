@@ -1,41 +1,44 @@
 mod amoe;
 mod cache_manager;
 pub mod chat_template;
+mod diffusion;
 mod ggml;
 mod gguf;
 mod inputs_processor;
 mod isq;
+mod loaders;
 mod macros;
 mod normal;
-mod normal_loaders;
 mod paths;
 mod processing;
 mod sampling;
 mod speculative;
 mod vision;
-mod vision_loaders;
+
+pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::aici::toktree::TokTrie;
-use crate::amoe::{
-    AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs,
-    AnyMoeTrainingResult,
-};
-use crate::lora::{LoraConfig, Ordering};
-use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigMetadata, PagedAttentionConfig};
+use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::diffusion_models::response::send_responses;
+use crate::paged_attention::{CacheConfig, CacheEngine};
 use crate::prefix_cacher::PrefixCacheManager;
-use crate::{DeviceMapMetadata, TryIntoDType};
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
-use candle_core::quantized::GgmlDType;
 use chat_template::ChatTemplate;
-use core::fmt;
+pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
-pub use gguf::{GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder};
-pub use isq::IsqModel;
-pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub use normal_loaders::{
-    GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3RopeScaling, Qwen2Loader,
-    Starcoder2Loader,
+pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+use image::DynamicImage;
+pub use inputs_processor::InputProcessorOutput;
+pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
+pub use loaders::{
+    AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
+    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
+use mistralrs_quant::IsqType;
+pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
@@ -43,397 +46,27 @@ pub(crate) use processing::{
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;
-use std::fmt::Debug;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use tokenizers::Tokenizer;
-use tokio::sync::Mutex;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
-pub use vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType, VisionModelLoader,
-};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, Var};
+use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
-use crate::{
-    sequence::Sequence,
-    xlora_models::{NonGranularState, XLoraConfig},
-};
+use crate::sequence::Sequence;
 
 pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
-use self::text_models_inputs_processor::{PagedAttentionInputMetadata, PagedAttentionMeta};
-
-/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
-/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths {
-    /// Model weights files (multiple files supported).
-    fn get_weight_filenames(&self) -> &[PathBuf];
-
-    /// Retrieve the [`PretrainedConfig`] file.
-    ///
-    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
-    fn get_config_filename(&self) -> &PathBuf;
-
-    /// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
-    ///
-    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
-    fn get_tokenizer_filename(&self) -> &PathBuf;
-
-    /// File where the content is expected to deserialize to [`ChatTemplate`].
-    fn get_template_filename(&self) -> &Option<PathBuf>;
-
-    /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-
-    /// Configuration of optional adapters. `(String, String)` is of the form `(id name, name)`.
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>;
-
-    /// Filepath for the XLORA classifier
-    fn get_classifier_path(&self) -> &Option<PathBuf>;
-
-    /// `XLoraConfig` for the XLORA classifier
-    fn get_classifier_config(&self) -> &Option<XLoraConfig>;
-
-    /// Return the defined ordering of adapters and layers within the model.
-    fn get_ordering(&self) -> &Option<Ordering>;
-
-    /// Filepath for general model configuration.
-    fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
-
-    /// Information for preloading LoRA adapters (adapter name, the weight file, and the config).
-    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
-
-    /// Get the preprocessor config (for the vision models). This is used to pre process images.
-    fn get_preprocessor_config(&self) -> &Option<PathBuf>;
-
-    /// Get the processor config (for the vision models). This is primarily used for the chat template.
-    fn get_processor_config(&self) -> &Option<PathBuf>;
-}
-
-#[derive(Clone)]
-/// All local paths and metadata necessary to load a model.
-pub struct LocalModelPaths<P> {
-    tokenizer_filename: P,
-    config_filename: P,
-    template_filename: Option<P>,
-    filenames: Vec<P>,
-    xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
-    classifier_path: Option<P>,
-    classifier_config: Option<XLoraConfig>,
-    xlora_ordering: Option<Ordering>,
-    gen_conf: Option<P>,
-    lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
-    preprocessor_config: Option<P>,
-    processor_config: Option<P>,
-}
-
-impl<P> LocalModelPaths<P> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        tokenizer_filename: P,
-        config_filename: P,
-        template_filename: P,
-        filenames: Vec<P>,
-        xlora_adapter_filenames: Option<Vec<(String, P)>>,
-        xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
-        classifier_path: Option<P>,
-        classifier_config: Option<XLoraConfig>,
-        xlora_ordering: Option<Ordering>,
-        gen_conf: Option<P>,
-        lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
-        preprocessor_config: Option<P>,
-        processor_config: Option<P>,
-    ) -> Self {
-        Self {
-            tokenizer_filename,
-            config_filename,
-            template_filename: Some(template_filename),
-            filenames,
-            xlora_adapter_filenames,
-            xlora_adapter_configs,
-            classifier_path,
-            classifier_config,
-            xlora_ordering,
-            gen_conf,
-            lora_preload_adapter_info,
-            preprocessor_config,
-            processor_config,
-        }
-    }
-}
-
-impl ModelPaths for LocalModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
-    }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
-    }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
-        &self.filenames
-    }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        &self.xlora_adapter_filenames
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
-        &self.xlora_adapter_configs
-    }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        &self.classifier_config
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        &self.classifier_path
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        &self.xlora_ordering
-    }
-    fn get_template_filename(&self) -> &Option<PathBuf> {
-        &self.template_filename
-    }
-    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
-        self.gen_conf.as_ref()
-    }
-    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
-        &self.lora_preload_adapter_info
-    }
-    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
-        &self.preprocessor_config
-    }
-    fn get_processor_config(&self) -> &Option<PathBuf> {
-        &self.processor_config
-    }
-}
-
-#[derive(Debug, Clone)]
-/// The source of the HF token.
-pub enum TokenSource {
-    Literal(String),
-    EnvVar(String),
-    Path(String),
-    CacheToken,
-    None,
-}
-
-impl FromStr for TokenSource {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.splitn(2, ':').collect();
-        match parts[0] {
-            "literal" => parts
-                .get(1)
-                .map(|&value| TokenSource::Literal(value.to_string()))
-                .ok_or_else(|| "Expected a value for 'literal'".to_string()),
-            "env" => Ok(TokenSource::EnvVar(
-                parts
-                    .get(1)
-                    .unwrap_or(&"HUGGING_FACE_HUB_TOKEN")
-                    .to_string(),
-            )),
-            "path" => parts
-                .get(1)
-                .map(|&value| TokenSource::Path(value.to_string()))
-                .ok_or_else(|| "Expected a value for 'path'".to_string()),
-            "cache" => Ok(TokenSource::CacheToken),
-            "none" => Ok(TokenSource::None),
-            _ => Err("Invalid token source format".to_string()),
-        }
-    }
-}
-
-impl fmt::Display for TokenSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TokenSource::Literal(value) => write!(f, "literal:{}", value),
-            TokenSource::EnvVar(value) => write!(f, "env:{}", value),
-            TokenSource::Path(value) => write!(f, "path:{}", value),
-            TokenSource::CacheToken => write!(f, "cache"),
-            TokenSource::None => write!(f, "none"),
-        }
-    }
-}
-
-/// The kind of model to build.
-#[derive(Clone, Default, derive_more::From, strum::Display)]
-pub enum ModelKind {
-    #[default]
-    #[strum(to_string = "normal (no quant, no adapters)")]
-    Normal,
-
-    #[strum(to_string = "quantized from {quant} (no adapters)")]
-    Quantized { quant: QuantizationKind },
-
-    #[strum(to_string = "{adapter}, (no quant)")]
-    Adapter { adapter: AdapterKind },
-
-    #[strum(to_string = "{adapter}, quantized from {quant}")]
-    AdapterQuantized {
-        adapter: AdapterKind,
-        quant: QuantizationKind,
-    },
-
-    #[strum(to_string = "speculative: target: `{target}`, draft: `{draft}`")]
-    Speculative {
-        target: Box<ModelKind>,
-        draft: Box<ModelKind>,
-    },
-
-    #[strum(to_string = "anymoe: target: `{target}`")]
-    AnyMoe { target: Box<ModelKind> },
-}
-
-#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
-#[strum(serialize_all = "kebab-case")]
-pub enum QuantizationKind {
-    /// GGML
-    Ggml,
-    /// GGUF
-    Gguf,
-}
-
-#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
-#[strum(serialize_all = "kebab-case")]
-pub enum AdapterKind {
-    /// LoRA
-    Lora,
-    /// X-LoRA
-    XLora,
-}
-
-// For the proper name as formatted via doc comment for a variant
-pub trait PrettyName: strum::EnumMessage + ToString {
-    fn pretty_name(&self) -> String {
-        match self.get_documentation() {
-            Some(s) => s.to_string(),
-            // Instead of panic via expect(),
-            // fallback to default kebab-case:
-            None => self.to_string(),
-        }
-    }
-}
-
-impl PrettyName for AdapterKind {}
-impl PrettyName for QuantizationKind {}
-
-impl ModelKind {
-    // Quantized helpers:
-    pub fn is_quantized(&self) -> bool {
-        self.quantized_kind().iter().any(|q| q.is_some())
-    }
-
-    pub fn is_quantized_and(&self, mut f: impl FnMut(QuantizationKind) -> bool) -> bool {
-        self.quantized_kind().iter().any(|q| q.is_some_and(&mut f))
-    }
-
-    pub fn quantized_kind(&self) -> Vec<Option<QuantizationKind>> {
-        use ModelKind::*;
-
-        match self {
-            Normal | Adapter { .. } => vec![None],
-            Quantized { quant } | AdapterQuantized { quant, .. } => vec![Some(*quant)],
-            Speculative { target, draft } => {
-                let t = *target.clone();
-                let d = *draft.clone();
-
-                [t.quantized_kind(), d.quantized_kind()].concat()
-            }
-            AnyMoe { target } => target.quantized_kind(),
-        }
-    }
-
-    // Adapter helpers:
-    pub fn is_adapted(&self) -> bool {
-        self.adapted_kind().iter().any(|a| a.is_some())
-    }
-
-    pub fn is_adapted_and(&self, mut f: impl FnMut(AdapterKind) -> bool) -> bool {
-        self.adapted_kind().iter().any(|a| a.is_some_and(&mut f))
-    }
-
-    pub fn adapted_kind(&self) -> Vec<Option<AdapterKind>> {
-        use ModelKind::*;
-
-        match self {
-            Normal | Quantized { .. } => vec![None],
-            Adapter { adapter } | AdapterQuantized { adapter, .. } => vec![Some(*adapter)],
-            Speculative { target, draft } => {
-                let t = *target.clone();
-                let d = *draft.clone();
-
-                [t.adapted_kind(), d.adapted_kind()].concat()
-            }
-            AnyMoe { target } => target.adapted_kind(),
-        }
-    }
-}
-
-/// The `Loader` trait abstracts the loading process. The primary entrypoint is the
-/// `load_model` method.
-///
-/// # Example
-/// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
-/// use candle_core::Device;
-///
-/// let loader: Box<dyn Loader> = todo!();
-/// let pipeline = loader.load_model_from_hf(
-///     None,
-///     TokenSource::CacheToken,
-///     &ModelDType::Auto,
-///     &Device::cuda_if_available(0).unwrap(),
-///     false,
-///     DeviceMapMetadata::dummy(),
-///     None,
-///     None,
-/// ).unwrap();
-/// ```
-pub trait Loader {
-    /// If `revision` is None, then it defaults to `main`.
-    /// If `dtype` is None, then it defaults to the model default (usually BF16).
-    /// If model is not found on HF, will attempt to resolve locally.
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
-
-    /// Load a model from the specified paths.
-    /// Also initializes `DEBUG`.
-    #[allow(
-        clippy::type_complexity,
-        clippy::too_many_arguments,
-        clippy::borrowed_box
-    )]
-    fn load_model_from_path(
-        &self,
-        paths: &Box<dyn ModelPaths>,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
-
-    fn get_id(&self) -> String;
-    fn get_kind(&self) -> ModelKind;
-}
+use self::text_models_inputs_processor::PagedAttentionMeta;
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    pub tok_trie: Arc<TokTrie>,
+    /// Only None if it doesnt make sense for the model
+    pub tok_trie: Option<Arc<TokTrie>>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
@@ -445,6 +78,7 @@ pub struct GeneralMetadata {
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub enum AdapterInstruction {
@@ -466,12 +100,13 @@ pub trait PreProcessingMixin: MetadataMixin {
     fn get_processor(&self) -> Arc<dyn Processor> {
         Arc::new(BasicProcessor)
     }
-    fn get_chat_template(&self) -> Arc<ChatTemplate>;
+    /// Only None if it doesnt make sense for the model
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>>;
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>>;
 }
 
 pub trait IsqPipelineMixin {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()>;
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()>;
 }
 
 pub trait CacheManagerMixin {
@@ -495,7 +130,8 @@ pub trait AdapterActivationMixin {
 
 pub trait MetadataMixin {
     fn device(&self) -> Device;
-    fn tokenizer(&self) -> Arc<Tokenizer>;
+    /// Only None if it doesnt make sense for the model
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>>;
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
@@ -555,10 +191,34 @@ pub trait AnyMoePipelineMixin {
     }
 }
 
-#[derive(PartialEq, Copy, Clone)]
+/// Category of the model. This can also be used to extract model-category specific tools,
+/// such as the vision model prompt prefixer.
+#[derive(Clone)]
 pub enum ModelCategory {
     Text,
-    Vision { has_conv2d: bool },
+    Vision {
+        has_conv2d: bool,
+        prefixer: Arc<dyn VisionPromptPrefixer>,
+    },
+    Diffusion,
+}
+
+impl PartialEq for ModelCategory {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text, Self::Text) => true,
+            (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Diffusion, Self::Diffusion) => true,
+            (Self::Text, _) => false,
+            (Self::Vision { .. }, _) => false,
+            (Self::Diffusion, _) => false,
+        }
+    }
+}
+
+/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+pub trait VisionPromptPrefixer: Send + Sync {
+    fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
 }
 
 pub enum CacheBackendMetadata<'a> {
@@ -574,6 +234,34 @@ pub enum CacheBackendMetadata<'a> {
     },
 }
 
+#[derive(Clone, Debug)]
+pub enum ForwardInputsResult {
+    CausalGeneration { logits: Tensor },
+    Image { images: Vec<DynamicImage> },
+}
+
+impl ForwardInputsResult {
+    fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
+        match self {
+            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.i(bs_idx)?,
+            }),
+            Self::Image { images } => Ok(Self::Image {
+                images: vec![images[bs_idx].clone()],
+            }),
+        }
+    }
+
+    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+        match self {
+            Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.to_device(device)?,
+            }),
+            Self::Image { .. } => Ok(self.clone()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -585,7 +273,10 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error>;
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error>;
 
     #[allow(clippy::too_many_arguments)]
     async fn step(
@@ -599,74 +290,93 @@ pub trait Pipeline:
     ) -> Result<(), candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
-                let inputs = self
-                    .get_processor()
-                    .inputs_processor()
-                    .process_inputs(
-                        self.tokenizer(),
-                        input_seqs,
-                        is_prompt,
-                        self.get_metadata().is_xlora,
-                        &self.device(),
-                        self.get_metadata().has_no_kv_cache,
-                        None,
-                        self.get_input_processor_config(),
-                        None,
-                    )
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
+                    self.tokenizer(),
+                    input_seqs,
+                    is_prompt,
+                    self.get_metadata().is_xlora,
+                    &self.device(),
+                    self.get_metadata().has_no_kv_cache,
+                    None,
+                    self.get_input_processor_config(),
+                    None,
+                    self.get_metadata().prompt_batchsize,
+                );
 
-                match pre_op {
-                    CacheInstruction::In(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
+                let mut logits = vec![None; input_seqs.len()];
+
+                for (i, inputs) in inputs_iter.enumerate() {
+                    let InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    } = inputs.map_err(candle_core::Error::msg)?;
+                    if i == 0 {
+                        match pre_op {
+                            CacheInstruction::In(ref adapter_inst) => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
+                                self.clone_in_cache(input_seqs, false)
                             }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.clone_in_cache(input_seqs, false)
-                    }
-                    CacheInstruction::Nothing(adapter_inst) => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
+                            CacheInstruction::Nothing(ref adapter_inst) => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
                             }
-                            AdapterInstruction::None => 0,
-                        };
-                    }
-                    CacheInstruction::Reset {
-                        reset_non_granular,
-                        adapter_inst,
-                    } => {
-                        match adapter_inst {
-                            AdapterInstruction::Activate(adapters) => {
-                                self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
-                                        dyn std::error::Error,
-                                    >>::as_ref(
-                                        &e
-                                    ))
-                                })?
+                            CacheInstruction::Reset {
+                                reset_non_granular,
+                                ref adapter_inst,
+                            } => {
+                                match adapter_inst {
+                                    AdapterInstruction::Activate(adapters) => {
+                                        self.activate_adapters(adapters.clone()).map_err(|e| {
+                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                                dyn std::error::Error,
+                                            >>::as_ref(
+                                                &e
+                                            ))
+                                        })?
+                                    }
+                                    AdapterInstruction::None => 0,
+                                };
+                                self.set_none_cache(reset_non_granular, false)
                             }
-                            AdapterInstruction::None => 0,
-                        };
-                        self.set_none_cache(reset_non_granular, false)
+                            _ => unreachable!("Unreachable PRE cache op."),
+                        }
                     }
-                    _ => unreachable!("Unreachable PRE cache op."),
+
+                    let raw_logits = self.forward_inputs(inputs)?;
+
+                    for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                    }
                 }
 
-                let logits = self.forward_inputs(inputs)?;
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -678,8 +388,52 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-                    .await?;
+                match &logits[0] {
+                    ForwardInputsResult::CausalGeneration { .. } => {
+                        self.sample_causal_gen(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::CausalGeneration { logits } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    logits
+                                })
+                                .collect::<Vec<_>>(),
+                            prefix_cacher,
+                            disable_eos_stop,
+                            rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    }
+                }
                 Ok(())
             }
             CacheBackendMetadata::PagedAttention {
@@ -694,99 +448,101 @@ pub trait Pipeline:
                     .expect("PagedAttention must have cache engine.")
                     .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
 
-                let inputs = self
-                    .get_processor()
-                    .inputs_processor()
-                    .process_inputs(
-                        self.tokenizer(),
-                        input_seqs,
-                        is_prompt,
-                        self.get_metadata().is_xlora,
-                        &self.device(),
-                        self.get_metadata().has_no_kv_cache,
-                        None,
-                        self.get_input_processor_config(),
-                        Some(metadata),
-                    )
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                let inputs_iter = self.get_processor().inputs_processor().process_inputs(
+                    self.tokenizer(),
+                    input_seqs,
+                    is_prompt,
+                    self.get_metadata().is_xlora,
+                    &self.device(),
+                    self.get_metadata().has_no_kv_cache,
+                    None,
+                    self.get_input_processor_config(),
+                    Some(metadata),
+                    self.get_metadata().prompt_batchsize,
+                );
 
-                let logits = self.forward_inputs(inputs)?;
+                let mut logits = vec![None; input_seqs.len()];
 
-                self.sample(input_seqs, logits, prefix_cacher, disable_eos_stop, rng)
-                    .await?;
+                for inputs in inputs_iter {
+                    let InputProcessorOutput {
+                        inputs,
+                        seq_indices,
+                    } = inputs.map_err(candle_core::Error::msg)?;
+
+                    let raw_logits = self.forward_inputs(inputs)?;
+
+                    for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                    }
+                }
+
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+
+                match &logits[0] {
+                    ForwardInputsResult::CausalGeneration { .. } => {
+                        self.sample_causal_gen(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::CausalGeneration { logits } = r
+                                    else {
+                                        unreachable!("All results must have same type")
+                                    };
+                                    logits
+                                })
+                                .collect::<Vec<_>>(),
+                            prefix_cacher,
+                            disable_eos_stop,
+                            rng,
+                        )
+                        .await?;
+                    }
+                    ForwardInputsResult::Image { .. } => {
+                        send_responses(
+                            input_seqs,
+                            logits
+                                .into_iter()
+                                .map(|r| {
+                                    #[allow(irrefutable_let_patterns)]
+                                    let ForwardInputsResult::Image { images } = r
+                                    else {
+                                        unreachable!(
+                                            "All results must have same type, `CausalGeneration`"
+                                        )
+                                    };
+                                    images
+                                        .into_iter()
+                                        .next()
+                                        .expect("Must have at least 1 element.")
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    }
+                }
                 Ok(())
             }
         }
     }
 
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error>;
 
     fn category(&self) -> ModelCategory;
-}
-
-pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
-    ) -> candle_core::Result<Tensor>;
-    #[allow(clippy::too_many_arguments)]
-    fn xlora_forward(
-        &self,
-        input_ids: &Tensor,
-        input_ids_full: &Tensor,
-        seqlen_offsets: &[usize],
-        seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
-        no_kv_cache: bool,
-        non_granular_state: &Option<NonGranularState>,
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-    ) -> candle_core::Result<Tensor>;
-    fn is_xlora(&self) -> bool;
-    fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
-    fn max_seq_len(&self) -> usize;
-    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
-        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
-        candle_core::bail!(
-            "Activating adapters is only supported for models fine-tuned with LoRA."
-        );
-    }
-    fn config(&self) -> &ModelConfigMetadata;
-}
-
-pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
-    // pixel_values and pixel_attention_mask only specified for prompt seqs
-    #[allow(clippy::too_many_arguments)]
-    fn forward(
-        &self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
-    ) -> candle_core::Result<Tensor>;
-    fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
-    fn max_seq_len(&self) -> usize;
-    fn has_conv2d(&self) -> bool;
-    fn config(&self) -> &ModelConfigMetadata;
 }
 
 pub(crate) fn extract_logits(
@@ -805,6 +561,7 @@ mod tests {
     use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
+    use serde_json::Value;
 
     macro_rules! hashmap {
         (@single $($x:tt)*) => (());
@@ -816,7 +573,7 @@ mod tests {
                 let _cap = hashmap!(@count $($key),*);
                 let mut _map = ::indexmap::IndexMap::with_capacity(_cap);
                 $(
-                    let _ = _map.insert($key, $value);
+                    let _ = _map.insert($key, Value::String($value));
                 )*
                 _map
             }
@@ -921,7 +678,7 @@ mod tests {
         ];
         let mut inputs = Vec::new();
         for [role, content] in messages {
-            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
                 IndexMap::new();
             message.insert("role".to_string(), Either::Left(role.to_string()));
             message.insert("content".to_string(), Either::Left(content.to_string()));
@@ -955,7 +712,7 @@ mod tests {
 
         let mut inputs = Vec::new();
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("system".to_string()));
         message.insert(
@@ -967,7 +724,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -984,7 +741,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -996,7 +753,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -1013,7 +770,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -1025,7 +782,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(

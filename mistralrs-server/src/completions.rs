@@ -1,3 +1,4 @@
+use anyhow::Result;
 use std::{
     env,
     error::Error,
@@ -18,8 +19,8 @@ use axum::{
     },
 };
 use mistralrs_core::{
-    CompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage, Response,
-    SamplingParams, StopTokens as InternalStopTokens,
+    CompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 use tracing::warn;
@@ -73,6 +74,7 @@ impl futures::Stream for Streamer {
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -145,7 +147,7 @@ fn parse_request(
     oairequest: CompletionRequest,
     state: Arc<MistralRs>,
     tx: Sender<Response>,
-) -> (Request, bool) {
+) -> Result<(Request, bool)> {
     let repr = serde_json::to_string(&oairequest).expect("Serialization of request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
 
@@ -160,7 +162,18 @@ fn parse_request(
     }
 
     let is_streaming = oairequest.stream.unwrap_or(false);
-    (
+
+    let dry_params = if let Some(dry_multiplier) = oairequest.dry_multiplier {
+        Some(DrySamplingParams::new_with_defaults(
+            dry_multiplier,
+            oairequest.dry_sequence_breakers,
+            oairequest.dry_base,
+            oairequest.dry_allowed_length,
+        )?)
+    } else {
+        None
+    };
+    Ok((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
             messages: RequestMessage::Completion {
@@ -180,6 +193,7 @@ fn parse_request(
                 stop_toks,
                 logits_bias: oairequest.logit_bias,
                 n_choices: oairequest.n_choices,
+                dry_params,
             },
             response: tx,
             return_logprobs: false,
@@ -193,9 +207,10 @@ fn parse_request(
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            logits_processors: None,
         }),
         is_streaming,
-    )
+    ))
 }
 
 #[utoipa::path(
@@ -205,6 +220,7 @@ fn parse_request(
     request_body = CompletionRequest,
     responses((status = 200, description = "Completions"))
 )]
+
 pub async fn completions(
     State(state): State<Arc<MistralRs>>,
     Json(oairequest): Json<CompletionRequest>,
@@ -216,7 +232,14 @@ pub async fn completions(
         );
     }
 
-    let (request, is_streaming) = parse_request(oairequest, state.clone(), tx);
+    let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
+        Ok(x) => x,
+        Err(e) => {
+            let e = anyhow::Error::msg(e.to_string());
+            MistralRs::maybe_log_error(state, &*e);
+            return CompletionResponder::InternalError(e.into());
+        }
+    };
     let sender = state.get_sender().unwrap();
 
     if let Err(e) = sender.send(request).await {
@@ -272,6 +295,7 @@ pub async fn completions(
             Response::Chunk(_) => unreachable!(),
             Response::Done(_) => unreachable!(),
             Response::ModelError(_, _) => unreachable!(),
+            Response::ImageGeneration(_) => unreachable!(),
         }
     }
 }

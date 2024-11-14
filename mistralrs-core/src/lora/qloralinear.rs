@@ -1,12 +1,9 @@
-use std::{collections::HashMap, iter::zip, ops::Mul};
+use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{
-    bail,
-    quantized::{QMatMul, QTensor},
-    Module, Result, Tensor,
-};
+use candle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
 use candle_nn::{Linear, VarBuilder};
 use either::Either;
+use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use super::{
     apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
@@ -15,7 +12,7 @@ use super::{
 
 #[derive(Debug)]
 pub struct QLoraLinear {
-    old: QMatMul,
+    old: Arc<dyn QuantMethod>,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
@@ -47,6 +44,16 @@ impl QLoraLinear {
                 candle_core::bail!("Expected all target modules to be the same.");
             }
         }
+
+        let old: Arc<dyn QuantMethod> = match old {
+            QMatMul::QTensor(q) => Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: q,
+                b: None,
+            })?),
+            QMatMul::TensorF16(t) | QMatMul::Tensor(t) => Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(t, None)),
+            )?),
+        };
 
         let module = prefix.split('.').last().unwrap();
         if target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
@@ -214,35 +221,33 @@ impl Merge for QLoraLinear {
     }
 
     fn merge_weights(&mut self) -> Result<()> {
-        let (mut w_base_layer, dtype) = match &self.old {
-            QMatMul::QTensor(q) => (q.dequantize(&q.device())?, q.dtype()),
-            QMatMul::Tensor(_) | QMatMul::TensorF16(_) => unreachable!(),
-        };
+        let mut w_base_layer: Option<Tensor> = None;
         for adapter in 0..self.scale_adapters.len() {
-            w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
+            if let Some(w_base_layer) = &mut w_base_layer {
+                *w_base_layer = (&*w_base_layer + &self.get_delta_weight(adapter)?)?;
+            } else {
+                w_base_layer = Some(self.get_delta_weight(adapter)?)
+            }
         }
-        let new_w = QTensor::quantize(&w_base_layer, dtype)?;
-        self.old = QMatMul::from_qtensor(new_w)?;
+        self.old
+            .add_delta_w(w_base_layer.as_ref().expect("Found no adapters to merge."))?;
         self.merged = true;
         Ok(())
     }
 }
 
 impl LinearLayerLike for QLoraLinear {
-    fn bias(&self) -> Option<&Tensor> {
-        None
+    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
+        &mut self.old
     }
-    fn bias_mut(&mut self) -> Option<&mut Tensor> {
+    fn bias(&self) -> Option<&Tensor> {
         None
     }
     fn weight(&self) -> &Tensor {
         unimplemented!()
     }
-    fn inner(&mut self) -> &mut QMatMul {
-        &mut self.old
-    }
-    fn is_quant(&self) -> bool {
-        true
+    fn quantized_act_type(&self) -> Option<DType> {
+        Some(DType::F32)
     }
     fn lora_forward(
         &self,

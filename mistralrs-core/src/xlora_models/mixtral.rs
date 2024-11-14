@@ -2,33 +2,35 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    attention::SdpaParams,
+    layers::{Activation, Sdpa},
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, RotaryEmbedding, VarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_nn::{RotaryEmbedding, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{CausalMasker, RmsNorm},
     models::mixtral::Config,
     pipeline::{extract_logits, Cache, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -36,11 +38,10 @@ struct Attention {
     o_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    use_flash_attn: bool,
     sliding_window: Option<usize>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -60,7 +61,6 @@ impl Attention {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
         let q_proj = linear_no_bias(
             hidden_sz,
@@ -109,11 +109,16 @@ impl Attention {
             o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
             head_dim,
             rotary_emb,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
@@ -128,13 +133,14 @@ impl Attention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &xs,
@@ -154,7 +160,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -201,23 +207,17 @@ impl Attention {
             false,
         )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-        let mut attn_output = ScaledDotProductAttention.run_attention(
+        let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            self.num_heads,
-            self.head_dim,
             attn_mask.as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            q_len,
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
@@ -225,14 +225,14 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct BlockSparseTop2MLP {
     w1: Arc<dyn LinearLayerLike + Send + Sync>,
     w2: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -302,8 +302,8 @@ impl BlockSparseTop2MLP {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.w1.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.w1.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let lhs = self
             .w1
@@ -326,14 +326,14 @@ impl BlockSparseTop2MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.w1.is_quant() {
+        if self.w1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct SparseMoeBlock {
     gate: Arc<dyn LinearLayerLike + Send + Sync>,
     experts: Vec<BlockSparseTop2MLP>,
@@ -398,8 +398,8 @@ impl SparseMoeBlock {
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.gate.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut router_logits = self.gate.lora_forward(
             &xs,
@@ -407,7 +407,7 @@ impl SparseMoeBlock {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate.is_quant() {
+        if self.gate.quantized_act_type().is_some() {
             router_logits = router_logits.to_dtype(original_dtype)?;
         }
 
@@ -470,7 +470,6 @@ impl SparseMoeBlock {
     }
 }
 
-#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     block_sparse_moe: SparseMoeBlock,
@@ -544,6 +543,7 @@ impl DecoderLayer {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -556,15 +556,19 @@ impl DecoderLayer {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = self.block_sparse_moe.forward(
-            &xs.apply(&self.post_attention_layernorm)?,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let xs = self
+            .block_sparse_moe
+            .forward(
+                &xs.apply(&self.post_attention_layernorm)?,
+                scalings.clone(),
+                global_scaling_weight,
+                is_scaling_pass,
+            )?
+            .to_dtype(residual.dtype())?;
         residual + xs
     }
 }
@@ -575,10 +579,10 @@ pub struct XLoraModel {
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     sliding_window: Option<usize>,
-    pub device: Device,
-    pub cache: Cache,
+    device: Device,
+    cache: Cache,
     dtype: DType,
-    pub max_seq_len: usize,
+    max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
@@ -596,10 +600,14 @@ impl XLoraModel {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -610,20 +618,35 @@ impl XLoraModel {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta as f32,
+                    head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )?),
+            );
+        }
+
         let mut count = 0;
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                head_dim,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )?);
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -704,6 +727,7 @@ impl XLoraModel {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
+                head_dim: None,
             },
         })
     }
@@ -718,6 +742,7 @@ impl XLoraModel {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut cache = if is_full_pass {
             if no_kv_cache {
@@ -757,6 +782,7 @@ impl XLoraModel {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -775,6 +801,8 @@ impl XLoraModel {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -787,6 +815,8 @@ impl XLoraModel {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -799,10 +829,11 @@ impl XLoraModel {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -819,10 +850,11 @@ impl XLoraModel {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -839,10 +871,11 @@ impl XLoraModel {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -853,42 +886,56 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.self_attn.q_proj)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.self_attn.k_proj)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.self_attn.v_proj)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.self_attn.o_proj)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.block_sparse_moe.gate)
                     .unwrap()
-                    .inner(),
+                    .quant_inner(),
                 Some(i),
             ));
             for expert in &mut layer.block_sparse_moe.experts {
-                tensors.push((Arc::get_mut(&mut expert.w1).unwrap().inner(), Some(i)));
-                tensors.push((Arc::get_mut(&mut expert.w2).unwrap().inner(), Some(i)));
-                tensors.push((Arc::get_mut(&mut expert.w3).unwrap().inner(), Some(i)));
+                tensors.push((Arc::get_mut(&mut expert.w1).unwrap().quant_inner(), Some(i)));
+                tensors.push((Arc::get_mut(&mut expert.w2).unwrap().quant_inner(), Some(i)));
+                tensors.push((Arc::get_mut(&mut expert.w3).unwrap().quant_inner(), Some(i)));
             }
         }
         (tensors, &*self.mapper)
     }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 
@@ -901,6 +948,7 @@ impl NormalModel for XLoraModel {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -916,6 +964,8 @@ impl NormalModel for XLoraModel {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -927,6 +977,8 @@ impl NormalModel for XLoraModel {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &Cache {
@@ -1002,6 +1054,7 @@ impl ScalingsMaker for XLoraModel {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -1011,6 +1064,7 @@ impl ScalingsMaker for XLoraModel {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

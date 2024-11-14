@@ -1,26 +1,31 @@
 # In situ quantization
 
-In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized. An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models. 
+In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized.
 
-Possible values for ISQ quantization:
+An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models at runtime.
+
+To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
+
+## ISQ quantization types
 - Q4_0
 - Q4_1
 - Q5_0
 - Q5_1
 - Q8_0
-- Q8_1
+- Q8_1 (*not available on CUDA*)
 - Q2K
 - Q3K
 - Q4K
 - Q5K
 - Q6K
-- Q8K
+- Q8K  (*not available on CUDA*)
+- HQQ4
+- HQQ8
+- FP8
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 
-If a tensor cannot be quantized, the fallback process is as follows:
-1) If using a `K` quant, fallback to a similar `Q` quant.
-2) If that is not possible, use `F32` as the data type.
+For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ organization parameter in all APIs.
 
 ## Python Example
 ```python
@@ -38,16 +43,12 @@ runner = Runner(
 You can find this example [here](../mistralrs/examples/isq/main.rs).
 
 ```rust
-let pipeline = loader.load_model_from_hf(
-    None,
-    TokenSource::CacheToken,
-    None,
-    &Device::cuda_if_available(0)?,
-    false,
-    DeviceMapMetadata::dummy(),
-    Some(GgmlDType::Q4K),
-    None, // No PagedAttention yet
-)?;
+let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct")
+    .with_isq(IsqType::Q8_0)
+    .with_logging()
+    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .build()
+    .await?;
 ```
 
 ## Server example

@@ -4,11 +4,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::ScaledDotProductAttention,
+    attention::SdpaParams,
+    layers::{Activation, Sdpa},
     lora::{linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -17,23 +19,22 @@ use crate::{
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
-use candle_nn::{
-    embedding, layer_norm, Activation, Embedding, LayerNorm, RotaryEmbedding, VarBuilder,
-};
+use candle_core::{DType, Device, Result, Tensor};
+use candle_nn::{embedding, layer_norm, Embedding, LayerNorm, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker},
+    layers::CausalMasker,
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, Cache, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -92,8 +93,8 @@ impl MLP {
     ) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.fc1.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.fc1.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut res = self.fc2.lora_forward(
             &self
@@ -109,14 +110,13 @@ impl MLP {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.fc1.is_quant() {
+        if self.fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Clone)]
 struct Attention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -124,11 +124,11 @@ struct Attention {
     dense: Arc<dyn LinearLayerLike + Send + Sync>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -142,7 +142,7 @@ impl Attention {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
@@ -206,7 +206,13 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 
@@ -221,12 +227,13 @@ impl Attention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &xs,
@@ -246,7 +253,7 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -288,26 +295,14 @@ impl Attention {
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?.contiguous()?;
-
-        let attn_output = ScaledDotProductAttention.run_attention(
-            &q,
-            &k,
-            &v,
-            self.num_heads,
-            self.head_dim,
-            mask,
-            self.use_flash_attn,
-            b_size,
-            seq_len,
-        )?;
+        let attn_output =
+            Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?;
 
         let mut attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         let mut res = self.dense.lora_forward(
             &attn_output,
@@ -315,14 +310,13 @@ impl Attention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -340,7 +334,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        rope: RotaryEmbedding,
+        rope: Arc<RotaryEmbedding>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -389,6 +383,7 @@ impl DecoderLayer {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = xs.apply(&self.input_layernorm)?;
@@ -401,6 +396,7 @@ impl DecoderLayer {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )?;
         let feed_forward_hidden_states =
             self.mlp
@@ -414,9 +410,9 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
-    pub cache: Cache,
-    pub device: Device,
-    pub max_seq_len: usize,
+    cache: Cache,
+    device: Device,
+    max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -435,10 +431,14 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(
@@ -453,22 +453,36 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_m = vb_m.pp("layers");
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            // Alternative rope scalings are not supported
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new_partial(
+                    cfg.rope_theta,
+                    cfg.head_dim(),
+                    (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb.dtype(),
+                )?),
+            );
+        }
         let mut count = 0;
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            // Alternative rope scalings are not supported.
-            let rotary_emb = RotaryEmbedding::new_partial(
-                cfg.rope_theta,
-                cfg.head_dim(),
-                (cfg.partial_rotary_factor * cfg.head_dim() as f64) as usize,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )?;
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let layer = DecoderLayer::new(
                 cfg,
                 vb_m.pp(layer_idx),
@@ -537,6 +551,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads(),
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: None,
             },
         })
     }
@@ -551,6 +566,7 @@ impl Model {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = input_ids.apply(&self.embed_tokens)?;
         let mut cache = if is_full_pass {
@@ -588,6 +604,7 @@ impl Model {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
@@ -606,6 +623,8 @@ impl Model {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -618,6 +637,8 @@ impl Model {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -630,10 +651,11 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -650,10 +672,11 @@ impl Model {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -670,10 +693,11 @@ impl Model {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -684,67 +708,53 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().inner(),
-                Some(i),
-            ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc1).unwrap().inner(), Some(i)));
-            tensors.push((Arc::get_mut(&mut layer.mlp.fc2).unwrap().inner(), Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().bias_mut(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.q_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.k_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
                 Arc::get_mut(&mut layer.self_attn.v_proj)
                     .unwrap()
-                    .bias_mut(),
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.self_attn.dense).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.self_attn.dense)
+                    .unwrap()
+                    .quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc1).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc1).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.fc2).unwrap().bias_mut(),
+                Arc::get_mut(&mut layer.mlp.fc2).unwrap().quant_inner(),
                 Some(i),
             ));
         }
         (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 
@@ -757,6 +767,7 @@ impl NormalModel for Model {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -772,6 +783,8 @@ impl NormalModel for Model {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -783,6 +796,8 @@ impl NormalModel for Model {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &Cache {
@@ -850,6 +865,7 @@ impl ScalingsMaker for Model {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -859,6 +875,7 @@ impl ScalingsMaker for Model {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

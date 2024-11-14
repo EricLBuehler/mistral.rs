@@ -1,112 +1,54 @@
-use either::Either;
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
-
+use anyhow::Result;
 use mistralrs::{
-    AnyMoeConfig, AnyMoeExpertType, AnyMoeLoader, Constraint, DefaultSchedulerMethod, Device,
-    DeviceMapMetadata, Loader, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder,
-    NormalLoaderType, NormalRequest, NormalSpecificConfig, Request, RequestMessage, Response,
-    Result, SamplingParams, SchedulerConfig, TokenSource,
+    AnyMoeConfig, AnyMoeExpertType, AnyMoeModelBuilder, IsqType, PagedAttentionMetaBuilder,
+    TextMessageRole, TextMessages, TextModelBuilder,
 };
 
-/// Gets the best device, cpu, cuda if compiled with CUDA
-pub(crate) fn best_device() -> Result<Device> {
-    #[cfg(not(feature = "metal"))]
-    {
-        Device::cuda_if_available(0)
-    }
-    #[cfg(feature = "metal")]
-    {
-        Device::new_metal(0)
-    }
-}
+#[tokio::main]
+async fn main() -> Result<()> {
+    let text_builder = TextModelBuilder::new("mistralai/Mistral-7B-Instruct-v0.1")
+        .with_isq(IsqType::Q8_0)
+        .with_logging()
+        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
 
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    let loader = NormalLoaderBuilder::new(
-        NormalSpecificConfig {
-            use_flash_attn: false,
-        },
-        None,
-        None,
-        Some("mistralai/Mistral-7B-Instruct-v0.1".to_string()),
-    )
-    .build(NormalLoaderType::Mistral);
-    let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
-        target: loader,
-        config: AnyMoeConfig {
+    let model = AnyMoeModelBuilder::from_text_builder(
+        text_builder,
+        AnyMoeConfig {
             hidden_size: 4096,
             lr: 1e-3,
             epochs: 100,
             batch_size: 4,
-            expert_type: AnyMoeExpertType::LoraAdapter {
-                rank: 64,
-                alpha: 16.,
-                target_modules: vec!["gate_proj".to_string()],
-            },
+            expert_type: AnyMoeExpertType::FineTuned,
             gate_model_id: None, // Set this to Some("path/to/model/id") for the pretrained gating model id
             training: true,
-            loss_svg: None,
+            loss_csv_path: None,
         },
-        prefix: "model.layers".to_string(),
-        mlp: "mlp".to_string(),
-        path: "examples/amoe.json".to_string(),
-        model_ids: vec!["typeof/zephyr-7b-beta-lora".to_string()],
-        layers: vec![],
-    });
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-        None, // No PagedAttention.
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
+        "model.layers",
+        "mlp",
+        "examples/amoe.json",
+        vec!["typeof/zephyr-7b-beta-lora"],
+        vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     )
-    .build())
-}
+    .build()
+    .await?;
 
-fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::System,
+            "You are an AI agent with a specialty in programming.",
+        )
+        .add_message(
+            TextMessageRole::User,
+            "Hello! How are you? Please write generic binary search function in Rust.",
+        );
 
-    let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::Chat(vec![IndexMap::from([
-            ("role".to_string(), Either::Left("user".to_string())),
-            ("content".to_string(), Either::Left("Hello!".to_string())),
-        ])]),
-        sampling_params: SamplingParams::default(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: None,
-        tool_choice: None,
-    });
-    mistralrs.get_sender()?.blocking_send(request)?;
+    let response = model.send_chat_request(messages).await?;
 
-    let response = rx.blocking_recv().unwrap();
-    match response {
-        Response::Done(c) => println!(
-            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content.as_ref().unwrap(),
-            c.usage.avg_prompt_tok_per_sec,
-            c.usage.avg_compl_tok_per_sec
-        ),
-        _ => unreachable!(),
-    }
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
     Ok(())
 }

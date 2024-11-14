@@ -56,6 +56,8 @@ COUNT_NONZERO_OP(double, f64)
 COUNT_NONZERO_OP(uint8_t, u8)
 COUNT_NONZERO_OP(uint32_t, u32)
 COUNT_NONZERO_OP(int64_t, i64)
+COUNT_NONZERO_OP(int32_t, i32)
+COUNT_NONZERO_OP(int16_t, i16)
 
 __global__ void transform_indices(const uint32_t *temp_indices,
                                   const uint32_t num_nonzero,
@@ -126,6 +128,8 @@ NONZERO_OP(double, f64)
 NONZERO_OP(uint8_t, u8)
 NONZERO_OP(uint32_t, u32)
 NONZERO_OP(int64_t, i64)
+NONZERO_OP(int32_t, i32)
+NONZERO_OP(int16_t, i16)
 
 template <typename T>
 __global__ void bitwise_and__kernel(const T *d_in1, const T *d_in2, T *d_out,
@@ -207,3 +211,35 @@ void bitwise_xor(const T *d_in1, const T *d_in2, T *d_out, int N) {
 BITWISE_OP(uint8_t, u8)
 BITWISE_OP(uint32_t, u32)
 BITWISE_OP(int64_t, i64)
+BITWISE_OP(int32_t, i32)
+
+template <typename T>
+__global__ void leftshift_kernel(const T *d_in1, T *d_out,
+                                   const uint32_t N, const int32_t k) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N) {
+    d_out[idx] = d_in1[idx] << k;
+  }
+}
+
+template <typename T>
+void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
+  int nthreads = next_power_of_2(N);
+  if (nthreads > 1024) {
+    nthreads = 1024;
+  }
+  const int nblocks = (N + nthreads - 1) / nthreads;
+  leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
+  cudaDeviceSynchronize();
+}
+
+#define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                                 \
+  extern "C" void leftshift_##RUST_NAME(const TYPENAME *d_in1,                            \
+                                         TYPENAME *d_out, uint32_t N, int32_t k) {        \
+    leftshift(d_in1, d_out, N, k);                                                        \
+  }
+
+LEFTSHIFT_OP(uint8_t, u8)
+LEFTSHIFT_OP(int32_t, i32)
+LEFTSHIFT_OP(uint32_t, u32)
+LEFTSHIFT_OP(int64_t, i64)

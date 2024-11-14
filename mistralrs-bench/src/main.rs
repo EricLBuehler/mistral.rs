@@ -2,13 +2,14 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelDType, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
-    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    initialize_logging, paged_attn_supported, parse_isq_value, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
+    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
+    TokenSource, Usage,
 };
-use std::fmt::Display;
 use std::sync::Arc;
+use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
 use tracing::{info, warn};
 
@@ -64,6 +65,7 @@ fn run_bench(
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
+        dry_params: Some(DrySamplingParams::default()),
     };
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -80,6 +82,7 @@ fn run_bench(
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
 
     let mut usages = Vec::new();
@@ -111,6 +114,7 @@ fn run_bench(
                         usages.push(res.usage);
                     }
                     Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
@@ -226,6 +230,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         stop_toks: None,
         logits_bias: None,
         n_choices: 1,
+        dry_params: Some(DrySamplingParams::default()),
     };
     let sender = mistralrs.get_sender().unwrap();
     let (tx, mut rx) = channel(10_000);
@@ -246,6 +251,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         adapters: None,
         tools: None,
         tool_choice: None,
+        logits_processors: None,
     });
 
     sender
@@ -261,6 +267,10 @@ struct Args {
     /// Model
     #[clap(subcommand)]
     model: ModelSelected,
+
+    /// Integer seed to ensure reproducible random number generation.
+    #[arg(short, long)]
+    seed: Option<u64>,
 
     /// Number of prompt tokens to run.
     #[arg(long, short = 'p', default_value_t = 512)]
@@ -283,6 +293,10 @@ struct Args {
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
+
+    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    #[arg(long = "isq", value_parser = parse_isq_value)]
+    in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
     /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
@@ -309,6 +323,10 @@ struct Args {
     /// Disable PagedAttention on CUDA.
     #[arg(long = "no_paged_attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -322,8 +340,17 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
     let model_name = loader.get_id();
 
@@ -331,6 +358,10 @@ fn main() -> anyhow::Result<()> {
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
+
+    if let Some(seed) = args.seed {
+        device.set_seed(seed)?;
+    }
 
     let token_source = TokenSource::CacheToken;
     info!(
@@ -450,7 +481,7 @@ fn main() -> anyhow::Result<()> {
         &device,
         false,
         mapper,
-        None,
+        args.in_situ_quant,
         cache_config,
     )?;
     info!("Model loaded.");

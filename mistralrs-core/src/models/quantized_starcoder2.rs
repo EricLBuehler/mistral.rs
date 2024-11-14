@@ -1,9 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
-use crate::layers::{
-    repeat_kv, CausalMasker, MatMul, QLinear, RotaryEmbedding, ScaledDotProductAttention,
-};
+use crate::gguf::Content;
+use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -11,24 +14,27 @@ use crate::pipeline::Cache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use candle_core::quantized::gguf_file;
+use crate::{DeviceMapMetadata, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Embedding, LayerNorm};
+use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    ffn_up: QLinear,
-    ffn_down: QLinear,
+    ffn_up: Arc<dyn QuantMethod>,
+    ffn_down: Arc<dyn QuantMethod>,
 }
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.ffn_up)?
-            .apply(&candle_nn::Activation::GeluPytorchTanh)?
-            .apply(&self.ffn_down)
+        MatMul.qmethod_matmul(
+            &MatMul
+                .qmethod_matmul(xs, &*self.ffn_up)?
+                .apply(&candle_nn::Activation::GeluPytorchTanh)?,
+            &*self.ffn_down,
+        )
     }
 }
 
@@ -40,18 +46,19 @@ fn layer_norm(w: QTensor, b: QTensor, eps: f64) -> Result<LayerNorm> {
 }
 
 struct LayerWeights {
-    attn_q: QLinear,
-    attn_k: QLinear,
-    attn_v: QLinear,
-    attn_output: QLinear,
+    attn_q: Arc<dyn QuantMethod>,
+    attn_k: Arc<dyn QuantMethod>,
+    attn_v: Arc<dyn QuantMethod>,
+    attn_output: Arc<dyn QuantMethod>,
     attn_norm: LayerNorm,
     ffn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary_emb: RotaryEmbedding,
+    rotary_emb: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -66,9 +73,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;
 
-        let q = self.attn_q.forward(x)?;
-        let k = self.attn_k.forward(x)?;
-        let v = self.attn_v.forward(x)?;
+        let q = MatMul.qmethod_matmul(x, &*self.attn_q)?;
+        let k = MatMul.qmethod_matmul(x, &*self.attn_k)?;
+        let v = MatMul.qmethod_matmul(x, &*self.attn_v)?;
 
         let mut q = q.reshape((b_sz * q_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.n_kv_head, self.head_dim))?;
@@ -113,25 +120,13 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    q_len,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -141,7 +136,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, q_len, hidden_size])?
         };
 
-        self.attn_output.forward(&y)
+        MatMul.qmethod_matmul(&y, &*self.attn_output)
     }
 }
 
@@ -202,16 +197,16 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "starcoder2",
-            metadata: &ct.metadata,
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,
@@ -223,48 +218,75 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_freq_base,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let head_dim = embedding_length / head_count;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             layer_norm_epsilon,
         )?;
-        let output = QMatMul::from_qtensor(ct.tensor(reader, "output.weight", device)?)?;
+        let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
+
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..block_count {
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    head_dim,
+                    context_window,
+                    device,
+                    true,
+                    DType::F32,
+                )?),
+            );
+        }
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new(
-                rope_freq_base,
-                head_dim,
-                context_window,
-                device,
-                true,
-                DType::F32,
-            )?;
+            let rotary = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
-            let mlp = Mlp { ffn_up, ffn_down };
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
+            let QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(ffn_down_w) = ffn_down.inner_ref().clone() else {
+                unreachable!()
+            };
+            let mlp = Mlp {
+                ffn_up: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_up_w,
+                    b: ffn_up.bias().cloned(),
+                })?),
+                ffn_down: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_down_w,
+                    b: ffn_down.bias().cloned(),
+                })?),
+            };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
             let ffn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.ffn_norm.bias"), device)?,
                 layer_norm_epsilon,
             )?;
-            let attn_q = QLinear::new(&ct, reader, &format!("{prefix}.attn_q"), device)?;
-            let attn_k = QLinear::new(&ct, reader, &format!("{prefix}.attn_k"), device)?;
-            let attn_v = QLinear::new(&ct, reader, &format!("{prefix}.attn_v"), device)?;
-            let attn_output = QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?;
+            let attn_q = QLinear::new(&mut ct, &format!("{prefix}.attn_q"), device)?;
+            let attn_k = QLinear::new(&mut ct, &format!("{prefix}.attn_k"), device)?;
+            let attn_v = QLinear::new(&mut ct, &format!("{prefix}.attn_v"), device)?;
+            let attn_output = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -277,11 +299,35 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                 )?),
             };
+            let QMatMul::QTensor(q_w) = attn_q.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(k_w) = attn_k.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(v_w) = attn_v.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(o_w) = attn_output.inner_ref().clone() else {
+                unreachable!()
+            };
             layers.push(LayerWeights {
-                attn_q,
-                attn_k,
-                attn_v,
-                attn_output,
+                attn_q: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: q_w,
+                    b: attn_q.bias().cloned(),
+                })?),
+                attn_k: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: k_w,
+                    b: attn_k.bias().cloned(),
+                })?),
+                attn_v: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: v_w,
+                    b: attn_v.bias().cloned(),
+                })?),
+                attn_output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: o_w,
+                    b: attn_output.bias().cloned(),
+                })?),
                 attn_norm,
                 ffn_norm,
                 mlp,
@@ -290,6 +336,13 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 rotary_emb: rotary,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

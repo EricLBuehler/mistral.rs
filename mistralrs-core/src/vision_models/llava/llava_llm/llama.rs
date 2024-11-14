@@ -5,21 +5,25 @@
     clippy::too_many_arguments
 )]
 
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use std::sync::Arc;
+
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, RmsNorm, ScaledDotProductAttention},
+    layers::{CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    merge_delta,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     AnyMoeConfig, AnyMoeExpertType,
@@ -28,16 +32,16 @@ use crate::{
 use super::{LLaVALLM, OrdinaryRoPE};
 
 struct CausalSelfAttention {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
-    o_proj: QMatMul,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl CausalSelfAttention {
@@ -51,22 +55,24 @@ impl CausalSelfAttention {
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameter: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len, hidden_size) = x.dims3()?;
+        let (b_sz, seq_len, _) = x.dims3()?;
 
         let original_dtype = x.dtype();
         let mut x = x.clone();
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
-        let mut q = MatMul.qmatmul(&x, &self.q_proj)?;
-        let mut k = MatMul.qmatmul(&x, &self.k_proj)?;
-        let mut v = MatMul.qmatmul(&x, &self.v_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
+        let mut q = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
+
         let mut q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -92,74 +98,92 @@ impl CausalSelfAttention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
                 let (k, v) =
                     crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-                let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?
-                    .contiguous()?;
-                let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?
-                    .contiguous()?;
-
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_attention_heads,
-                    self.head_dim,
                     attention_mask.clone().as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    seq_len,
+                    Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
 
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            y = y.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            y = y.to_dtype(t)?;
         }
         y = if attention_mask.is_some() {
-            y.transpose(1, 2)?.reshape((b_sz, seq_len, hidden_size))?
+            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
-            y.reshape((b_sz, seq_len, hidden_size))?
+            y.reshape((b_sz, seq_len, ()))?
         };
-        let mut y = MatMul.qmatmul(&y, &self.o_proj)?;
-        if matches!(self.q_proj, QMatMul::QTensor(_)) {
-            y = y.to_dtype(original_dtype)?;
+        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
         }
-        Ok(y)
+        Ok(res)
     }
 
     fn load(vb: VarBuilder, cfg: &Config, paged_attn: Option<PagedAttention>) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
-        let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
-        let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
-        let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
+        let q_proj = mistralrs_quant::linear_no_bias(
+            size_in,
+            size_q,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_no_bias(
+            size_in,
+            size_kv,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_no_bias(
+            size_in,
+            size_kv,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_no_bias(
+            size_q,
+            size_in,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
         Ok(Self {
-            q_proj: QMatMul::Tensor(q_proj.weight().clone()),
-            k_proj: QMatMul::Tensor(k_proj.weight().clone()),
-            v_proj: QMatMul::Tensor(v_proj.weight().clone()),
-            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 }
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    c_fc1: QMatMul,
-    c_fc2: QMatMul,
-    c_proj: QMatMul,
+    c_fc1: Arc<dyn QuantMethod>,
+    c_fc2: Arc<dyn QuantMethod>,
+    c_proj: Arc<dyn QuantMethod>,
     params: Vec<usize>,
 }
 
@@ -167,13 +191,28 @@ impl Mlp {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
-        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
-        let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
+        let c_fc1 = mistralrs_quant::linear_no_bias(
+            h_size,
+            i_size,
+            &cfg.quantization_config,
+            vb.pp("gate_proj"),
+        )?;
+        let c_fc2 = mistralrs_quant::linear_no_bias(
+            h_size,
+            i_size,
+            &cfg.quantization_config,
+            vb.pp("up_proj"),
+        )?;
+        let c_proj = mistralrs_quant::linear_no_bias(
+            i_size,
+            h_size,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
         Ok(Self {
-            c_fc1: QMatMul::Tensor(c_fc1.weight().clone()),
-            c_fc2: QMatMul::Tensor(c_fc2.weight().clone()),
-            c_proj: QMatMul::Tensor(c_proj.weight().clone()),
+            c_fc1,
+            c_fc2,
+            c_proj,
             params: vec![h_size, i_size],
         })
     }
@@ -185,22 +224,19 @@ impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let original_dtype = x.dtype();
         let mut x = x.clone();
-        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.c_fc1.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
-        let x = (candle_nn::ops::silu(&MatMul.qmatmul(&x, &self.c_fc1)?)?
-            * MatMul.qmatmul(&x, &self.c_fc2)?)?;
-        let mut res = MatMul.qmatmul(&x, &self.c_proj)?;
-        if matches!(self.c_fc1, QMatMul::QTensor(_)) {
+        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
+            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
+        let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
+        if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![None, None, None]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -211,17 +247,17 @@ impl MlpLayer for Mlp {
     // c_fc1, c_fc2, c_proj
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_c_fc1 = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.c_fc1, delta)
+            self.c_fc1.add_delta_w(delta)?
         } else {
             self.c_fc1.clone()
         };
         let new_c_fc2 = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.c_fc2, delta)
+            self.c_fc2.add_delta_w(delta)?
         } else {
             self.c_fc2.clone()
         };
         let new_c_proj = if let Some(ref delta) = deltas[2] {
-            merge_delta!(self.c_proj, delta)
+            self.c_proj.add_delta_w(delta)?
         } else {
             self.c_proj.clone()
         };
@@ -235,10 +271,7 @@ impl MlpLayer for Mlp {
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match &self.c_fc1 {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.c_fc1.dtype_and_device()
     }
 }
 
@@ -260,6 +293,7 @@ impl Block {
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameters: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let mut x = self.rms_1.forward(x)?;
@@ -272,6 +306,7 @@ impl Block {
             kv_cache,
             rope_parameters,
             metadata,
+            flash_params,
         )? + residual)?;
         let residual = &x;
         x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
@@ -315,9 +350,9 @@ pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
-    lm_head: QMatMul,
-    pub kv_cache: crate::pipeline::Cache,
-    pub device: Device,
+    lm_head: Arc<dyn QuantMethod>,
+    kv_cache: crate::pipeline::Cache,
+    device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
     cfg: ModelConfigMetadata,
@@ -331,6 +366,7 @@ impl Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let x = self.wte.forward(input_ids)?;
         self.forward_input_embed(
@@ -340,6 +376,7 @@ impl Llama {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
 
@@ -350,10 +387,7 @@ impl Llama {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let mapper = normal_loading_metadata.mapper;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -391,7 +425,7 @@ impl Llama {
                         ),
                     };
                     Block::load(
-                        vb.pp(&format!("model.layers.{i}")),
+                        vb.pp(format!("model.layers.{i}")),
                         cfg,
                         &*mapper,
                         i,
@@ -412,7 +446,7 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
             kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
             device: normal_loading_metadata.real_device,
             mapper,
@@ -423,13 +457,19 @@ impl Llama {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: None,
             },
         })
     }
 }
 
 impl IsqModel for Llama {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
@@ -440,7 +480,7 @@ impl IsqModel for Llama {
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
                     .collect::<Vec<_>>(),
@@ -448,8 +488,9 @@ impl IsqModel for Llama {
         }
         (tensors, &*self.mapper)
     }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
     }
 }
 
@@ -465,6 +506,7 @@ impl LLaVALLM for Llama {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
         let mut cache = self.kv_cache.lock();
@@ -490,15 +532,16 @@ impl LLaVALLM for Llama {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                flash_params,
             )?;
         }
         x = x.to_device(&self.device)?;
         x = self.ln_f.forward(&x)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
-        let logits = MatMul.qmatmul(&x, &self.lm_head)?;
-        extract_logits(&logits, context_lens)
+        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        extract_logits(&xs, context_lens)
     }
 }
 
@@ -511,6 +554,7 @@ impl NormalModel for Llama {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward_input(
             input_ids,
@@ -518,6 +562,7 @@ impl NormalModel for Llama {
             start_offsets_kernel,
             context_lens,
             metadata,
+            flash_params,
         )
     }
     fn xlora_forward(
@@ -532,6 +577,8 @@ impl NormalModel for Llama {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }

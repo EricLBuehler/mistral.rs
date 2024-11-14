@@ -1,6 +1,7 @@
-import openai
+from openai import OpenAI
 import httpx
-import textwrap, json
+import textwrap
+import json
 
 
 def log_response(response: httpx.Response):
@@ -27,15 +28,14 @@ def log_response(response: httpx.Response):
         print(f"    {key}: {value}")
 
 
-openai.api_key = "EMPTY"
-openai.base_url = "http://localhost:1234/v1/"
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 # Enable this to log requests and responses
-# openai.http_client = httpx.Client(
+# client._client = httpx.Client(
 #     event_hooks={"request": [print], "response": [log_response]}
 # )
 
-completion = openai.chat.completions.create(
+completion = client.chat.completions.create(
     model="idefics2",
     messages=[
         {

@@ -13,7 +13,7 @@ mod starcoder2;
 
 use std::sync::Arc;
 
-use crate::lora::Ordering;
+use crate::{lora::Ordering, pipeline::text_models_inputs_processor::FlashParams};
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
@@ -52,6 +52,7 @@ trait ScalingsMaker {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor>;
     fn get_cache(&self) -> &Cache;
 
@@ -67,6 +68,8 @@ trait ScalingsMaker {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         position_ids: &[usize],
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         let (b_size, _) = input_ids_full.dims2()?;
         let (_, seq_len) = input_ids.dims2()?;
@@ -97,6 +100,7 @@ trait ScalingsMaker {
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
                 position_ids,
+                flash_params_full,
             )?;
 
             let mut new_cache = Vec::new();
@@ -119,6 +123,7 @@ trait ScalingsMaker {
                 no_kv_cache,
                 Some(self.get_classifier().config.scaling_pass_value),
                 position_ids,
+                flash_params,
             )?
         };
 

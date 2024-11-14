@@ -1,15 +1,16 @@
 use super::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
 use anyhow::Result;
-use candle_core::quantized::{ggml_file, gguf_file};
+use candle_core::quantized::ggml_file;
 use candle_nn::VarBuilder;
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
+    gguf::Content,
     lora::{LoraConfig, Ordering},
     paged_attention::AttentionImplementation,
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
-    DeviceMapMetadata,
+    DeviceMapMetadata, Topology,
 };
 
 #[derive(derive_more::From)]
@@ -19,15 +20,10 @@ pub struct FileGGML {
 }
 
 #[derive(derive_more::From)]
-pub struct FileGGUF<'a> {
-    pub ct: gguf_file::Content,
-    pub reader: &'a mut std::fs::File,
-}
-
-#[derive(derive_more::From)]
 pub struct Device<'a> {
-    pub device: &'a candle_core::Device,
+    device: &'a candle_core::Device,
     pub mapper: DeviceMapMetadata,
+    pub topology: Option<&'a Topology>,
 }
 
 pub struct Adapter<'a> {
@@ -78,9 +74,10 @@ impl<'a> Adapter<'a> {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            candle_core::DType::F32,
+            Some(candle_core::DType::F32),
             device,
             silent,
+            None,
             |_| true,
         )?;
 
@@ -96,8 +93,8 @@ impl<'a> Adapter<'a> {
 
 // New type wrappers that segment the distinct parameter sets used by `from_ggml()` + `from_gguf()` methods:
 pub struct ParamsGGML(pub FileGGML);
-pub struct ParamsGGUF<'a>(
-    pub FileGGUF<'a>,
+pub struct ParamsGGUF<'a, R: std::io::Seek + std::io::Read>(
+    pub Content<'a, R>,
     pub Device<'a>,
     pub AttentionImplementation,
 );
@@ -109,7 +106,7 @@ pub struct NoAdapter {}
 // (required workaround to support impl on subtypes, otherwise would use an enum)
 pub trait QuantParams {}
 impl QuantParams for ParamsGGML {}
-impl QuantParams for ParamsGGUF<'_> {}
+impl<R: std::io::Seek + std::io::Read> QuantParams for ParamsGGUF<'_, R> {}
 
 // Emulates `Option<Adapter>` but is compatible as a type bound in `impl<T>` for Some vs None
 pub trait MaybeAdapter {}
@@ -161,10 +158,10 @@ pub trait FromGGML {
 
 pub trait FromGGUF {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        ct: Content<'_, R>,
         device: &candle_core::Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self, candle_core::Error>
     where
@@ -188,14 +185,14 @@ pub trait FromAdapterGGML {
 pub trait FromAdapterGGUF {
     #[allow(clippy::too_many_arguments)]
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        ct: Content<'_, R>,
         device: &candle_core::Device,
         lora_config: &[((String, String), LoraConfig)],
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: DeviceMapMetadata,
+        topology: Option<&Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self, candle_core::Error>
     where
@@ -239,26 +236,34 @@ impl Config<ParamsGGML, Adapter<'_>> {
     }
 }
 
-impl Config<ParamsGGUF<'_>, NoAdapter> {
+impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, NoAdapter> {
     pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
         let ParamsGGUF(
-            FileGGUF { ct, reader },
-            Device { device, mapper },
+            ct,
+            Device {
+                device,
+                mapper,
+                topology,
+            },
             attention_implementation,
         ) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
-        T::from_gguf(ct, reader, device, mapper, attention_implementation)
+        T::from_gguf(ct, device, mapper, topology, attention_implementation)
     }
 }
 
-impl Config<ParamsGGUF<'_>, Adapter<'_>> {
+impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
         let ParamsGGUF(
-            FileGGUF { ct, reader },
-            Device { device, mapper },
+            ct,
+            Device {
+                device,
+                mapper,
+                topology,
+            },
             _attention_implementation,
         ) = self.quant;
 
@@ -273,13 +278,13 @@ impl Config<ParamsGGUF<'_>, Adapter<'_>> {
         // Forwards all structured fields above into the required flattened param sequence:
         T::from_gguf(
             ct,
-            reader,
             device,
             lora_config,
             &vb,
             ordering,
             xlora_config,
             mapper,
+            topology,
             &preload_adapters,
         )
     }
@@ -289,6 +294,7 @@ use crate::{
     models::quantized_llama::ModelWeights as QLlama,
     models::quantized_phi2::ModelWeights as QPhi,
     models::quantized_phi3::ModelWeights as QPhi3,
+    models::quantized_qwen2::ModelWeights as QQwen2,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
@@ -313,12 +319,12 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 }
 
 akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2];
+    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen2];
 
-    impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf {
+    impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf {
         type Error = candle_core::Error;
 
-        fn try_from(params: ModelParams<'_, ParamsGGUF<'_>>) -> Result<Self, Self::Error> {
+        fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
             let config = params.expect_quantized("`Config` should be GGUF Quantized");
             config.try_into_model()
         }
@@ -328,10 +334,10 @@ akin! {
 akin! {
     let &models_gguf_a = [XLoraQLlama, XLoraQPhi3];
 
-    impl TryFrom<ModelParams<'_, ParamsGGUF<'_>>> for *models_gguf_a {
+    impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf_a {
         type Error = candle_core::Error;
 
-        fn try_from(params: ModelParams<'_, ParamsGGUF<'_>>) -> Result<Self, Self::Error> {
+        fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
             let config = params.expect_adapted("`Config` should be GGUF Quantized with an Adapter");
             config.try_into_model()
         }

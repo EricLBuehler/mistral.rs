@@ -1,10 +1,8 @@
-use base64::{engine::general_purpose, Engine};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     env,
     error::Error,
-    fs::{self, File},
-    io::Read,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -13,8 +11,11 @@ use std::{
 };
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens};
-use anyhow::Result;
+use crate::{
+    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    util,
+};
+use anyhow::{Context as _, Result};
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
@@ -26,8 +27,8 @@ use axum::{
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    ChatCompletionResponse, Constraint, MistralRs, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams, StopTokens as InternalStopTokens,
+    ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
+    RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
 };
 use serde::Serialize;
 
@@ -80,6 +81,7 @@ impl futures::Stream for Streamer {
                 Response::CompletionDone(_) => unreachable!(),
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -172,7 +174,7 @@ async fn parse_request(
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
-                            Either<String, Vec<IndexMap<String, String>>>,
+                            Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         message_map
@@ -233,7 +235,7 @@ async fn parse_request(
                         }
                         let mut message_map: IndexMap<
                             String,
-                            Either<String, Vec<IndexMap<String, String>>>,
+                            Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
                         let (content, url) = if items[0] == "text" {
@@ -242,13 +244,15 @@ async fn parse_request(
                             get_content_and_url(1, 0, image_messages)?
                         };
 
-                        let mut content_map = Vec::new();
+                        let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
                         let mut content_image_map = IndexMap::new();
-                        content_image_map.insert("type".to_string(), "image".to_string());
+                        content_image_map
+                            .insert("type".to_string(), Value::String("image".to_string()));
                         content_map.push(content_image_map);
                         let mut content_text_map = IndexMap::new();
-                        content_text_map.insert("type".to_string(), "text".to_string());
-                        content_text_map.insert("text".to_string(), content);
+                        content_text_map
+                            .insert("type".to_string(), Value::String("text".to_string()));
+                        content_text_map.insert("text".to_string(), Value::String(content));
                         content_map.push(content_text_map);
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
@@ -259,24 +263,14 @@ async fn parse_request(
             }
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
-                for url in image_urls {
-                    let bytes = if url.contains("http") {
-                        // Read from http
-                        match reqwest::get(url.clone()).await {
-                            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-                            Err(e) => anyhow::bail!(e),
-                        }
-                    } else if let Ok(mut f) = File::open(&url) {
-                        // Read from local file
-                        let metadata = fs::metadata(&url)?;
-                        let mut buffer = vec![0; metadata.len() as usize];
-                        f.read_exact(&mut buffer)?;
-                        buffer
-                    } else {
-                        // Decode with base64
-                        general_purpose::STANDARD.decode(url)?
-                    };
-                    images.push(image::load_from_memory(&bytes)?);
+                for url_unparsed in image_urls {
+                    let image = util::parse_image_url(&url_unparsed)
+                        .await
+                        .with_context(|| {
+                            format!("Failed to parse image resource: {}", url_unparsed)
+                        })?;
+
+                    images.push(image);
                 }
                 RequestMessage::VisionChat { messages, images }
             } else {
@@ -285,13 +279,24 @@ async fn parse_request(
         }
         Either::Right(prompt) => {
             let mut messages = Vec::new();
-            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
                 IndexMap::new();
             message_map.insert("role".to_string(), Either::Left("user".to_string()));
             message_map.insert("content".to_string(), Either::Left(prompt));
             messages.push(message_map);
             RequestMessage::Chat(messages)
         }
+    };
+
+    let dry_params = if let Some(dry_multiplier) = oairequest.dry_multiplier {
+        Some(DrySamplingParams::new_with_defaults(
+            dry_multiplier,
+            oairequest.dry_sequence_breakers,
+            oairequest.dry_base,
+            oairequest.dry_allowed_length,
+        )?)
+    } else {
+        None
     };
 
     let is_streaming = oairequest.stream.unwrap_or(false);
@@ -311,6 +316,7 @@ async fn parse_request(
                 stop_toks,
                 logits_bias: oairequest.logit_bias,
                 n_choices: oairequest.n_choices,
+                dry_params,
             },
             response: tx,
             return_logprobs: oairequest.logprobs,
@@ -324,6 +330,7 @@ async fn parse_request(
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
+            logits_processors: None,
         }),
         is_streaming,
     ))
@@ -404,6 +411,7 @@ pub async fn chatcompletions(
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
             Response::CompletionChunk(_) => unreachable!(),
+            Response::ImageGeneration(_) => unreachable!(),
         }
     }
 }

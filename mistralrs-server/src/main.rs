@@ -5,24 +5,34 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use candle_core::{quantized::GgmlDType, Device};
+use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
-    SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
-use openai::{ChatCompletionRequest, Message, ModelObjects, StopTokens};
+use openai::{
+    ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
+    StopTokens,
+};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
+
 mod chat_completion;
 mod completions;
-use crate::{chat_completion::__path_chatcompletions, completions::completions};
-
-use crate::{chat_completion::chatcompletions, openai::ModelObject};
+mod image_generation;
 mod interactive_mode;
 mod openai;
+mod util;
+
+use crate::openai::ModelObject;
+use crate::{
+    chat_completion::{__path_chatcompletions, chatcompletions},
+    completions::completions,
+    image_generation::image_generation,
+};
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -38,30 +48,16 @@ fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
 }
 
-fn parse_isq(s: &str) -> Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
-}
-
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// IP to serve on. Defaults to "0.0.0.0"
     #[arg(long)]
     serve_ip: Option<String>,
+
+    /// Integer seed to ensure reproducible random number generation.
+    #[arg(short, long)]
+    seed: Option<u64>,
 
     /// Port to serve on.
     #[arg(short, long)]
@@ -100,13 +96,9 @@ struct Args {
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
     token_source: TokenSource,
 
-    /// Enter interactive mode instead of serving a chat server. Exclusive to `--vi` (vision interactive mode).
+    /// Enter interactive mode instead of serving a chat server.
     #[clap(long, short, action)]
     interactive_mode: bool,
-
-    /// Enter vision interactive mode instead of serving a chat server. Exclusive to `--interactive-mode/-i`.
-    #[clap(long = "vi", action)]
-    vision_interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
@@ -119,8 +111,8 @@ struct Args {
     num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
-    #[arg(long = "isq", value_parser = parse_isq)]
-    in_situ_quant: Option<GgmlDType>,
+    #[arg(long = "isq", value_parser = parse_isq_value)]
+    in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is only supported on CUDA and is always automatically activated.
@@ -153,6 +145,10 @@ struct Args {
     /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
     throughput_log: bool,
+
+    /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
+    #[arg(long = "prompt-batchsize")]
+    prompt_batchsize: Option<usize>,
 }
 
 #[utoipa::path(
@@ -226,7 +222,7 @@ async fn re_isq(
 ) -> Result<String, String> {
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq(&request.ggml_type)?);
+    let request = Request::ReIsq(parse_isq_value(&request.ggml_type)?);
     state.get_sender().unwrap().send(request).await.unwrap();
     Ok(repr)
 }
@@ -236,7 +232,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
     #[openapi(
         paths(models, health, chatcompletions),
         components(
-            schemas(ModelObjects, ModelObject, ChatCompletionRequest, StopTokens, Message)),
+            schemas(ModelObjects, ModelObject, ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, StopTokens, Message)),
         tags(
             (name = "Mistral.rs", description = "Mistral.rs API")
         ),
@@ -266,6 +262,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/", get(health))
         .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
+        .route("/v1/images/generations", post(image_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
         .with_state(state)
@@ -288,16 +285,29 @@ async fn main() -> Result<()> {
         args.max_seqs = 1;
     }
 
+    let prompt_batchsize = match args.prompt_batchsize {
+        Some(0) => {
+            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+        }
+        Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+        None => None,
+    };
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
+        .with_prompt_batchsize(prompt_batchsize)
         .build()?;
 
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
     let device = Device::cuda_if_available(0)?;
+
+    if let Some(seed) = args.seed {
+        device.set_seed(seed)?;
+    }
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -445,13 +455,8 @@ async fn main() -> Result<()> {
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n);
 
-    if args.interactive_mode && args.vision_interactive_mode {
-        anyhow::bail!("Interactive mode and vision interactive mode are exclusive.");
-    } else if args.interactive_mode {
-        interactive_mode(builder.build(), false, args.throughput_log).await;
-        return Ok(());
-    } else if args.vision_interactive_mode {
-        interactive_mode(builder.build(), true, args.throughput_log).await;
+    if args.interactive_mode {
+        interactive_mode(builder.build(), args.throughput_log).await;
         return Ok(());
     }
 
@@ -462,7 +467,7 @@ async fn main() -> Result<()> {
     };
     let mistralrs = builder.build();
 
-    let port = args.port.expect("Expected port to be specified.");
+    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
 
     let app = get_router(mistralrs);
 

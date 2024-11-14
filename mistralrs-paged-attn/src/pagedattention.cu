@@ -73,6 +73,20 @@ inline __device__ float block_sum(float* red_smem, float sum) {
   return VLLM_SHFL_SYNC(sum, 0);
 }
 
+inline __device__ float fast_tanh(float x) {
+  #if defined(__CUDA_ARCH__)
+    #if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 750)
+      float y;
+      asm volatile ( "tanh.approx.f32 %0, %1; " : "=f"(y) : "f"(x));
+      return y;
+    #else
+      return ::tanhf(x);
+    #endif
+  #else
+  return std::tanh(x);
+  #endif
+}
+
 // TODO(woosuk): Merge the last two dimensions of the grid.
 // Grid: (num_heads, num_seqs, max_num_partitions).
 template<
@@ -90,6 +104,7 @@ __device__ void paged_attention_kernel(
   const scalar_t* __restrict__ v_cache,   // [num_blocks, num_kv_heads, head_size, block_size]
   const int num_kv_heads,                 // [num_heads]
   const float scale,
+  const float softcapping,
   const uint32_t* __restrict__ block_tables,   // [num_seqs, max_num_blocks_per_seq]
   const uint32_t* __restrict__ context_lens,   // [num_seqs]
   const int max_num_blocks_per_seq,
@@ -152,7 +167,7 @@ __device__ void paged_attention_kernel(
 
   // Load the query to registers.
   // Each thread in a thread group has a different part of the query.
-  // For example, if the the thread group size is 4, then the first thread in the group
+  // For example, if the thread group size is 4, then the first thread in the group
   // has 0, 4, 8, ... th vectors of the query, and the second thread has 1, 5, 9, ...
   // th vectors of the query, and so on.
   // NOTE(woosuk): Because q is split from a qkv tensor, it may not be contiguous.
@@ -190,7 +205,7 @@ __device__ void paged_attention_kernel(
 
     // Load a key to registers.
     // Each thread in a thread group has a different part of the key.
-    // For example, if the the thread group size is 4, then the first thread in the group
+    // For example, if the thread group size is 4, then the first thread in the group
     // has 0, 4, 8, ... th vectors of the key, and the second thread has 1, 5, 9, ... th
     // vectors of the key, and so on.
     for (int i = 0; i < NUM_TOKENS_PER_THREAD_GROUP; i++) {
@@ -212,6 +227,12 @@ __device__ void paged_attention_kernel(
       // Compute dot product.
       // This includes a reduction across the threads in the same thread group.
       float qk = scale * Qk_dot<scalar_t, THREAD_GROUP_SIZE>::dot(q_vecs[thread_group_offset], k_vecs);
+      
+      // Apply softcapping
+      if (softcapping != 1.0) {
+        qk = fast_tanh(qk / softcapping) * softcapping;
+      }
+
       // Add the ALiBi bias if slopes are given.
       qk += (alibi_slope != 0) ? alibi_slope * (token_idx - context_len + 1) : 0;
 
@@ -403,6 +424,7 @@ __global__ void paged_attention_v1_kernel(
   const scalar_t* __restrict__ v_cache,   // [num_blocks, num_kv_heads, head_size, block_size]
   const int num_kv_heads,                 // [num_heads]
   const float scale,
+  const float softcapping,
   const uint32_t* __restrict__ block_tables,   // [num_seqs, max_num_blocks_per_seq]
   const uint32_t* __restrict__ context_lens,   // [num_seqs]
   const int max_num_blocks_per_seq,
@@ -412,7 +434,7 @@ __global__ void paged_attention_v1_kernel(
   const int kv_head_stride) {
   paged_attention_kernel<scalar_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS>(
     /* exp_sums */ nullptr, /* max_logits */ nullptr,
-    out, q, k_cache, v_cache, num_kv_heads, scale, block_tables, context_lens,
+    out, q, k_cache, v_cache, num_kv_heads, scale, softcapping, block_tables, context_lens,
     max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride, kv_head_stride);
 }
 
@@ -432,6 +454,7 @@ __global__ void paged_attention_v2_kernel(
   const scalar_t* __restrict__ v_cache,   // [num_blocks, num_kv_heads, head_size, block_size]
   const int num_kv_heads,                 // [num_heads]
   const float scale,
+  const float softcapping,
   const uint32_t* __restrict__ block_tables,   // [num_seqs, max_num_blocks_per_seq]
   const uint32_t* __restrict__ context_lens,   // [num_seqs]
   const int max_num_blocks_per_seq,
@@ -440,7 +463,7 @@ __global__ void paged_attention_v2_kernel(
   const int kv_block_stride,
   const int kv_head_stride) {
   paged_attention_kernel<scalar_t, HEAD_SIZE, BLOCK_SIZE, NUM_THREADS, PARTITION_SIZE>(
-    exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_kv_heads, scale,
+    exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_kv_heads, scale, softcapping,
     block_tables, context_lens, max_num_blocks_per_seq, alibi_slopes,
     q_stride, kv_block_stride, kv_head_stride);
 }
@@ -558,6 +581,7 @@ __global__ void paged_attention_v2_reduce_kernel(
     reinterpret_cast<T*>(value_cache),                                                        \
     num_kv_heads,                                                                             \
     scale,                                                                                    \
+    softcapping,                                                                              \
     block_tables,                                                                             \
     context_lens,                                                                             \
     max_num_blocks_per_seq,                                                                   \
@@ -578,6 +602,7 @@ void paged_attention_v1_launcher(
   void *value_cache,
   int num_kv_heads,
   float scale,
+  float softcapping,
   uint32_t *block_tables,
   uint32_t *context_lens,
   int max_context_len,
@@ -643,6 +668,7 @@ void paged_attention_v1_launcher(
     value_cache,                                                    \
     num_kv_heads,                                                   \
     scale,                                                          \
+    softcapping,                                                    \
     block_tables,                                                   \
     context_lens,                                                   \
     max_context_len,                                                \
@@ -678,6 +704,7 @@ extern "C" void paged_attention_v1(
   void *value_cache,     // [num_blocks, num_heads, head_size, block_size]
   int32_t num_kv_heads,               // [num_heads]
   float scale,
+  float softcapping,
   uint32_t *block_tables,    // [num_seqs, max_num_blocks_per_seq]
   uint32_t *context_lens,    // [num_seqs]
   int32_t block_size,
@@ -713,6 +740,7 @@ extern "C" void paged_attention_v1(
     reinterpret_cast<T*>(value_cache),                                                        \
     num_kv_heads,                                                                             \
     scale,                                                                                    \
+    softcapping,                                                                                    \
     block_tables,                                                                             \
     context_lens,                                                                             \
     max_num_blocks_per_seq,                                                                   \
@@ -744,6 +772,7 @@ void paged_attention_v2_launcher(
   void *value_cache,
   int num_kv_heads,
   float scale,
+  float softcapping,
   uint32_t *block_tables,
   uint32_t *context_lens,
   int max_context_len,
@@ -816,6 +845,7 @@ void paged_attention_v2_launcher(
     value_cache,                                                    \
     num_kv_heads,                                                   \
     scale,                                                          \
+    softcapping,                                                    \
     block_tables,                                                   \
     context_lens,                                                   \
     max_context_len,                                                \
@@ -854,6 +884,7 @@ extern "C" void paged_attention_v2(
   void *value_cache,     // [num_blocks, num_heads, head_size, block_size]
   int32_t num_kv_heads,
   float scale,
+  float softcapping,
   uint32_t *block_tables,    // [num_seqs, max_num_blocks_per_seq]
   uint32_t *context_lens,    // [num_seqs]
   int32_t block_size,

@@ -17,15 +17,19 @@ use tracing::{info, warn};
 use crate::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
-    pipeline::chat_template::{ChatTemplate, ChatTemplateValue},
+    pipeline::{
+        chat_template::{ChatTemplate, ChatTemplateValue},
+        isq::UQFF_RESIDUAL_SAFETENSORS,
+    },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
     ModelPaths, Ordering, TokenSource,
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}";
-const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}";
+const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {
     pub adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -261,6 +265,7 @@ pub fn get_model_paths(
     quantized_filename: &Option<Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
+    loading_from_uqff: bool,
 ) -> Result<Vec<PathBuf>> {
     match &quantized_filename {
         Some(names) => {
@@ -285,11 +290,16 @@ pub fn get_model_paths(
         None => {
             // We only match these patterns for model names
             let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
+            let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id)
-                .filter(|x| safetensor_match.is_match(x) || pickle_match.is_match(x));
+            let listing = api_dir_list!(api, model_id).filter(|x| {
+                safetensor_match.is_match(x)
+                    || pickle_match.is_match(x)
+                    || quant_safetensor_match.is_match(x)
+                    || x == UQFF_RESIDUAL_SAFETENSORS
+            });
             let safetensors = listing
                 .clone()
                 .filter(|x| x.ends_with(".safetensors"))
@@ -298,12 +308,18 @@ pub fn get_model_paths(
                 .clone()
                 .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
                 .collect::<Vec<_>>();
+            let uqff_residual = listing
+                .clone()
+                .filter(|x| x == UQFF_RESIDUAL_SAFETENSORS)
+                .collect::<Vec<_>>();
             let files = if !safetensors.is_empty() {
                 // Always prefer safetensors
                 safetensors
             } else if !pickles.is_empty() {
                 // Fall back to pickle
                 pickles
+            } else if !uqff_residual.is_empty() && loading_from_uqff {
+                uqff_residual
             } else {
                 anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
             };

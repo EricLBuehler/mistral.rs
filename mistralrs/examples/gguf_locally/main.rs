@@ -1,98 +1,59 @@
-use either::Either;
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
-
+use anyhow::Result;
 use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, GGUFLoaderBuilder, MistralRs,
-    MistralRsBuilder, ModelDType, NormalRequest, Request, RequestMessage, Response, Result,
-    SamplingParams, SchedulerConfig, TokenSource,
+    GgufModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
 };
 
-/// Gets the best device, cpu, cuda if compiled with CUDA
-pub(crate) fn best_device() -> Result<Device> {
-    #[cfg(not(feature = "metal"))]
-    {
-        Device::cuda_if_available(0)
-    }
-    #[cfg(feature = "metal")]
-    {
-        Device::new_metal(0)
-    }
-}
-
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    // Select a Mistral model
-    // We do not use any files from HF servers here, and instead load the
+#[tokio::main]
+async fn main() -> Result<()> {
+    // We do not use any files from remote servers here, and instead load the
     // chat template from the specified file, and the tokenizer and model from a
-    // local GGUF file at the path `.`
-    let loader = GGUFLoaderBuilder::new(
-        Some("chat_templates/mistral.json".to_string()),
-        None,
-        ".".to_string(),
-        "mistral-7b-instruct-v0.1.Q4_K_M.gguf".to_string(),
+    // local GGUF file at the path specified.
+    let model = GgufModelBuilder::new(
+        "gguf_models/mistral_v0.1/",
+        vec!["mistral-7b-instruct-v0.1.Q4_K_M.gguf"],
     )
-    .build();
-    // Load, into a Pipeline
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &best_device()?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-        None, // No PagedAttention.
-    )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
-    )
-    .build())
-}
+    .with_chat_template("chat_templates/mistral.json")
+    .with_logging()
+    .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+    .build()
+    .await?;
 
-fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let messages = TextMessages::new()
+        .add_message(
+            TextMessageRole::System,
+            "You are an AI agent with a specialty in programming.",
+        )
+        .add_message(
+            TextMessageRole::User,
+            "Hello! How are you? Please write generic binary search function in Rust.",
+        );
 
-    let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::Chat(vec![IndexMap::from([
-            ("role".to_string(), Either::Left("user".to_string())),
-            ("content".to_string(), Either::Left("Hello!".to_string())),
-        ])]),
-        sampling_params: SamplingParams::default(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: None,
-        tool_choice: None,
-    });
-    mistralrs.get_sender()?.blocking_send(request)?;
+    let response = model.send_chat_request(messages).await?;
 
-    let response = rx.blocking_recv().unwrap();
-    match response {
-        Response::Done(c) => println!(
-            "Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content.as_ref().unwrap(),
-            c.usage.avg_prompt_tok_per_sec,
-            c.usage.avg_compl_tok_per_sec
-        ),
-        Response::InternalError(e) => panic!("Internal error: {e}"),
-        Response::ValidationError(e) => panic!("Validation error: {e}"),
-        Response::ModelError(e, c) => panic!(
-            "Model error: {e}. Response: Text: {}, Prompt T/s: {}, Completion T/s: {}",
-            c.choices[0].message.content.as_ref().unwrap(),
-            c.usage.avg_prompt_tok_per_sec,
-            c.usage.avg_compl_tok_per_sec
-        ),
-        _ => unreachable!(),
-    }
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
+    // Next example: Return some logprobs with the `RequestBuilder`, which enables higher configurability.
+    let request = RequestBuilder::new().return_logprobs(true).add_message(
+        TextMessageRole::User,
+        "Please write a mathematical equation where a few numbers are added.",
+    );
+
+    let response = model.send_chat_request(request).await?;
+
+    println!(
+        "Logprobs: {:?}",
+        &response.choices[0]
+            .logprobs
+            .as_ref()
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap()[0..3]
+    );
+
     Ok(())
 }

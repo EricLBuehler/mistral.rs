@@ -1,3 +1,4 @@
+<a name="top"></a>
 <h1 align="center">
   mistral.rs
 </h1>
@@ -9,8 +10,6 @@ Blazingly fast LLM inference.
 <p align="center">
 | <a href="https://ericlbuehler.github.io/mistral.rs/mistralrs/"><b>Rust Documentation</b></a> | <a href="https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/API.md"><b>Python Documentation</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> | <a href="https://matrix.to/#/#mistral.rs:matrix.org"><b>Matrix</b></a> |
 </p>
-
-Mistral.rs is a fast LLM inference platform supporting inference on a variety of devices, quantization, and easy-to-use application with an Open-AI API compatible HTTP server and Python bindings. 
 
 Please submit requests for new models [here](https://github.com/EricLBuehler/mistral.rs/issues/156).
 
@@ -29,75 +28,98 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
 *After following installation instructions*
 
-- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
+- Check out UQFF for prequantized models of various methods!
+    - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-    ```
-    ./mistralrs_server -i toml -f toml-selectors/anymoe_lora.toml
-    ```
-
-- 🦙 Run the Llama 3.1 model
-
-    ```
-    ./mistralrs_server -i plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
-    ```
-
-- φ³ Run the Phi 3 model with 128K context window
-
-    ```
-    ./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
-    ```
-
-- φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
+- 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
     <h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
 
     ```
-    ./mistralrs_server --port 1234 vision-plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+    ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+    ```
+
+- 🌟📷 Run the **Qwen2-VL** Model: [documentation and guide here](docs/QWEN2VL.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
+    ```
+
+- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
+
+    ```
+    ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
+    ```
+- φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
+
+    ```
+    ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
+    ```
+
+- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+
+    ```
+    ./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+    ```
+
+- φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
+
+    ```
+    ./mistralrs-server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
+    ```
+
+- 🌲📷 Run the FLUX.1 diffusion model: [documentation and guide here](docs/FLUX.md)
+
+    <img src="https://github.com/user-attachments/assets/82bf5009-e3e9-402b-acf9-c48a52c7721b" width = "400" height = "267">
+
+    ```
+    ./mistralrs-server --port 1234 diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
     ```
 
 - Other models: [see a support matrix](#support-matrix) and [how to run them](#run-with-the-cli)
 
-Mistal.rs supports several model categories:
-- text
-- vision (see [the docs](docs/VISION_MODELS.md))
+Mistral.rs supports several model categories:
+- Text to Text
+- Text+Image to Text: Vision (see [the docs](docs/VISION_MODELS.md))
+- Text to Image: Image Generation (see [the docs](docs/IMAGEGEN_MODELS.md))
 
 ## Description
+**Easy**:
+- Lightweight OpenAI API compatible HTTP server
+- Python API
+- Grammar support with Regex and Yacc
+- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
+
 **Fast**:
-- Quantized model support: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit for faster inference and optimized memory usage.
-- Continuous batching and PagedAttention support.
-- Prefix caching.
+- Apple silicon support: ARM NEON, Accelerate, Metal
+- Accelerated CPU inference with MKL, AVX support
+- CUDA support with flash attention and cuDNN.
 - [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
-**Accelerator support**:
-- Apple silicon support with the Metal framework.
-- CPU inference with `mkl`, `accelerate` support and optimized backend.
-- CUDA support with flash attention and cuDNN.
-
-**Easy**:
-- Lightweight OpenAI API compatible HTTP server.
-- Python API.
-- Grammar support with Regex and Yacc.
-- [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from Hugging Face Hub by quantizing them after loading instead of creating a GGUF file.
-    - This loads the ISQ-able weights on CPU before quantizing with ISQ and then moving to the device to avoid memory spikes.
-    - Extremely fast due to working in parallel
+**Quantization**:
+- [Details](docs/QUANTS.md)
+- GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
+- GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
+- HQQ: 4-bit and 8 bit, with ISQ support
 
 **Powerful**:
-- Fast LoRA support with weight merging.
-- First X-LoRA inference platform with first class support.
-- Speculative Decoding: Mix supported models as the draft model or the target model
-- Dynamic LoRA adapter swapping at runtime with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
-- AnyMoE: Build a memory-efficient MoE model from anything, in seconds
-    - [Paper](https://arxiv.org/abs/2405.19076)
-    - [Docs](docs/ANYMOE.md)
-- PagedAttention: [docs](docs/PAGED_ATTENTION.md)
-- Various sampling techniques:
-    - Top K
-    - Top P
-    - Min P
-    - Please suggest more by raising an issue!
+- LoRA support with weight merging
+- First X-LoRA inference platform with first class support
+- [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
+- Various [sampling and penalty](docs/SAMPLING.mds) methods
 - Tool calling: [docs](docs/TOOL_CALLING.md)
+- Prompt chunking: process large prompts in a more manageable way
 
+**Advanced features**:
+- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
+- Prefix caching
+- [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
+- [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
+- Speculative Decoding: Mix supported models as the draft model or the target model
+- Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
+
+**Documentation for mistral.rs can be found [here](docs/README.md).**
 
 This is a demo of interactive mode with streaming running Phi 3 128k mini with quantization via ISQ to Q4K.
 
@@ -114,17 +136,20 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |--|--|--|--|--|
 |Mistral v0.1/v0.2/v0.3|✅|✅|✅|✅|
 |Gemma|✅|✅|✅|✅|
-|Llama 2/3|✅|✅|✅|✅|
+|Llama 3.1/3.2|✅|✅|✅|✅|
 |Mixtral|✅|✅|✅| |
 |Phi 2|✅|✅|✅|✅|
 |Phi 3|✅|✅|✅|✅|
-|Qwen 2|✅| |✅|✅|
+|Phi 3.5 MoE|✅| |✅| |
+|Qwen 2.5|✅| |✅|✅|
 |Phi 3 Vision|✅| |✅|✅|
 |Idefics 2|✅| |✅|✅|
 |Gemma 2|✅|✅|✅|✅|
 |Starcoder 2|✅|✅|✅|✅|
 |LLaVa Next|✅| |✅|✅|
 |LLaVa|✅| |✅|✅|
+|Llama 3.2 Vision|✅| |✅| |
+|Qwen2-VL|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -140,7 +165,7 @@ Rust multithreaded/async API for easy integration into any application.
 
 Python API for mistral.rs.
 
-- [Installation including PyPI](mistralrs-pyo3/README.md)
+- [Installation including PyPI](mistralrs-pyo3/_README.md)
 - [Docs](mistralrs-pyo3/API.md)
 - [Examples](examples/python)
 - [Cookbook](examples/python/cookbook.ipynb)
@@ -163,43 +188,32 @@ OpenAI API compatible API server
 
 ## Supported accelerators
 - CUDA:
-  - Enable with `cuda` feature: `--features cuda`
-  - Flash attention support with `flash-attn` feature, only applicable to non-quantized models: `--features flash-attn`
-  - cuDNNsupport with `cudnn` feature: `--features cudnn`
+  - Compile with the `cuda` feature: `--features cuda`
+  - FlashAttention support: compile with the `flash-attn` feature
+  - cuDNN support: compile with the`cudnn` feature: `--features cudnn`
 - Metal:
-  - Enable with `metal` feature: `--features metal`
+  - Compile with the `metal` feature: `--features metal`
 - CPU:
-  - Intel MKL with `mkl` feature: `--features mkl`
-  - Apple Accelerate with `accelerate` feature: `--features accelerate`
+  - Intel MKL: compile with the `mkl` feature: `--features mkl`
+  - Apple Accelerate: compile with the `accelerate` feature: `--features accelerate`
+  - ARM NEON and AVX are used automatically
 
 Enabling features is done by passing `--features ...` to the build system. When using `cargo run` or `maturin develop`, pass the `--features` flag before the `--` separating build flags from runtime flags.
 
 - To enable a single feature like `metal`: `cargo build --release --features metal`.
 - To enable multiple features, specify them in quotes: `cargo build --release --features "cuda flash-attn cudnn"`.
 
-## Benchmarks
-|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
-|-|-|-|-|-|
-|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-
-> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
-
-Please submit more benchmarks via raising an issue!
-
 ## Installation and Build
 
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.2.3)
+> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.1)
 
-- Install the [Python package here](mistralrs-pyo3/README.md).
+- Install the [Python package here](mistralrs-pyo3/_README.md).
+- The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
 
-1) Install required packages
+1) Install required packages:
     - `OpenSSL` (*Example on Ubuntu:* `sudo apt install libssl-dev`)
     - <b>*Linux only:*</b> `pkg-config` (*Example on Ubuntu:* `sudo apt install pkg-config`)
 
@@ -217,13 +231,13 @@ Please submit more benchmarks via raising an issue!
     huggingface-cli login
     ```
 
-4) Download the code
+4) Download the code:
     ```bash
     git clone https://github.com/EricLBuehler/mistral.rs.git
     cd mistral.rs
     ```
 
-5) Build or install
+5) Build or install:
     - Base build command
         ```bash
         cargo build --release
@@ -254,23 +268,24 @@ Please submit more benchmarks via raising an issue!
         ```bash
         cargo install --path mistralrs-server --features cuda
         ```
-6) The build process will output a binary `misralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
+6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
     
     *Example on Ubuntu:*
     ```
-    cp ./target/release/mistralrs-server ./mistralrs_server
+    cp ./target/release/mistralrs-server ./mistralrs-server
     ```
 
-7) Use our APIs and integrations 
+7) Use our APIs and integrations: 
     
     [APIs and integrations list](#apis-and-integrations)
 
 ## Getting models
 
-There are 2 ways to run a model with mistral.rs:
+There are 2 ways to get models with mistral.rs:
 - From Hugging Face Hub (easiest)
 - From local files
-    - Running a GGUF model fully locally
+    - Running a GGUF model
+    - Specify local paths
 
 ### Getting models from Hugging Face Hub
 
@@ -284,7 +299,7 @@ Mistral.rs can automatically download models from HF Hub. To access gated models
 This is passed in the following ways:
 - Command line:
 ```bash
-./mistralrs_server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server --token-source none -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 - Python:
 
@@ -296,7 +311,7 @@ If token cannot be loaded, no token will be used (i.e. effectively using `none`)
 
 You can also instruct mistral.rs to load models fully locally by modifying the `*_model_id` arguments or options:
 ```bash
-./mistralrs_server --port 1234 plain -m . -a mistral
+./mistralrs-server --port 1234 plain -m . -a mistral
 ```
 
 Throughout mistral.rs, any model ID argument or option may be a local path and should contain the following files for each model ID option:
@@ -316,24 +331,51 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 - `--adapters-model-id` (server) or `adapters_model_id` (python/rust):
   - Adapters `.safetensors` and `adapter_config.json` files in their respective directories
 
-### Running GGUF models locally
+### Running GGUF models
 
-To run GGUF models fully locally, the only mandatory arguments are the quantized model ID and the quantized filename. 
+To run GGUF models, the only mandatory arguments are the quantized model ID and the quantized filename. The quantized model ID can be a HF model ID.
 
-#### Chat template
+GGUF models contain a tokenizer. However, mistral.rs allows you to run the model with a tokenizer from a specified model, typically the official one. This means there are two options:
+1) [With a specified tokenizer](#with-a-specified-tokenizer)
+1) [With the builtin tokenizer](#with-the-builtin-tokenizer)
+
+#### With a specified tokenizer
+
+Running with a tokenizer model ID enables you to specify the model ID to source the tokenizer from:
+
+```bash
+./mistralrs-server gguf -m bartowski/Phi-3.5-mini-instruct-GGUF -f Phi-3.5-mini-instruct-Q4_K_M.gguf -t microsoft/Phi-3.5-mini-instruct
+```
+
+If the specified tokenizer model ID contains a `tokenizer.json`, then it will be used over the GGUF tokenizer.
+
+#### With the builtin tokenizer
+
+Using the builtin tokenizer:
+
+```bash
+./mistralrs-server gguf -m bartowski/Phi-3.5-mini-instruct-GGUF -f Phi-3.5-mini-instruct-Q4_K_M.gguf
+```
+
+(or using a local file):
+
+```bash
+./mistralrs-server gguf -m path/to/files -f Phi-3.5-mini-instruct-Q4_K_M.gguf
+```
+
+There are a few more ways to configure:
+
+**Chat template:**
 
 The chat template can be automatically detected and loaded from the GGUF file if no other chat template source is specified including the tokenizer model ID.
 
-you do not need to specify the tokenizer model ID argument and instead should pass a path to the
-chat template JSON file (examples [here](chat_templates), you will need to create your own by specifying the chat template and `bos`/`eos` tokens) as well as specifying a local model ID. For example:
+If that does not work, you can either [provide a tokenizer](#with-a-specified-tokenizer) (recommended), or specify a custom chat template.
 
 ```bash
-./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3-mini-128k-instruct-q4_K_M.gguf
+./mistralrs-server --chat-template <chat_template> gguf -m . -f Phi-3.5-mini-instruct-Q4_K_M.gguf
 ```
 
-If you do not specify a chat template, then the `--tok-model-id`/`-t` tokenizer model ID argument is expected where the `tokenizer_config.json` file should be provided. If that model ID contains a `tokenizer.json`, then that will be used over the GGUF tokenizer.
-
-#### Tokenizer
+**Tokenizer**
 
 The following tokenizer model types are currently supported. If you would like one to be added, please raise an issue. Otherwise,
 please consider using the method demonstrated in examples below, where the tokenizer is sourced from Hugging Face.
@@ -344,13 +386,13 @@ please consider using the method demonstrated in examples below, where the token
 
 ## Run with the CLI
 
-Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs_server --help` to see the subcommands.
-
-Additionally, for models without quantization, the model architecture should be provided as the `--arch` or `-a` argument in contrast to GGUF models which encode the architecture in the file. 
+Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
 
 ### Architecture for plain models
 
 > Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+
+If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
 - `mistral`
 - `gemma`
@@ -358,6 +400,7 @@ Additionally, for models without quantization, the model architecture should be 
 - `llama`
 - `phi2`
 - `phi3`
+- `phi3.5moe`
 - `qwen2`
 - `gemma2`
 - `starcoder2`
@@ -370,6 +413,8 @@ Additionally, for models without quantization, the model architecture should be 
 - `idefics2`
 - `llava_next`
 - `llava`
+- `vllama`
+- `qwen2vl`
 
 ### Supported GGUF architectures
 
@@ -379,69 +424,39 @@ Additionally, for models without quantization, the model architecture should be 
 - `phi2`
 - `phi3`
 - `starcoder2`
+- `qwen2`
 
 **With adapters:**
 
 - `llama`
 - `phi3`
 
-**Interactive mode:**
+### Interactive mode
 
 You can launch interactive mode, a simple chat application running in the terminal, by passing `-i`:
 
 ```bash
-./mistralrs_server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
+./mistralrs-server -i plain -m microsoft/Phi-3-mini-128k-instruct -a phi3
 ```
 
-**Interactive mode for vision models:**
-
-You can launch interactive mode for vision models, a simple chat application running in the terminal, by passing `-i`:
+Vision models work too:
 
 ```bash
-./mistralrs_server --vi plain -m microsoft/Phi-3-vision-128k-instruct -a phi3v
+./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
 ```
 
-## More quick examples:
-
-- X-LoRA with no quantization
-
-To start an X-LoRA server with the exactly as presented in [the paper](https://arxiv.org/abs/2402.07148):
+And even diffusion models:
 
 ```bash
-./mistralrs_server --port 1234 x-lora-plain -o orderings/xlora-paper-ordering.json -x lamm-mit/x-lora
-```
-- LoRA with a model from GGUF
-
-To start an LoRA server with adapters from the X-LoRA paper (you should modify the ordering file to use only one adapter, as the adapter static scalings are all 1 and so the signal will become distorted):
-
-```bash
-./mistralrs_server --port 1234 lora-gguf -o orderings/xlora-paper-ordering.json -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q8_0.gguf -a lamm-mit/x-lora
+./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
 ```
 
-Normally with a LoRA model you would use a custom ordering file. However, for this example we use the ordering from the X-LoRA paper because we are using the adapters from the X-LoRA paper.
+### OpenAI HTTP server
 
-- With a model from GGUF
-
-To start a server running Mistral from GGUF:
+You can an HTTP server
 
 ```bash
-./mistralrs_server --port 1234 gguf -t mistralai/Mistral-7B-Instruct-v0.1 -m TheBloke/Mistral-7B-Instruct-v0.1-GGUF -f mistral-7b-instruct-v0.1.Q4_K_M.gguf
-```
-
-- With a model from GGML
-
-To start a server running Llama from GGML:
-
-```bash
-./mistralrs_server --port 1234 ggml -t meta-llama/Llama-2-13b-chat-hf -m TheBloke/Llama-2-13B-chat-GGML -f llama-2-13b-chat.ggmlv3.q4_K_M.bin
-```
-
-- Plain model from safetensors
-
-To start a server running Mistral from safetensors.
-
-```bash
-./mistralrs_server --port 1234 plain -m mistralai/Mistral-7B-Instruct-v0.1 -a mistral
+./mistralrs-server --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
 ```
 
 ### Structured selection with a `.toml` file
@@ -450,10 +465,23 @@ We provide a method to select models with a `.toml` file. The keys are the same 
 
 Example:
 ```bash
-./mistralrs_server --port 1234 toml -f toml-selectors/gguf.toml
+./mistralrs-server --port 1234 toml -f toml-selectors/gguf.toml
 ```
 
 ---
+
+## Benchmarks
+|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
+|-|-|-|-|-|
+|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
+|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
+
+> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
+
+Please submit more benchmarks via raising an issue!
 
 ## Supported models
 
@@ -466,13 +494,15 @@ Example:
 |Mixtral|✅| |✅|
 |Phi 2|✅| |✅|
 |Phi 3|✅| |✅|
-|Qwen 2| | |✅|
+|Phi 3.5 MoE| | |✅|
+|Qwen 2.5| | |✅|
 |Phi 3 Vision| | |✅|
 |Idefics 2| | |✅|
 |Gemma 2| | |✅|
 |Starcoder 2| |✅|✅|
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
+|Llama 3.2 Vision| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -491,13 +521,15 @@ Example:
 |Mixtral|✅|✅| |
 |Phi 2|✅| | |
 |Phi 3|✅|✅| |
-|Qwen 2| | | |
+|Phi 3.5 MoE| | | |
+|Qwen 2.5| | | |
 |Phi 3 Vision| | | |
 |Idefics 2| | | |
 |Gemma 2|✅| | |
 |Starcoder 2|✅| | |
 |LLaVa Next| | | |
 |LLaVa| | | |
+|Llama 3.2 Vision| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -505,16 +537,18 @@ Example:
 |Mistral 7B|✅|
 |Gemma|✅|
 |Llama|✅|
-|Mixtral|✅|
+|Mixtral| |
 |Phi 2|✅|
 |Phi 3|✅|
-|Qwen 2|✅|
+|Phi 3.5 MoE| |
+|Qwen 2.5|✅|
 |Phi 3 Vision| |
 |Idefics 2| |
 |Gemma 2|✅|
 |Starcoder 2|✅|
 |LLaVa Next|✅|
 |LLaVa|✅|
+|Llama 3.2 Vision| |
 
 
 ### Using derivative model
@@ -535,11 +569,11 @@ It is also important to check the chat template style of the model. If the HF hu
 
 For example, when using a Zephyr model:
 
-`./mistralrs_server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
+`./mistralrs-server --port 1234 --log output.txt gguf -t HuggingFaceH4/zephyr-7b-beta -m TheBloke/zephyr-7B-beta-GGUF -f zephyr-7b-beta.Q5_0.gguf`
 
 ### Adapter model support: X-LoRA and LoRA
 
-An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. Please find docs for adapter models [here](docs/ADAPTER_MODELS.md)
+An adapter model is a model with X-LoRA or LoRA. X-LoRA support is provided by selecting the `x-lora-*` architecture, and LoRA support by selecting the `lora-*` architecture. Please find docs for adapter models [here](docs/ADAPTER_MODELS.md). Examples may be found [here](docs/LORA_XLORA.md).
 
 ### Chat Templates and Tokenizer
 Mistral.rs will attempt to automatically load a chat template and tokenizer. This enables high flexibility across models and ensures accurate and flexible chat templating. However, this behavior can be customized. Please find detailed documentation [here](docs/CHAT_TOK.md).
@@ -564,3 +598,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
+
+<p align="right">
+  <a href="#top">⬆️ Back to Top</a>
+</p>

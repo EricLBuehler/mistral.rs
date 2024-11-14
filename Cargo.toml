@@ -6,14 +6,13 @@ members = [
     "mistralrs",
     "mistralrs-bench",
     "mistralrs-vision",
+    "mistralrs-quant",
 ]
-exclude = [
-    "mistralrs-paged_attn",
-]
+exclude = ["mistralrs-paged_attn"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.3"
+version = "0.3.2"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -24,8 +23,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/spiceai/candle.git", rev = "30a1278a4a12516c151a14f6ee17c109305e8995" }
-candle-nn = { git = "https://github.com/spiceai/candle.git", rev = "30a1278a4a12516c151a14f6ee17c109305e8995" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -35,45 +34,33 @@ intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 futures = "0.3"
-clap = { version = "4.5.1", features = ["derive"] }
-pyo3 = { version = "0.22.0", features = ["full", "extension-module", "either"] }
+clap = { version = "4.5.1", features = ["derive", "wrap_help"] }
+pyo3 = { version = "0.22.4", features = ["full", "extension-module", "either"] }
 tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
 # All features but avif, avif increases the msrv dramatically
-image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds', 'exr', 'ff', 'gif', 'hdr', 'ico', 'jpeg', 'png', 'pnm', 'qoi', 'tga', 'tiff', 'webp']}
+image = { version = "0.25.1", default-features = false, features = [
+    'bmp',
+    'dds',
+    'exr',
+    'ff',
+    'gif',
+    'hdr',
+    'ico',
+    'jpeg',
+    'png',
+    'pnm',
+    'qoi',
+    'tga',
+    'tiff',
+    'webp',
+] }
 reqwest = { version = "0.12.4", features = ["blocking"] }
 base64 = "0.22.1"
 half = "2.4.0"
-
-# Config for 'cargo dist'
-[workspace.metadata.dist]
-# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.17.0"
-# CI backends to support
-ci = "github"
-# The installers to generate for each app
-installers = ["shell"]
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# Publish jobs to run in CI
-pr-run-mode = "plan"
-# Whether to auto-include files like READMEs, LICENSE, and CHANGELOGs (default true)
-auto-includes = false
-# Whether to install an updater program
-install-updater = true
-
-[profile.profiling]
-inherits = "release"
-debug = true
-
-[profile.dev]
-opt-level = 3
-
-# The profile that 'cargo dist' will build with
-[profile.dist]
-inherits = "release"
-lto = "thin"
-
-[profile.release]
-codegen-units = 1
-lto = "fat"
+rayon = "1.1.0"
+url = "2.5.2"
+data-url = "0.3.1"
+buildstructor = "0.5.4"
+float8 = "0.1.1"
+regex = "1.10.6"

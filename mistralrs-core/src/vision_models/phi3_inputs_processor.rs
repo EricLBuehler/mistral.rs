@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
@@ -8,13 +8,15 @@ use itertools::Itertools;
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
+use tracing::warn;
 
 use crate::{
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputsProcessor, InputsProcessorType, MessagesAction, Processor, ProcessorCreator,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        ProcessorCreator,
     },
     sequence::Sequence,
 };
@@ -68,7 +70,7 @@ impl InputsProcessor for Phi3InputsProcessor {
     }
     fn process_inputs(
         &self,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         is_xlora: bool,
@@ -77,24 +79,38 @@ impl InputsProcessor for Phi3InputsProcessor {
         last_n_context_len: Option<(usize, usize)>,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-    ) -> anyhow::Result<Box<dyn Any>> {
+        prompt_batchsize: Option<NonZeroUsize>,
+    ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
-            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Cannot make inputs for X-LoRA vision model.",
+            ))));
         }
         if no_kv_cache {
-            anyhow::bail!("Vision model must have kv cache.");
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Vision model must have kv cache.",
+            ))));
         }
+        // TODO(EricLBuehler): support this? Would require some handling of image tokens.
+        if prompt_batchsize.is_some() {
+            warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
+        }
+        let Some(tokenizer) = tokenizer else {
+            return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                "Phi3InputProcessor requires a specified tokenizer.",
+            ))));
+        };
 
         let config = other_config
             .clone()
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-        let (pixel_values, image_sizes, num_img_tokens, n_images) = if is_prompt
-            && input_seqs
-                .iter()
-                .map(|seq| seq.images().is_some())
-                .all(|x| x)
-        {
+
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+
+        let (pixel_values, image_sizes, num_img_tokens, n_images) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
@@ -110,54 +126,87 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_attention_mask: _,
                     image_sizes,
                     num_img_tokens,
-                } = self.preprocess(imgs, config, device)?;
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                } = self
+                    .preprocess(
+                        imgs,
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
+                    .expect("Preprocessor failed");
                 let image_sizes = image_sizes.unwrap();
                 pixel_values_accum.push(pixel_values);
                 image_sizes_accum.push(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
             (
-                Some(Tensor::cat(&pixel_values_accum, 0)?),
+                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
                 n_images,
             )
         } else {
-            let text_models_inputs_processor::ModelInputs {
-                input_ids,
-                input_ids_full: _,
-                seqlen_offsets,
-                seqlen_offsets_full: _,
-                seqlen_offsets_kernel,
-                seqlen_offsets_kernel_full: _,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-            } = *text_models_inputs_processor::TextInputsProcessor
-                .process_inputs(
-                    tokenizer,
-                    input_seqs,
-                    is_prompt,
-                    is_xlora,
-                    device,
-                    no_kv_cache,
-                    last_n_context_len,
-                    other_config,
-                    paged_attn_metadata,
-                )?
-                .downcast::<text_models_inputs_processor::ModelInputs>()
-                .expect("Downcast failed.");
+            return Box::new(
+                text_models_inputs_processor::TextInputsProcessor
+                    .process_inputs(
+                        Some(tokenizer),
+                        input_seqs,
+                        is_prompt,
+                        is_xlora,
+                        device,
+                        no_kv_cache,
+                        last_n_context_len,
+                        other_config,
+                        paged_attn_metadata,
+                        None, // TODO
+                    )
+                    .map(|metadata| {
+                        let InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        } = metadata?;
 
-            return Ok(Box::new(ModelInputs {
-                input_ids,
-                seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                position_ids,
-                pixel_values: None,
-                model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes: None }),
-                paged_attn_meta,
-            }));
+                        let text_models_inputs_processor::ModelInputs {
+                            input_ids,
+                            input_ids_full: _,
+                            seqlen_offsets,
+                            seqlen_offsets_full: _,
+                            seqlen_offsets_kernel,
+                            seqlen_offsets_kernel_full: _,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta,
+                            flash_meta,
+                            flash_meta_full: _,
+                        } = *inputs
+                            .downcast::<text_models_inputs_processor::ModelInputs>()
+                            .expect("Downcast failed.");
+
+                        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                            input_ids,
+                            seqlen_offsets,
+                            seqlen_offsets_kernel,
+                            context_lens,
+                            position_ids,
+                            pixel_values: None,
+                            model_specific_args: Box::new(Phi3VisionSpecificArgs {
+                                image_sizes: None,
+                            }),
+                            paged_attn_meta,
+                            flash_meta,
+                        });
+                        Ok(InputProcessorOutput {
+                            inputs,
+                            seq_indices,
+                        })
+                    }),
+            );
         };
 
         let mut toks = Vec::new();
@@ -169,7 +218,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     .collect::<Vec<_>>(),
                 false,
             )
-            .map_err(anyhow::Error::msg)?;
+            .expect("Decode failed");
 
         for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
             input_seqs
@@ -183,7 +232,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .collect::<Vec<_>>();
             let prompt_chunks = tokenizer
                 .encode_batch(splits, true)
-                .map_err(anyhow::Error::msg)?
+                .expect("Encode failed")
                 .into_iter()
                 .map(|enc| enc.get_ids().to_vec())
                 .collect::<Vec<_>>();
@@ -211,11 +260,15 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .collect::<Vec<_>>();
             // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
             if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
-                anyhow::bail!("`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].");
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].",
+                ))));
             }
             // Total images must be the same as the number of image tags
             if unique_image_ids.len() != n_images {
-                anyhow::bail!("Total images must be the same as the number of image tags.");
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "Total images must be the same as the number of image tags.",
+                ))));
             }
 
             // Use the TryInto + unwrap_or to handle case when id==0
@@ -254,21 +307,15 @@ impl InputsProcessor for Phi3InputsProcessor {
             toks.push(input_ids);
         }
 
-        let text_models_inputs_processor::InputMetadata {
-            input,
-            positions,
-            positions_kernel,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
-        } = if is_prompt {
+        let iter = if is_prompt {
             get_prompt_input(
                 toks,
                 input_seqs,
                 device,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         } else {
             get_completion_input(
                 toks,
@@ -277,18 +324,41 @@ impl InputsProcessor for Phi3InputsProcessor {
                 no_kv_cache,
                 last_n_context_len,
                 paged_attn_metadata.as_mut(),
-            )?
+                None, // TODO: evaluate if it is possible to batch this
+            )
         };
 
-        Ok(Box::new(ModelInputs {
-            input_ids: input,
-            seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
-            context_lens,
-            position_ids,
-            pixel_values,
-            model_specific_args: Box::new(Phi3VisionSpecificArgs { image_sizes }),
-            paged_attn_meta,
+        Box::new(iter.into_iter().map(move |metadata| {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        positions_kernel,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                    },
+                seq_indices,
+            } = metadata?;
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                seqlen_offsets_kernel: positions_kernel,
+                context_lens,
+                position_ids,
+                pixel_values: pixel_values.clone(),
+                model_specific_args: Box::new(Phi3VisionSpecificArgs {
+                    image_sizes: image_sizes.clone(),
+                }),
+                paged_attn_meta,
+                flash_meta,
+            });
+            Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            })
         }))
     }
 }
@@ -394,11 +464,14 @@ impl ImagePreProcessor for Phi3InputsProcessor {
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
+        (_, _): (usize, usize),
     ) -> Result<PreprocessedImages> {
         // If no images, will not call this.
         assert!(!images.is_empty());
+        assert!(videos.is_empty());
 
         let mut image_sizes = Vec::new();
         let mut padded_images = Vec::new();
@@ -479,6 +552,11 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             image_sizes: Some((image_sizes.0, image_sizes.1)),
             pixel_attention_mask: None,
             num_img_tokens: Some(num_img_tokens),
+            aspect_ratio_ids: None,
+            aspect_ratio_mask: None,
+            num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
         })
     }
 }

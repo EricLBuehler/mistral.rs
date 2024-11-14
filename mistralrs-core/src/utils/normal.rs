@@ -5,7 +5,8 @@ use candle_core::{DType, Device, Tensor};
 use serde::Deserialize;
 use tracing::info;
 
-#[derive(Clone, Copy, Default, Debug, Deserialize)]
+#[derive(Clone, Copy, Default, Debug, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 /// DType for the model.
 ///
 /// If the model is quantized, this is ignored so it is reasonable to use the [`Default`] impl.
@@ -49,19 +50,11 @@ impl FromStr for ModelDType {
 
 /// Type which can be converted to a DType
 pub trait TryIntoDType {
-    fn try_into_dtype(&self, device: &Device) -> Result<DType>;
-    fn try_into_dtype_all(&self, devices: &[Device]) -> Result<DType>;
+    fn try_into_dtype(&self, devices: &[&Device]) -> Result<DType>;
 }
 
 impl TryIntoDType for DType {
-    fn try_into_dtype(&self, _: &Device) -> Result<DType> {
-        info!("DType selected is {self:?}.");
-        if !matches!(self, DType::BF16 | DType::F32 | DType::F64 | DType::F16) {
-            anyhow::bail!("DType must be one of BF16, F16, F32, F64");
-        }
-        Ok(*self)
-    }
-    fn try_into_dtype_all(&self, _: &[Device]) -> Result<DType> {
+    fn try_into_dtype(&self, _: &[&Device]) -> Result<DType> {
         info!("DType selected is {self:?}.");
         if !matches!(self, DType::BF16 | DType::F32 | DType::F64 | DType::F16) {
             anyhow::bail!("DType must be one of BF16, F16, F32, F64");
@@ -122,29 +115,7 @@ fn get_dtypes() -> Vec<DType> {
     get_dtypes_non_cuda()
 }
 
-fn determine_auto_dtype(device: &Device) -> candle_core::Result<DType> {
-    for dtype in get_dtypes() {
-        // Try a matmul
-        let x = Tensor::zeros((2, 2), dtype, device)?;
-        let y = x.matmul(&x);
-        match y {
-            Ok(_) => return Ok(dtype),
-            Err(e) => match e {
-                // For CUDA
-                candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
-                // Accelerate backend doesn't support f16/bf16
-                // Metal backend doesn't support f16
-                candle_core::Error::Msg(_) => continue,
-                // This is when the metal backend doesn't support bf16
-                candle_core::Error::Metal(_) => continue,
-                other => return Err(other),
-            },
-        }
-    }
-    Ok(DType::F32)
-}
-
-fn determine_auto_dtype_all(devices: &[Device]) -> candle_core::Result<DType> {
+fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
     let dev_dtypes = get_dtypes();
     for dtype in get_dtypes_non_cuda()
         .iter()
@@ -168,6 +139,10 @@ fn determine_auto_dtype_all(devices: &[Device]) -> candle_core::Result<DType> {
                         // Accelerate backend doesn't support f16/bf16
                         // Metal backend doesn't support f16
                         candle_core::Error::Msg(_) => continue,
+                        // This is when the metal backend doesn't support bf16
+                        candle_core::Error::Metal(_) => continue,
+                        // If running with RUST_BACKTRACE=1
+                        candle_core::Error::WithBacktrace { .. } => continue,
                         other => return Err(other),
                     },
                 }
@@ -178,17 +153,7 @@ fn determine_auto_dtype_all(devices: &[Device]) -> candle_core::Result<DType> {
 }
 
 impl TryIntoDType for ModelDType {
-    fn try_into_dtype(&self, device: &Device) -> Result<DType> {
-        let dtype = match self {
-            Self::Auto => Ok(determine_auto_dtype(device).map_err(anyhow::Error::msg)?),
-            Self::BF16 => Ok(DType::BF16),
-            Self::F16 => Ok(DType::F16),
-            Self::F32 => Ok(DType::F32),
-        };
-        info!("DType selected is {:?}.", dtype.as_ref().unwrap());
-        dtype
-    }
-    fn try_into_dtype_all(&self, devices: &[Device]) -> Result<DType> {
+    fn try_into_dtype(&self, devices: &[&Device]) -> Result<DType> {
         let dtype = match self {
             Self::Auto => Ok(determine_auto_dtype_all(devices).map_err(anyhow::Error::msg)?),
             Self::BF16 => Ok(DType::BF16),

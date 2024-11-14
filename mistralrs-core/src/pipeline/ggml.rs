@@ -5,8 +5,8 @@ use super::{
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -22,20 +22,22 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, TryIntoDType,
-    DEBUG,
+    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType, DEBUG,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
     xlora_models::XLoraQLlama,
 };
 use anyhow::Result;
-use candle_core::quantized::{ggml_file, GgmlDType};
+use candle_core::quantized::ggml_file;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -73,10 +75,12 @@ pub struct GGMLLoader {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
     pub gqa: usize,
+    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
 }
 
 #[derive(Default)]
@@ -96,6 +100,7 @@ pub struct GGMLLoaderBuilder {
 }
 
 impl GGMLLoaderBuilder {
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: GGMLSpecificConfig,
         chat_template: Option<String>,
@@ -104,7 +109,7 @@ impl GGMLLoaderBuilder {
         quantized_model_id: String,
         quantized_filename: String,
     ) -> Self {
-        let kind = ModelKind::Quantized {
+        let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Ggml,
         };
 
@@ -118,6 +123,12 @@ impl GGMLLoaderBuilder {
             quantized_model_id,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(
@@ -232,7 +243,7 @@ impl Loader for GGMLLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
 
@@ -241,9 +252,29 @@ impl Loader for GGMLLoader {
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
-        if !mapper.is_dummy() {
+        if !(mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map())))
+        {
             warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
         }
+        if !(mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map())))
+            && paged_attn_config.is_some()
+        {
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
         if !mapper.is_dummy() && paged_attn_config.is_some() {
             warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
@@ -309,8 +340,8 @@ impl Loader for GGMLLoader {
         // Config into model:
         // NOTE: No architecture to infer like GGUF, Llama model is implicitly matched
         let model = match self.kind {
-            ModelKind::Quantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
-            ModelKind::AdapterQuantized { .. } => {
+            ModelKind::GgufQuantized { .. } => Model::Llama(QLlama::try_from(model_config)?),
+            ModelKind::GgufAdapter { .. } => {
                 Model::XLoraLlama(XLoraQLlama::try_from(model_config)?)
             }
             _ => unreachable!(),
@@ -346,7 +377,7 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: Some(tok_trie),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -356,6 +387,7 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
         })))
     }
@@ -369,7 +401,7 @@ impl Loader for GGMLLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
@@ -379,7 +411,8 @@ impl Loader for GGMLLoader {
             self,
             self.quantized_model_id,
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
-            silent
+            silent,
+            false // Never loading UQFF
         );
         self.load_model_from_path(
             &paths?,
@@ -405,8 +438,8 @@ impl Loader for GGMLLoader {
 }
 
 impl PreProcessingMixin for GGMLPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        Some(self.chat_template.clone())
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
@@ -414,7 +447,7 @@ impl PreProcessingMixin for GGMLPipeline {
 }
 
 impl IsqPipelineMixin for GGMLPipeline {
-    fn re_isq_model(&mut self, _dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, _dtype: IsqType) -> Result<()> {
         anyhow::bail!(
             "You are trying to in-situ requantize a GGML model. This will not do anything."
         )
@@ -465,8 +498,8 @@ impl MetadataMixin for GGMLPipeline {
             Model::XLoraLlama(ref model) => model.device.clone(),
         }
     }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        Some(self.tokenizer.clone())
     }
     fn name(&self) -> String {
         self.model_id.clone()
@@ -484,7 +517,10 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -495,15 +531,17 @@ impl Pipeline for GGMLPipeline {
             context_lens,
             position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
+            flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
-        match self.model {
+        let logits = match self.model {
             Model::Llama(ref model) => model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
                 None,
-            ),
+            )?,
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -514,13 +552,16 @@ impl Pipeline for GGMLPipeline {
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
-            ),
-        }
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
+            )?,
+        };
+        Ok(ForwardInputsResult::CausalGeneration { logits })
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,

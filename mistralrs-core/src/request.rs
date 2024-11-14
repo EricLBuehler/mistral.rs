@@ -1,13 +1,16 @@
-use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
+use mistralrs_quant::IsqType;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     response::Response,
     sampler::SamplingParams,
     tools::{Tool, ToolChoice},
+    CustomLogitsProcessor, DiffusionGenerationParams,
 };
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
 #[derive(Clone)]
@@ -18,7 +21,15 @@ pub enum Constraint {
     None,
 }
 
-pub type MessageContent = Either<String, Vec<IndexMap<String, String>>>;
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+/// Image generation response format
+pub enum ImageGenerationResponseFormat {
+    Url,
+    B64Json,
+}
+
+pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
 #[derive(Clone, Debug)]
 /// Message or messages for a [`Request`].
@@ -34,10 +45,31 @@ pub enum RequestMessage {
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
     },
+    ImageGeneration {
+        prompt: String,
+        format: ImageGenerationResponseFormat,
+        generation_params: DiffusionGenerationParams,
+    },
 }
 
 #[derive(Clone)]
-/// A normal request request to the `MistralRs`
+/// A normal request request to the `MistralRs`.
+/// - `messages`: Messages for the request
+/// - `sampling_params`: Sampling parameters for generation
+/// - `response`: Object to send the result through
+/// - `return_logprobs`: Whether to return logprobs
+/// - `is_streaming`: Control whether the request is streaming, if so chunk responses will be sent
+/// - `id`: Request ID
+/// - `constraint`: Constraint to use during generation
+/// - `suffix`: Suffix to add
+/// - `adapters`: Adapters to use in this request
+/// - `tools`: Tools available in this request
+/// - `tool_choice`: Choice of tools
+/// - `logits_processors`: Custom logits processors. Order of application:
+///     1) Apply penalties from `sampling_params`
+///     2) Apply these custom logits processors sequentially
+///     3) Apply temperature and softmax
+///     4) Sample the next token (topk, topp, minp, etc)
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
@@ -50,6 +82,7 @@ pub struct NormalRequest {
     pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
+    pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
 }
 
 impl NormalRequest {
@@ -73,17 +106,21 @@ impl NormalRequest {
             constraint: Constraint::None,
             suffix: None,
             adapters: None,
+            logits_processors: None,
         }
     }
 }
 
 #[derive(Clone)]
 /// A request to the Engine, encapsulating the various parameters as well as
-/// the `mspc` response `Sender` used to return the [`Response`].
+/// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(NormalRequest),
-    ReIsq(GgmlDType),
+    ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
+    // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
+    // and then Engine will be dropped.
+    Terminate,
 }
 
 impl Debug for Request {
@@ -92,15 +129,10 @@ impl Debug for Request {
             Request::Normal(NormalRequest {
                 messages,
                 sampling_params,
-                response: _,
-                return_logprobs: _,
                 is_streaming,
-                id,
-                constraint: _,
-                suffix: _,
                 adapters,
-                tool_choice: _,
-                tools: _,
+                id,
+                ..
             }) => {
                 write!(
                     f,
@@ -113,6 +145,7 @@ impl Debug for Request {
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
             }
+            Request::Terminate => write!(f, "Termination Request"),
         }
     }
 }

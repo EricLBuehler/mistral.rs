@@ -1,8 +1,10 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 use crate::{
-    pipeline::{NormalLoaderType, VisionLoaderType},
-    ModelDType,
+    pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
+    DiffusionLoaderType, ModelDType,
 };
 
 fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
@@ -10,6 +12,10 @@ fn parse_arch(x: &str) -> Result<NormalLoaderType, String> {
 }
 
 fn parse_vision_arch(x: &str) -> Result<VisionLoaderType, String> {
+    x.parse()
+}
+
+fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
     x.parse()
 }
 
@@ -38,11 +44,28 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        #[allow(rustdoc::bare_urls)]
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        #[arg(short, long)]
+        organization: Option<IsqOrganization>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -70,11 +93,23 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -97,11 +132,23 @@ pub enum ModelSelected {
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -112,14 +159,19 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -130,12 +182,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -151,6 +204,10 @@ pub enum ModelSelected {
         /// This makes the maximum running sequences 1.
         #[arg(long)]
         tgt_non_granular_index: Option<usize>,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with LoRA.
@@ -161,12 +218,13 @@ pub enum ModelSelected {
         #[arg(short, long)]
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -177,6 +235,10 @@ pub enum ModelSelected {
         /// Ordering JSON file
         #[arg(short, long)]
         order: String,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model.
@@ -189,18 +251,22 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -213,12 +279,12 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -238,6 +304,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a GGML model with LoRA.
@@ -250,12 +320,12 @@ pub enum ModelSelected {
         #[arg(long)]
         tokenizer_json: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         #[arg(short = 'm', long)]
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -270,6 +340,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
     },
 
     /// Select a vision plain model, without quantization or adapters
@@ -285,6 +359,38 @@ pub enum ModelSelected {
         /// The architecture of the model.
         #[arg(short, long, value_parser = parse_vision_arch)]
         arch: VisionLoaderType,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        #[arg(long)]
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        #[arg(short, long)]
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        #[arg(short, long)]
+        from_uqff: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        #[arg(short = 'e', long)]
+        max_edge: Option<u32>,
+    },
+
+    /// Select a diffusion plain model, without quantization or adapters
+    DiffusionPlain {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
+        /// The architecture of the model.
+        #[arg(short, long, value_parser = parse_diffusion_arch)]
+        arch: DiffusionLoaderType,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]

@@ -1,12 +1,18 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::{ggml_file, gguf_file};
-use candle_core::quantized::{QMatMul, QTensor};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use candle_core::quantized::ggml_file;
+use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding};
+use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
-use crate::layers::{repeat_kv, CausalMasker, MatMul, QRmsNorm, ScaledDotProductAttention};
+use crate::gguf::Content;
+use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -15,30 +21,29 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
-#[derive(Debug, Clone)]
 struct Mlp {
-    feed_forward_w1: QMatMul,
-    feed_forward_w2: QMatMul,
-    feed_forward_w3: QMatMul,
+    feed_forward_w1: Arc<dyn QuantMethod>,
+    feed_forward_w2: Arc<dyn QuantMethod>,
+    feed_forward_w3: Arc<dyn QuantMethod>,
 }
 
 impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = MatMul.qmatmul(xs, &self.feed_forward_w1)?;
-        let w3 = MatMul.qmatmul(xs, &self.feed_forward_w3)?;
+        let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
+        let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
         let y = &(candle_nn::ops::silu(&w1)? * w3)?;
-        MatMul.qmatmul(y, &self.feed_forward_w2)
+        MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
     }
 }
 
-#[derive(Debug, Clone)]
 enum MlpOrMoe {
     Mlp(Mlp),
     MoE {
         n_expert_used: usize,
-        feed_forward_gate_inp: QMatMul,
+        feed_forward_gate_inp: Arc<dyn QuantMethod>,
         experts: Vec<Mlp>,
     },
 }
@@ -53,7 +58,7 @@ impl MlpOrMoe {
             } => {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
-                let router_logits = feed_forward_gate_inp.forward(&xs)?;
+                let router_logits = MatMul.qmethod_matmul(&xs, &**feed_forward_gate_inp)?;
                 let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
                 // In order to extract topk, we extract the data from the tensor and manipulate it
@@ -114,18 +119,19 @@ impl MlpOrMoe {
 }
 
 struct LayerWeights {
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_wo: QMatMul,
+    attention_wq: Arc<dyn QuantMethod>,
+    attention_wk: Arc<dyn QuantMethod>,
+    attention_wv: Arc<dyn QuantMethod>,
+    attention_wo: Arc<dyn QuantMethod>,
     attention_norm: QRmsNorm,
     mlp_or_moe: MlpOrMoe,
     ffn_norm: QRmsNorm,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    rotary: RotaryEmbedding,
+    rotary: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -140,9 +146,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = MatMul.qmatmul(x, &self.attention_wq)?;
-        let k = MatMul.qmatmul(x, &self.attention_wk)?;
-        let v = MatMul.qmatmul(x, &self.attention_wv)?;
+        let q = MatMul.qmethod_matmul(x, &*self.attention_wq)?;
+        let k = MatMul.qmethod_matmul(x, &*self.attention_wk)?;
+        let v = MatMul.qmethod_matmul(x, &*self.attention_wv)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -187,25 +193,13 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    seq_len,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -215,7 +209,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, seq_len, n_embd])?
         };
 
-        let y = MatMul.qmatmul(&y, &self.attention_wo)?;
+        let y = MatMul.qmethod_matmul(&y, &*self.attention_wo)?;
         Ok(y)
     }
 }
@@ -224,7 +218,7 @@ pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
     norm: QRmsNorm,
-    output: QMatMul,
+    output: Arc<dyn QuantMethod>,
     pub device: Device,
     pub cache: Cache,
     pub max_seq_len: usize,
@@ -261,33 +255,65 @@ impl ModelConfig::FromGGML for ModelWeights {
                 let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
                 let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
                 MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                    feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                    feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                    feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w1),
+                        b: None,
+                    })?),
+                    feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w2),
+                        b: None,
+                    })?),
+                    feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w3),
+                        b: None,
+                    })?),
                 })
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
+            let n_kv_head = ct.hparams.n_head as usize / gqa;
             layers.push(LayerWeights {
-                attention_wq: QMatMul::from_qtensor(attention_wq)?,
-                attention_wk: QMatMul::from_qtensor(attention_wk)?,
-                attention_wv: QMatMul::from_qtensor(attention_wv)?,
-                attention_wo: QMatMul::from_qtensor(attention_wo)?,
+                attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wq),
+                    b: None,
+                })?),
+                attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wk),
+                    b: None,
+                })?),
+                attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wv),
+                    b: None,
+                })?),
+                attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wo),
+                    b: None,
+                })?),
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
                 ffn_norm: QRmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
-                rotary: rotary.clone(),
+                rotary: rotary.clone().into(),
                 paged_attn: None, // TODO
+                sdpa_params: SdpaParams {
+                    n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
             layers,
             norm,
-            output: QMatMul::from_qtensor(output)?,
+            output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: Arc::new(output),
+                b: None,
+            })?),
             device: ct.device.clone(),
             cache: Cache::new(ct.hparams.n_layer as usize, false),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
@@ -368,16 +394,16 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "llama",
-            metadata: &ct.metadata,
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             n_expert,
@@ -394,16 +420,17 @@ impl ModelConfig::FromGGUF for ModelWeights {
             value_length,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
-        )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
+        let tok_embeddings = qtok_embeddings.dequantize(device)?;
+        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
+        let output = if !ct.has_tensor("output.weight") {
+            ct.tensor("token_embd.weight", device)?
+        } else {
+            ct.tensor("output.weight", device)?
+        };
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let head_dim = key_length;
         if key_length != value_length {
@@ -412,45 +439,62 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..block_count {
+            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    rope_freq_base,
+                    rope_dim,
+                    max_seq_len,
+                    device,
+                    false,
+                    DType::F32,
+                )?),
+            );
+        }
+
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = RotaryEmbedding::new(
-                rope_freq_base,
-                rope_dim,
-                max_seq_len,
-                device,
-                false,
-                DType::F32,
-            )?;
+            let rotary = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
 
-            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo =
-                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
+            let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;
+            let attention_wv = ct.tensor(&format!("{prefix}.attn_v.weight"), device)?;
+            let attention_wo = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
             let mlp_or_moe = if n_expert <= 1 {
-                let feed_forward_w1 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+                let feed_forward_w1 = ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?;
+                let feed_forward_w2 = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
+                let feed_forward_w3 = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
                 MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                    feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                    feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                    feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w1),
+                        b: None,
+                    })?),
+                    feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w2),
+                        b: None,
+                    })?),
+                    feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_w3),
+                        b: None,
+                    })?),
                 })
             } else {
                 let feed_forward_gate_inp =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
+                    ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
                 let mut experts = Vec::with_capacity(n_expert);
-                match ct.tensor(reader, &format!("{prefix}.ffn_gate_exps.weight"), device) {
+                match ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device) {
                     Ok(feed_forward_gate_exps) => {
                         let feed_forward_down_exps =
-                            ct.tensor(reader, &format!("{prefix}.ffn_down_exps.weight"), device)?;
+                            ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
                         let feed_forward_up_exps =
-                            ct.tensor(reader, &format!("{prefix}.ffn_up_exps.weight"), device)?;
+                            ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), device)?;
 
                         let dequant_ffn_gate = feed_forward_gate_exps
                             .dequantize(device)?
@@ -475,49 +519,69 @@ impl ModelConfig::FromGGUF for ModelWeights {
                             .zip(dequant_ffn_down.into_iter().zip(dequant_ffn_up))
                         {
                             experts.push(Mlp {
-                                feed_forward_w1: QMatMul::from_qtensor(QTensor::quantize(
-                                    &ff_w1, gate_type,
-                                )?)?,
-                                feed_forward_w2: QMatMul::from_qtensor(QTensor::quantize(
-                                    &ff_w2, down_type,
-                                )?)?,
-                                feed_forward_w3: QMatMul::from_qtensor(QTensor::quantize(
-                                    &ff_w3, up_type,
-                                )?)?,
+                                feed_forward_w1: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(QTensor::quantize(&ff_w1, gate_type)?),
+                                        b: None,
+                                    },
+                                )?),
+                                feed_forward_w2: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(QTensor::quantize(&ff_w2, down_type)?),
+                                        b: None,
+                                    },
+                                )?),
+                                feed_forward_w3: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(QTensor::quantize(&ff_w3, up_type)?),
+                                        b: None,
+                                    },
+                                )?),
                             })
                         }
                     }
                     Err(_) => {
                         for i in 0..n_expert {
-                            let feed_forward_w1 = ct.tensor(
-                                reader,
-                                &format!("{prefix}.ffn_gate.{i}.weight"),
-                                device,
-                            )?;
-                            let feed_forward_w2 = ct.tensor(
-                                reader,
-                                &format!("{prefix}.ffn_down.{i}.weight"),
-                                device,
-                            )?;
+                            let feed_forward_w1 =
+                                ct.tensor(&format!("{prefix}.ffn_gate.{i}.weight"), device)?;
+                            let feed_forward_w2 =
+                                ct.tensor(&format!("{prefix}.ffn_down.{i}.weight"), device)?;
                             let feed_forward_w3 =
-                                ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                                ct.tensor(&format!("{prefix}.ffn_up.{i}.weight"), device)?;
                             experts.push(Mlp {
-                                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                                feed_forward_w1: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(feed_forward_w1),
+                                        b: None,
+                                    },
+                                )?),
+                                feed_forward_w2: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(feed_forward_w2),
+                                        b: None,
+                                    },
+                                )?),
+                                feed_forward_w3: Arc::new(GgufMatMul::new(
+                                    QuantMethodConfig::Gguf {
+                                        q_weight: Arc::new(feed_forward_w3),
+                                        b: None,
+                                    },
+                                )?),
                             })
                         }
                     }
                 }
                 MlpOrMoe::MoE {
                     n_expert_used,
-                    feed_forward_gate_inp: QMatMul::from_qtensor(feed_forward_gate_inp)?,
+                    feed_forward_gate_inp: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: Arc::new(feed_forward_gate_inp),
+                        b: None,
+                    })?),
                     experts,
                 }
             };
-            let attention_norm =
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
-            let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
+            let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
+            let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -531,10 +595,22 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 )?),
             };
             layers.push(LayerWeights {
-                attention_wq: QMatMul::from_qtensor(attention_wq)?,
-                attention_wk: QMatMul::from_qtensor(attention_wk)?,
-                attention_wv: QMatMul::from_qtensor(attention_wv)?,
-                attention_wo: QMatMul::from_qtensor(attention_wo)?,
+                attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wq),
+                    b: None,
+                })?),
+                attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wk),
+                    b: None,
+                })?),
+                attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wv),
+                    b: None,
+                })?),
+                attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(attention_wo),
+                    b: None,
+                })?),
                 attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
                 ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
@@ -543,13 +619,23 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 rotary: rotary.clone(),
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
-            output: QMatMul::from_qtensor(output)?,
+            output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                q_weight: Arc::new(output),
+                b: None,
+            })?),
             device: device.clone(),
             cache: Cache::new(block_count, false),
             max_seq_len,
@@ -609,7 +695,7 @@ impl ModelWeights {
         let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         extract_logits(
-            &MatMul.qmatmul(&x.contiguous()?, &self.output)?,
+            &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
             context_lens,
         )
     }

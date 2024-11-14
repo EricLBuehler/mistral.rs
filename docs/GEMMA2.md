@@ -18,7 +18,7 @@ if len(prompt) > 0:
 while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
-    completion = openai.chat.completions.create(
+    completion = client.chat.completions.create(
         model="gemma2",
         messages=messages,
         max_tokens=256,

@@ -7,32 +7,30 @@ use std::{
 };
 
 use base64::{engine::general_purpose, Engine};
-use candle_core::{quantized::GgmlDType, DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-#[cfg(feature = "plotly")]
-use plotly::{layout::Axis, ImageFormat, Plot, Scatter};
+use mistralrs_quant::IsqType;
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
 use crate::{
-    aici::toktree::TokTrie,
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
     prefix_cacher::PrefixCacheManager,
     sampler::Sampler,
-    sequence::{Sequence, SequenceGroup, SequenceRecognizer},
+    sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
     DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
     Pipeline, Response, TokenSource, TryIntoDType,
 };
 
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 pub struct AnyMoeLoader {
@@ -60,7 +58,7 @@ impl Loader for AnyMoeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -102,7 +100,7 @@ impl Loader for AnyMoeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -202,13 +200,13 @@ impl CacheManagerMixin for AnyMoePipeline {
 }
 
 impl IsqPipelineMixin for AnyMoePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)
     }
 }
 
 impl PreProcessingMixin for AnyMoePipeline {
-    fn get_chat_template(&self) -> Arc<crate::ChatTemplate> {
+    fn get_chat_template(&self) -> Option<Arc<crate::ChatTemplate>> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
@@ -232,27 +230,30 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
-    fn tokenizer(&self) -> Arc<tokenizers::Tokenizer> {
+    fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)
     }
 
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
         get_mut_arcmutex!(self.target)
-            .sample(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .sample_causal_gen(seqs, logits, prefix_cacher, disable_eos_stop, rng)
             .await
     }
 
@@ -293,7 +294,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             expert_type,
             gate_model_id,
             training,
-            loss_svg,
+            loss_csv_path,
         } = self.config.clone();
         let mut steps = 0;
 
@@ -351,9 +352,21 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut rng = thread_rng();
         let mut samples = inputs.into_inner();
 
-        // Create several dummy objects for the sequences.
+        // Create several dummy objects for the sequences. No custom logits processors.
         let (dummy_sender, _) = tokio::sync::mpsc::channel(10000);
-        let dummy_sampler = Sampler::new(None, 0, tokenizer.clone(), None, None, -1, 0.0, 0.0);
+        let dummy_sampler = Sampler::new(
+            None,
+            0,
+            tokenizer.clone(),
+            None,
+            None,
+            None,
+            -1,
+            0.0,
+            0.0,
+            vec![],
+        )
+        .map_err(candle_core::Error::msg)?;
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
@@ -388,7 +401,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             true,
                             Vec::new(),
                         )
-                        .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                        .map_err(candle_core::Error::msg)?;
                     let images = image_urls.as_ref().map(|urls| {
                         urls.iter()
                             .map(|url| -> anyhow::Result<DynamicImage> {
@@ -426,7 +439,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
-                        (*self.get_metadata().tok_trie).clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -441,13 +453,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         None,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
+                        None, // TODO: prompt chunking doesn't work.
                     )
+                    .nth(0)
                     .unwrap();
 
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
 
                 // Clear the KV cache
                 target.set_none_cache(true, true);
@@ -486,45 +500,33 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         target.amoe_finish_training(gate_model_id)?;
         assert_eq!(target.amoe_base_model_trainable_params(), 0);
 
-        #[cfg(feature = "plotly")]
-        if let Some(loss_svg) = loss_svg {
-            let mut plot = Plot::new();
-            for gate in 0..all_losses[0].len() {
-                let gate_loss = all_losses
-                    .iter()
-                    .map(|losses| losses[gate])
-                    .collect::<Vec<_>>();
-                #[allow(clippy::cast_precision_loss)]
-                plot.add_trace(Scatter::new(
-                    (0..gate_loss.len())
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .map(|x| x as f32)
-                        .collect::<Vec<_>>(),
-                    gate_loss,
-                ));
-            }
-
-            plot.set_layout(
-                plot.layout()
-                    .clone()
-                    .show_legend(false)
-                    .title(format!("Gating layers ({} layers)", all_losses[0].len()))
-                    .x_axis(Axis::new().title("Step"))
-                    .y_axis(Axis::new().title("Loss")),
-            );
-
-            let path = Path::new(&loss_svg);
+        if let Some(loss_csv_path) = loss_csv_path {
+            let path = Path::new(&loss_csv_path);
             if !path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy() == *"svg")
+                .is_some_and(|e| e.to_string_lossy() == *"csv")
             {
-                candle_core::bail!("`loss_svg` must have an extension `svg`.");
+                candle_core::bail!("`loss_csv_path` must have an extension `csv`.");
             }
-            plot.write_image(path, ImageFormat::SVG, 800, 600, 1.0);
+
+            let mut writer = csv::Writer::from_path(path).map_err(candle_core::Error::msg)?;
+
+            let mut header = vec![format!("Step")];
+            header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
+            writer
+                .write_record(&header)
+                .map_err(candle_core::Error::msg)?;
+
+            for (i, row) in all_losses.into_iter().enumerate() {
+                let mut new_row = vec![format!("Step {i}")];
+                new_row.extend(row.iter().map(|x| format!("{x:.4}")));
+                writer
+                    .write_record(&new_row)
+                    .map_err(candle_core::Error::msg)?;
+            }
+
+            writer.flush().map_err(candle_core::Error::msg)?;
         }
-        #[cfg(not(feature = "plotly"))]
-        if let Some(_loss_svg) = loss_svg {}
 
         Ok(Some(AnyMoeTrainingResult {
             steps,
@@ -536,15 +538,15 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 /// Create a dummy sequence containing just the prompt. This is OK because we just want a sequence that
 /// has no information other than the input tokens (and maybe images).
 fn new_dummy_seq(
-    tokens: Vec<u32>,
+    (tokens, prompt): (Vec<u32>, String),
     dummy_sender: tokio::sync::mpsc::Sender<Response>,
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
-    trie: TokTrie,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
+        prompt,
         0,
         0,
         1,
@@ -564,7 +566,10 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
-        trie,
+        None,
+        None,
+        None,
+        SeqStepType::PromptAndDecode,
         None,
     )
 }

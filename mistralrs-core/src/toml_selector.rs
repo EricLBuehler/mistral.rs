@@ -1,12 +1,13 @@
-use std::fs::File;
+use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
 use serde::Deserialize;
 
 use crate::{
-    amoe::AnyMoeConfig, AnyMoeLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
-    Loader, ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    SpeculativeConfig, SpeculativeLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionSpecificConfig,
+    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    GGUF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -30,11 +31,23 @@ pub enum TomlModelSelected {
         model_id: String,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
+
+        /// ISQ organization: `default` or `moqe` (Mixture of Quantized Experts: https://arxiv.org/abs/2310.02410).
+        organization: Option<IsqOrganization>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -53,11 +66,20 @@ pub enum TomlModelSelected {
         tgt_non_granular_index: Option<usize>,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -72,11 +94,20 @@ pub enum TomlModelSelected {
         order: String,
 
         /// The architecture of the model.
-        arch: NormalLoaderType,
+        arch: Option<NormalLoaderType>,
 
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -87,12 +118,16 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: String,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -102,11 +137,12 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -118,6 +154,9 @@ pub enum TomlModelSelected {
         /// Index of completion tokens to generate scalings up until. If this is 1, then there will be one completion token generated before it is cached.
         /// This makes the maximum running sequences 1.
         tgt_non_granular_index: Option<usize>,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGUF model with LoRA.
@@ -127,11 +166,12 @@ pub enum TomlModelSelected {
         /// removing all remote accesses.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename(s).
+        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -139,6 +179,9 @@ pub enum TomlModelSelected {
 
         /// Ordering JSON file
         order: String,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model.
@@ -147,16 +190,19 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: String,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -164,11 +210,11 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// Model ID to load X-LoRA from. This may be a HF hub repo or a local path.
@@ -184,6 +230,9 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a GGML model with LoRA.
@@ -191,11 +240,11 @@ pub enum TomlModelSelected {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
 
-        /// Quantized model ID to find the `quantized_filename`, only applicable if `quantized` is set.
+        /// Quantized model ID to find the `quantized_filename`.
         /// This may be a HF hub repo or a local path.
         quantized_model_id: String,
 
-        /// Quantized filename, only applicable if `quantized` is set.
+        /// Quantized filename.
         quantized_filename: String,
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
@@ -207,6 +256,9 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
     },
 
     /// Select a vision plain model, without quantization or adapters
@@ -220,6 +272,19 @@ pub enum TomlModelSelected {
         /// Model data type. Defaults to `auto`.
         #[serde(default = "default_dtype")]
         dtype: ModelDType,
+
+        /// Path to a topology YAML file.
+        topology: Option<String>,
+
+        /// UQFF path to write to.
+        write_uqff: Option<PathBuf>,
+
+        /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+        from_uqff: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        max_edge: Option<u32>,
     },
 }
 
@@ -275,12 +340,14 @@ struct TomlLoaderInnerParams {
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
+    prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub struct TomlLoaderArgs {
     pub use_flash_attn: bool,
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -308,13 +375,24 @@ fn loader_from_selected(
             model_id,
             arch,
             dtype: _,
+            topology,
+            organization,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: organization.unwrap_or_default(),
+                write_uqff,
+                from_uqff,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::XLora {
             model_id,
             xlora_model_id,
@@ -322,8 +400,18 @@ fn loader_from_selected(
             tgt_non_granular_index,
             arch,
             dtype: _,
+            topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff,
+                from_uqff,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -337,15 +425,25 @@ fn loader_from_selected(
             args.no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
             adapters_model_id,
             order,
             arch,
             dtype: _,
+            topology,
+            write_uqff,
+            from_uqff,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff,
+                from_uqff,
+            },
             args.chat_template,
             args.tokenizer_json,
             model_id,
@@ -357,16 +455,24 @@ fn loader_from_selected(
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
             )?,
         )
-        .build(arch),
+        .build(arch)?,
         TomlModelSelected::GGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             Some(tok_model_id),
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -376,11 +482,19 @@ fn loader_from_selected(
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_xlora(
             xlora_model_id,
@@ -398,11 +512,19 @@ fn loader_from_selected(
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename
+                .split(GGUF_MULTI_FILE_DELIMITER)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            GGUFSpecificConfig {
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
         .with_lora(
             adapters_model_id,
@@ -417,8 +539,13 @@ fn loader_from_selected(
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(tok_model_id),
@@ -434,8 +561,13 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -459,8 +591,13 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             gqa,
+            topology,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             args.chat_template,
             args.tokenizer_json,
             tok_model_id,
@@ -479,8 +616,19 @@ fn loader_from_selected(
             model_id,
             arch,
             dtype: _,
+            topology,
+            write_uqff,
+            from_uqff,
+            max_edge,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize: args.prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
+                max_edge,
+            },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
@@ -499,6 +647,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
+            prompt_batchsize: args.prompt_batchsize,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

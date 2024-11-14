@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use either::Either;
 use indexmap::IndexMap;
 
@@ -20,7 +20,7 @@ pub trait ProcessorCreator {
 }
 
 pub enum MessagesAction {
-    // For idefics2
+    // For idefics2, others which use the "new" openai format
     Keep,
     // For everything else
     FlattenOnlyText,
@@ -30,13 +30,14 @@ pub enum MessagesAction {
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
 pub trait Processor {
+    /// Get the tokens and the untokenized prompt
     fn process(
         &self,
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         tools: Vec<Tool>,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<(Vec<u32>, String)> {
         let prompt = apply_chat_template(
             pipeline,
             messages,
@@ -46,9 +47,12 @@ pub trait Processor {
         )?;
         let encoding = pipeline
             .tokenizer()
-            .encode(prompt, true)
-            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-        Ok(encoding.get_ids().to_vec())
+            .with_context(|| {
+                "Default `Processor::process` requires the model to have a tokenizer."
+            })?
+            .encode(prompt.clone(), true)
+            .map_err(anyhow::Error::msg)?;
+        Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];
@@ -80,8 +84,13 @@ pub(crate) fn apply_chat_template(
                                 'outer: for content_row in rv {
                                     for (content_k, content_v) in content_row {
                                         if content_k == "text" {
-                                            new_message.insert(k, Either::Left(content_v));
-                                            break 'outer;
+                                            if let Some(content_str) = content_v.as_str() {
+                                                new_message.insert(
+                                                    k,
+                                                    Either::Left(content_str.to_string()),
+                                                );
+                                                break 'outer;
+                                            }
                                         }
                                     }
                                 }
@@ -96,9 +105,11 @@ pub(crate) fn apply_chat_template(
             new_messages
         }
     };
-    let chat_template = pipeline.get_chat_template();
+    let chat_template = pipeline
+        .get_chat_template()
+        .with_context(|| "`apply_chat_template` expects the pipeline to have a chat template.")?;
     let template = chat_template.chat_template.as_ref().unwrap();
-    let bos_tok = if let Some(ref bos) = pipeline.get_chat_template().bos_token {
+    let bos_tok = if let Some(ref bos) = chat_template.bos_token {
         match bos.0 {
             Either::Left(ref lit) => Some(lit.to_string()),
             Either::Right(ref added) => Some(added.content.to_string()),
@@ -106,7 +117,7 @@ pub(crate) fn apply_chat_template(
     } else {
         None
     };
-    let eos_tok = if let Some(ref eos) = pipeline.get_chat_template().eos_token {
+    let eos_tok = if let Some(ref eos) = chat_template.eos_token {
         match eos.0 {
             Either::Left(ref lit) => Some(lit.to_string()),
             Either::Right(ref added) => Some(added.content.to_string()),
@@ -114,7 +125,7 @@ pub(crate) fn apply_chat_template(
     } else {
         None
     };
-    let unk_tok = if let Some(ref unk) = pipeline.get_chat_template().unk_token {
+    let unk_tok = if let Some(ref unk) = chat_template.unk_token {
         match unk.0 {
             Either::Left(ref lit) => Some(lit.to_string()),
             Either::Right(ref added) => Some(added.content.to_string()),
@@ -143,6 +154,6 @@ impl Processor for BasicProcessor {
         &[]
     }
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }

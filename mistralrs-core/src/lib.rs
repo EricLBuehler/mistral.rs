@@ -1,10 +1,11 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
-pub use engine::TERMINATE_ALL_NEXT_STEP;
+pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
-use pipeline::ModelCategory;
+pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
@@ -13,7 +14,10 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
-    sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
+    sync::{
+        atomic::{self, AtomicBool, AtomicUsize},
+        Arc, Mutex, RwLock,
+    },
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -45,6 +49,8 @@ mod models;
 mod paged_attention;
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
 use dummy_paged_attention as paged_attention;
+mod attention;
+mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
 mod request;
@@ -54,26 +60,35 @@ mod scheduler;
 mod sequence;
 mod toml_selector;
 mod tools;
+mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use mistralrs_quant::IsqType;
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
-    chat_template::ChatTemplate, AnyMoeLoader, AnyMoePipeline, GGMLLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFArchitecture, GGUFLoader, GGUFLoaderBuilder, GemmaLoader,
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeculativeConfig, SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource,
-    VisionLoader, VisionLoaderBuilder, VisionLoaderType, VisionModelLoader, VisionSpecificConfig,
+    chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
+    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
+    DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
+    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
+    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
+    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
+    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
-pub use request::{Constraint, MessageContent, NormalRequest, Request, RequestMessage};
-pub use response::Response;
+pub use request::{
+    Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
+    RequestMessage,
+};
 pub use response::*;
-pub use sampler::{SamplingParams, StopTokens, TopLogprob};
+pub use sampler::{
+    CustomLogitsProcessor, DrySamplingParams, SamplingParams, StopTokens, TopLogprob,
+};
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 use serde::Serialize;
 use tokio::runtime::Runtime;
@@ -81,6 +96,7 @@ use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
 };
+pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
@@ -88,9 +104,16 @@ pub use utils::paged_attn_supported;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
+static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
+
+pub struct MistralRsConfig {
+    pub kind: ModelKind,
+    pub device: Device,
+    pub category: ModelCategory,
+}
 
 /// The MistralRs struct handles sending requests to the engine.
-/// It is the core multi-threaded component of mistral.rs, and uses `mspc`
+/// It is the core multi-threaded component of mistral.rs, and uses `mpsc`
 /// `Sender` and `Receiver` primitives to send and receive requests to the
 /// engine.
 pub struct MistralRs {
@@ -101,6 +124,9 @@ pub struct MistralRs {
     next_request_id: Mutex<RefCell<usize>>,
     reboot_state: RebootState,
     engine_handler: RwLock<JoinHandle<()>>,
+    engine_id: usize,
+    category: ModelCategory,
+    config: MistralRsConfig,
 }
 
 #[derive(Clone)]
@@ -246,6 +272,15 @@ fn set_gemm_reduced_precision_f16() {
 #[cfg(not(feature = "cuda"))]
 fn set_gemm_reduced_precision_f16() {}
 
+impl Drop for MistralRs {
+    fn drop(&mut self) {
+        ENGINE_INSTRUCTIONS
+            .lock()
+            .expect("`ENGINE_INSTRUCTIONS` was poisioned")
+            .insert(self.engine_id, Some(EngineInstruction::Terminate));
+    }
+}
+
 impl MistralRs {
     fn new(config: MistralRsBuilder) -> Arc<Self> {
         let MistralRsBuilder {
@@ -261,9 +296,11 @@ impl MistralRs {
             throughput_logging_enabled,
         } = config;
 
-        let model_supports_reduced_gemm = match pipeline.try_lock().unwrap().category() {
+        let category = pipeline.try_lock().unwrap().category();
+        let model_supports_reduced_gemm = match category {
             ModelCategory::Text => true,
-            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+            ModelCategory::Vision { has_conv2d, .. } => !has_conv2d,
+            ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
@@ -275,6 +312,7 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
+        let throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -284,13 +322,21 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
-            throughput_logging_enabled: throughput_logging_enabled.is_some(),
+            throughput_logging_enabled,
         };
 
         let (tx, rx) = channel(10_000);
 
         let sender = RwLock::new(tx);
         let id = pipeline.try_lock().unwrap().name();
+
+        let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
+        let device = pipeline.try_lock().unwrap().device();
+        let config = MistralRsConfig {
+            kind,
+            device,
+            category: category.clone(),
+        };
 
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
@@ -304,15 +350,16 @@ impl MistralRs {
                     no_prefix_cache,
                     prefix_cache_n,
                     disable_eos_stop,
+                    throughput_logging_enabled,
                 );
-                if throughput_logging_enabled.is_some() {
-                    engine.enable_throughput_logging();
-                }
                 engine.run().await;
             });
         });
 
+        let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
+
         Arc::new(Self {
+            engine_id,
             sender,
             log,
             id,
@@ -323,6 +370,8 @@ impl MistralRs {
             next_request_id: Mutex::new(RefCell::new(0)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
+            category,
+            config,
         })
     }
 
@@ -357,10 +406,8 @@ impl MistralRs {
                         reboot_state.no_prefix_cache,
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
+                        reboot_state.throughput_logging_enabled,
                     );
-                    if reboot_state.throughput_logging_enabled {
-                        engine.enable_throughput_logging();
-                    }
                     engine.run().await;
                 });
             });
@@ -398,6 +445,10 @@ impl MistralRs {
 
     pub fn get_creation_time(&self) -> u64 {
         self.creation_time
+    }
+
+    pub fn get_model_category(&self) -> ModelCategory {
+        self.category.clone()
     }
 
     pub fn next_request_id(&self) -> usize {
@@ -446,5 +497,9 @@ impl MistralRs {
             f.write_all(format!("Error response at {time}: {err}\n\n").as_bytes())
                 .expect("Unable to write data");
         }
+    }
+
+    pub fn config(&self) -> &MistralRsConfig {
+        &self.config
     }
 }

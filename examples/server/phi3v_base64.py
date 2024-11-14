@@ -1,6 +1,7 @@
 import requests
 import httpx
-import textwrap, json
+import textwrap
+import json
 import base64
 
 

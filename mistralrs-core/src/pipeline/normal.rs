@@ -1,16 +1,16 @@
 use super::cache_manager::DefaultCacheManager;
-use super::normal_loaders::{
-    Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    Phi2Loader, Phi3Loader, Qwen2Loader, Starcoder2Loader,
-};
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
+    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+};
+use super::{
+    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
+    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -18,6 +18,7 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
@@ -28,21 +29,22 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, lora_model_loader,
+    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -55,6 +57,13 @@ pub struct NormalPipeline {
     non_granular_state: Option<NonGranularState>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
+    topology: Option<Topology>,
+    silent: bool,
+    organization: IsqOrganization,
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -69,6 +78,9 @@ pub struct NormalLoader {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
+    from_uqff: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -85,13 +97,19 @@ pub struct NormalLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
+    pub organization: IsqOrganization,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
+    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
@@ -106,6 +124,12 @@ impl NormalLoaderBuilder {
             kind: ModelKind::Normal,
             ..Default::default()
         }
+    }
+
+    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
+    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
+        self.no_kv_cache = no_kv_cache;
+        self
     }
 
     fn with_adapter(
@@ -156,19 +180,23 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
-    pub fn build(self, loader: NormalLoaderType) -> Box<dyn Loader> {
-        let loader: Box<dyn NormalModelLoader> = match loader {
-            NormalLoaderType::Mistral => Box::new(MistralLoader),
-            NormalLoaderType::Gemma => Box::new(GemmaLoader),
-            NormalLoaderType::Llama => Box::new(LlamaLoader),
-            NormalLoaderType::Mixtral => Box::new(MixtralLoader),
-            NormalLoaderType::Phi2 => Box::new(Phi2Loader),
-            NormalLoaderType::Phi3 => Box::new(Phi3Loader),
-            NormalLoaderType::Qwen2 => Box::new(Qwen2Loader),
-            NormalLoaderType::Gemma2 => Box::new(Gemma2Loader),
-            NormalLoaderType::Starcoder2 => Box::new(Starcoder2Loader),
+    /// If the loader type is not specified, loader type is automatically determined from the
+    /// `architectures` array in the config.
+    pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
+        let loader: Box<dyn NormalModelLoader> = match loader_tp {
+            Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
+            Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),
+            Some(NormalLoaderType::Llama) => Box::new(LlamaLoader),
+            Some(NormalLoaderType::Mixtral) => Box::new(MixtralLoader),
+            Some(NormalLoaderType::Phi2) => Box::new(Phi2Loader),
+            Some(NormalLoaderType::Phi3) => Box::new(Phi3Loader),
+            Some(NormalLoaderType::Qwen2) => Box::new(Qwen2Loader),
+            Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
+            Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
+            Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
+            None => Box::new(AutoLoader),
         };
-        Box::new(NormalLoader {
+        Ok(Box::new(NormalLoader {
             inner: loader,
             model_id: self.model_id.unwrap(),
             config: self.config,
@@ -179,7 +207,10 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
-        })
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
+            from_uqff: RwLock::new(None),
+        }))
     }
 }
 
@@ -193,18 +224,27 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -224,23 +264,36 @@ impl Loader for NormalLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
 
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
         // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
+        if mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             info!(
                 "Loading model `{}` on {}.",
                 self.get_id(),
                 device.device_pretty_repr()
             );
         } else if paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
             paged_attn_config = None;
         }
+
+        let mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
+        let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
             "Model config: {:?}",
@@ -248,7 +301,15 @@ impl Loader for NormalLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let load_device = if in_situ_quant.is_none() {
+        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
+        if let Some(ref topology) = self.config.topology {
+            loading_isq |= topology
+                .0
+                .iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -265,29 +326,31 @@ impl Loader for NormalLoader {
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
+                self.config.from_uqff.is_some(),
                 device.clone(),
-                attention_mechanism
+                attention_mechanism,
+                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
             } => xlora_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             ModelKind::Adapter {
@@ -301,7 +364,7 @@ impl Loader for NormalLoader {
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
                 device.clone()
             ),
             _ => unreachable!(),
@@ -313,8 +376,32 @@ impl Loader for NormalLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.from_uqff.is_none()
+        {
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                self.config.organization,
+                self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
+                },
+            )?;
+        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                from_uqff,
+            )?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
@@ -358,7 +445,7 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: Some(tok_trie),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -368,7 +455,14 @@ impl Loader for NormalLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
+            topology: self.config.topology.clone(),
+            silent,
+            organization: self.config.organization,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
         })))
     }
 
@@ -385,8 +479,8 @@ impl Loader for NormalLoader {
 }
 
 impl PreProcessingMixin for NormalPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        Some(self.chat_template.clone())
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         None
@@ -394,10 +488,25 @@ impl PreProcessingMixin for NormalPipeline {
 }
 
 impl IsqPipelineMixin for NormalPipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(
+                Some(dtype),
+                device,
+                self.topology.as_ref(),
+                self.silent,
+                self.organization,
+                None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                    processor_filename: &None,
+                    preprocessor_filename: &None,
+                },
+            )
             .map_err(anyhow::Error::msg)
     }
 }
@@ -432,8 +541,8 @@ impl MetadataMixin for NormalPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
     }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        Some(self.tokenizer.clone())
     }
     fn name(&self) -> String {
         self.model_id.clone()
@@ -451,7 +560,10 @@ impl MetadataMixin for NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> Result<Tensor, candle_core::Error> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -462,21 +574,34 @@ impl Pipeline for NormalPipeline {
             context_lens,
             position_ids,
             mut paged_attn_meta,
+            flash_meta,
+            flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
-        match self.model.is_xlora() {
+        let paged_attn_meta = match (
+            self.get_metadata().cache_engine.as_ref(),
+            &mut paged_attn_meta,
+        ) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+            (Some(_), None) => {
+                // This can happen if Rust-side user code is wrong
+                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            }
+            (None, Some(_)) => {
+                // This should never happen but we handle it anyway
+                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+            }
+            (None, None) => None,
+        };
+        let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
                 &seqlen_offsets,
                 seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
-                self.get_metadata().cache_engine.as_ref().map(|engine| {
-                    (
-                        engine.get_kv_cache().clone(),
-                        paged_attn_meta.as_mut().unwrap(),
-                    )
-                }),
-            ),
+                paged_attn_meta,
+                &flash_meta,
+            )?,
             true => self.model.xlora_forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
@@ -488,13 +613,16 @@ impl Pipeline for NormalPipeline {
                 &self.non_granular_state,
                 context_lens,
                 position_ids,
-            ),
-        }
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
+            )?,
+        };
+        Ok(ForwardInputsResult::CausalGeneration { logits })
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -536,16 +664,16 @@ impl AnyMoePipelineMixin for NormalPipeline {
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -561,20 +689,28 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
-                if regex.is_match(&key) {
-                    // Idx of the last char of the layer id, +1
-                    // Assumes N.MLP
-                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
-                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
-                        .parse::<usize>()
-                        .unwrap();
-                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
-                } else {
-                    false
-                }
-            })?;
+            let vb = from_mmaped_safetensors(
+                filenames,
+                vec![],
+                Some(dtype),
+                dev,
+                silent,
+                None,
+                move |key| {
+                    if regex.is_match(&key) {
+                        // Idx of the last char of the layer id, +1
+                        // Assumes N.MLP
+                        let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                        let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                        let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                            .parse::<usize>()
+                            .unwrap();
+                        layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                    } else {
+                        false
+                    }
+                },
+            )?;
             vbs.push(vb);
         }
 
@@ -584,9 +720,9 @@ impl AnyMoePipelineMixin for NormalPipeline {
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -607,9 +743,10 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let vb = from_mmaped_safetensors(
                 gate_filenames.clone(),
                 vec![],
-                dtype,
+                Some(dtype),
                 dev,
                 silent,
+                None,
                 |_| true,
             )?;
             info!(

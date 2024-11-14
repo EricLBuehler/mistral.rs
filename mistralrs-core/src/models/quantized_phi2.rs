@@ -1,13 +1,21 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::quantized::gguf_file;
+use std::sync::Arc;
+
+use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
+use mistralrs_quant::GgufMatMul;
+use mistralrs_quant::QuantMethod;
+use mistralrs_quant::QuantMethodConfig;
 
+use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
-use crate::layers::ScaledDotProductAttention;
-use crate::layers::{repeat_kv, CausalMasker, QLinear};
+use crate::gguf::Content;
+use crate::layers::MatMul;
+use crate::layers::Sdpa;
+use crate::layers::{CausalMasker, QLinear};
 use crate::paged_attention::AttentionImplementation;
 use crate::paged_attention::PagedAttention;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -16,33 +24,34 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
+use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    ffn_up: QLinear,
-    ffn_down: QLinear,
+    ffn_up: Arc<dyn QuantMethod>,
+    ffn_down: Arc<dyn QuantMethod>,
 }
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.ffn_up)?.gelu()?.apply(&self.ffn_down)
+        MatMul.qmethod_matmul(&MatMul.qmethod_matmul(xs, &*self.ffn_up)?, &*self.ffn_down)
     }
 }
 
 struct LayerWeights {
-    attn_qkv: QLinear,
-    attn_output: QLinear,
+    attn_qkv: Arc<dyn QuantMethod>,
+    attn_output: Arc<dyn QuantMethod>,
     attn_norm: LayerNorm,
     mlp: Mlp,
     n_head: usize,
-    n_kv_head: usize,
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
     rope_dim: usize,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl LayerWeights {
@@ -97,25 +106,13 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
                 let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-                let k = repeat_kv(k, self.n_head / self.n_kv_head)?;
-                let v = repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-                ScaledDotProductAttention.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    self.n_head,
-                    self.head_dim,
-                    mask,
-                    false,
-                    b_sz,
-                    seq_len,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -218,16 +215,16 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
 impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: gguf_file::Content,
-        reader: &mut R,
+        mut ct: Content<'_, R>,
         device: &Device,
         mapper: DeviceMapMetadata,
+        topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
             path_prefix: "phi2",
-            metadata: &ct.metadata,
+            metadata: ct.get_metadata(),
         };
         let PropsGGUF {
             head_count,
@@ -241,29 +238,44 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let output_norm = layer_norm(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            ct.tensor(reader, "output_norm.bias", device)?,
+            ct.tensor("output_norm.weight", device)?,
+            ct.tensor("output_norm.bias", device)?,
             ln_eps,
         )?;
-        let output = QLinear::new(&ct, reader, "output", device)?;
+        let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
 
-        let mapper = mapper.into_mapper(block_count, device)?;
+        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 
-            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
-            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
-            let mlp = Mlp { ffn_up, ffn_down };
+            let ffn_up = QLinear::new(&mut ct, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&mut ct, &format!("{prefix}.ffn_down"), device)?;
+            let QMatMul::QTensor(ffn_up_w) = ffn_up.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(ffn_down_w) = ffn_down.inner_ref().clone() else {
+                unreachable!()
+            };
+            let mlp = Mlp {
+                ffn_up: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_up_w,
+                    b: ffn_up.bias().cloned(),
+                })?),
+                ffn_down: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: ffn_down_w,
+                    b: ffn_down.bias().cloned(),
+                })?),
+            };
             let attn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?,
+                ct.tensor(&format!("{prefix}.attn_norm.bias"), device)?,
                 ln_eps,
             )?;
             let paged_attn = match &attention_mechanism {
@@ -278,18 +290,38 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     None,
                 )?),
             };
+            let qkv = QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?;
+            let out = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;
+            let QMatMul::QTensor(qkv_w) = qkv.inner_ref().clone() else {
+                unreachable!()
+            };
+            let QMatMul::QTensor(out_w) = out.inner_ref().clone() else {
+                unreachable!()
+            };
             layers.push(LayerWeights {
-                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
-                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_qkv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: qkv_w,
+                    b: qkv.bias().cloned(),
+                })?),
+                attn_output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: out_w,
+                    b: out.bias().cloned(),
+                })?),
                 attn_norm,
                 mlp,
                 n_head: head_count,
-                n_kv_head: head_count_kv,
                 head_dim,
                 cos: cos.clone().to_device(device)?,
                 sin: sin.clone().to_device(device)?,
                 rope_dim,
                 paged_attn,
+                sdpa_params: SdpaParams {
+                    n_kv_groups: head_count / head_count_kv,
+                    use_flash_attn: false,
+                    softcap: None,
+                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                    sliding_window: None,
+                },
             })
         }
         Ok(Self {

@@ -1,71 +1,65 @@
 #![allow(clippy::too_many_arguments)]
 
+use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
-use base64::{engine::general_purpose, Engine};
-use candle_core::quantized::GgmlDType;
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    fs,
-    io::Read,
+    num::NonZeroUsize,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
 use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
+use util::{PyApiErr, PyApiResult};
 
-use candle_core::Device;
+use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, AnyMoeLoader, ChatCompletionResponse,
-    CompletionResponse, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, NormalLoaderBuilder, NormalRequest,
+    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
+    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
+    DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    Tool, VisionLoaderBuilder, VisionSpecificConfig,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::prelude::*;
 use std::fs::File;
 mod anymoe;
 mod requests;
 mod stream;
+mod util;
 mod which;
 use which::{Architecture, VisionArchitecture, Which};
 
-static DEVICE: OnceLock<Device> = OnceLock::new();
+static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
 #[cfg(not(feature = "metal"))]
-fn get_device() -> Device {
-    DEVICE
-        .get_or_init(|| Device::cuda_if_available(0).expect("Failed to create device"))
-        .clone()
-}
-#[cfg(feature = "metal")]
-fn get_device() -> Device {
-    DEVICE
-        .get_or_init(|| Device::new_metal(0).expect("Failed to create device"))
-        .clone()
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = Device::cuda_if_available(0)?;
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
 }
 
-fn parse_isq(s: &str) -> std::result::Result<GgmlDType, String> {
-    match s {
-        "Q4_0" => Ok(GgmlDType::Q4_0),
-        "Q4_1" => Ok(GgmlDType::Q4_1),
-        "Q5_0" => Ok(GgmlDType::Q5_0),
-        "Q5_1" => Ok(GgmlDType::Q5_1),
-        "Q8_0" => Ok(GgmlDType::Q8_0),
-        "Q8_1" => Ok(GgmlDType::Q8_1),
-        "Q2K" => Ok(GgmlDType::Q2K),
-        "Q3K" => Ok(GgmlDType::Q3K),
-        "Q4K" => Ok(GgmlDType::Q4K),
-        "Q5K" => Ok(GgmlDType::Q5K),
-        "Q6K" => Ok(GgmlDType::Q6K),
-        "Q8K" => Ok(GgmlDType::Q8K),
-        _ => Err(format!("GGML type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`.")),
-    }
+#[cfg(feature = "metal")]
+fn get_device(seed: Option<u64>) -> &'static Result<Device> {
+    DEVICE.get_or_init(|| {
+        let device = Device::new_metal(0)?;
+        if let Some(seed) = seed {
+            device.set_seed(seed)?;
+        }
+        Ok(device)
+    })
 }
 
 #[pyclass]
@@ -80,7 +74,8 @@ fn parse_which(
     which: Which,
     no_kv_cache: bool,
     chat_template: Option<String>,
-) -> PyResult<Box<dyn Loader>> {
+    prompt_batchsize: Option<NonZeroUsize>,
+) -> PyApiResult<Box<dyn Loader>> {
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -91,13 +86,26 @@ fn parse_which(
             model_id,
             tokenizer_json,
             arch,
+            topology,
+            organization,
+            write_uqff,
+            from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: organization.map(Into::into).unwrap_or(Default::default()),
+                write_uqff,
+                from_uqff,
+            },
             chat_template,
             tokenizer_json,
             Some(model_id),
         )
-        .build(arch.into()),
+        .with_no_kv_cache(no_kv_cache)
+        .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
             xlora_model_id,
@@ -105,54 +113,83 @@ fn parse_which(
             tokenizer_json,
             tgt_non_granular_index,
             arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff,
+                from_uqff,
+            },
             chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
             no_kv_cache,
             tgt_non_granular_index,
         )
-        .build(arch.into()),
+        .build(arch.map(Into::into))?,
         Which::Lora {
             model_id,
             tokenizer_json,
             adapters_model_id,
             order,
             arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
         } => NormalLoaderBuilder::new(
-            NormalSpecificConfig { use_flash_attn },
+            NormalSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                organization: Default::default(),
+                write_uqff,
+                from_uqff,
+            },
             chat_template,
             tokenizer_json,
             model_id,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
         )
-        .build(arch.into()),
+        .build(arch.map(Into::into))?,
         Which::GGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
@@ -161,19 +198,25 @@ fn parse_which(
             xlora_model_id,
             order,
             tgt_non_granular_index,
+            topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
             no_kv_cache,
             tgt_non_granular_index,
         )
@@ -184,19 +227,25 @@ fn parse_which(
             quantized_filename,
             adapters_model_id,
             order,
+            topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename,
+            quantized_filename.map_left(|f| vec![f]).into_inner(),
+            GGUFSpecificConfig {
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
         )
         .build(),
         Which::GGML {
@@ -205,14 +254,21 @@ fn parse_which(
             quantized_model_id,
             quantized_filename,
             gqa,
+            topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             chat_template,
             tokenizer_json,
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGML {
             tok_model_id,
@@ -223,21 +279,27 @@ fn parse_which(
             order,
             tgt_non_granular_index,
             gqa,
+            topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             chat_template,
             tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
             no_kv_cache,
             tgt_non_granular_index,
         )
@@ -250,34 +312,60 @@ fn parse_which(
             adapters_model_id,
             order,
             gqa,
+            topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
-            GGMLSpecificConfig { gqa },
+            GGMLSpecificConfig {
+                gqa,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+            },
             chat_template,
             tokenizer_json,
             tok_model_id,
             quantized_model_id,
             quantized_filename,
         )
+        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
                 File::open(order.clone())
                     .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+            )?,
         )
         .build(),
         Which::VisionPlain {
             model_id,
             tokenizer_json,
             arch,
+            topology,
+            write_uqff,
+            from_uqff,
+            dtype: _,
+            max_edge,
         } => VisionLoaderBuilder::new(
-            VisionSpecificConfig { use_flash_attn },
+            VisionSpecificConfig {
+                use_flash_attn,
+                prompt_batchsize,
+                topology: Topology::from_option_path(topology)?,
+                write_uqff,
+                from_uqff,
+                max_edge,
+            },
             chat_template,
             tokenizer_json,
             Some(model_id),
         )
         .build(arch.into()),
+        Which::DiffusionPlain {
+            model_id,
+            arch,
+            dtype: _,
+        } => {
+            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
+                .build(arch.into())
+        }
     })
 }
 
@@ -301,6 +389,8 @@ impl Runner {
         pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
+        prompt_batchsize = None,
+        seed = None,
     ))]
     fn new(
         which: Which,
@@ -319,7 +409,9 @@ impl Runner {
         pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
-    ) -> PyResult<Self> {
+        prompt_batchsize: Option<usize>,
+        seed: Option<u64>,
+    ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
@@ -327,7 +419,8 @@ impl Runner {
             | Which::LoraGGUF { .. }
             | Which::GGML { .. }
             | Which::LoraGGML { .. }
-            | Which::VisionPlain { .. } => None,
+            | Which::VisionPlain { .. }
+            | Which::DiffusionPlain { .. } => None,
             Which::XLora {
                 tgt_non_granular_index,
                 ..
@@ -341,15 +434,38 @@ impl Runner {
                 ..
             } => tgt_non_granular_index,
         };
+        let dtype = match which {
+            Which::Plain { dtype, .. }
+            | Which::Lora { dtype, .. }
+            | Which::GGUF { dtype, .. }
+            | Which::LoraGGUF { dtype, .. }
+            | Which::GGML { dtype, .. }
+            | Which::LoraGGML { dtype, .. }
+            | Which::VisionPlain { dtype, .. }
+            | Which::DiffusionPlain { dtype, .. }
+            | Which::XLora { dtype, .. }
+            | Which::XLoraGGUF { dtype, .. }
+            | Which::XLoraGGML { dtype, .. } => dtype,
+        };
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
         } else {
             max_seqs
         };
 
-        let loader = parse_which(which, no_kv_cache, chat_template.clone())?;
+        let prompt_batchsize = match prompt_batchsize {
+            Some(0) => {
+                return Err(PyApiErr::from(
+                    "`prompt_batchsize` must be a strictly positive integer, got 0.",
+                ))
+            }
+            Some(x) => Some(NonZeroUsize::new(x).unwrap()),
+            None => None,
+        };
+
+        let loader = parse_which(which, no_kv_cache, chat_template.clone(), prompt_batchsize)?;
         let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(draft_which, no_kv_cache, chat_template)?;
+            let draft = parse_which(draft_which, no_kv_cache, chat_template, prompt_batchsize)?;
             Box::new(SpeculativeLoader {
                 target: loader,
                 draft,
@@ -371,7 +487,7 @@ impl Runner {
                     expert_type: amoe_conf.expert_type.into(),
                     gate_model_id: amoe_conf.gate_model_id.clone(),
                     training: amoe_conf.training,
-                    loss_svg: amoe_conf.loss_svg.clone(),
+                    loss_csv_path: amoe_conf.loss_csv_path.clone(),
                 },
                 path: amoe_conf.dataset_json,
                 prefix: amoe_conf.prefix,
@@ -383,9 +499,9 @@ impl Runner {
             loader
         };
 
-        let device = get_device();
+        let device = get_device(seed).as_ref().map_err(PyApiErr::from)?;
         let isq = if let Some(isq) = in_situ_quant {
-            Some(parse_isq(&isq).map_err(|e| PyValueError::new_err(e.to_string()))?)
+            Some(parse_isq_value(&isq).map_err(PyApiErr::from)?)
         } else {
             None
         };
@@ -471,16 +587,15 @@ impl Runner {
         let pipeline = loader
             .load_model_from_hf(
                 None,
-                TokenSource::from_str(token_source)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                &ModelDType::Auto,
-                &device,
+                TokenSource::from_str(token_source).map_err(PyApiErr::from)?,
+                &dtype,
+                device,
                 true, // Silent for jupyter
                 mapper,
                 isq,
                 cache_config,
             )
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(PyApiErr::from)?;
 
         let scheduler_config = if cache_config.is_some() {
             // Handle case where we may have device mapping
@@ -494,7 +609,7 @@ impl Runner {
                     method: DefaultSchedulerMethod::Fixed(
                         max_seqs
                             .try_into()
-                            .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                            .map_err(|e| PyApiErr::from(format!("{e:?}")))?,
                     ),
                 }
             }
@@ -503,7 +618,7 @@ impl Runner {
                 method: DefaultSchedulerMethod::Fixed(
                     max_seqs
                         .try_into()
-                        .map_err(|e| PyValueError::new_err(format!("{e:?}")))?,
+                        .map_err(|e| PyApiErr::from(format!("{e:?}")))?,
                 ),
             }
         };
@@ -519,7 +634,7 @@ impl Runner {
     fn send_chat_completion_request(
         &mut self,
         request: Py<ChatCompletionRequest>,
-    ) -> PyResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
+    ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -529,24 +644,35 @@ impl Runner {
                 .map(|x| StopTokens::Seqs(x.to_vec()));
             let constraint = if request.grammar_type == Some("regex".to_string()) {
                 if request.grammar.is_none() {
-                    return Err(PyValueError::new_err(
+                    return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
                 Constraint::Regex(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type == Some("yacc".to_string()) {
                 if request.grammar.is_none() {
-                    return Err(PyValueError::new_err(
+                    return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
                 Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
-                return Err(PyValueError::new_err(
+                return Err(PyApiErr::from(
                     "Grammar type is specified but is not `regex` or `yacc`",
                 ));
             } else {
                 Constraint::None
+            };
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
+            } else {
+                None
             };
 
             let messages = match request.messages {
@@ -558,7 +684,7 @@ impl Runner {
                             Either::Left(content) => {
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -572,12 +698,12 @@ impl Runner {
                             }
                             Either::Right(image_messages) => {
                                 if image_messages.len() != 2 {
-                                    return Err(PyValueError::new_err(
-                                    "Expected 2 items for the content of a message with an image."
-                                .to_string()));
+                                    return Err(PyApiErr::from(
+                                        "Expected 2 items for the content of a message with an image."
+                                    ));
                                 }
                                 if message["role"].as_ref().left().unwrap() != "user" {
-                                    return Err(PyValueError::new_err(format!(
+                                    return Err(PyApiErr::from(format!(
                                         "Role for an image message must be `user`, but it is {}",
                                         &message["role"].as_ref().left().unwrap()
                                     )));
@@ -586,15 +712,15 @@ impl Runner {
                                 let mut items = Vec::new();
                                 for image_message in image_messages {
                                     if image_message.len() != 2 {
-                                        return Err(PyValueError::new_err("Expected 2 items for the sub-content of a message with an image.".to_string()));
+                                        return Err(PyApiErr::from("Expected 2 items for the sub-content of a message with an image.".to_string()));
                                     }
                                     if !image_message.contains_key("type") {
-                                        return Err(PyValueError::new_err(
+                                        return Err(PyApiErr::from(
                                             "Expected `type` key in input message.".to_string(),
                                         ));
                                     }
                                     if image_message["type"].is_right() {
-                                        return Err(PyValueError::new_err(
+                                        return Err(PyApiErr::from(
                                             "Expected string value in `type`.".to_string(),
                                         ));
                                     }
@@ -609,9 +735,9 @@ impl Runner {
                                         String,
                                         Either<String, HashMap<String, String>>,
                                     >],
-                                ) -> PyResult<(String, String)> {
+                                ) -> PyApiResult<(String, String)> {
                                     if image_messages[text_idx]["text"].is_right() {
-                                        return Err(PyValueError::new_err(
+                                        return Err(PyApiErr::from(
                                             "Expected string value in `text`.".to_string(),
                                         ));
                                     }
@@ -625,7 +751,7 @@ impl Runner {
                                             .unwrap_right()
                                             .contains_key("url")
                                     {
-                                        return Err(PyValueError::new_err("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
+                                        return Err(PyApiErr::from("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
                                     }
                                     let url = image_messages[url_idx]["image_url"]
                                         .as_ref()
@@ -635,7 +761,7 @@ impl Runner {
                                 }
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -649,11 +775,13 @@ impl Runner {
 
                                 let mut content_map = Vec::new();
                                 let mut content_image_map = IndexMap::new();
-                                content_image_map.insert("type".to_string(), "image".to_string());
+                                content_image_map
+                                    .insert("type".to_string(), Value::String("image".to_string()));
                                 content_map.push(content_image_map);
                                 let mut content_text_map = IndexMap::new();
-                                content_text_map.insert("type".to_string(), "text".to_string());
-                                content_text_map.insert("text".to_string(), content);
+                                content_text_map
+                                    .insert("type".to_string(), Value::String("text".to_string()));
+                                content_text_map.insert("text".to_string(), Value::String(content));
                                 content_map.push(content_text_map);
 
                                 message_map
@@ -666,32 +794,10 @@ impl Runner {
                     if !image_urls.is_empty() {
                         let mut images = Vec::new();
                         for url in image_urls {
-                            let bytes = if url.contains("http") {
-                                // Read from http
-                                match reqwest::blocking::get(url.clone()) {
-                                    Ok(http_resp) => http_resp
-                                        .bytes()
-                                        .map_err(|e| PyValueError::new_err(e.to_string()))?
-                                        .to_vec(),
-                                    Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
-                                }
-                            } else if let Ok(mut f) = File::open(&url) {
-                                // Read from local file
-                                let metadata = fs::metadata(&url)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                                let mut buffer = vec![0; metadata.len() as usize];
-                                f.read_exact(&mut buffer)?;
-                                buffer
-                            } else {
-                                // Decode with base64
-                                general_purpose::STANDARD
-                                    .decode(url)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?
-                            };
-                            images.push(
-                                image::load_from_memory(&bytes)
-                                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                            );
+                            let url_unparsed = url.trim();
+
+                            let image = util::parse_image_url(url_unparsed)?;
+                            images.push(image);
                         }
                         RequestMessage::VisionChat {
                             messages: messages_vec,
@@ -705,7 +811,7 @@ impl Runner {
                     let mut messages = Vec::new();
                     let mut message_map: IndexMap<
                         String,
-                        Either<String, Vec<IndexMap<String, String>>>,
+                        Either<String, Vec<IndexMap<String, Value>>>,
                     > = IndexMap::new();
                     message_map.insert("role".to_string(), Either::Left("user".to_string()));
                     message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
@@ -722,10 +828,7 @@ impl Runner {
             let tools = if let Some(tools) = &request.tool_schemas {
                 let mut new_tools = Vec::new();
                 for schema in tools {
-                    new_tools.push(
-                        serde_json::from_str::<Tool>(schema)
-                            .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                    );
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
                 }
                 Some(new_tools)
             } else {
@@ -753,6 +856,7 @@ impl Runner {
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
+                    dry_params,
                 },
                 response: tx,
                 return_logprobs: request.logprobs,
@@ -762,6 +866,7 @@ impl Runner {
                 adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
+                logits_processors: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -775,14 +880,15 @@ impl Runner {
 
                 match response {
                     Response::ValidationError(e) | Response::InternalError(e) => {
-                        Err(PyValueError::new_err(e.to_string()))
+                        Err(PyApiErr::from(e.to_string()))
                     }
                     Response::Done(response) => Ok(Either::Left(response)),
-                    Response::ModelError(msg, _) => Err(PyValueError::new_err(msg.to_string())),
+                    Response::ModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
                     Response::Chunk(_) => unreachable!(),
                     Response::CompletionDone(_) => unreachable!(),
                     Response::CompletionModelError(_, _) => unreachable!(),
                     Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
                 }
             }
         })
@@ -792,7 +898,7 @@ impl Runner {
     fn send_completion_request(
         &mut self,
         request: Py<CompletionRequest>,
-    ) -> PyResult<CompletionResponse> {
+    ) -> PyApiResult<CompletionResponse> {
         let (tx, mut rx) = channel(10_000);
         Python::with_gil(|py| {
             let request = request.bind(py).borrow();
@@ -802,20 +908,20 @@ impl Runner {
                 .map(|x| StopTokens::Seqs(x.to_vec()));
             let constraint = if request.grammar_type == Some("regex".to_string()) {
                 if request.grammar.is_none() {
-                    return Err(PyValueError::new_err(
+                    return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
                 Constraint::Regex(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type == Some("yacc".to_string()) {
                 if request.grammar.is_none() {
-                    return Err(PyValueError::new_err(
+                    return Err(PyApiErr::from(
                         "Grammar type is specified but not grammar text",
                     ));
                 }
                 Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
             } else if request.grammar_type.is_some() {
-                return Err(PyValueError::new_err(
+                return Err(PyApiErr::from(
                     "Grammar type is specified but is not `regex` or `yacc`",
                 ));
             } else {
@@ -830,12 +936,20 @@ impl Runner {
             let tools = if let Some(tools) = &request.tool_schemas {
                 let mut new_tools = Vec::new();
                 for schema in tools {
-                    new_tools.push(
-                        serde_json::from_str::<Tool>(schema)
-                            .map_err(|e| PyValueError::new_err(e.to_string()))?,
-                    );
+                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
                 }
                 Some(new_tools)
+            } else {
+                None
+            };
+
+            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
+                Some(DrySamplingParams::new_with_defaults(
+                    dry_multiplier,
+                    request.dry_sequence_breakers.clone(),
+                    request.dry_base,
+                    request.dry_allowed_length,
+                )?)
             } else {
                 None
             };
@@ -865,6 +979,7 @@ impl Runner {
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
+                    dry_params,
                 },
                 response: tx,
                 return_logprobs: false,
@@ -874,6 +989,7 @@ impl Runner {
                 adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
+                logits_processors: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -883,25 +999,72 @@ impl Runner {
 
             match response {
                 Response::ValidationError(e) | Response::InternalError(e) => {
-                    Err(PyValueError::new_err(e.to_string()))
+                    Err(PyApiErr::from(e.to_string()))
                 }
                 Response::CompletionDone(response) => Ok(response),
-                Response::CompletionModelError(msg, _) => {
-                    Err(PyValueError::new_err(msg.to_string()))
-                }
+                Response::CompletionModelError(msg, _) => Err(PyApiErr::from(msg.to_string())),
                 Response::Chunk(_) => unreachable!(),
                 Response::Done(_) => unreachable!(),
                 Response::ModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
+                Response::ImageGeneration(_) => unreachable!(),
             }
         })
     }
 
+    /// Generate an image.
+    #[pyo3(signature = (
+        prompt,
+        response_format,
+        height = 720,
+        width = 1280,
+    ))]
+    fn generate_image(
+        &self,
+        prompt: String,
+        response_format: ImageGenerationResponseFormat,
+        height: usize,
+        width: usize,
+    ) -> PyApiResult<ImageGenerationResponse> {
+        let (tx, mut rx) = channel(1);
+
+        let request = _Request::Normal(NormalRequest {
+            id: 0,
+            messages: RequestMessage::ImageGeneration {
+                prompt: prompt.to_string(),
+                format: response_format,
+                generation_params: DiffusionGenerationParams { height, width },
+            },
+            sampling_params: SamplingParams::deterministic(),
+            response: tx,
+            return_logprobs: false,
+            is_streaming: false,
+            suffix: None,
+            constraint: Constraint::None,
+            adapters: None,
+            tool_choice: None,
+            tools: None,
+            logits_processors: None,
+        });
+
+        let sender = self.runner.get_sender()?;
+        sender.blocking_send(request).unwrap();
+
+        let ResponseOk::ImageGeneration(response) = rx
+            .blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            return Err(PyApiErr::from("Got unexpected response type."));
+        };
+
+        Ok(response)
+    }
+
     /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
     /// then nothing will happen.
-    fn send_re_isq(&self, dtype: String) -> PyResult<()> {
-        let request =
-            _Request::ReIsq(parse_isq(&dtype).map_err(|e| PyValueError::new_err(e.to_string()))?);
+    fn send_re_isq(&self, dtype: String) -> PyApiResult<()> {
+        let request = _Request::ReIsq(parse_isq_value(&dtype)?);
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
     }
@@ -943,5 +1106,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::CompletionChoice>()?;
     m.add_class::<mistralrs_core::CompletionResponse>()?;
     m.add_class::<mistralrs_core::TopLogprob>()?;
+    m.add_class::<mistralrs_core::ModelDType>()?;
+    m.add_class::<mistralrs_core::ImageGenerationResponseFormat>()?;
     Ok(())
 }

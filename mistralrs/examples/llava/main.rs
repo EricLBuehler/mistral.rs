@@ -1,84 +1,37 @@
-use either::Either;
-use image::{ColorType, DynamicImage};
-use indexmap::IndexMap;
-use std::sync::Arc;
-use tokio::sync::mpsc::channel;
+use anyhow::Result;
+use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
-use mistralrs::{
-    Constraint, DefaultSchedulerMethod, Device, DeviceMapMetadata, MistralRs, MistralRsBuilder,
-    ModelDType, NormalRequest, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    TokenSource, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-};
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = VisionModelBuilder::new("llava-hf/llava-1.5-7b-hf", VisionLoaderType::LLaVA)
+        .with_isq(IsqType::Q4K)
+        .with_chat_template("chat_templates/vicuna.json")
+        .with_logging()
+        .build()
+        .await?;
 
-fn setup() -> anyhow::Result<Arc<MistralRs>> {
-    let loader = VisionLoaderBuilder::new(
-        VisionSpecificConfig {
-            use_flash_attn: false,
-        },
-        Some("chat_templates/vicuna.json".to_string()),
-        None,
-        Some("llava-hf/llava-1.5-7b-hf".to_string()),
-    )
-    .build(VisionLoaderType::LLaVA);
-    // Load, into a Pipeline
+    let bytes = match reqwest::blocking::get(
+        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+    ) {
+        Ok(http_resp) => http_resp.bytes()?.to_vec(),
+        Err(e) => anyhow::bail!(e),
+    };
+    let image = image::load_from_memory(&bytes)?;
 
-    let pipeline = loader.load_model_from_hf(
-        None,
-        TokenSource::CacheToken,
-        &ModelDType::Auto,
-        &Device::cuda_if_available(0)?,
-        false,
-        DeviceMapMetadata::dummy(),
-        None,
-        None, // No PagedAttention.
+    let messages = VisionMessages::new().add_image_message(
+        TextMessageRole::User,
+        "What is depicted here? Please describe the scene in detail.",
+        image,
+        &model,
     )?;
-    // Create the MistralRs, which is a runner
-    Ok(MistralRsBuilder::new(
-        pipeline,
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(5.try_into().unwrap()),
-        },
-    )
-    .build())
-}
 
-fn main() -> anyhow::Result<()> {
-    let mistralrs = setup()?;
+    let response = model.send_chat_request(messages).await?;
 
-    let (tx, mut rx) = channel(10_000);
-    let request = Request::Normal(NormalRequest {
-        messages: RequestMessage::VisionChat {
-            images: vec![DynamicImage::new(1280, 720, ColorType::Rgb8)],
-            messages: vec![IndexMap::from([
-                ("role".to_string(), Either::Left("user".to_string())),
-                (
-                    "content".to_string(),
-                    Either::Left("<image>what is this image show?".to_string()),
-                ),
-            ])],
-        },
-        sampling_params: SamplingParams::default(),
-        response: tx,
-        return_logprobs: false,
-        is_streaming: false,
-        id: 0,
-        constraint: Constraint::None,
-        suffix: None,
-        adapters: None,
-        tools: None,
-        tool_choice: None,
-    });
-    mistralrs.get_sender()?.blocking_send(request)?;
-    let response = rx.blocking_recv().unwrap();
-    match response {
-        Response::Done(c) => println!("Text: {}", c.choices[0].message.content.as_ref().unwrap()),
-        Response::InternalError(e) => println!("Internal error: {:?}", e),
-        Response::ValidationError(e) => println!("Validation error: {:?}", e),
-        Response::ModelError(s, r) => println!("Model error: {:?} {:?}", s, r),
-        Response::Chunk(_) => println!("Chunk"),
-        Response::CompletionModelError(_, _) => println!("Completion model error"),
-        Response::CompletionDone(c) => println!("Text: {}", c.choices[0].text),
-        _ => unreachable!("Unexpected response"),
-    }
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+    dbg!(
+        response.usage.avg_prompt_tok_per_sec,
+        response.usage.avg_compl_tok_per_sec
+    );
+
     Ok(())
 }

@@ -1,19 +1,24 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     iter::zip,
     sync::{Arc, Mutex},
 };
 
-use candle_core::{bail, Device, Error, Result, Tensor, D};
+use candle_core::{Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
+use once_cell::sync::Lazy;
 use rand::distributions::{Distribution, WeightedIndex};
 use rand_isaac::Isaac64Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
+
+static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
+    Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
 #[derive(Clone, Debug)]
 /// Stop sequences or ids.
@@ -36,10 +41,15 @@ pub struct SamplingParams {
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
+    pub dry_params: Option<DrySamplingParams>,
 }
 
-impl Default for SamplingParams {
-    fn default() -> Self {
+impl SamplingParams {
+    /// This sets up the parameters so that there is:
+    /// - No temperature, topk, topp, minp
+    /// - No penalties, stop tokens, or logit bias
+    /// - No maximum length
+    pub fn deterministic() -> Self {
         Self {
             temperature: None,
             top_k: None,
@@ -52,7 +62,118 @@ impl Default for SamplingParams {
             max_len: None,
             logits_bias: None,
             n_choices: 1,
+            dry_params: None,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DrySamplingParams {
+    pub sequence_breakers: Vec<String>,
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: usize,
+}
+
+impl DrySamplingParams {
+    pub fn new_with_defaults(
+        multiplier: f32,
+        sequence_breakers: Option<Vec<String>>,
+        base: Option<f32>,
+        allowed_length: Option<usize>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            base: base.unwrap_or(1.75),
+            allowed_length: allowed_length.unwrap_or(2),
+            sequence_breakers: sequence_breakers.unwrap_or(DRY_SEQUENCE_BREAKERS.clone()),
+            multiplier,
+        })
+    }
+}
+
+impl Default for DrySamplingParams {
+    fn default() -> Self {
+        Self {
+            multiplier: 0.0,
+            base: 1.75,
+            allowed_length: 2,
+            sequence_breakers: DRY_SEQUENCE_BREAKERS.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DrySamplingParamsInner {
+    pub sequence_breakers: HashSet<u32>,
+    pub multiplier: f32,
+    pub base: f32,
+    pub allowed_length: usize,
+}
+
+impl DrySamplingParamsInner {
+    pub fn from(other: DrySamplingParams, tokenizer: &Tokenizer) -> anyhow::Result<Self> {
+        Ok(Self {
+            base: other.base,
+            allowed_length: other.allowed_length,
+            sequence_breakers: HashSet::from_iter(
+                other
+                    .sequence_breakers
+                    .into_iter()
+                    .map(|breaker| {
+                        tokenizer
+                            // Prefix with 'a' to get the correct encoding of the token at the end of a text.
+                            //
+                            // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
+                            //        for the correct solution which covers multi-token sequence breakers
+                            //        and ambiguous encodings.
+                            .encode(["a", &breaker].concat(), true)
+                            .map_err(anyhow::Error::msg)
+                            .map(|enc| {
+                                let ids = enc.get_ids();
+                                if !ids.is_empty() {
+                                    None
+                                } else {
+                                    Some(ids[ids.len() - 1])
+                                }
+                            })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            ),
+            multiplier: other.multiplier,
+        })
+    }
+}
+
+/// Customizable logits processor.
+///
+/// # Example
+/// ```rust
+/// use std::{sync::Arc, ops::Mul};
+/// use mistralrs_core::CustomLogitsProcessor;
+/// use candle_core::{Result, Tensor};
+///
+/// struct ThresholdLogitsProcessor;
+/// impl CustomLogitsProcessor for ThresholdLogitsProcessor {
+///     fn apply(&self, logits: &Tensor, _context: &[u32]) -> Result<Tensor> {
+///         // Mask is 1 for true, 0 for false.
+///         let mask = logits.ge(0.5)?;
+///         logits.broadcast_mul(&mask.to_dtype(logits.dtype())?)
+///     }
+/// }
+/// let processor1: Arc<dyn CustomLogitsProcessor> = Arc::new(|logits: &Tensor, _context: &[u32]| logits * 1.23);
+/// let processor2: Arc<dyn CustomLogitsProcessor> = Arc::new(ThresholdLogitsProcessor);
+/// ```
+pub trait CustomLogitsProcessor: Send + Sync {
+    /// Logits and sequence context (prompt and generated tokens), returning modified tokens.
+    fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor>;
+}
+
+impl<T: Fn(&Tensor, &[u32]) -> Result<Tensor> + Send + Sync> CustomLogitsProcessor for T {
+    fn apply(&self, logits: &Tensor, context: &[u32]) -> Result<Tensor> {
+        self(logits, context)
     }
 }
 
@@ -61,12 +182,14 @@ impl Default for SamplingParams {
 pub struct Sampler {
     temperature: Option<f64>,
     top_n_logprobs: usize,
-    tokenizer: Arc<Tokenizer>,
+    tokenizer: Option<Arc<Tokenizer>>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
+    dry_params: Option<DrySamplingParamsInner>,
     top_k: i64,
     top_p: f64,
     min_p: f64,
+    logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -76,14 +199,14 @@ pub struct Sampler {
 pub struct TopLogprob {
     pub token: u32,
     pub logprob: f32,
-    pub bytes: String,
+    pub bytes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Logprobs {
     pub token: u32,
     pub logprob: f32,
-    pub bytes: String,
+    pub bytes: Option<String>,
     pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
@@ -96,28 +219,41 @@ impl Sampler {
     pub fn new(
         temperature: Option<f64>,
         top_n_logprobs: usize,
-        tokenizer: Arc<Tokenizer>,
+        tokenizer: Option<Arc<Tokenizer>>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
+        dry_params: Option<DrySamplingParams>,
         top_k: i64,
         top_p: f64,
         min_p: f64,
-    ) -> Self {
+        logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
+    ) -> anyhow::Result<Self> {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
         } else {
             temperature
         };
-        Self {
+        let dry_params = if let Some(ref tokenizer) = tokenizer {
+            dry_params.map(|params| DrySamplingParamsInner::from(params, tokenizer))
+        } else {
+            None
+        };
+        let dry_params = match dry_params {
+            Some(fallible) => Some(fallible?),
+            None => None,
+        };
+        Ok(Self {
             temperature,
             top_n_logprobs,
             tokenizer,
             frequency_penalty,
             presence_penalty,
+            dry_params,
             top_k,
             top_p,
             min_p,
-        }
+            logits_processors,
+        })
     }
 
     fn get_top_logprobs(
@@ -142,21 +278,32 @@ impl Sampler {
             top_n_toks.push(argsort_indices[val]);
         }
 
-        let mut bytes = Vec::new();
-        for tok in &top_n_toks {
-            bytes.push(
-                self.tokenizer
-                    .decode(&[*tok as u32], false)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            );
+        if let Some(tokenizer) = &self.tokenizer {
+            let mut bytes = Vec::new();
+            for tok in &top_n_toks {
+                bytes.push(
+                    tokenizer
+                        .decode(&[*tok as u32], false)
+                        .map_err(|x| Error::Msg(x.to_string()))?,
+                );
+            }
+
+            Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
+                .map(|(bytes, (token, logprob))| TopLogprob {
+                    token: token as u32,
+                    logprob,
+                    bytes: Some(bytes),
+                })
+                .collect::<Vec<_>>())
+        } else {
+            Ok(zip(top_n_toks, top_n_logprobs)
+                .map(|(token, logprob)| TopLogprob {
+                    token: token as u32,
+                    logprob,
+                    bytes: None,
+                })
+                .collect::<Vec<_>>())
         }
-        Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
-            .map(|(bytes, (token, logprob))| TopLogprob {
-                token: token as u32,
-                logprob,
-                bytes,
-            })
-            .collect::<Vec<_>>())
     }
 
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
@@ -173,14 +320,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -250,14 +404,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -280,14 +441,21 @@ impl Sampler {
             None
         };
 
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token.try_into().unwrap()], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         Ok(Logprobs {
             token: next_token as u32,
             logprob,
             top_logprobs,
-            bytes: self
-                .tokenizer
-                .decode(&[next_token.try_into().unwrap()], false)
-                .map_err(|x| Error::Msg(x.to_string()))?,
+            bytes,
         })
     }
 
@@ -356,12 +524,23 @@ impl Sampler {
         self.sample_multinomial(probs, argsort_indices, return_logprobs, rng)
     }
 
-    fn apply_penalties(&self, mut logits: Vec<f32>, context: Option<&[u32]>) -> Result<Tensor> {
+    fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
+        if context.is_empty() {
+            candle_core::bail!("Penalty context is empty, this should not happen.");
+        }
+
+        // Dry penalty
+        self.apply_dry_penalty(&mut logits, context)?;
+
+        // Frequency and Presence penalty
+        self.apply_freq_presc_penalty(&mut logits, context)?;
+
+        let vocab_size = logits.len();
+        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    fn apply_freq_presc_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
         if self.frequency_penalty.is_some() || self.presence_penalty.is_some() {
-            if context.is_none() {
-                bail!("Must specify penalty context.");
-            }
-            let context = context.as_ref().unwrap();
             let frequency_penalty = self.frequency_penalty.unwrap_or(0.);
             let presence_penalty = self.presence_penalty.unwrap_or(0.);
 
@@ -369,6 +548,10 @@ impl Sampler {
 
             let mut counts = vec![0.0f32; logits.len()];
             for ctx in context.iter() {
+                // Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
+                if *ctx as usize >= logits.len() {
+                    continue;
+                }
                 counts[*ctx as usize] += 1.0;
             }
 
@@ -379,24 +562,94 @@ impl Sampler {
                     - if count > 0.0 { 1. } else { 0. } * presence_penalty;
             }
         }
-        let vocab_size = logits.len();
-        Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+        Ok(())
+    }
+
+    fn apply_dry_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
+        if let Some(ref params) = self.dry_params {
+            let match_indices = context
+                .par_iter()
+                .enumerate()
+                .take(context.len() - 1)
+                .filter(|(_i, x)| *context.last().unwrap() == **x)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+
+            let mut match_lengths = HashMap::new();
+
+            for i in match_indices {
+                let next_token = context[i + 1];
+
+                if params.sequence_breakers.contains(&next_token) {
+                    continue;
+                }
+
+                let mut match_length = 1;
+
+                // Limit match length to avoid quadratic runtime and potential DoS with adversarial inputs.
+                while match_length < 50 {
+                    if match_length > i {
+                        // Start of input
+                        break;
+                    }
+
+                    let j = i - match_length;
+
+                    let prev_tok = context[context.len() - (match_length + 1)];
+                    if context[j] != prev_tok {
+                        // Start of match reached
+                        break;
+                    }
+
+                    if params.sequence_breakers.contains(&prev_tok) {
+                        // Seq breaking tok reached
+                        break;
+                    }
+
+                    match_length += 1;
+                }
+
+                #[allow(clippy::map_entry)]
+                if match_lengths.contains_key(&next_token) {
+                    match_lengths.insert(next_token, match_length.max(match_lengths[&next_token]));
+                } else {
+                    match_lengths.insert(next_token, match_length);
+                }
+            }
+
+            // Actually apply penalties
+            for (tok, match_len) in match_lengths {
+                if match_len >= params.allowed_length {
+                    // Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
+                    if tok as usize >= logits.len() {
+                        continue;
+                    }
+                    let penalty = params.multiplier
+                        * params.base.powf((match_len - params.allowed_length) as f32);
+                    logits[tok as usize] -= penalty;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Sample the provided tokens.
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
-    /// If `frequency_penalty.is_some()` or `presence_penalty.is_some()`, then `penalty_ctxt` must be provided.
     pub fn sample(
         &self,
         logits: Tensor,
-        penalty_ctxt: Option<&[u32]>,
+        context: &[u32],
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
-        let logits = self.apply_penalties(logits.to_vec1()?, penalty_ctxt)?;
+        let logits = logits.to_vec1()?;
+        let mut logits = self.apply_penalties(logits, context)?;
+        for processor in &self.logits_processors {
+            logits = processor.apply(&logits, context)?;
+        }
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
@@ -468,10 +721,24 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            Some(get_tokenizer().into()),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
-        let res = sampler.sample(logits, None, false, rng, false).unwrap();
+        let res = sampler
+            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, false)
+            .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)
@@ -486,10 +753,24 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(None, 10, get_tokenizer().into(), None, None, 32, 0.1, 0.05);
+        let sampler = Sampler::new(
+            None,
+            10,
+            Some(get_tokenizer().into()),
+            None,
+            None,
+            None,
+            32,
+            0.1,
+            0.05,
+            vec![],
+        )
+        .unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
-        let res = sampler.sample(logits, None, false, rng, true).unwrap();
+        let res = sampler
+            .sample(logits, &(0..1024).collect::<Vec<_>>(), false, rng, true)
+            .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
         assert_eq!(res.logprob, 1023f64.log(10.) as f32)

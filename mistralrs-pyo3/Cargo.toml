@@ -17,7 +17,7 @@ doc = false
 
 [dependencies]
 pyo3.workspace = true
-mistralrs-core = { version = "0.2.3", path = "../mistralrs-core", features = ["pyo3_macros"] }
+mistralrs-core = { version = "0.3.2", path = "../mistralrs-core", features = ["pyo3_macros"] }
 serde.workspace = true
 serde_json.workspace = true
 candle-core.workspace = true
@@ -30,6 +30,9 @@ tokio.workspace = true
 image.workspace = true
 reqwest.workspace = true
 base64.workspace = true
+url.workspace = true
+data-url.workspace = true
+anyhow.workspace = true
 
 [build-dependencies]
 pyo3-build-config = "0.22"

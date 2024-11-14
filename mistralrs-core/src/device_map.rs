@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{utils::debug::DeviceRepr, ModelDType, TryIntoDType};
+use crate::{utils::debug::DeviceRepr, Topology, TryIntoDType};
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
@@ -40,7 +40,37 @@ impl DeviceMapMetadata {
         &self,
         model_layers: usize,
         device: &Device,
+        topology: Option<&Topology>,
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
+        if let Some(topology) = topology {
+            if topology.0.iter().all(|x| x.is_none()) {
+                return Ok(Box::new(DummyDeviceMapper {
+                    nm_device: device.clone(),
+                }));
+            } else {
+                let layers = topology
+                    .0
+                    .iter()
+                    .map(|layer| {
+                        layer
+                            .as_ref()
+                            .map(|x| x.device.clone().unwrap_or(device.clone()))
+                            .unwrap_or(device.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                info!("Loading model according to the following repeating layer mappings based on topology:");
+                for (i, dev) in layers.iter().enumerate() {
+                    info!("Layer {i}: {}", dev.device_pretty_repr());
+                }
+
+                return Ok(Box::new(LayerDeviceMapper {
+                    mappings: layers,
+                    nm_device: device.clone(),
+                }));
+            }
+        }
+
         // How many device layers
         // Clamp to max of model layers
         let n_device_layers = if let Some(layers) = &self.device_layers {
@@ -73,12 +103,14 @@ impl DeviceMapMetadata {
         {
             combined.extend(vec![device.clone(); n_device_layers]);
         } else {
+            let original_seed = device.get_current_seed()?;
             for DeviceLayerMapMetadata { ordinal, layers } in self.device_layers.as_ref().unwrap() {
                 let dev = match device {
                     Device::Cpu => Device::Cpu,
                     Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
                     Device::Metal(_) => Device::new_metal(*ordinal)?,
                 };
+                dev.set_seed(original_seed)?;
                 combined.extend(vec![dev; *layers]);
             }
         }
@@ -123,7 +155,7 @@ pub trait DeviceMapper: Debug {
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
 
     // === IMMEDIATELY AFTER INIT ===
-    fn get_min_dtype(&self) -> Result<DType>;
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
 }
 
 #[derive(Debug)]
@@ -168,10 +200,10 @@ impl DeviceMapper for LayerDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
-    fn get_min_dtype(&self) -> Result<DType> {
-        ModelDType::Auto
-            .try_into_dtype_all(&self.mappings)
-            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        dtype
+            .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
+            .map_err(candle_core::Error::msg)
     }
 }
 
@@ -216,9 +248,9 @@ impl DeviceMapper for DummyDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
-    fn get_min_dtype(&self) -> Result<DType> {
-        ModelDType::Auto
-            .try_into_dtype(&self.nm_device)
-            .map_err(|e| candle_core::Error::Msg(format!("{e:?}")))
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        dtype
+            .try_into_dtype(&[&self.nm_device])
+            .map_err(candle_core::Error::msg)
     }
 }

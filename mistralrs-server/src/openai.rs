@@ -1,5 +1,5 @@
 use either::Either;
-use mistralrs_core::{Tool, ToolChoice};
+use mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -51,8 +51,20 @@ fn default_1usize() -> usize {
     1
 }
 
+fn default_720usize() -> usize {
+    720
+}
+
+fn default_1280usize() -> usize {
+    1280
+}
+
 fn default_model() -> String {
     "default".to_string()
+}
+
+fn default_response_format() -> ImageGenerationResponseFormat {
+    ImageGenerationResponseFormat::Url
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -112,6 +124,14 @@ pub struct ChatCompletionRequest {
     pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -182,4 +202,33 @@ pub struct CompletionRequest {
     pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_multiplier: Option<f32>,
+    #[schema(example = json!(Option::None::<f32>))]
+    pub dry_base: Option<f32>,
+    #[schema(example = json!(Option::None::<usize>))]
+    pub dry_allowed_length: Option<usize>,
+    #[schema(example = json!(Option::None::<String>))]
+    pub dry_sequence_breakers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ImageGenerationRequest {
+    #[schema(example = "mistral")]
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[schema(example = "Draw a picture of a majestic, snow-covered mountain.")]
+    pub prompt: String,
+    #[serde(rename = "n")]
+    #[serde(default = "default_1usize")]
+    #[schema(example = 1)]
+    pub n_choices: usize,
+    #[serde(default = "default_response_format")]
+    pub response_format: ImageGenerationResponseFormat,
+    #[serde(default = "default_720usize")]
+    #[schema(example = 720)]
+    pub height: usize,
+    #[serde(default = "default_1280usize")]
+    #[schema(example = 1280)]
+    pub width: usize,
 }

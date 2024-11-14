@@ -5,7 +5,8 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{quantized::GgmlDType, Device, IndexOp, Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -27,8 +28,8 @@ use crate::{
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -48,7 +49,7 @@ impl Loader for SpeculativeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -95,7 +96,7 @@ impl Loader for SpeculativeLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let paged_attn_config = if paged_attn_config.is_none() {
@@ -179,8 +180,22 @@ impl SpeculativePipeline {
         draft: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         config: SpeculativeConfig,
     ) -> Result<Self> {
-        if get_mut_arcmutex!(target).tokenizer().get_vocab(true)
-            != get_mut_arcmutex!(draft).tokenizer().get_vocab(true)
+        if get_mut_arcmutex!(target)
+            .tokenizer()
+            .as_ref()
+            .ok_or(candle_core::Error::Msg(
+                "`SpeculativePipeline::new` requires the target pipeline to have a token trie"
+                    .to_string(),
+            ))?
+            .get_vocab(true)
+            != get_mut_arcmutex!(draft)
+                .tokenizer()
+                .as_ref()
+                .ok_or(candle_core::Error::Msg(
+                    "`SpeculativePipeline::new` requires the draft pipeline to have a token trie"
+                        .to_string(),
+                ))?
+                .get_vocab(true)
         {
             candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
@@ -212,7 +227,7 @@ impl SpeculativePipeline {
 }
 
 impl PreProcessingMixin for SpeculativePipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
         get_mut_arcmutex!(self.target).get_chat_template()
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
@@ -221,7 +236,7 @@ impl PreProcessingMixin for SpeculativePipeline {
 }
 
 impl IsqPipelineMixin for SpeculativePipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> anyhow::Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)?;
         get_mut_arcmutex!(self.draft).re_isq_model(dtype)
     }
@@ -270,7 +285,7 @@ impl MetadataMixin for SpeculativePipeline {
     fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
     }
-    fn tokenizer(&self) -> Arc<Tokenizer> {
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn name(&self) -> String {
@@ -292,13 +307,13 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&self, _inputs: Box<dyn Any>) -> Result<Tensor> {
+    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
         unreachable!()
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         _seqs: &mut [&mut Sequence],
-        _logits: Tensor,
+        _logits: Vec<Tensor>,
         _prefix_cacher: &mut PrefixCacheManager,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -392,9 +407,19 @@ impl Pipeline for SpeculativePipeline {
                             None,
                             None,
                             None, // TODO: get block tables/handle it
+                            None, // TODO: do we support???
                         )
+                        .nth(0)
+                        .unwrap()
                         .unwrap();
                     let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
+                    #[allow(irrefutable_let_patterns)]
+                    let ForwardInputsResult::CausalGeneration { logits } = logits
+                    else {
+                        candle_core::bail!(
+                            "Speculative decoding requires `CausalGeneration` forward results"
+                        );
+                    };
 
                     let sample = sample_sequence(
                         logits.clone(),
@@ -451,10 +476,20 @@ impl Pipeline for SpeculativePipeline {
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         None,
                         None, // TODO: get block tables/handle it
+                        None, // TODO: do we support???
                     )
+                    .nth(0)
+                    .unwrap()
                     .unwrap();
 
                 let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
+                #[allow(irrefutable_let_patterns)]
+                let ForwardInputsResult::CausalGeneration { logits } = logits
+                else {
+                    candle_core::bail!(
+                        "Speculative decoding requires `CausalGeneration` forward results"
+                    );
+                };
 
                 // Reset the prefill tokens
                 seq.reset_prefill_toks();
@@ -548,15 +583,23 @@ impl Pipeline for SpeculativePipeline {
                             get_mut_arcmutex!(self.target)
                                 .get_metadata()
                                 .tok_trie
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
+                                ))?
                                 .append_token(rx.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                                .map_err(candle_core::Error::msg)?;
                         }
                         SequenceRecognizer::Cfg(ref mut cfg) => {
                             get_mut_arcmutex!(self.target)
                                 .get_metadata()
                                 .tok_trie
+                                .as_ref()
+                                .ok_or(candle_core::Error::Msg(
+                                    "`SpeculativePipeline::step` requires a token trie".to_string(),
+                                ))?
                                 .append_token(cfg.as_mut(), accepted.token)
-                                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                                .map_err(candle_core::Error::msg)?;
                         }
                         SequenceRecognizer::None => {}
                     }
@@ -609,7 +652,7 @@ impl Pipeline for SpeculativePipeline {
         }
     }
     fn category(&self) -> ModelCategory {
-        self.category
+        self.category.clone()
     }
 }
 

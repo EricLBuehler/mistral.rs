@@ -1,9 +1,8 @@
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
-import base64
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="microsoft/Phi-3-vision-128k-instruct",
+        model_id="microsoft/Phi-3.5-vision-instruct",
         arch=VisionArchitecture.Phi3V,
     ),
 )

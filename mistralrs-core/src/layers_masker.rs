@@ -23,7 +23,7 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
-fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
+pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
     let on_false = xs;
     let res = mask
@@ -218,7 +218,7 @@ impl CausalMasker {
     #[deprecated(
         since = "0.1.10",
         note = "use `make_causal_mask_as_attn_bias` instead! \
-        This is *not* compatible with `ScaledDotProductAttention`"
+        This is *not* compatible with `Sdpa`"
     )]
     pub fn make_causal_mask(
         &self,
@@ -242,7 +242,7 @@ impl CausalMasker {
     #[deprecated(
         since = "0.1.10",
         note = "use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
-        This is *not* compatible with `ScaledDotProductAttention`"
+        This is *not* compatible with `Sdpa`"
     )]
     pub fn make_causal_mask_with_sliding_window(
         &self,

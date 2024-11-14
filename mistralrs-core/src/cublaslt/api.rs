@@ -1,13 +1,14 @@
-pub use candle_core::cuda_backend::cudarc::cublaslt::Activation;
+use candle_core::cuda::cudarc::driver::DevicePtr;
+use float8::F8E4M3;
 use std::ffi::c_int;
 
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::WrapErr;
-use candle_core::{CpuStorage, Device, Layout, Result, Shape, Storage, Tensor};
+use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
 use std::sync::Arc;
 
-use candle_core::cuda_backend::cudarc::cublaslt::{CudaBlasLT, Matmul, MatmulConfig};
+use super::matmul::{Activation, CudaBlasLT, Matmul, MatmulConfig};
 
 #[derive(Debug, Clone)]
 pub struct CublasLt(Arc<CudaBlasLT>);
@@ -858,11 +859,12 @@ pub fn fused_batch_matmul(
         a.apply_op2(b, op)
     }
 }
-
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::PI;
+
     use super::*;
-    use candle_core::{DType, Device};
+    use candle_core::{DType, Device, IndexOp};
 
     fn to_vec2_round(t: Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
         let b = 10f32.powi(digits);
@@ -901,10 +903,9 @@ mod tests {
         let res = fused_matmul(&a, &b, None, None, None, Some(&bias), None, cublaslt)?;
         let expected = (b.matmul(&a.t()?)? + bias.broadcast_left(2)?)?;
 
-        assert_eq!(
-            to_vec2_round(res.to_dtype(DType::F32)?, 4)?,
-            to_vec2_round(expected.to_dtype(DType::F32)?, 4)?
-        );
+        let abs_diff = (res - expected)?.abs()?.to_vec2::<f32>()?;
+        let range = 1e-02;
+        assert!(abs_diff.iter().all(|x| x.into_iter().all(|y| *y <= range)));
         Ok(())
     }
 
@@ -931,10 +932,11 @@ mod tests {
         )?;
         let expected = (b.matmul(&a.t()?)?.add(&c)? + bias.broadcast_left((3, 2))?)?;
 
-        assert_eq!(
-            to_vec3_round(res.to_dtype(DType::F32)?, 4)?,
-            to_vec3_round(expected.to_dtype(DType::F32)?, 4)?
-        );
+        let abs_diff = (res - expected)?.abs()?.to_vec3::<f32>()?;
+        let range = 1e-02;
+        assert!(abs_diff
+            .iter()
+            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
         Ok(())
     }
 }

@@ -10,6 +10,7 @@ use std::ffi::c_int;
 
 struct PagedAttention {
     softmax_scale: f32,
+    softcapping: f32,
 
     key_cache: Tensor,
     value_cache: Tensor,
@@ -174,6 +175,7 @@ impl PagedAttention {
                     vc_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
+                    self.softcapping,
                     bt_ptr,
                     cl_ptr,
                     block_size as c_int,
@@ -210,6 +212,7 @@ impl PagedAttention {
                     vc_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
+                    self.softcapping,
                     bt_ptr,
                     cl_ptr,
                     block_size as c_int,
@@ -266,8 +269,10 @@ impl candle::CustomOp1 for PagedAttention {
 /// * `context_lens` - Tensor associating lengths to each sequence of shape `(num_sequences)`
 /// * `max_context_len` - Max of `context_len`
 /// * `softmax_scale` - scaling factor
+/// * `softcapping`- Softcapping value as in Gemma 2. Using 1.0 means do nothing.
 ///
 /// The resulting tensor has dimensions `(num_sequences, num_heads_q, head_size)`.
+#[allow(clippy::too_many_arguments)]
 pub fn paged_attention(
     q: &Tensor,
     key_cache: &Tensor,
@@ -276,6 +281,7 @@ pub fn paged_attention(
     context_lens: &Tensor,
     max_context_len: usize,
     softmax_scale: f32,
+    softcapping: f32,
 ) -> Result<Tensor> {
     let op = PagedAttention {
         softmax_scale,
@@ -284,6 +290,7 @@ pub fn paged_attention(
         block_tables: block_tables.clone(),
         context_lens: context_lens.clone(),
         max_context_len,
+        softcapping,
     };
     q.apply_op1(op)
 }

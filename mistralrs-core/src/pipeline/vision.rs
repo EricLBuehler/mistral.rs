@@ -1,19 +1,19 @@
 use super::cache_manager::DefaultCacheManager;
-use super::vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
-};
+use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor, TokenSource, VisionModel,
-    VisionModelLoader, XLoraPaths,
+    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
+    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
+    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    XLoraPaths,
 };
+use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, ChatTemplate, LocalModelPaths};
+use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
@@ -23,20 +23,22 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, vision_normal_model_loader, AnyMoeExpertType,
-    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, TryIntoDType,
+    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
+    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::quantized::GgmlDType;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -49,6 +51,16 @@ pub struct VisionPipeline {
     metadata: Arc<GeneralMetadata>,
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
+    topology: Option<Topology>,
+    silent: bool,
+    prefixer: Arc<dyn VisionPromptPrefixer>,
+
+    // For full UQFF serialization
+    template_filename: Option<PathBuf>,
+    generation_config: Option<PathBuf>,
+    config: String,
+    processor_filename: Option<PathBuf>,
+    preprocessor_filename: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -61,6 +73,9 @@ pub struct VisionLoader {
     tokenizer_json: Option<String>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
+    token_source: RwLock<Option<TokenSource>>,
+    revision: RwLock<Option<String>>,
+    from_uqff: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Default)]
@@ -73,10 +88,15 @@ pub struct VisionLoaderBuilder {
     tokenizer_json: Option<String>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
+    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub topology: Option<Topology>,
+    pub write_uqff: Option<PathBuf>,
+    pub from_uqff: Option<PathBuf>,
+    pub max_edge: Option<u32>,
 }
 
 impl VisionLoaderBuilder {
@@ -101,6 +121,8 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Idefics2 => Box::new(Idefics2Loader),
             VisionLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
+            VisionLoaderType::VLlama => Box::new(VLlamaLoader),
+            VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -111,6 +133,9 @@ impl VisionLoaderBuilder {
             tokenizer_json: self.tokenizer_json,
             xlora_model_id: None,
             xlora_order: None,
+            token_source: RwLock::new(None),
+            revision: RwLock::new(None),
+            from_uqff: RwLock::new(None),
         })
     }
 }
@@ -125,18 +150,27 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
-            revision,
+            revision.clone(),
             self,
             None,
             None,
-            silent
+            silent,
+            self.config.from_uqff.is_some()
         );
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+        }
+        *self
+            .token_source
+            .write()
+            .expect("Failed to write to token source") = Some(token_source);
+        *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
             &paths?,
             dtype,
@@ -156,21 +190,31 @@ impl Loader for VisionLoader {
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
-        in_situ_quant: Option<GgmlDType>,
+        in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        let dtype = dtype.try_into_dtype(device)?;
 
         // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
+        if mapper.is_dummy()
+            && (self.config.topology.is_none()
+                || self
+                    .config
+                    .topology
+                    .as_ref()
+                    .is_some_and(|t| t.is_dummy_device_map()))
+        {
             info!(
                 "Loading model `{}` on {}.",
                 self.get_id(),
                 device.device_pretty_repr()
             );
         } else if paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
+        if !self.inner.supports_paged_attention() {
             paged_attn_config = None;
         }
 
@@ -180,7 +224,22 @@ impl Loader for VisionLoader {
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
 
-        let load_device = if in_situ_quant.is_none() {
+        let mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
+        let dtype = mapper.get_min_dtype(dtype)?;
+
+        let mut loading_isq = in_situ_quant.is_some();
+        if let Some(ref topology) = self.config.topology {
+            loading_isq |= topology
+                .0
+                .iter()
+                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+        }
+
+        let load_device = if !loading_isq {
             device.clone()
         } else {
             Device::Cpu
@@ -195,14 +254,15 @@ impl Loader for VisionLoader {
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
-                dtype,
+                Some(dtype),
                 &load_device,
                 config,
                 self.inner,
                 self.config.use_flash_attn,
                 silent,
                 mapper,
-                in_situ_quant.is_some(),
+                loading_isq,
+                self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism
             ),
@@ -223,9 +283,12 @@ impl Loader for VisionLoader {
             .as_ref()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
 
-        let processor =
-            self.inner
-                .get_processor(&config, processor_config, preprocessor_config.clone()); //There are always some repos that don't properly handle config position, for example... LLaVA
+        let processor = self.inner.get_processor(
+            &config,
+            processor_config,
+            preprocessor_config.clone(),
+            self.config.max_edge,
+        ); //There are always some repos that don't properly handle config position, for example... LLaVA
 
         let tokenizer = get_tokenizer(
             paths.get_tokenizer_filename(),
@@ -237,8 +300,32 @@ impl Loader for VisionLoader {
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template = get_chat_template(paths, &self.chat_template, None);
 
-        if let Some(in_situ_quant) = in_situ_quant {
-            model.quantize(in_situ_quant, device.clone())?;
+        if (in_situ_quant.is_some() || self.config.topology.is_some())
+            && self.config.from_uqff.is_none()
+        {
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                IsqOrganization::Default,
+                self.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: &tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: paths.get_processor_config(),
+                    preprocessor_filename: paths.get_preprocessor_config(),
+                },
+            )?;
+        } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
+            model.load_from_artifacts(
+                device.clone(),
+                self.config.topology.as_ref(),
+                silent,
+                from_uqff,
+            )?;
         }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
@@ -272,7 +359,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie,
+                tok_trie: Some(tok_trie),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -282,9 +369,18 @@ impl Loader for VisionLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
+                prompt_batchsize: self.config.prompt_batchsize,
             }),
             processor,
+            prefixer: self.inner.prefixer(),
             preprocessor_config: Arc::new(preprocessor_config),
+            topology: self.config.topology.clone(),
+            silent,
+            template_filename: paths.get_template_filename().clone(),
+            generation_config: paths.get_gen_conf_filename().cloned(),
+            config,
+            processor_filename: paths.get_processor_config().clone(),
+            preprocessor_filename: paths.get_preprocessor_config().clone(),
         })))
     }
 
@@ -298,8 +394,8 @@ impl Loader for VisionLoader {
 }
 
 impl PreProcessingMixin for VisionPipeline {
-    fn get_chat_template(&self) -> Arc<ChatTemplate> {
-        self.chat_template.clone()
+    fn get_chat_template(&self) -> Option<Arc<ChatTemplate>> {
+        Some(self.chat_template.clone())
     }
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         Some(self.preprocessor_config.clone())
@@ -310,10 +406,25 @@ impl PreProcessingMixin for VisionPipeline {
 }
 
 impl IsqPipelineMixin for VisionPipeline {
-    fn re_isq_model(&mut self, dtype: GgmlDType) -> Result<()> {
+    fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
         self.model
-            .quantize(dtype, device)
+            .quantize(
+                Some(dtype),
+                device,
+                self.topology.as_ref(),
+                self.silent,
+                IsqOrganization::Default,
+                None,
+                UqffFullSer {
+                    tokenizer: &self.tokenizer,
+                    template_filename: &self.template_filename,
+                    generation_config: self.generation_config.as_ref(),
+                    config: self.config.clone(),
+                    processor_filename: &self.processor_filename,
+                    preprocessor_filename: &self.preprocessor_filename,
+                },
+            )
             .map_err(anyhow::Error::msg)
     }
 }
@@ -353,14 +464,14 @@ impl MetadataMixin for VisionPipeline {
         self.model_id.clone()
     }
     fn reset_non_granular_state(&self) {}
-    fn tokenizer(&self) -> Arc<Tokenizer> {
-        self.tokenizer.clone()
+    fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        Some(self.tokenizer.clone())
     }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&self, inputs: Box<dyn Any>) -> candle_core::Result<Tensor> {
+    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -370,8 +481,24 @@ impl Pipeline for VisionPipeline {
             pixel_values,
             model_specific_args,
             mut paged_attn_meta,
+            flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        self.model.forward(
+        let paged_attn_meta = match (
+            self.get_metadata().cache_engine.as_ref(),
+            &mut paged_attn_meta,
+        ) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+            (Some(_), None) => {
+                // This can happen if Rust-side user code is wrong
+                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+            }
+            (None, Some(_)) => {
+                // This should never happen but we handle it anyway
+                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+            }
+            (None, None) => None,
+        };
+        let logits = self.model.forward(
             &input_ids,
             pixel_values,
             &seqlen_offsets,
@@ -379,18 +506,15 @@ impl Pipeline for VisionPipeline {
             context_lens,
             position_ids,
             model_specific_args,
-            self.get_metadata().cache_engine.as_ref().map(|engine| {
-                (
-                    engine.get_kv_cache().clone(),
-                    paged_attn_meta.as_mut().unwrap(),
-                )
-            }),
-        )
+            paged_attn_meta,
+            &flash_meta,
+        )?;
+        Ok(ForwardInputsResult::CausalGeneration { logits })
     }
-    async fn sample(
+    async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],
-        logits: Tensor,
+        logits: Vec<Tensor>,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -399,7 +523,10 @@ impl Pipeline for VisionPipeline {
     }
     fn category(&self) -> ModelCategory {
         let has_conv2d = self.model.has_conv2d();
-        ModelCategory::Vision { has_conv2d }
+        ModelCategory::Vision {
+            has_conv2d,
+            prefixer: self.prefixer.clone(),
+        }
     }
 }
 
@@ -433,16 +560,16 @@ impl AnyMoePipelineMixin for VisionPipeline {
     ) -> candle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -458,20 +585,28 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
             let layers_clone = layers.clone();
-            let vb = from_mmaped_safetensors(filenames, vec![], dtype, dev, silent, move |key| {
-                if regex.is_match(&key) {
-                    // Idx of the last char of the layer id, +1
-                    // Assumes N.MLP
-                    let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
-                    let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
-                    let layer_n = key[first_layer_idx + 1..last_layer_idx]
-                        .parse::<usize>()
-                        .unwrap();
-                    layers_clone.contains(&layer_n) || layers_clone.is_empty()
-                } else {
-                    false
-                }
-            })?;
+            let vb = from_mmaped_safetensors(
+                filenames,
+                vec![],
+                Some(dtype),
+                dev,
+                silent,
+                None,
+                move |key| {
+                    if regex.is_match(&key) {
+                        // Idx of the last char of the layer id, +1
+                        // Assumes N.MLP
+                        let last_layer_idx = key.find(&match_regex_clone).unwrap() - 1;
+                        let first_layer_idx = key[..last_layer_idx].rfind('.').unwrap();
+                        let layer_n = key[first_layer_idx + 1..last_layer_idx]
+                            .parse::<usize>()
+                            .unwrap();
+                        layers_clone.contains(&layer_n) || layers_clone.is_empty()
+                    } else {
+                        false
+                    }
+                },
+            )?;
             vbs.push(vb);
         }
 
@@ -481,9 +616,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(|e| candle_core::Error::Msg(e.to_string()))?)
+                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
                 .build()
-                .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                .map_err(candle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -504,9 +639,10 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let vb = from_mmaped_safetensors(
                 gate_filenames.clone(),
                 vec![],
-                dtype,
+                Some(dtype),
                 dev,
                 silent,
+                None,
                 |_| true,
             )?;
             info!(

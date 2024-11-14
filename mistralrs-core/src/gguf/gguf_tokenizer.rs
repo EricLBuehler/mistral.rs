@@ -3,7 +3,6 @@
 use std::{collections::HashMap, sync::atomic::Ordering};
 
 use anyhow::Result;
-use candle_core::quantized::gguf_file::Content;
 use itertools::Itertools;
 use tokenizers::{
     decoders::{
@@ -22,6 +21,8 @@ use tracing::info;
 
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
+
+use super::Content;
 
 pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
@@ -71,10 +72,12 @@ struct AddedTokensCollection {
     unk: Option<String>,
 }
 
-pub fn convert_gguf_to_hf_tokenizer(content: &Content) -> Result<GgufTokenizerConversion> {
+pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
+    content: &Content<'_, R>,
+) -> Result<GgufTokenizerConversion> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml",
-        metadata: &content.metadata,
+        metadata: content.get_metadata(),
     };
     let props = PropsGGUF::try_from(metadata)?;
 
@@ -235,9 +238,9 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
         .with_model(bpe)
         .with_decoder(Decoder::ByteLevel(true, true, true))
         .build()?;
-    tokenizer.with_pre_tokenizer(pre_tokenizers::byte_level::ByteLevel::new(
+    tokenizer.with_pre_tokenizer(Some(pre_tokenizers::byte_level::ByteLevel::new(
         false, true, true,
-    ));
+    )));
     if add_bos_token.is_some_and(|x| x) {
         let mut special_toks = HashMap::new();
         special_toks.insert(
@@ -249,7 +252,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
             )
             .unwrap(),
         );
-        tokenizer.with_post_processor(
+        tokenizer.with_post_processor(Some(
             TemplateProcessing::builder()
                 .try_single(format!("{}:0 $A:0", p.tokens[bos as usize]))
                 .unwrap()
@@ -258,9 +261,11 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
                 .special_tokens(special_toks)
                 .build()
                 .unwrap(),
-        );
+        ));
     } else {
-        tokenizer.with_post_processor(processors::byte_level::ByteLevel::new(true, false, true));
+        tokenizer.with_post_processor(Some(processors::byte_level::ByteLevel::new(
+            true, false, true,
+        )));
     }
 
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, unk);
@@ -285,11 +290,11 @@ impl TokenizerX {
         // Handle local enum to remote enum type:
         if let Some(decoder) = with_decoder {
             let d = DecoderWrapper::try_from(decoder)?;
-            tokenizer.with_decoder(d);
+            tokenizer.with_decoder(Some(d));
         }
         if let Some(normalizer) = with_normalizer {
             let n = NormalizerWrapper::try_from(normalizer)?;
-            tokenizer.with_normalizer(n);
+            tokenizer.with_normalizer(Some(n));
         }
 
         Ok(tokenizer)
@@ -369,14 +374,9 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use anyhow::Result;
-    use candle_core::quantized::gguf_file::Content;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
-
-    use super::convert_gguf_to_hf_tokenizer;
 
     #[allow(dead_code)]
     #[derive(Debug)]
@@ -393,47 +393,25 @@ mod tests {
             TokenizerType::Llama => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "TheBloke/Mistral-7B-Instruct-v0.1-GGUF".to_string(),
+                    "EricB/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
 
-                let filename = api.get("mistral-7b-instruct-v0.1.Q2_K.gguf").unwrap();
-                let tokenizer = {
-                    let mut file = std::fs::File::open(&filename)?;
-                    convert_gguf_to_hf_tokenizer(
-                        &Content::read(&mut file)
-                            .map_err(|e| e.with_path(filename.clone()))
-                            .map_err(anyhow::Error::msg)?,
-                    )
-                    .map_err(anyhow::Error::msg)
-                    .map(|res| res.tokenizer)?
-                };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+                let filename = api.get("llama_gguf_tokenizer.json").unwrap();
+                let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
                 let api = ApiBuilder::new().with_progress(true).build().unwrap();
                 let api = api.repo(Repo::with_revision(
-                    "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF".to_string(),
+                    "EricB/mistralrs_tests".to_string(),
                     RepoType::Model,
                     "main".to_string(),
                 ));
 
-                let filename = api.get("Meta-Llama-3-8B-Instruct.Q2_K.gguf").unwrap();
-                let tokenizer = {
-                    let mut file = std::fs::File::open(&filename)?;
-                    convert_gguf_to_hf_tokenizer(
-                        &Content::read(&mut file)
-                            .map_err(|e| e.with_path(filename.clone()))
-                            .map_err(anyhow::Error::msg)?,
-                    )
-                    .map_err(anyhow::Error::msg)
-                    .map(|res| res.tokenizer)?
-                };
-                // So that CI doesn't fail
-                fs::remove_file(&filename)?;
+                let filename = api.get("gpt2_gguf_tokenizer.json").unwrap();
+                let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
                 Ok(tokenizer)
             }
             other => anyhow::bail!("Cannot get testing HF tokenizer for type {other:?}"),

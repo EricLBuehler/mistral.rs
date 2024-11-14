@@ -1,23 +1,17 @@
-use std::{collections::HashMap, iter::zip, ops::Mul};
+use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{
-    bail,
-    quantized::{QMatMul, QTensor},
-    Module, Result, Tensor,
-};
+use candle_core::{bail, DType, Module, Result, Tensor};
 use candle_nn::{Linear, VarBuilder};
 use either::Either;
-
-use crate::layers::QLinear;
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use super::{
     apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
     LinearLayerLike, LoraConfig, LoraLinearConfig, Merge,
 };
 
-#[derive(Debug)]
 pub struct LoraLinear {
-    old: QLinear,
+    old: Arc<dyn QuantMethod>,
     a_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     b_adapters: Either<Vec<Linear>, (Tensor, Vec<Linear>)>,
     scale_adapters: Vec<f64>,
@@ -106,7 +100,9 @@ impl LoraLinear {
             .to_dtype(a_adapters_stack.dtype())?;
             let a_adapters_stack = a_adapters_stack.broadcast_mul(&scale_adapters_t)?;
             Ok(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+                old: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(old.weight().clone(), old.bias().cloned()),
+                ))?),
                 a_adapters: Either::Right((a_adapters_stack.clone(), a_adapters)),
                 b_adapters: Either::Right((b_adapters_stack, b_adapters)),
                 scale_adapters,
@@ -116,7 +112,9 @@ impl LoraLinear {
             })
         } else {
             Ok(LoraLinear {
-                old: QLinear::from_parts(old.weight().clone(), old.bias().cloned()),
+                old: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(old.weight().clone(), old.bias().cloned()),
+                ))?),
                 a_adapters: Either::Left(a_adapters),
                 b_adapters: Either::Left(b_adapters),
                 scale_adapters,
@@ -176,43 +174,33 @@ impl Merge for LoraLinear {
     }
 
     fn merge_weights(&mut self) -> Result<()> {
-        match &self.old.inner() {
-            QMatMul::QTensor(q) => {
-                let (mut w_base_layer, dtype) = (q.dequantize(&q.device())?, q.dtype());
-                for adapter in 0..self.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
-                }
-                let new_w = QTensor::quantize(&w_base_layer, dtype)?;
-                self.old = QLinear::from_qparts(new_w, self.old.bias().cloned());
+        let mut w_base_layer: Option<Tensor> = None;
+        for adapter in 0..self.scale_adapters.len() {
+            if let Some(w_base_layer) = &mut w_base_layer {
+                *w_base_layer = (&*w_base_layer + &self.get_delta_weight(adapter)?)?;
+            } else {
+                w_base_layer = Some(self.get_delta_weight(adapter)?)
             }
-            QMatMul::Tensor(w_base_layer) | QMatMul::TensorF16(w_base_layer) => {
-                let mut w_base_layer = w_base_layer.clone();
-                for adapter in 0..self.scale_adapters.len() {
-                    w_base_layer = (w_base_layer + self.get_delta_weight(adapter))?;
-                }
-                self.old = QLinear::from_parts(w_base_layer, self.old.bias().cloned());
-            }
-        };
+        }
+        self.old
+            .add_delta_w(w_base_layer.as_ref().expect("Found no adapters to merge."))?;
         self.merged = true;
         Ok(())
     }
 }
 
 impl LinearLayerLike for LoraLinear {
-    fn bias(&self) -> Option<&Tensor> {
-        self.old.bias()
+    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
+        &mut self.old
     }
-    fn bias_mut(&mut self) -> Option<&mut Tensor> {
-        self.old.bias_mut()
+    fn bias(&self) -> Option<&Tensor> {
+        unreachable!()
     }
     fn weight(&self) -> &Tensor {
         unreachable!()
     }
-    fn inner(&mut self) -> &mut QMatMul {
-        self.old.inner()
-    }
-    fn is_quant(&self) -> bool {
-        self.old.is_quant()
+    fn quantized_act_type(&self) -> Option<DType> {
+        self.old.quantized_act_type()
     }
     fn lora_forward(
         &self,

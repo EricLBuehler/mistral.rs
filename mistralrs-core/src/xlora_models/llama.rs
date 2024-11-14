@@ -2,28 +2,32 @@
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    layers::{Llama3RotaryEmbedding, ScaledDotProductAttention},
+    attention::SdpaParams,
+    layers::{Llama3RotaryEmbedding, Sdpa},
     lora::{linear_no_bias as linear, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
-    pipeline::{text_models_inputs_processor::PagedAttentionInputMetadata, IsqModel},
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        IsqModel,
+    },
     utils::progress::NiceProgressBar,
 };
-use candle_core::{quantized::QMatMul, DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{repeat_kv, CausalMasker, RmsNorm},
+    layers::{CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
 
 use super::{classifier::XLoraClassifier, NonGranularState, ScalingsMaker, XLoraConfig};
 
-#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: Arc<dyn LinearLayerLike + Send + Sync>,
     k_proj: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -32,9 +36,9 @@ struct CausalSelfAttention {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
-    use_flash_attn: bool,
     rotary_emb: Arc<Llama3RotaryEmbedding>,
     max_seq_len: usize,
+    sdpa_params: SdpaParams,
 }
 
 impl CausalSelfAttention {
@@ -50,13 +54,14 @@ impl CausalSelfAttention {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
 
         let original_dtype = x.dtype();
         let mut x = x.clone();
-        if self.q_proj.is_quant() {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
         let mut q = self.q_proj.lora_forward(
             &x,
@@ -76,7 +81,7 @@ impl CausalSelfAttention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -117,24 +122,18 @@ impl CausalSelfAttention {
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
 
-        let k = repeat_kv(k, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-        let v = repeat_kv(v, self.num_attention_heads / self.num_key_value_heads)?.contiguous()?;
-
-        let y = ScaledDotProductAttention.run_attention(
+        let y = Sdpa.run_attention(
             &q,
             &k,
             &v,
-            self.num_attention_heads,
-            self.head_dim,
             mask.clone().as_ref(),
-            self.use_flash_attn,
-            b_sz,
-            seq_len,
+            Some(flash_params),
+            &self.sdpa_params,
         )?;
 
         let mut y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
-        if self.q_proj.is_quant() {
-            y = y.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            y = y.to_dtype(t)?;
         }
         let mut res = self.o_proj.lora_forward(
             &y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?,
@@ -142,7 +141,7 @@ impl CausalSelfAttention {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.q_proj.is_quant() {
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -212,14 +211,20 @@ impl CausalSelfAttention {
             num_attention_heads: cfg.num_attention_heads,
             num_key_value_heads: cfg.num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            use_flash_attn: cfg.use_flash_attn,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
+            sdpa_params: SdpaParams {
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                sliding_window: None,
+            },
         })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
     c_fc1: Arc<dyn LinearLayerLike + Send + Sync>,
     c_fc2: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -236,8 +241,8 @@ impl Mlp {
     ) -> Result<Tensor> {
         let original_dtype = x.dtype();
         let mut x = x.clone();
-        if self.c_fc1.is_quant() {
-            x = x.to_dtype(DType::F32)?;
+        if let Some(t) = self.c_fc1.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
         let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
             &x,
@@ -256,7 +261,7 @@ impl Mlp {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.c_fc1.is_quant() {
+        if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -314,7 +319,6 @@ impl Mlp {
     }
 }
 
-#[derive(Debug, Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
@@ -335,6 +339,7 @@ impl Block {
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -348,6 +353,7 @@ impl Block {
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
+            flash_params,
         )? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(
@@ -419,8 +425,8 @@ pub struct XLoraLlama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
-    pub kv_cache: pipeline::Cache,
-    pub device: Device,
+    kv_cache: pipeline::Cache,
+    device: Device,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -438,6 +444,7 @@ impl XLoraLlama {
         is_full_pass: bool,
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
         let mut cache = if is_full_pass {
@@ -474,6 +481,7 @@ impl XLoraLlama {
                     .map(|classifier| classifier.get_global_scaling_weight())
                     .unwrap_or(1.0),
                 is_scaling_pass,
+                flash_params,
             )?;
         }
         let x = x.to_device(&self.device)?;
@@ -492,6 +500,8 @@ impl XLoraLlama {
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         if self.xlora_classifier.is_some() {
             let scalings = self.get_scalings(
@@ -504,6 +514,8 @@ impl XLoraLlama {
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
+                flash_params,
+                flash_params_full,
             )?;
 
             if no_kv_cache {
@@ -516,10 +528,11 @@ impl XLoraLlama {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params_full,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -536,10 +549,11 @@ impl XLoraLlama {
                         true,
                         no_kv_cache,
                         None,
+                        flash_params,
                     )?
                     .contiguous()?;
-                if self.lm_head.is_quant() {
-                    res = res.to_dtype(DType::F32)?;
+                if let Some(t) = self.lm_head.quantized_act_type() {
+                    res = res.to_dtype(t)?;
                 }
                 extract_logits(
                     &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -556,10 +570,11 @@ impl XLoraLlama {
                     false,
                     no_kv_cache,
                     None,
+                    flash_params,
                 )?
                 .contiguous()?;
-            if self.lm_head.is_quant() {
-                res = res.to_dtype(DType::F32)?;
+            if let Some(t) = self.lm_head.quantized_act_type() {
+                res = res.to_dtype(t)?;
             }
             extract_logits(
                 &self.lm_head.lora_forward(&res, None, 1.0, None)?,
@@ -579,10 +594,14 @@ impl XLoraLlama {
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
         let dtype = vb.dtype();
         let mut count = 0;
 
@@ -610,23 +629,34 @@ impl XLoraLlama {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("model.norm"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for i in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(Llama3RotaryEmbedding::new_llama3(
+                    vb.dtype(),
+                    cfg,
+                    device,
+                    is_gptx,
+                )?),
+            );
+        }
         let mut blocks: Vec<_> =
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
-                    let rotary_emb = Arc::new(
-                        Llama3RotaryEmbedding::new(
-                            vb.dtype(),
-                            cfg,
-                            mapper
-                                .device_for(i, false)
-                                .unwrap_or(&normal_loading_metadata.real_device),
-                            is_gptx,
-                        )
-                        .expect("Failed to create RoPE"),
-                    );
+                    let device = mapper
+                        .device_for(i, false)
+                        .unwrap_or(&normal_loading_metadata.real_device);
+                    let rotary_emb = ropes
+                        .get(&device.location())
+                        .expect("No RoPE for device location!")
+                        .clone();
                     Block::load(
-                        vb.pp(&format!("model.layers.{i}")),
+                        vb.pp(format!("model.layers.{i}")),
                         cfg,
                         lora_config,
                         &mut count,
@@ -687,43 +717,56 @@ impl XLoraLlama {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: None,
             },
         })
     }
 }
 
 impl IsqModel for XLoraLlama {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().inner(), None));
+        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
         for (i, layer) in self.blocks.iter_mut().enumerate() {
             tensors.push((
-                Arc::get_mut(&mut layer.attn.q_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.attn.q_proj).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.attn.k_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.attn.k_proj).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.attn.v_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.attn.v_proj).unwrap().quant_inner(),
                 Some(i),
             ));
             tensors.push((
-                Arc::get_mut(&mut layer.attn.o_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.attn.o_proj).unwrap().quant_inner(),
                 Some(i),
             ));
-            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().inner(), Some(i)));
-            tensors.push((Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().inner(), Some(i)));
             tensors.push((
-                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().inner(),
+                Arc::get_mut(&mut layer.mlp.c_fc1).unwrap().quant_inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.c_fc2).unwrap().quant_inner(),
+                Some(i),
+            ));
+            tensors.push((
+                Arc::get_mut(&mut layer.mlp.c_proj).unwrap().quant_inner(),
                 Some(i),
             ));
         }
         (tensors, &*self.mapper)
     }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 
@@ -736,6 +779,7 @@ impl NormalModel for XLoraLlama {
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -751,6 +795,8 @@ impl NormalModel for XLoraLlama {
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        flash_params: &FlashParams,
+        flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
@@ -762,6 +808,8 @@ impl NormalModel for XLoraLlama {
             no_kv_cache,
             non_granular_state,
             context_lens,
+            flash_params,
+            flash_params_full,
         )
     }
     fn cache(&self) -> &super::Cache {
@@ -832,6 +880,7 @@ impl ScalingsMaker for XLoraLlama {
         no_kv_cache: bool,
         is_scaling_pass: Option<f64>,
         _context_lens: &[usize],
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.inner_forward(
             input_ids,
@@ -841,6 +890,7 @@ impl ScalingsMaker for XLoraLlama {
             is_full_pass,
             no_kv_cache,
             is_scaling_pass,
+            flash_params,
         )
     }
 }

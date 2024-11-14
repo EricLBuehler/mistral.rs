@@ -56,7 +56,16 @@ macro_rules! api_get_file {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! get_paths {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+    (
+        $path_name:ident,
+        $token_source:expr,
+        $revision:expr,
+        $this:expr,
+        $quantized_model_id:expr,
+        $quantized_filename:expr,
+        $silent:expr,
+        $loading_uqff:expr
+    ) => {{
         let api = ApiBuilder::new()
             .with_progress(!$silent)
             .with_token(get_token($token_source)?)
@@ -84,6 +93,7 @@ macro_rules! get_paths {
             &$quantized_filename,
             &api,
             &model_id,
+            $loading_uqff,
         )?;
         let XLoraPaths {
             adapter_configs,
@@ -169,8 +179,49 @@ macro_rules! get_paths {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! get_uqff_paths {
+    ($from_uqff:expr, $this:expr, $silent:expr) => {{
+        let api = ApiBuilder::new()
+            .with_progress(!$silent)
+            .with_token(get_token(
+                &$this
+                    .token_source
+                    .read()
+                    .expect("Failed to read token source")
+                    .clone()
+                    .unwrap_or(TokenSource::None),
+            )?)
+            .build()?;
+        let revision = $this
+            .revision
+            .read()
+            .expect("Failed to read revision")
+            .clone()
+            .unwrap_or("main".to_string());
+        let api = api.repo(Repo::with_revision(
+            $this.model_id.to_string(),
+            RepoType::Model,
+            revision.clone(),
+        ));
+
+        let file = $from_uqff.display().to_string();
+
+        api_get_file!(api, &file, Path::new(&$this.model_id))
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! get_paths_gguf {
-    ($path_name:ident, $token_source:expr, $revision:expr, $this:expr, $quantized_model_id:expr, $quantized_filename:expr, $silent:expr) => {{
+    (
+        $path_name:ident,
+        $token_source:expr,
+        $revision:expr,
+        $this:expr,
+        $quantized_model_id:expr,
+        $quantized_filenames:expr,
+        $silent:expr
+    ) => {{
         let api = ApiBuilder::new()
             .with_progress(!$silent)
             .with_token(get_token($token_source)?)
@@ -209,9 +260,10 @@ macro_rules! get_paths_gguf {
             revision.clone(),
             &$token_source,
             &Some($quantized_model_id),
-            &Some(vec![$quantized_filename]),
+            &Some($quantized_filenames),
             &api,
             &model_id,
+            false, // Never loading UQFF
         )?;
 
         let XLoraPaths {
@@ -299,14 +351,40 @@ macro_rules! get_paths_gguf {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr, $attention_mechanism:expr) => {{
+    (
+        $paths:expr,
+        $dtype:expr,
+        $device:expr,
+        $config:expr,
+        $loader:expr,
+        $use_flash_attn:expr,
+        $silent:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $loading_uqff:expr,
+        $real_device:expr,
+        $attention_mechanism:expr,
+        $is_moqe:expr
+    ) => {{
+        let regexes = if $loading_isq && $loading_uqff {
+            // Dummy weights for the layers which will be overwritten...
+            Some(std::sync::Arc::new(if $is_moqe {
+                $loader.isq_layer_regexes_moqe(&$config)?
+            } else {
+                $loader.isq_layer_regexes(&$config)?
+            }))
+        } else {
+            None
+        };
+
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
             $dtype,
             $device,
             $silent,
-            |_| true,
+            regexes,
+            |_| true, // Will be overwritten...
         )?;
 
         $loader.load(
@@ -326,13 +404,34 @@ macro_rules! normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! vision_normal_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr, $attention_mechanism:expr) => {{
+    (
+        $paths:expr,
+        $dtype:expr,
+        $device:expr,
+        $config:expr,
+        $loader:expr,
+        $use_flash_attn:expr,
+        $silent:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $loading_uqff:expr,
+        $real_device:expr,
+        $attention_mechanism:expr
+    ) => {{
+        let regexes = if $loading_isq && $loading_uqff {
+            // Dummy weights for the layers which will be overwritten...
+            Some(std::sync::Arc::new($loader.isq_layer_regexes(&$config)?))
+        } else {
+            None
+        };
+
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
             Vec::new(),
             $dtype,
             $device,
             $silent,
+            regexes,
             |_| true,
         )?;
 
@@ -353,7 +452,18 @@ macro_rules! vision_normal_model_loader {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! xlora_model_loader {
-    ($paths:expr, $dtype:expr, $device:expr, $config:expr, $loader:expr, $use_flash_attn:expr, $silent:expr, $mapper:expr, $loading_isq:expr, $real_device:expr) => {{
+    (
+        $paths:expr,
+        $dtype:expr,
+        $device:expr,
+        $config:expr,
+        $loader:expr,
+        $use_flash_attn:expr,
+        $silent:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $real_device:expr
+    ) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
         let vb = from_mmaped_safetensors(
@@ -371,6 +481,7 @@ macro_rules! xlora_model_loader {
             $dtype,
             $device,
             $silent,
+            None,
             |_| true,
         )?;
 
@@ -408,9 +519,10 @@ macro_rules! lora_model_loader {
                 .iter()
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
-            $dtype,
+            Some($dtype),
             $device,
             $silent,
+            None,
             |_| true,
         )?;
 

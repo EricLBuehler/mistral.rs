@@ -3,31 +3,32 @@
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{
-    quantized::QMatMul, shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape,
-    Tensor, D,
+    shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
-use candle_nn::{linear_b, linear_no_bias, VarBuilder};
+use candle_nn::VarBuilder;
 use either::Either;
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeTrainableLayer, MlpLayer, MoeMlp},
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        repeat_kv, CausalMasker, FusedBiasLinear, MatMul, PhiRopeConfig, PhiRotaryEmbedding,
-        RmsNorm, ScaledDotProductAttention,
+        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
+        Sdpa,
     },
     layers_masker::PastKvLenCache,
-    merge_delta,
     ops::{BitWiseOp, NonZeroOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, Phi3RopeScaling, VisionModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
     AnyMoeConfig, AnyMoeExpertType,
 };
@@ -50,6 +51,7 @@ pub struct ImageProcessorConfig {
 }
 
 serde_default_fn!(bool, d_flash_attn, false);
+serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
@@ -64,7 +66,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
-    pub rope_scaling: Option<HashMap<String, Phi3RopeScaling>>,
+    pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
     #[serde(default = "d_flash_attn")]
     pub use_flash_attn: bool,
@@ -72,6 +74,9 @@ pub struct Config {
     pub original_max_position_embeddings: usize,
     pub embd_layer: EmbedLayerConfig,
     pub img_processor: ImageProcessorConfig,
+    pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "word_emb_default")]
+    pub tie_word_embeddings: bool,
 }
 
 impl From<Config> for PhiRopeConfig {
@@ -93,21 +98,30 @@ impl Config {
 }
 
 trait ModuleWithMetadata: Module + Debug + Send + Sync {
-    fn device(&self) -> &Device;
+    fn device(&self) -> Device;
     fn dtype(&self) -> DType;
 }
 
-impl ModuleWithMetadata for FusedBiasLinear {
-    fn device(&self) -> &Device {
-        self.w.device()
+#[derive(Debug)]
+struct QuantMethodWrapper(Arc<dyn QuantMethod>);
+
+impl Module for QuantMethodWrapper {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.0.forward(xs)
+    }
+}
+
+impl ModuleWithMetadata for QuantMethodWrapper {
+    fn device(&self) -> Device {
+        self.0.unquant_weight_bias().unwrap().0.device().clone()
     }
     fn dtype(&self) -> DType {
-        self.w.dtype()
+        self.0.unquant_weight_bias().unwrap().0.dtype()
     }
 }
 
 impl ModuleWithMetadata for candle_nn::Activation {
-    fn device(&self) -> &Device {
+    fn device(&self) -> Device {
         unreachable!()
     }
     fn dtype(&self) -> DType {
@@ -139,16 +153,15 @@ impl ShapeWithOneHole for BigShapeWithOneHole {
 // =================== BASE LAYERS ===================
 
 struct Attention {
-    qkv_proj: QMatMul,
-    o_proj: QMatMul,
+    qkv_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<PhiRotaryEmbedding>,
-    use_flash_attn: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -162,22 +175,41 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim();
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
-        let qkv_proj = linear_no_bias(cfg.hidden_size, op_size, vb.pp("qkv_proj"))?;
-        let o_proj = linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?;
+
+        let qkv_proj = mistralrs_quant::linear_no_bias(
+            cfg.hidden_size,
+            op_size,
+            &cfg.quantization_config,
+            vb.pp("qkv_proj"),
+        )?;
+
+        let o_proj = mistralrs_quant::linear_no_bias(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
+
         Ok(Self {
-            qkv_proj: QMatMul::Tensor(qkv_proj.weight().clone()),
-            o_proj: QMatMul::Tensor(o_proj.weight().clone()),
+            qkv_proj,
+            o_proj,
             rotary_emb,
             num_heads,
             num_kv_heads,
-            num_kv_groups: num_heads / num_kv_heads,
             head_dim,
-            use_flash_attn: cfg.use_flash_attn,
             sliding_window: cfg.sliding_window,
             paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
+                sliding_window: cfg.sliding_window,
+            },
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -186,16 +218,17 @@ impl Attention {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut qkv = MatMul.qmatmul(&xs, &self.qkv_proj)?;
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+        let mut qkv = MatMul.qmethod_matmul(&xs, &*self.qkv_proj)?;
+        if self.qkv_proj.quantized_act_type().is_some() {
             qkv = qkv.to_dtype(original_dtype)?;
         }
         let query_pos = self.num_heads * self.head_dim;
@@ -240,6 +273,7 @@ impl Attention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    None,
                 )?
             }
             None => {
@@ -252,42 +286,37 @@ impl Attention {
                     true,
                 )?;
 
-                let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-                let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-                ScaledDotProductAttention.run_attention(
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    self.num_heads,
-                    self.head_dim,
                     attn_mask.as_ref(),
-                    self.use_flash_attn,
-                    b_sz,
-                    q_len,
+                    Some(flash_params),
+                    &self.sdpa_params,
                 )?
             }
         };
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+
+        if let Some(t) = self.qkv_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
         attn_output = if attention_mask.is_some() {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmatmul(&attn_output, &self.o_proj)?;
-        if matches!(self.qkv_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.qkv_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Mlp {
-    gate_up_proj: QMatMul,
-    down_proj: QMatMul,
+    gate_up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act_fn: candle_nn::Activation,
     i_size: usize,
     params: Vec<usize>,
@@ -297,11 +326,24 @@ impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let gate_up_proj = linear_no_bias(hidden_size, 2 * i_size, vb.pp("gate_up_proj"))?;
-        let down_proj = linear_no_bias(i_size, hidden_size, vb.pp("down_proj"))?;
+
+        let gate_up_proj = mistralrs_quant::linear_no_bias(
+            hidden_size,
+            2 * i_size,
+            &cfg.quantization_config,
+            vb.pp("gate_up_proj"),
+        )?;
+
+        let down_proj = mistralrs_quant::linear_no_bias(
+            i_size,
+            hidden_size,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
+
         Ok(Self {
-            gate_up_proj: QMatMul::Tensor(gate_up_proj.weight().clone()),
-            down_proj: QMatMul::Tensor(down_proj.weight().clone()),
+            gate_up_proj,
+            down_proj,
             act_fn: cfg.hidden_act,
             i_size,
             params: vec![hidden_size, i_size],
@@ -315,24 +357,21 @@ impl MlpLayer for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_up_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let up_states = MatMul.qmatmul(&xs, &self.gate_up_proj)?;
+        let up_states = MatMul.qmethod_matmul(&xs, &*self.gate_up_proj)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = MatMul.qmatmul(&up_states, &self.down_proj)?;
-        if matches!(self.gate_up_proj, QMatMul::QTensor(_)) {
+        let mut res = MatMul.qmethod_matmul(&up_states, &*self.down_proj)?;
+        if self.gate_up_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
         vec![&mut self.gate_up_proj, &mut self.down_proj]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![None, None]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -343,12 +382,12 @@ impl MlpLayer for Mlp {
     // gate_up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_gate_up = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.gate_up_proj, delta)
+            self.gate_up_proj.add_delta_w(delta)?
         } else {
             self.gate_up_proj.clone()
         };
         let new_down = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.down_proj, delta)
+            self.down_proj.add_delta_w(delta)?
         } else {
             self.down_proj.clone()
         };
@@ -363,10 +402,7 @@ impl MlpLayer for Mlp {
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match &self.gate_up_proj {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.gate_up_proj.dtype_and_device()
     }
 }
 
@@ -412,6 +448,7 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -420,6 +457,7 @@ impl DecoderLayer {
         position_ids: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -430,6 +468,7 @@ impl DecoderLayer {
             position_ids,
             kv_cache,
             metadata,
+            flash_params,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -473,6 +512,7 @@ pub struct ImageEmbedding {
     hd_transform_order: String,
     use_hd_transform: bool,
     vocab_size: usize,
+    tensors: Vec<(String, Tensor)>,
 }
 
 impl ImageEmbedding {
@@ -528,50 +568,87 @@ impl ImageEmbedding {
             .projection_cls
             .clone()
             .unwrap_or("linear".to_string());
+
+        let mut tensors = Vec::new();
         let layers: Vec<Box<dyn ModuleWithMetadata>> =
             match (projection_cls.as_str(), use_hd_transform) {
                 ("linear", _) => {
-                    vec![Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
+                    let a = mistralrs_quant::linear_b(
                         image_dim_out,
                         hidden_size,
                         true,
+                        &None,
                         vb.pp("img_projection"),
-                    )?)?)]
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
+                        tensors.push(("img_projection.bias".to_string(), b));
+                    }
+                    vec![Box::new(QuantMethodWrapper(a))]
                 }
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
+                    let a = mistralrs_quant::linear_b(
+                        image_dim_out * 4,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.0"),
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.0.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
+                        tensors.push(("img_projection.0.bias".to_string(), b));
+                    }
+                    let b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.2"),
+                    )?;
+                    let (b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.2.weight".to_string(), b_w));
+                    if let Some(b) = b_b {
+                        tensors.push(("img_projection.2.bias".to_string(), b));
+                    }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            image_dim_out * 4,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.0"),
-                        )?)?),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.2"),
-                        )?)?),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 ("mlp", false) => {
                     let dim_proj = hidden_size;
+                    let a = mistralrs_quant::linear_b(
+                        image_dim_out,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.0"),
+                    )?;
+                    let (a_w, a_b) = a.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.0.weight".to_string(), a_w));
+                    if let Some(b) = a_b {
+                        tensors.push(("img_projection.0.bias".to_string(), b));
+                    }
+                    let b = mistralrs_quant::linear_b(
+                        dim_proj,
+                        dim_proj,
+                        true,
+                        &None,
+                        vb.pp("img_projection.2"),
+                    )?;
+                    let (b_w, b_b) = b.unquant_weight_bias().unwrap();
+                    tensors.push(("img_projection.2.weight".to_string(), b_w));
+                    if let Some(b) = b_b {
+                        tensors.push(("img_projection.2.bias".to_string(), b));
+                    }
                     vec![
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            image_dim_out,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.0"),
-                        )?)?),
+                        Box::new(QuantMethodWrapper(a)),
                         Box::new(candle_nn::Activation::Gelu),
-                        Box::new(TryInto::<FusedBiasLinear>::try_into(linear_b(
-                            dim_proj,
-                            dim_proj,
-                            true,
-                            vb.pp("img_projection.2"),
-                        )?)?),
+                        Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 _ => {
@@ -599,6 +676,7 @@ impl ImageEmbedding {
             hd_transform_order,
             use_hd_transform,
             vocab_size: config.vocab_size,
+            tensors,
         })
     }
 
@@ -754,21 +832,21 @@ impl ImageEmbedding {
                 for img in output_imgs {
                     let layerout = self
                         .layers
-                        .forward(&img.to_device(target_dev)?.to_dtype(target_dtype)?)?;
+                        .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
                     image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
                 let tt = self
                     .get_image_features(pixel_values)?
-                    .to_device(target_dev)?
+                    .to_device(&target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
                 let image_set_tensor_inner = self.layers.forward(&tt)?;
                 image_set_tensor = Some(Either::Right(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 3 {
                 let tt = pixel_values
-                    .to_device(target_dev)?
+                    .to_device(&target_dev)?
                     .to_dtype(target_dtype)?
                     .reshape(((), self.image_dim_out))?;
                 let image_set_tensor_inner = self.layers.forward(&tt)?;
@@ -786,7 +864,7 @@ impl ImageEmbedding {
                     let mut idx = 0;
                     for (i, cnt) in output_lens.into_iter().enumerate() {
                         let img_set_tensor = image_set_tensors[i]
-                            .to_device(target_dev)?
+                            .to_device(&target_dev)?
                             .to_dtype(target_dtype)?;
                         // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
@@ -801,12 +879,12 @@ impl ImageEmbedding {
                 (None, Some(Either::Right(image_set_tensor))) => {
                     let mut idx = 0;
                     // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
-                    // https://huggingface.co/microsoft/Phi-3-vision-128k-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
+                    // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
                     for i in 0..pixel_values.dim(0)? {
                         let cnt = self.num_img_tokens;
                         let img_set_tensor = image_set_tensor
                             .i(i * cnt..(i + 1) * cnt)?
-                            .to_device(target_dev)?
+                            .to_device(&target_dev)?
                             .to_dtype(target_dtype)?;
                         let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
                         let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
@@ -824,6 +902,22 @@ impl ImageEmbedding {
 
         Ok(hidden_states)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        if let Some(glb_gn) = self.glb_gn.clone() {
+            uvb.add_tensor("glb_GN", glb_gn);
+        }
+        if let Some(sub_gn) = self.sub_gn.clone() {
+            uvb.add_tensor("sub_GN", sub_gn);
+        }
+        uvb.extend(self.tensors.clone());
+        uvb.pp("img_processor.vision_model")
+            .extend(self.image_processor.residual_tensors());
+
+        uvb.to_safetensors()
+    }
 }
 
 // =================== ============= ===================
@@ -833,10 +927,10 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
-    pub device: Device,
-    pub cache: Cache,
-    pub max_seq_len: usize,
+    lm_head: Arc<dyn QuantMethod>,
+    device: Device,
+    cache: Cache,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
@@ -850,10 +944,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
         let embed_tokens = candle_nn::embedding(
@@ -869,13 +960,26 @@ impl Model {
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+            );
+        }
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            let rotary_emb = Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(PagedAttention::new(
@@ -904,16 +1008,29 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
-            cfg.hidden_size,
-            cfg.vocab_size,
-            mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-        )?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        } else {
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
+        };
         Ok(Self {
             vision_embed_tokens,
             layers,
             norm,
-            lm_head: QMatMul::Tensor(lm_head.weight().clone()),
+            lm_head,
             device: normal_loading_metadata.real_device,
             cache: Cache::new(cfg.num_hidden_layers, false),
             max_seq_len: cfg.max_position_embeddings,
@@ -926,6 +1043,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
+                head_dim: None,
             },
         })
     }
@@ -940,6 +1058,7 @@ impl Model {
         context_lens: Vec<(usize, usize)>,
         image_sizes: Option<Vec<(usize, usize)>>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
             self.vision_embed_tokens
@@ -973,19 +1092,25 @@ impl Model {
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmatmul(&xs, &self.lm_head)?, context_lens)
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
     }
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
@@ -994,7 +1119,7 @@ impl IsqModel for Model {
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
                     .collect::<Vec<_>>(),
@@ -1002,8 +1127,26 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        (Vec::new(), &*self.mapper)
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+        uvb_m
+            .pp("vision_embed_tokens")
+            .extend(self.vision_embed_tokens.residual_tensors());
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+
+        uvb.to_safetensors()
     }
 }
 
@@ -1022,6 +1165,7 @@ impl VisionModel for Model {
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Phi3VisionSpecificArgs { image_sizes } = *model_specific_args
             .downcast()
@@ -1034,6 +1178,7 @@ impl VisionModel for Model {
             context_lens,
             image_sizes,
             metadata,
+            flash_params,
         )
     }
     fn cache(&self) -> &Cache {

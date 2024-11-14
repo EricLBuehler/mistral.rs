@@ -1,32 +1,30 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{quantized::QMatMul, DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, RotaryEmbedding, VarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_nn::{Linear, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
     amoe::{
         AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
         MoeMlp,
     },
+    attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{repeat_kv, CausalMasker, MatMul, QLinear},
-    merge_delta,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits, text_models_inputs_processor::PagedAttentionInputMetadata, Cache, IsqModel,
-        NormalLoadingMetadata, NormalModel,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
-#[derive(serde::Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -45,9 +43,11 @@ pub struct Config {
     pub attn_logit_softcapping: Option<f64>,
     pub final_logit_softcapping: Option<f64>,
     pub query_pre_attn_scalar: usize,
-
-    #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    pub quantization_config: Option<QuantizedConfig>,
+    pub use_flash_attn: bool,
+    #[allow(dead_code)]
+    pub tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -63,43 +63,13 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl RmsNorm {
-    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(dim, "weight")?;
-        Ok(Self { weight, eps })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x_dtype = x.dtype();
-        let internal_dtype = match x_dtype {
-            DType::F16 | DType::BF16 => DType::F32,
-            d => d,
-        };
-        let hidden_size = x.dim(D::Minus1)?;
-        let x = x.to_dtype(internal_dtype)?;
-        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
-    gate_proj: QLinear,
-    up_proj: QLinear,
-    down_proj: QLinear,
-    act_fn: candle_nn::Activation,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
+    act_fn: Activation,
     params: Vec<usize>,
 }
 
@@ -107,13 +77,31 @@ impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("gate_proj"))?;
-        let up_proj = linear(hidden_sz, intermediate_sz, false, vb.pp("up_proj"))?;
-        let down_proj = linear(intermediate_sz, hidden_sz, false, vb.pp("down_proj"))?;
+        let gate_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            intermediate_sz,
+            false,
+            &cfg.quantization_config,
+            vb.pp("gate_proj"),
+        )?;
+        let up_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            intermediate_sz,
+            false,
+            &cfg.quantization_config,
+            vb.pp("up_proj"),
+        )?;
+        let down_proj = mistralrs_quant::linear_b(
+            intermediate_sz,
+            hidden_sz,
+            false,
+            &cfg.quantization_config,
+            vb.pp("down_proj"),
+        )?;
         Ok(Self {
-            gate_proj: QLinear::from_linear(gate_proj),
-            up_proj: QLinear::from_linear(up_proj),
-            down_proj: QLinear::from_linear(down_proj),
+            gate_proj,
+            up_proj,
+            down_proj,
             act_fn: cfg.hidden_act()?,
             params: vec![hidden_sz, intermediate_sz],
         })
@@ -126,30 +114,21 @@ impl MlpLayer for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.gate_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
-        let mut res = (lhs * rhs)?.apply(&self.down_proj)?;
-        if self.gate_proj.is_quant() {
+        let lhs = MatMul
+            .qmethod_matmul(&xs, &*self.gate_proj)?
+            .apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        let mut res = MatMul.qmethod_matmul(&(lhs * rhs)?, &*self.down_proj)?;
+        if self.gate_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
     }
-    fn get_isq_tensors(&mut self) -> Vec<&mut QMatMul> {
-        vec![
-            self.gate_proj.inner(),
-            self.up_proj.inner(),
-            self.down_proj.inner(),
-        ]
-    }
-    fn get_isq_biases(&mut self) -> Vec<Option<&mut Tensor>> {
-        vec![
-            self.gate_proj.bias_mut(),
-            self.up_proj.bias_mut(),
-            self.down_proj.bias_mut(),
-        ]
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
     }
     fn clone(&self) -> Box<dyn MlpLayer> {
         Box::new(Clone::clone(self))
@@ -159,54 +138,50 @@ impl MlpLayer for MLP {
     }
     // gate, up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        let new_gate = if let Some(ref delta) = deltas[0] {
-            merge_delta!(self.gate_proj.inner_ref(), delta)
+        let gate_proj = if let Some(ref delta) = deltas[0] {
+            self.gate_proj.add_delta_w(delta)?
         } else {
-            self.gate_proj.inner_ref().clone()
+            self.gate_proj.clone()
         };
-        let new_up = if let Some(ref delta) = deltas[1] {
-            merge_delta!(self.up_proj.inner_ref(), delta)
+        let up_proj = if let Some(ref delta) = deltas[1] {
+            self.up_proj.add_delta_w(delta)?
         } else {
-            self.up_proj.inner_ref().clone()
+            self.up_proj.clone()
         };
-        let new_down = if let Some(ref delta) = deltas[2] {
-            merge_delta!(self.down_proj.inner_ref(), delta)
+        let down_proj = if let Some(ref delta) = deltas[2] {
+            self.down_proj.add_delta_w(delta)?
         } else {
-            self.down_proj.inner_ref().clone()
+            self.down_proj.clone()
         };
 
         Ok(Box::new(Self {
-            gate_proj: QLinear::from_old_and_qmatmul(new_gate, &self.gate_proj),
-            up_proj: QLinear::from_old_and_qmatmul(new_up, &self.up_proj),
-            down_proj: QLinear::from_old_and_qmatmul(new_down, &self.down_proj),
+            gate_proj,
+            up_proj,
+            down_proj,
             act_fn: self.act_fn,
             params: self.params.clone(),
         }))
     }
 
     fn dtype_device(&self) -> (DType, Device) {
-        match self.gate_proj.inner_ref() {
-            QMatMul::QTensor(q) => (DType::F32, q.device()),
-            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
-        }
+        self.gate_proj.dtype_and_device()
     }
 }
 
-#[derive(Debug, Clone)]
 struct Attention {
-    q_proj: QLinear,
-    k_proj: QLinear,
-    v_proj: QLinear,
-    o_proj: QLinear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
-    num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    query_pre_attn_scalar: usize,
     attn_logit_softcapping: Option<f64>,
     use_sliding_window: bool,
     sliding_window: Option<usize>,
+    paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -215,39 +190,71 @@ impl Attention {
         cfg: &Config,
         layer_idx: usize,
         vb: VarBuilder,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = cfg.head_dim;
         let bias = cfg.attention_bias;
-        let q_proj = linear(hidden_sz, num_heads * head_dim, bias, vb.pp("q_proj"))?;
-        let k_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("k_proj"))?;
-        let v_proj = linear(hidden_sz, num_kv_heads * head_dim, bias, vb.pp("v_proj"))?;
-        let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
+        let q_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_heads * head_dim,
+            bias,
+            &cfg.quantization_config,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            bias,
+            &cfg.quantization_config,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = mistralrs_quant::linear_b(
+            hidden_sz,
+            num_kv_heads * head_dim,
+            bias,
+            &cfg.quantization_config,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = mistralrs_quant::linear_b(
+            num_heads * head_dim,
+            hidden_sz,
+            bias,
+            &cfg.quantization_config,
+            vb.pp("o_proj"),
+        )?;
+        let sliding_window = if layer_idx % 2 == 0 {
+            // ^ Order is SWA, global, SWA
+            Some(cfg.sliding_window)
+        } else {
+            None
+        };
         Ok(Self {
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            o_proj: QLinear::from_linear(o_proj),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
             head_dim,
             rotary_emb,
-            query_pre_attn_scalar: cfg.query_pre_attn_scalar,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
-            sliding_window: if layer_idx % 2 == 0 {
-                // ^ Order is SWA, global, SWA
-                Some(cfg.sliding_window)
-            } else {
-                None
+            sliding_window,
+            paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: num_heads / num_kv_heads,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
+                softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
+                sliding_window,
             },
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -256,18 +263,20 @@ impl Attention {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
-        if self.q_proj.is_quant() {
+        let mut q = MatMul.qmethod_matmul(&xs, &*self.q_proj)?;
+        let mut k = MatMul.qmethod_matmul(&xs, &*self.k_proj)?;
+        let mut v = MatMul.qmethod_matmul(&xs, &*self.v_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
@@ -311,47 +320,52 @@ impl Attention {
             attention_mask
         };
 
-        // self.sliding_window is None if !self.use_sliding_window
-        let (k, v, mask) = Cache::update_kv_cache_sliding_window(
-            kv_cache,
-            k,
-            v,
-            mask,
-            self.sliding_window,
-            false,
-        )?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => {
+                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
+                paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    self.attn_logit_softcapping,
+                )?
+            }
+            None => {
+                // self.sliding_window is None if !self.use_sliding_window
+                let (k, v, mask) = Cache::update_kv_cache_sliding_window(
+                    kv_cache,
+                    k,
+                    v,
+                    mask,
+                    self.sliding_window,
+                    false,
+                )?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
-
-        let mut att = MatMul.matmul_affine_div(
-            &q.contiguous()?,
-            &k.t()?.contiguous()?,
-            (self.query_pre_attn_scalar as f64).sqrt(),
-        )?;
-
-        if let Some(attn_logit_softcapping) = self.attn_logit_softcapping {
-            att = (att / attn_logit_softcapping)?;
-            att = att.tanh()?;
-            att = (att * attn_logit_softcapping)?;
-        }
-
-        let att = match mask {
-            Some(m) => att.broadcast_add(&m)?,
-            None => att,
+                Sdpa.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    mask.as_ref(),
+                    Some(flash_params),
+                    &self.sdpa_params,
+                )?
+            }
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let mut attn_output = MatMul.matmul(&att, &v.contiguous()?)?;
 
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
         }
-        let mut res = attn_output
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, ()))?
-            .apply(&self.o_proj)?;
-        if self.q_proj.is_quant() {
+        attn_output = if attention_mask.is_some() {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.reshape((b_sz, q_len, ()))?
+        };
+        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.o_proj)?;
+        if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
@@ -375,30 +389,32 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             layer_idx,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
         )?;
         let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
-        let pre_feedforward_layernorm = RmsNorm::new(
+        let pre_feedforward_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("pre_feedforward_layernorm"), false),
         )?;
-        let post_feedforward_layernorm = RmsNorm::new(
+        let post_feedforward_layernorm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_feedforward_layernorm"), false),
@@ -413,6 +429,7 @@ impl DecoderLayer {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
@@ -421,6 +438,8 @@ impl DecoderLayer {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -433,6 +452,8 @@ impl DecoderLayer {
                 seqlen_offsets,
                 start_offsets_kernel,
                 kv_cache,
+                metadata,
+                flash_params,
             )?
             .apply(&self.post_attention_layernorm)?;
         let xs = (xs + residual)?;
@@ -449,11 +470,11 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<dyn QuantMethod>,
     hidden_size: usize,
-    pub device: Device,
-    pub cache: Cache,
-    pub max_seq_len: usize,
+    device: Device,
+    cache: Cache,
+    max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
     final_logit_softcapping: Option<f64>,
@@ -468,10 +489,14 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let mapper = normal_loading_metadata
-            .mapper
-            .into_mapper(cfg.num_hidden_layers, &normal_loading_metadata.real_device)?;
-        let vb = vb.set_dtype(mapper.get_min_dtype()?);
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization in {} bits.",
+                quant_cfg.quant_method.to_string(),
+                quant_cfg.bits
+            );
+        }
+        let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
         let embed_tokens = candle_nn::embedding(
@@ -479,25 +504,54 @@ impl Model {
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
+        let mut ropes = HashMap::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            ropes.insert(
+                device.location(),
+                Arc::new(RotaryEmbedding::new(
+                    cfg.rope_theta as f32,
+                    cfg.head_dim,
+                    cfg.max_position_embeddings,
+                    device,
+                    is_gptx,
+                    vb_m.dtype(),
+                )?),
+            );
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
-            // TODO softcapping in paged attn
-            candle_core::bail!("Gemma 2 does not support PagedAttention.");
-        }
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let rotary_emb = Arc::new(RotaryEmbedding::new(
-                cfg.rope_theta as f32,
-                cfg.head_dim,
-                cfg.max_position_embeddings,
-                mapper
-                    .device_for(layer_idx, false)
-                    .unwrap_or(&normal_loading_metadata.real_device),
-                is_gptx,
-                vb.dtype(),
-            )?);
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
+            let head_dim = cfg.head_dim;
+            let sliding_window = if layer_idx % 2 == 0 {
+                // ^ Order is SWA, global, SWA
+                Some(cfg.sliding_window)
+            } else {
+                None
+            };
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
+                    cfg.num_attention_heads,
+                    head_dim,
+                    (1.0 / (cfg.query_pre_attn_scalar as f64).sqrt()) as f32,
+                    Some(cfg.num_key_value_heads),
+                    sliding_window,
+                    device,
+                    None,
+                )?),
+            };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -505,23 +559,26 @@ impl Model {
                 &*mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
             )?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(
+        let norm = RmsNorm::new_gemma(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = QMatMul::Tensor(mapper.cast_nm_device(
+        let lm_head = mapper.cast_nm_device(
             embed_tokens.embeddings(),
             normal_loading_metadata.loading_isq,
-        )?);
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head,
+            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(lm_head, None),
+            ))?),
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
             cache: Cache::new(cfg.num_hidden_layers, false),
@@ -535,6 +592,7 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
+                head_dim: Some(cfg.head_dim),
             },
         })
     }
@@ -545,6 +603,8 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
@@ -578,15 +638,19 @@ impl Model {
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let mut xs = xs.apply(&self.norm)?;
-        if matches!(self.lm_head, QMatMul::QTensor(_)) {
-            xs = xs.to_dtype(DType::F32)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
         }
 
-        let mut xs = MatMul.qmatmul(&xs, &self.lm_head)?;
+        let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = (xs / final_logit_softcapping)?;
@@ -599,18 +663,23 @@ impl Model {
 }
 
 impl IsqModel for Model {
-    fn get_matmuls(&mut self) -> (Vec<(&mut QMatMul, Option<usize>)>, &dyn DeviceMapper) {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.inner(), Some(i)));
-            tensors.push((layer.self_attn.o_proj.inner(), Some(i)));
+            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
+            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
             tensors.extend(
                 layer
                     .mlp
-                    .get_isq_tensors()
+                    .get_isq_layers()
                     .into_iter()
                     .map(|m| (m, Some(i)))
                     .collect::<Vec<_>>(),
@@ -618,23 +687,31 @@ impl IsqModel for Model {
         }
         (tensors, &*self.mapper)
     }
-    fn get_biases(&mut self) -> (Vec<(Option<&mut Tensor>, Option<usize>)>, &dyn DeviceMapper) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((layer.self_attn.q_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.k_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.v_proj.bias_mut(), Some(i)));
-            tensors.push((layer.self_attn.o_proj.bias_mut(), Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_biases()
-                    .into_iter()
-                    .map(|b| (b, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm.undo_gemma().unwrap());
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l
+                .pp("input_layernorm")
+                .add(&layer.input_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp("pre_feedforward_layernorm")
+                .add(&layer.pre_feedforward_layernorm.undo_gemma().unwrap());
+            uvb_l
+                .pp("post_feedforward_layernorm")
+                .add(&layer.post_feedforward_layernorm.undo_gemma().unwrap());
         }
-        (tensors, &*self.mapper)
+
+        uvb.to_safetensors()
     }
 }
 
@@ -646,13 +723,16 @@ impl NormalModel for Model {
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
             input_ids,
             seqlen_offsets,
             start_offsets_kernel,
             context_lens,
+            metadata,
+            flash_params,
         )
     }
     fn xlora_forward(
@@ -667,6 +747,8 @@ impl NormalModel for Model {
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
     ) -> Result<Tensor> {
         unimplemented!()
     }
