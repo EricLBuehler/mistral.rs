@@ -600,7 +600,6 @@
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
-<a href="#603" id="603">603</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1029,12 +1028,11 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.lock()
         };
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        <span class="kw">let </span>mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.max_seq_len),
             DType::F32,
-            <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {

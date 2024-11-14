@@ -225,6 +225,13 @@
 <a href="#225" id="225">225</a>
 <a href="#226" id="226">226</a>
 <a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -319,24 +326,31 @@
     head_dim: usize,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(
-        <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
-        <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
-        (head_dim <span class="kw">as </span>f64).sqrt(),
-    )<span class="question-mark">?</span>;
-    <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
-        att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-        att = att.tanh()<span class="question-mark">?</span>;
-        att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-    }
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = mask {
+        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
+            att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+            att = att.tanh()<span class="question-mark">?</span>;
+            att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+        }
 
-    <span class="kw">let </span>att = <span class="kw">match </span>mask {
-        <span class="prelude-val">Some</span>(m) =&gt; att.broadcast_add(m)<span class="question-mark">?</span>,
-        <span class="prelude-val">None </span>=&gt; att,
-    };
-    <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
-    <span class="comment">// Convert to contiguous as matmul doesn't support strided vs for now.
-    </span>MatMul.matmul(<span class="kw-2">&amp;</span>att, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)
+        <span class="kw">let </span>att = candle_nn::ops::attn_softmax_last_dim(<span class="kw-2">&amp;</span>att, mask, <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt())<span class="question-mark">?</span>;
+        MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
+    } <span class="kw">else </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
+            att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+            att = att.tanh()<span class="question-mark">?</span>;
+            att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+        }
+
+        <span class="kw">let </span>att = <span class="kw">match </span>mask {
+            <span class="prelude-val">Some</span>(m) =&gt; att.broadcast_add(m)<span class="question-mark">?</span>,
+            <span class="prelude-val">None </span>=&gt; att,
+        };
+        <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
+        MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
+    }
 }
 
 <span class="kw">pub struct </span>SdpaParams {

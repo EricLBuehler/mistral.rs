@@ -1307,7 +1307,6 @@
 <a href="#1307" id="1307">1307</a>
 <a href="#1308" id="1308">1308</a>
 <a href="#1309" id="1309">1309</a>
-<a href="#1310" id="1310">1310</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
@@ -2377,7 +2376,7 @@
             <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?
         </span>};
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        <span class="kw">let </span>attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
@@ -2385,7 +2384,6 @@
                 .unwrap_or(<span class="kw-2">&amp;*</span>cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
             <span class="self">self</span>.sliding_window,
             xs.dtype(),
-            <span class="self">self</span>.layers[<span class="number">0</span>].self_attn.num_heads,
         )<span class="question-mark">?</span>;
 
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {

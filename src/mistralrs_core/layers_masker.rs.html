@@ -293,6 +293,44 @@
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::ops::Add;
@@ -417,7 +455,97 @@
         <span class="kw">return </span><span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]);
     }
 
-    <span class="kw">pub fn </span>make_causal_mask_as_attn_bias(
+    <span class="kw">pub fn </span>make_causal_mask_matrix(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
+        dtype: DType,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
+        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+        }
+
+        <span class="kw">let </span>causal_mask = {
+            <span class="kw">let </span>mask = <span class="self">self
+                </span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?
+                </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+            <span class="prelude-val">Some</span>(mask)
+        };
+
+        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
+        <span class="kw">let </span>causal_mask: <span class="prelude-ty">Option</span>&lt;<span class="prelude-ty">Result</span>&lt;Tensor&gt;&gt; = causal_mask.map(|mask| {
+            <span class="kw">let </span>mask = mask.broadcast_as((mask.dims()[<span class="number">0</span>], mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
+            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+            </span><span class="kw">let </span>mask = masked_fill(
+                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>mask,
+                f32::NEG_INFINITY,
+            )<span class="question-mark">?</span>;
+
+            <span class="prelude-val">Ok</span>(mask)
+        });
+        <span class="kw">let </span>mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = causal_mask {
+            <span class="prelude-val">Some</span>(mask<span class="question-mark">?</span>)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+        <span class="prelude-val">Ok</span>(mask)
+    }
+
+    <span class="kw">pub fn </span>make_sliding_window_causal_mask_matrix(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        input_ids: <span class="kw-2">&amp;</span>Tensor,
+        cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
+        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        dtype: DType,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+        <span class="kw">if </span>sliding_window.is_none() {
+            <span class="kw">return </span><span class="self">self</span>.make_causal_mask_matrix(input_ids, cache, dtype);
+        }
+        <span class="kw">let </span>sliding_window = sliding_window.unwrap();
+        <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
+        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
+        }
+
+        <span class="kw">let </span>causal_mask = {
+            <span class="kw">let </span>mask = <span class="self">self</span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?</span>;
+            <span class="kw">let </span>diagonal = past_kv_len <span class="kw">as </span>isize - sliding_window <span class="kw">as </span>isize - <span class="number">1</span>;
+            <span class="kw">let </span>context_mask = apply_tril(<span class="kw-2">&amp;</span>mask.ones_like()<span class="question-mark">?</span>, diagonal)<span class="question-mark">?</span>;
+            <span class="kw">let </span>mask = masked_fill(<span class="kw-2">&amp;</span>mask.to_dtype(DType::F32)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>context_mask, f32::MIN)<span class="question-mark">?
+                </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+
+            <span class="prelude-val">Some</span>(mask)
+        };
+
+        <span class="kw">let </span>zero = Tensor::new(<span class="number">0.0f32</span>, input_ids.device())<span class="question-mark">?</span>;
+        <span class="kw">let </span>causal_mask: <span class="prelude-ty">Option</span>&lt;<span class="prelude-ty">Result</span>&lt;Tensor&gt;&gt; = causal_mask.map(|mask| {
+            <span class="kw">let </span>mask = mask.broadcast_as((mask.dims()[<span class="number">0</span>], mask.dims()[<span class="number">1</span>]))<span class="question-mark">?</span>;
+            <span class="comment">// Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+            </span><span class="kw">let </span>mask = masked_fill(
+                <span class="kw-2">&amp;</span>zero.to_dtype(dtype)<span class="question-mark">?</span>.broadcast_as(mask.shape())<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>mask,
+                f32::NEG_INFINITY,
+            )<span class="question-mark">?</span>;
+
+            <span class="prelude-val">Ok</span>(mask)
+        });
+        <span class="kw">let </span>mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = causal_mask {
+            <span class="prelude-val">Some</span>(mask<span class="question-mark">?</span>)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+        <span class="prelude-val">Ok</span>(mask)
+    }
+
+    <span class="attr">#[deprecated(
+        since = <span class="string">"0.3.3"</span>,
+        note = <span class="string">"use `make_causal_mask_matrix_as_attn_bias` instead. This is incompatible with `Sdpa`."
+    </span>)]
+    </span><span class="kw">pub fn </span>make_causal_mask_as_attn_bias(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
@@ -459,7 +587,11 @@
         <span class="prelude-val">Ok</span>(mask)
     }
 
-    <span class="kw">pub fn </span>make_causal_mask_with_sliding_window_as_attn_bias(
+    <span class="attr">#[deprecated(
+        since = <span class="string">"0.3.3"</span>,
+        note = <span class="string">"use `make_causal_mask_matrix_with_sliding_window_as_attn_bias` instead. This is incompatible with `Sdpa`."
+    </span>)]
+    </span><span class="kw">pub fn </span>make_causal_mask_with_sliding_window_as_attn_bias(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
@@ -468,7 +600,8 @@
         n_attn_heads: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
         <span class="kw">if </span>sliding_window.is_none() {
-            <span class="kw">return </span><span class="self">self</span>.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
+            <span class="attr">#[allow(deprecated)]
+            </span><span class="kw">return </span><span class="self">self</span>.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
         }
         <span class="kw">let </span>sliding_window = sliding_window.unwrap();
         <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
@@ -508,63 +641,6 @@
             <span class="prelude-val">None
         </span>};
         <span class="prelude-val">Ok</span>(mask)
-    }
-
-    <span class="attr">#[deprecated(
-        since = <span class="string">"0.1.10"</span>,
-        note = <span class="string">"use `make_causal_mask_as_attn_bias` instead! \
-        This is *not* compatible with `Sdpa`"
-    </span>)]
-    </span><span class="kw">pub fn </span>make_causal_mask(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        input_ids: <span class="kw-2">&amp;</span>Tensor,
-        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-        <span class="kw">let </span>past_kv_len = <span class="self">self</span>.calculate_past_kv_len(cache)<span class="question-mark">?</span>;
-        <span class="kw">let </span>(b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
-        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-        }
-
-        <span class="kw">let </span>mask = <span class="self">self</span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = mask
-            .expand((b_sz, <span class="number">1</span>, tgt_len, tgt_len + past_kv_len))<span class="question-mark">?
-            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-
-        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask))
-    }
-
-    <span class="attr">#[deprecated(
-        since = <span class="string">"0.1.10"</span>,
-        note = <span class="string">"use `make_causal_mask_with_sliding_window_as_attn_bias` instead! \
-        This is *not* compatible with `Sdpa`"
-    </span>)]
-    </span><span class="kw">pub fn </span>make_causal_mask_with_sliding_window(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        input_ids: <span class="kw-2">&amp;</span>Tensor,
-        cache: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;],
-        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-        <span class="kw">if </span>sliding_window.is_none() {
-            <span class="attr">#[allow(deprecated)]
-            </span><span class="kw">return </span><span class="self">self</span>.make_causal_mask(input_ids, cache);
-        }
-        <span class="kw">let </span>sliding_window = sliding_window.unwrap();
-        <span class="kw">let </span>past_kv_len = <span class="self">self</span>.calculate_past_kv_len(cache)<span class="question-mark">?</span>;
-        <span class="kw">let </span>(b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
-        <span class="kw">if </span>tgt_len == <span class="number">1 </span>{
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
-        }
-
-        <span class="kw">let </span>mask = <span class="self">self</span>.make_mask(tgt_len, past_kv_len, input_ids.device())<span class="question-mark">?</span>;
-        <span class="kw">let </span>diagonal = past_kv_len <span class="kw">as </span>isize - sliding_window <span class="kw">as </span>isize - <span class="number">1</span>;
-        <span class="kw">let </span>context_mask = apply_tril(<span class="kw-2">&amp;</span>mask.ones_like()<span class="question-mark">?</span>, diagonal)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = masked_fill(<span class="kw-2">&amp;</span>mask.to_dtype(DType::F32)<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>context_mask, f32::MIN)<span class="question-mark">?</span>;
-        <span class="kw">let </span>mask = mask
-            .expand((b_sz, <span class="number">1</span>, tgt_len, tgt_len + past_kv_len))<span class="question-mark">?
-            </span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-
-        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(mask))
     }
 
     <span class="kw">pub fn </span>apply_mask_one_and_zero(
