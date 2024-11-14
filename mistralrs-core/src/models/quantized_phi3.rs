@@ -373,7 +373,7 @@ impl ModelWeights {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
@@ -381,7 +381,6 @@ impl ModelWeights {
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             Some(self.max_seq_len),
             DType::F32,
-            self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {

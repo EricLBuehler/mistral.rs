@@ -622,12 +622,8 @@ impl XLoraModel {
             self.cache.lock()
         };
         let xs = self.embed_tokens.forward(input_ids)?;
-        let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
-            input_ids,
-            &*cache,
-            xs.dtype(),
-            self.layers[0].self_attn.num_heads,
-        )?;
+        let attention_mask =
+            CausalMasker.make_causal_mask_matrix(input_ids, &*cache, xs.dtype())?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

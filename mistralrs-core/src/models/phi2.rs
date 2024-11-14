@@ -538,14 +538,13 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = input_ids.apply(&self.embed_tokens)?;
         let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             xs.dtype(),
-            self.layers[0].self_attn.num_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

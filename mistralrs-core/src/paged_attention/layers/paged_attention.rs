@@ -99,7 +99,7 @@ impl PagedAttention {
                     Some(sc) => ((att / sc)?.tanh()? * sc)?,
                 };
 
-                let att = att.broadcast_add(mask)?;
+                let att = att.broadcast_add(mask.unsqueeze(0)?.unsqueeze(0)?)?;
                 let att = candle_nn::ops::softmax_last_dim(&att)?;
                 if key_value_heads != attention_heads {
                     let value_repeat = if key_value_heads == 1 {

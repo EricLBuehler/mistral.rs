@@ -281,12 +281,11 @@ impl Qwen2VLModel {
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
             self.text.cfg.sliding_window,
             self.text.dtype,
-            self.text.cfg.num_attn_heads,
         )?;
 
         let input_embeds = if pixel_values.is_some() || pixel_values_videos.is_some() {

@@ -659,7 +659,7 @@ impl Model {
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
@@ -667,7 +667,6 @@ impl Model {
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             self.sliding_window,
             xs.dtype(),
-            self.layers[0].self_attn.num_heads,
         )?;
 
         for (i, layer) in self.layers.iter().enumerate() {

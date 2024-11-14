@@ -647,11 +647,10 @@ impl MLlamaTextModel {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let mut cache = self.cache.lock();
-        let self_mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
             hidden_states.dtype(),
-            self.cfg.num_attn_heads,
         )?;
 
         for (i, layer) in self.layers.iter().enumerate() {
