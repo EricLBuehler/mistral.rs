@@ -111,7 +111,7 @@ impl<P: Debug> LocalModelPaths<P> {
     pub fn new(
         tokenizer_filename: P,
         config_filename: P,
-        template_filename: P,
+        template_filename: Option<P>,
         filenames: Vec<P>,
         xlora_adapter_filenames: Option<Vec<(String, P)>>,
         xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -126,7 +126,7 @@ impl<P: Debug> LocalModelPaths<P> {
         Self {
             tokenizer_filename,
             config_filename,
-            template_filename: Some(template_filename),
+            template_filename,
             filenames,
             xlora_adapter_filenames,
             xlora_adapter_configs,
