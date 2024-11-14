@@ -555,14 +555,13 @@ impl Model {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             xs.dtype(),
-            self.layers[0].self_attn.num_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
