@@ -40,13 +40,6 @@ pub enum HFError {
 
     #[error("HF repo has invalid structure: {0:?}")]
     InvalidRepoStructure(String),
-
-    #[error("Unknown error loading {file} from {model_id} repo. Error: {error:?}.")]
-    UnknownHfHubError {
-        model_id: String,
-        file: String,
-        error: HFHubApiError,
-    },
 }
 
 /// Attempts to retrieve a file from a HF repo. Will check if the file exists locally first.
@@ -82,6 +75,7 @@ pub(crate) fn api_get_file(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn get_paths(
     model_id: String,
     tokenizer_json: Option<&str>,
@@ -95,7 +89,7 @@ pub fn get_paths(
     silent: bool,
     loading_uqff: bool,
 ) -> Result<Box<dyn ModelPaths>, HFError> {
-    let token = get_token(token_source).map_err(|e| HFError::HFTokenError(e))?;
+    let token = get_token(token_source).map_err(HFError::HFTokenError)?;
     let api = ApiBuilder::new()
         .with_progress(!silent)
         .with_token(token)
@@ -152,7 +146,7 @@ pub fn get_paths(
     )?;
 
     // Get optional configs by checking directory contents
-    let dir_contents: Vec<String> = api_dir_list(&api, &Path::new(&model_id))?;
+    let dir_contents: Vec<String> = api_dir_list(&api, Path::new(&model_id))?;
 
     let gen_conf = if dir_contents.contains(&"generation_config.json".to_string()) {
         info!("Loading `generation_config.json` at `{}`", model_id);
@@ -216,10 +210,9 @@ pub fn api_dir_list(api: &ApiRepo, model_id: impl AsRef<Path>) -> Result<Vec<Str
 
     if model_id.exists() {
         std::fs::read_dir(model_id)
-            .map_err(|e| HFError::IoError(e))?
-            .into_iter()
+            .map_err(HFError::IoError)?
             .map(|entry| {
-                let entry = entry.map_err(|e| HFError::IoError(e))?;
+                let entry = entry.map_err(HFError::IoError)?;
 
                 let filename = entry
                     .path()

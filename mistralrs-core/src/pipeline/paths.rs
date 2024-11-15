@@ -127,12 +127,7 @@ pub fn get_xlora_paths(
     let adapter_files = api_dir
         .iter()
         .filter_map(|name| {
-            let Some(order) = xlora_order else {
-                return None;
-            };
-            let Some(ref adapters) = order.adapters else {
-                return None;
-            };
+            let adapters = xlora_order?.adapters.as_deref()?;
             for adapter_name in adapters {
                 if name.contains(adapter_name) {
                     return Some((name, adapter_name.clone()));
@@ -154,9 +149,9 @@ pub fn get_xlora_paths(
     let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for (file, name) in adapter_files {
         if let Some(paths) = adapters_paths.get_mut(&name) {
-            paths.push(api_get_file(&api, &file, model_id)?);
+            paths.push(api_get_file(&api, file, model_id)?);
         } else {
-            adapters_paths.insert(name, vec![api_get_file(&api, &file, model_id)?]);
+            adapters_paths.insert(name, vec![api_get_file(&api, file, model_id)?]);
         }
     }
 
@@ -195,13 +190,15 @@ pub fn get_xlora_paths(
     })
 }
 
+pub type XloraAdapterConfig = ((String, String), LoraConfig);
+pub type XloraAdapterSafetensors = (String, PathBuf);
 // Sort local paths for the adapter configs and safetensors files
 //
 // Returns a tuple of the adapter configs and safetensors files
 pub fn xlora_adapters_config_and_safetensors(
     xlora_order: Option<&Ordering>,
     adapter_paths: HashMap<String, Vec<PathBuf>>,
-) -> Result<(Vec<((String, String), LoraConfig)>, Vec<(String, PathBuf)>), HFError> {
+) -> Result<(Vec<XloraAdapterConfig>, Vec<XloraAdapterSafetensors>), HFError> {
     let Some(xlora_order) = xlora_order else {
         return Ok((Vec::new(), Vec::new()));
     };
@@ -218,7 +215,7 @@ pub fn xlora_adapters_config_and_safetensors(
             if path.extension().unwrap() == "safetensors" {
                 adapters_safetensors.push((name.clone(), path.to_owned()));
             } else {
-                let conf = fs::read_to_string(path).map_err(|e| HFError::IoError(e))?;
+                let conf = fs::read_to_string(path).map_err(HFError::IoError)?;
                 let lora_config: LoraConfig = serde_json::from_str(&conf).map_err(|e| {
                     HFError::JsonError(e, "failed to parse LORA config file".to_string())
                 })?;
@@ -229,12 +226,13 @@ pub fn xlora_adapters_config_and_safetensors(
     Ok((adapters_configs, adapters_safetensors))
 }
 
+pub type LoraAdapterInfo = HashMap<String, (PathBuf, LoraConfig)>;
 // If preload adapters are specified
 pub fn lora_preload_adapter_info(
     api: &ApiRepo,
     model_id: &Path,
     xlora_order: Option<&Ordering>,
-) -> Result<Option<HashMap<String, (PathBuf, LoraConfig)>>, HFError> {
+) -> Result<Option<LoraAdapterInfo>, HFError> {
     let Some(xlora_order) = xlora_order else {
         return Ok(None);
     };
@@ -296,6 +294,7 @@ pub fn lora_preload_adapter_info(
     Ok(Some(output))
 }
 
+#[allow(clippy::result_large_err)]
 fn compile_patterns() -> Result<(Regex, Regex, Regex), BuildError> {
     let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
     let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
@@ -381,7 +380,7 @@ pub fn get_model_paths(
                     .collect::<Vec<_>>()
             );
             for rfilename in files {
-                filenames.push(api_get_file(&api, &rfilename, model_id)?);
+                filenames.push(api_get_file(api, rfilename, model_id)?);
             }
             Ok(filenames)
         }
