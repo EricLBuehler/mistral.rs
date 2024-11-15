@@ -10,12 +10,11 @@ use hf_hub::{
     api::sync::{ApiBuilder, ApiRepo},
     Repo, RepoType,
 };
-use regex_automata::meta::Regex;
+use regex_automata::meta::{BuildError, Regex};
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
-    api_dir_list, api_get_file,
     lora::LoraConfig,
     pipeline::{
         chat_template::{ChatTemplate, ChatTemplateValue},
@@ -26,11 +25,14 @@ use crate::{
     ModelPaths, Ordering, TokenSource,
 };
 
+use super::hf::{api_dir_list, api_get_file, HFError};
+
 // Match files against these, avoids situations like `consolidated.safetensors`
 const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
 const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
+#[derive(Debug, Default)]
 pub(crate) struct XLoraPaths {
     pub adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     pub adapter_safetensors: Option<Vec<(String, PathBuf)>>,
@@ -42,231 +44,274 @@ pub(crate) struct XLoraPaths {
 
 pub fn get_xlora_paths(
     base_model_id: String,
-    xlora_model_id: &Option<String>,
+    xlora_model_id: Option<&str>,
     token_source: &TokenSource,
     revision: String,
-    xlora_order: &Option<Ordering>,
-) -> Result<XLoraPaths> {
-    Ok(if let Some(ref xlora_id) = xlora_model_id {
-        let api = ApiBuilder::new()
-            .with_progress(true)
-            .with_token(get_token(token_source)?)
-            .build()?;
-        let api = api.repo(Repo::with_revision(
-            xlora_id.clone(),
+    xlora_order: Option<&Ordering>,
+) -> Result<XLoraPaths, HFError> {
+    let Some(xlora_id) = xlora_model_id else {
+        return Ok(XLoraPaths::default());
+    };
+    let api = ApiBuilder::new()
+        .with_progress(true)
+        .with_token(get_token(token_source)?)
+        .build()?
+        .repo(Repo::with_revision(
+            xlora_id.to_string(),
             RepoType::Model,
             revision,
         ));
-        let model_id = Path::new(&xlora_id);
 
-        // Get the path for the xlora classifier
-        let xlora_classifier = &api_dir_list!(api, model_id)
-            .filter(|x| x.contains("xlora_classifier.safetensors"))
-            .collect::<Vec<_>>();
-        if xlora_classifier.len() > 1 {
-            warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
-            warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+    let model_id = Path::new(&xlora_id);
+    let api_dir = api_dir_list(&api, model_id)?;
+
+    // Get the path for the xlora classifier
+    let xlora_classifier = api_dir
+        .iter()
+        .filter(|x| x.contains("xlora_classifier.safetensors"))
+        .collect::<Vec<_>>();
+    if xlora_classifier.len() > 1 {
+        warn!("Detected multiple X-LoRA classifiers: {xlora_classifier:?}");
+        warn!("Selected classifier: `{}`", &xlora_classifier[0]);
+    }
+    let xlora_classifier = xlora_classifier.first();
+
+    let classifier_path = xlora_classifier
+        .map(|xlora_classifier| api_get_file(&api, xlora_classifier, model_id))
+        .transpose()?;
+
+    // Get the path for the xlora config by checking all for valid versions.
+    // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
+    let xlora_configs = api_dir
+        .iter()
+        .filter(|x| x.contains("xlora_config.json"))
+        .collect::<Vec<_>>();
+    if xlora_configs.len() > 1 {
+        warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
+    }
+
+    let mut xlora_config: Option<XLoraConfig> = None;
+    let mut last_err: Option<serde_json::Error> = None;
+    for (i, config_path) in xlora_configs.iter().enumerate() {
+        if xlora_configs.len() != 1 {
+            warn!("Selecting config: `{}`", config_path);
         }
-        let xlora_classifier = xlora_classifier.first();
-
-        let classifier_path =
-            xlora_classifier.map(|xlora_classifier| api_get_file!(api, xlora_classifier, model_id));
-
-        // Get the path for the xlora config by checking all for valid versions.
-        // NOTE(EricLBuehler): Remove this functionality because all configs should be deserializable
-        let xlora_configs = &api_dir_list!(api, model_id)
-            .filter(|x| x.contains("xlora_config.json"))
-            .collect::<Vec<_>>();
-        if xlora_configs.len() > 1 {
-            warn!("Detected multiple X-LoRA configs: {xlora_configs:?}");
-        }
-
-        let mut xlora_config: Option<XLoraConfig> = None;
-        let mut last_err: Option<serde_json::Error> = None;
-        for (i, config_path) in xlora_configs.iter().enumerate() {
-            if xlora_configs.len() != 1 {
-                warn!("Selecting config: `{}`", config_path);
+        let config_path = api_get_file(&api, config_path, model_id)?;
+        let conf = fs::read_to_string(config_path)?;
+        let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
+        match deser {
+            Ok(conf) => {
+                xlora_config = Some(conf);
+                break;
             }
-            let config_path = api_get_file!(api, config_path, model_id);
-            let conf = fs::read_to_string(config_path)?;
-            let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
-            match deser {
-                Ok(conf) => {
-                    xlora_config = Some(conf);
-                    break;
+            Err(e) => {
+                if i != xlora_configs.len() - 1 {
+                    warn!("Config is broken with error `{e}`");
                 }
-                Err(e) => {
-                    if i != xlora_configs.len() - 1 {
-                        warn!("Config is broken with error `{e}`");
-                    }
-                    last_err = Some(e);
-                }
+                last_err = Some(e);
             }
         }
-        let xlora_config = xlora_config.map(Some).unwrap_or_else(|| {
-            if let Some(last_err) = last_err {
-                panic!(
-                    "Unable to derserialize any configs. Last error: {}",
-                    last_err
-                )
-            } else {
-                None
-            }
-        });
-
-        // If there are adapters in the ordering file, get their names and remote paths
-        let adapter_files = api_dir_list!(api, model_id)
-            .filter_map(|name| {
-                if let Some(ref adapters) = xlora_order.as_ref().unwrap().adapters {
-                    for adapter_name in adapters {
-                        if name.contains(adapter_name) {
-                            return Some((name, adapter_name.clone()));
-                        }
-                    }
-                }
-                None
-            })
-            .collect::<Vec<_>>();
-        if adapter_files.is_empty() && xlora_order.as_ref().unwrap().adapters.is_some() {
-            anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
-        }
-
-        // Get the local paths for each adapter
-        let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-        for (file, name) in adapter_files {
-            if let Some(paths) = adapters_paths.get_mut(&name) {
-                paths.push(api_get_file!(api, &file, model_id));
-            } else {
-                adapters_paths.insert(name, vec![api_get_file!(api, &file, model_id)]);
-            }
-        }
-
-        // Sort local paths for the adapter configs and safetensors files
-        let mut adapters_configs = Vec::new();
-        let mut adapters_safetensors = Vec::new();
-        if let Some(ref adapters) = xlora_order.as_ref().unwrap().adapters {
-            for (i, name) in adapters.iter().enumerate() {
-                let paths = adapters_paths
-                    .get(name)
-                    .unwrap_or_else(|| panic!("Adapter {name} not found."));
-                for path in paths {
-                    if path.extension().unwrap() == "safetensors" {
-                        adapters_safetensors.push((name.clone(), path.to_owned()));
-                    } else {
-                        let conf = fs::read_to_string(path)?;
-                        let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                        adapters_configs.push((((i + 1).to_string(), name.clone()), lora_config));
-                    }
-                }
-            }
-        }
-
-        // Make sure they all match
-        if xlora_order.as_ref().is_some_and(|order| {
-            &order.base_model_id
-                != xlora_config
-                    .as_ref()
-                    .map(|cfg| &cfg.base_model_id)
-                    .unwrap_or(&base_model_id)
-        }) || xlora_config
-            .as_ref()
-            .map(|cfg| &cfg.base_model_id)
-            .unwrap_or(&base_model_id)
-            != &base_model_id
-        {
-            anyhow::bail!(
-                "Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively.",
-                xlora_order.as_ref().unwrap().base_model_id,
-                xlora_config.map(|cfg| cfg.base_model_id).unwrap_or(base_model_id.clone()),
-                base_model_id
-            );
-        }
-
-        let lora_preload_adapter_info = if let Some(xlora_order) = xlora_order {
-            // If preload adapters are specified, get their metadata like above
-            if let Some(preload_adapters) = &xlora_order.preload_adapters {
-                let mut output = HashMap::new();
-                for adapter in preload_adapters {
-                    // Get the names and remote paths of the files associated with this adapter
-                    let adapter_files = api_dir_list!(api, &adapter.adapter_model_id)
-                        .filter_map(|f| {
-                            if f.contains(&adapter.name) {
-                                Some((f, adapter.name.clone()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    if adapter_files.is_empty() {
-                        anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
-                    }
-                    // Get local paths for this adapter
-                    let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
-                    for (file, name) in adapter_files {
-                        if let Some(paths) = adapters_paths.get_mut(&name) {
-                            paths.push(api_get_file!(api, &file, model_id));
-                        } else {
-                            adapters_paths.insert(name, vec![api_get_file!(api, &file, model_id)]);
-                        }
-                    }
-
-                    let mut config = None;
-                    let mut safetensor = None;
-
-                    // Sort local paths for the adapter configs and safetensors files
-                    let paths = adapters_paths
-                        .get(&adapter.name)
-                        .unwrap_or_else(|| panic!("Adapter {} not found.", adapter.name));
-                    for path in paths {
-                        if path.extension().unwrap() == "safetensors" {
-                            safetensor = Some(path.to_owned());
-                        } else {
-                            let conf = fs::read_to_string(path)?;
-                            let lora_config: LoraConfig = serde_json::from_str(&conf)?;
-                            config = Some(lora_config);
-                        }
-                    }
-
-                    let (config, safetensor) = (config.unwrap(), safetensor.unwrap());
-                    output.insert(adapter.name.clone(), (safetensor, config));
-                }
-                Some(output)
-            } else {
-                None
-            }
+    }
+    let xlora_config = xlora_config.map(Some).unwrap_or_else(|| {
+        if let Some(last_err) = last_err {
+            panic!(
+                "Unable to derserialize any configs. Last error: {}",
+                last_err
+            )
         } else {
             None
-        };
+        }
+    });
 
-        XLoraPaths {
-            adapter_configs: Some(adapters_configs),
-            adapter_safetensors: Some(adapters_safetensors),
-            classifier_path,
-            xlora_order: xlora_order.clone(),
-            xlora_config,
-            lora_preload_adapter_info,
+    // If there are adapters in the ordering file, get their names and remote paths
+    let adapter_files = api_dir
+        .iter()
+        .filter_map(|name| {
+            let Some(order) = xlora_order else {
+                return None;
+            };
+            let Some(ref adapters) = order.adapters else {
+                return None;
+            };
+            for adapter_name in adapters {
+                if name.contains(adapter_name) {
+                    return Some((name, adapter_name.clone()));
+                }
+            }
+            None
+        })
+        .collect::<Vec<_>>();
+
+    if adapter_files.is_empty() && xlora_order.is_some_and(|x| x.adapters.is_some()) {
+        return Err(
+            HFError::InvalidRepoStructure(
+                "Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?".to_string()
+            )
+        );
+    }
+
+    // Get the local paths for each adapter
+    let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for (file, name) in adapter_files {
+        if let Some(paths) = adapters_paths.get_mut(&name) {
+            paths.push(api_get_file(&api, &file, model_id)?);
+        } else {
+            adapters_paths.insert(name, vec![api_get_file(&api, &file, model_id)?]);
         }
-    } else {
-        XLoraPaths {
-            adapter_configs: None,
-            adapter_safetensors: None,
-            classifier_path: None,
-            xlora_order: None,
-            xlora_config: None,
-            lora_preload_adapter_info: None,
-        }
+    }
+
+    // Sort local paths for the adapter configs and safetensors files
+    let (adapters_configs, adapters_safetensors) =
+        xlora_adapters_config_and_safetensors(xlora_order, adapters_paths)?;
+
+    // Make sure they all match
+    if xlora_order.as_ref().is_some_and(|order| {
+        &order.base_model_id
+            != xlora_config
+                .as_ref()
+                .map(|cfg| &cfg.base_model_id)
+                .unwrap_or(&base_model_id)
+    }) || xlora_config
+        .as_ref()
+        .map(|cfg| &cfg.base_model_id)
+        .unwrap_or(&base_model_id)
+        != &base_model_id
+    {
+        return Err(HFError::InvalidRepoStructure(format!("Adapter ordering file, adapter model config, and base model ID do not match: {}, {}, and {} respectively.",
+            xlora_order.as_ref().unwrap().base_model_id,
+            xlora_config.map(|cfg| cfg.base_model_id).unwrap_or(base_model_id.clone()),
+            base_model_id
+        )));
+    };
+
+    let lora_preload_adapter_info = lora_preload_adapter_info(&api, model_id, xlora_order)?;
+    Ok(XLoraPaths {
+        adapter_configs: Some(adapters_configs),
+        adapter_safetensors: Some(adapters_safetensors),
+        classifier_path,
+        xlora_order: xlora_order.cloned(),
+        xlora_config,
+        lora_preload_adapter_info,
     })
+}
+
+// Sort local paths for the adapter configs and safetensors files
+//
+// Returns a tuple of the adapter configs and safetensors files
+pub fn xlora_adapters_config_and_safetensors(
+    xlora_order: Option<&Ordering>,
+    adapter_paths: HashMap<String, Vec<PathBuf>>,
+) -> Result<(Vec<((String, String), LoraConfig)>, Vec<(String, PathBuf)>), HFError> {
+    let Some(xlora_order) = xlora_order else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let Some(ref adapters) = xlora_order.adapters else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let mut adapters_configs = Vec::new();
+    let mut adapters_safetensors = Vec::new();
+    for (i, name) in adapters.iter().enumerate() {
+        let paths = adapter_paths
+            .get(name)
+            .unwrap_or_else(|| panic!("Adapter {name} not found."));
+        for path in paths {
+            if path.extension().unwrap() == "safetensors" {
+                adapters_safetensors.push((name.clone(), path.to_owned()));
+            } else {
+                let conf = fs::read_to_string(path).map_err(|e| HFError::IoError(e))?;
+                let lora_config: LoraConfig = serde_json::from_str(&conf).map_err(|e| {
+                    HFError::JsonError(e, "failed to parse LORA config file".to_string())
+                })?;
+                adapters_configs.push((((i + 1).to_string(), name.clone()), lora_config));
+            }
+        }
+    }
+    Ok((adapters_configs, adapters_safetensors))
+}
+
+// If preload adapters are specified
+pub fn lora_preload_adapter_info(
+    api: &ApiRepo,
+    model_id: &Path,
+    xlora_order: Option<&Ordering>,
+) -> Result<Option<HashMap<String, (PathBuf, LoraConfig)>>, HFError> {
+    let Some(xlora_order) = xlora_order else {
+        return Ok(None);
+    };
+    let Some(ref preload_adapters) = xlora_order.preload_adapters else {
+        return Ok(None);
+    };
+    let mut output = HashMap::new();
+    for adapter in preload_adapters {
+        // Get the names and remote paths of the files associated with this adapter
+        let files = api_dir_list(api, &adapter.adapter_model_id)?;
+        let adapter_files = files
+            .iter()
+            .filter_map(|f| {
+                if f.contains(&adapter.name) {
+                    Some((f, adapter.name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if adapter_files.is_empty() {
+            return Err(HFError::InvalidRepoStructure("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?".to_string()));
+        }
+        // Get local paths for this adapter
+        let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        for (file, name) in adapter_files {
+            let path = api_get_file(api, file, model_id)?;
+            if let Some(paths) = adapters_paths.get_mut(&name) {
+                paths.push(path);
+            } else {
+                adapters_paths.insert(name, vec![path]);
+            }
+        }
+
+        let mut config = None;
+        let mut safetensor = None;
+
+        // Sort local paths for the adapter configs and safetensors files
+        let paths = adapters_paths
+            .get(&adapter.name)
+            .unwrap_or_else(|| panic!("Adapter {} not found.", adapter.name));
+        for path in paths {
+            if path.extension().unwrap() == "safetensors" {
+                safetensor = Some(path.to_owned());
+            } else {
+                let conf = fs::read_to_string(path)?;
+                let lora_config: LoraConfig = serde_json::from_str(&conf).map_err(|e| {
+                    HFError::JsonError(e, "failed to parse LORA config file".to_string())
+                })?;
+                config = Some(lora_config);
+            }
+        }
+
+        let (Some(config), Some(safetensor)) = (config, safetensor) else {
+            return Err(HFError::InvalidRepoStructure("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?".to_string()));
+        };
+        output.insert(adapter.name.clone(), (safetensor, config));
+    }
+    Ok(Some(output))
+}
+
+fn compile_patterns() -> Result<(Regex, Regex, Regex), BuildError> {
+    let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
+    let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
+    let pickle_match = Regex::new(PICKLE_MATCH)?;
+    Ok((safetensor_match, quant_safetensor_match, pickle_match))
 }
 
 pub fn get_model_paths(
     revision: String,
     token_source: &TokenSource,
-    quantized_model_id: &Option<String>,
-    quantized_filename: &Option<Vec<String>>,
+    quantized_model_id: Option<&str>,
+    quantized_filename: Option<Vec<String>>,
     api: &ApiRepo,
     model_id: &Path,
     loading_from_uqff: bool,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<PathBuf>, HFError> {
     match &quantized_filename {
         Some(names) => {
             let id = quantized_model_id.as_ref().unwrap();
@@ -283,18 +328,20 @@ pub fn get_model_paths(
                     revision.clone(),
                 ));
                 let model_id = Path::new(&id);
-                files.push(api_get_file!(qapi, name, model_id));
+                files.push(api_get_file(&qapi, name, model_id)?);
             }
             Ok(files)
         }
         None => {
             // We only match these patterns for model names
-            let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
-            let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
-            let pickle_match = Regex::new(PICKLE_MATCH)?;
+            let (safetensor_match, quant_safetensor_match, pickle_match) = compile_patterns()
+                .map_err(|_| {
+                    HFError::InvalidRepoStructure("Invalid model pattern(s)".to_string())
+                })?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id).filter(|x| {
+            let all_listing = api_dir_list(api, model_id)?;
+            let listing = all_listing.iter().filter(|&x| {
                 safetensor_match.is_match(x)
                     || pickle_match.is_match(x)
                     || quant_safetensor_match.is_match(x)
@@ -310,7 +357,7 @@ pub fn get_model_paths(
                 .collect::<Vec<_>>();
             let uqff_residual = listing
                 .clone()
-                .filter(|x| x == UQFF_RESIDUAL_SAFETENSORS)
+                .filter(|&x| x == UQFF_RESIDUAL_SAFETENSORS)
                 .collect::<Vec<_>>();
             let files = if !safetensors.is_empty() {
                 // Always prefer safetensors
@@ -321,7 +368,10 @@ pub fn get_model_paths(
             } else if !uqff_residual.is_empty() && loading_from_uqff {
                 uqff_residual
             } else {
-                anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
+                return Err(HFError::InvalidRepoStructure(
+                    "Expected file with extension one of .safetensors, .pth, .pt, .bin."
+                        .to_string(),
+                ));
             };
             info!(
                 "Found model weight filenames {:?}",
@@ -331,7 +381,7 @@ pub fn get_model_paths(
                     .collect::<Vec<_>>()
             );
             for rfilename in files {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(api_get_file(&api, &rfilename, model_id)?);
             }
             Ok(filenames)
         }

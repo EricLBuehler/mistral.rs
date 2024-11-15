@@ -4,6 +4,7 @@ pub mod chat_template;
 mod diffusion;
 mod ggml;
 mod gguf;
+mod hf;
 mod inputs_processor;
 mod isq;
 mod loaders;
