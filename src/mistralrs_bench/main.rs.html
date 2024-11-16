@@ -558,15 +558,17 @@
 <a href="#558" id="558">558</a>
 <a href="#559" id="559">559</a>
 <a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
-    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    TokenSource, Usage,
+    get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams,
+    SchedulerConfig, TokenSource, Usage,
 };
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Display, num::NonZeroUsize};
@@ -908,6 +910,8 @@
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
 
+    <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
         .with_prompt_batchsize(prompt_batchsize)
@@ -1037,7 +1041,7 @@
     <span class="kw">let </span>pipeline = loader.load_model_from_hf(
         <span class="prelude-val">None</span>,
         token_source,
-        <span class="kw-2">&amp;</span>ModelDType::Auto,
+        <span class="kw-2">&amp;</span>dtype,
         <span class="kw-2">&amp;</span>device,
         <span class="bool-val">false</span>,
         mapper,
