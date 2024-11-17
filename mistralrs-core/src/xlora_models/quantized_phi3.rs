@@ -17,6 +17,7 @@ use crate::lora::Ordering;
 use crate::lora::QLoraLinear;
 use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::pipeline::EitherCache;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use crate::Topology;
@@ -195,7 +196,7 @@ pub struct ModelWeights {
     output: QLoraLinear,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
 }
@@ -376,7 +377,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             output,
             mapper: Some(mapper),
             device: device.clone(),
-            cache: Cache::new(block_count, true),
+            cache: EitherCache::Full(Cache::new(block_count, true)),
             max_seq_len: context_window,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
@@ -416,15 +417,15 @@ impl ModelWeights {
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
-                for _ in 0..self.cache.xlora_lock().len() {
+                for _ in 0..self.cache.full().xlora_lock().len() {
                     new_cache.push(None);
                 }
 
-                self.cache.xlora_lock().clone_from(&new_cache);
+                self.cache.full().xlora_lock().clone_from(&new_cache);
             }
-            self.cache.xlora_lock()
+            self.cache.full().xlora_lock()
         } else {
-            self.cache.lock()
+            self.cache.full().lock()
         };
         let mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
@@ -571,7 +572,7 @@ impl ScalingsMaker for ModelWeights {
     fn dtype(&self) -> DType {
         DType::F32 // for dummy scalings
     }
-    fn get_cache(&self) -> &Cache {
+    fn get_cache(&self) -> &EitherCache {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

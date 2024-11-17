@@ -9,7 +9,7 @@ use crate::layers::{CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::Cache;
+use crate::pipeline::{Cache, EitherCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -160,7 +160,7 @@ pub struct ModelWeights {
     output: QMatMul,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
 }
 
@@ -357,7 +357,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             output,
             mapper: Some(mapper),
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Full(Cache::new(block_count, false)),
             max_seq_len: context_window,
         })
     }
@@ -372,7 +372,7 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata

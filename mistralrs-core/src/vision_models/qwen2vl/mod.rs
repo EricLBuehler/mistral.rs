@@ -16,7 +16,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
 };
 
@@ -468,7 +468,7 @@ impl VisionModel for Qwen2VLModel {
             flash_params,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.text.cache
     }
     fn device(&self) -> &Device {

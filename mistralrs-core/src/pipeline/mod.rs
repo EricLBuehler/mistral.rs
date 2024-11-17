@@ -57,7 +57,9 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
+pub use self::cache_manager::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache,
+};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
@@ -120,7 +122,7 @@ pub trait CacheManagerMixin {
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
     fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
-    fn cache(&self) -> &Cache;
+    fn cache(&self) -> &EitherCache;
 }
 
 pub trait AdapterActivationMixin {

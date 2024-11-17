@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::DiffusionGenerationParams,
+    pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -190,6 +190,7 @@ pub struct Sequence {
     adapters: Option<Vec<String>>,
 
     // Cache
+    normal_cache: Vec<Option<KvCache>>,
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
     draft_cache: LayerCaches,
@@ -303,6 +304,7 @@ impl Sequence {
             id,
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
+            normal_cache: vec![None; layers],
             cache: vec![None; layers],
             draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
@@ -477,6 +479,10 @@ impl Sequence {
 
     pub fn completion_bytes(&self) -> &[u8] {
         &self.completion_bytes
+    }
+
+    pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
+        &mut self.normal_cache
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {

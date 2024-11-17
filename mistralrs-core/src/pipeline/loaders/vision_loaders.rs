@@ -17,7 +17,7 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::llava::config::Config as LLaVAConfig;
@@ -48,7 +48,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
+    fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;
     fn has_conv2d(&self) -> bool;
     fn config(&self) -> &ModelConfigMetadata;

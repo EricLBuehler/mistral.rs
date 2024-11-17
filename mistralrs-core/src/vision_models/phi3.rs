@@ -25,7 +25,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -929,7 +929,7 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
@@ -1032,7 +1032,7 @@ impl Model {
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -1066,7 +1066,7 @@ impl Model {
         } else {
             self.embed_tokens.forward(input_ids)?
         };
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
@@ -1180,7 +1180,7 @@ impl VisionModel for Model {
             flash_params,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {

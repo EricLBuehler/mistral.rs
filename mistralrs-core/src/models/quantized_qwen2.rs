@@ -14,7 +14,7 @@ use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::{extract_logits, Cache};
+use crate::pipeline::{extract_logits, Cache, EitherCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -139,7 +139,7 @@ pub struct ModelWeights {
     norm: QRmsNorm,
     output: Arc<dyn QuantMethod>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
@@ -364,7 +364,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 b: None,
             })?),
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Full(Cache::new(block_count, false)),
             max_seq_len,
             mapper: Some(mapper),
         })
@@ -381,7 +381,7 @@ impl ModelWeights {
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let mask = CausalMasker.make_causal_mask_matrix(
             x,
             metadata

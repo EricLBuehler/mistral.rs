@@ -5,8 +5,8 @@ use super::{
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
@@ -19,9 +19,9 @@ use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
-use crate::pipeline::{get_chat_template, Cache};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
@@ -486,13 +486,13 @@ impl Loader for GGUFLoader {
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.lock().len(),
-            Model::Phi2(ref model) => model.cache.lock().len(),
-            Model::XLoraLlama(ref model) => model.cache.lock().len(),
-            Model::Phi3(ref model) => model.cache.lock().len(),
-            Model::XLoraPhi3(ref model) => model.cache.lock().len(),
-            Model::Starcoder2(ref model) => model.cache.lock().len(),
-            Model::Qwen2(ref model) => model.cache.lock().len(),
+            Model::Llama(ref model) => model.cache.full().lock().len(),
+            Model::Phi2(ref model) => model.cache.full().lock().len(),
+            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
+            Model::Phi3(ref model) => model.cache.full().lock().len(),
+            Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
+            Model::Starcoder2(ref model) => model.cache.full().lock().len(),
+            Model::Qwen2(ref model) => model.cache.full().lock().len(),
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
@@ -580,7 +580,7 @@ impl CacheManagerMixin for GGUFPipeline {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::Phi2(ref model) => &model.cache,
@@ -632,7 +632,7 @@ impl MetadataMixin for GGUFPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }

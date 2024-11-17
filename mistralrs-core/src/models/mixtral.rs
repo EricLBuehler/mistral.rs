@@ -19,7 +19,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -467,7 +467,7 @@ pub struct Model {
     lm_head: Arc<dyn QuantMethod>,
     sliding_window: Option<usize>,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
@@ -579,7 +579,7 @@ impl Model {
             lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -603,7 +603,7 @@ impl Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
@@ -719,7 +719,7 @@ impl NormalModel for Model {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {

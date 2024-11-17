@@ -19,6 +19,7 @@ use crate::layers::{CausalMasker, QLinear};
 use crate::paged_attention::AttentionImplementation;
 use crate::paged_attention::PagedAttention;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::EitherCache;
 use crate::pipeline::{extract_logits, Cache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
@@ -132,7 +133,7 @@ pub struct ModelWeights {
     output_norm: LayerNorm,
     output: QLinear,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
@@ -330,7 +331,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             output_norm,
             output,
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Full(Cache::new(block_count, false)),
             max_seq_len,
             mapper,
         })
@@ -346,7 +347,7 @@ impl ModelWeights {
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut xs = self.tok_embeddings.forward(input_ids)?;
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let mask = CausalMasker.make_causal_mask_matrix(input_ids, &*cache, DType::F32)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

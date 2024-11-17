@@ -25,7 +25,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -408,7 +408,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
-    cache: Cache,
+    cache: EitherCache,
     device: Device,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -512,7 +512,7 @@ impl Model {
             layers,
             final_layernorm,
             lm_head,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             device: normal_loading_metadata.real_device,
             max_seq_len: cfg.max_position_embeddings,
             mapper,
@@ -537,7 +537,7 @@ impl Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = input_ids.apply(&self.embed_tokens)?;
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
@@ -650,7 +650,7 @@ impl NormalModel for Model {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {

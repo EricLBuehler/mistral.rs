@@ -5,15 +5,15 @@ use super::{
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -358,8 +358,8 @@ impl Loader for GGMLLoader {
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.lock().len(),
-            Model::XLoraLlama(ref model) => model.cache.lock().len(),
+            Model::Llama(ref model) => model.cache.full().lock().len(),
+            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGMLPipeline {
@@ -466,7 +466,7 @@ impl CacheManagerMixin for GGMLPipeline {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
@@ -505,7 +505,7 @@ impl MetadataMixin for GGMLPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }

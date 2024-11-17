@@ -29,8 +29,8 @@ use crate::{
 };
 
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 pub struct AnyMoeLoader {
@@ -185,7 +185,7 @@ impl AdapterActivationMixin for AnyMoePipeline {
 }
 
 impl CacheManagerMixin for AnyMoePipeline {
-    fn cache(&self) -> &super::Cache {
+    fn cache(&self) -> &EitherCache {
         unreachable!()
     }
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {

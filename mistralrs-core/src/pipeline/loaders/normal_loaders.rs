@@ -13,7 +13,7 @@ use crate::{
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel,
+        EitherCache, IsqModel,
     },
     serde_default_fn,
     utils::log::once_log_info,
@@ -65,7 +65,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     ) -> candle_core::Result<Tensor>;
     fn is_xlora(&self) -> bool;
     fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
+    fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;
     fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
         // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.

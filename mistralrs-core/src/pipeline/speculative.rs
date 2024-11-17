@@ -17,7 +17,7 @@ use crate::{
         sampling::{
             finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
         },
-        AdapterInstruction, Cache,
+        AdapterInstruction,
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
@@ -28,8 +28,8 @@ use crate::{
 use super::{
     cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -266,7 +266,7 @@ impl CacheManagerMixin for SpeculativePipeline {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         unreachable!()
     }
 }
@@ -452,10 +452,13 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Run the model with all draft tokens. ============================
 
-                let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
-                    .as_ref()
-                    .map(|(k, _)| k.dims()[2])
-                    .unwrap_or(0);
+                let initial_cache_len = match get_mut_arcmutex!(self.target).cache() {
+                    EitherCache::Full(full) => full.lock()[0]
+                        .as_ref()
+                        .map(|(k, _)| k.dims()[2])
+                        .unwrap_or(0),
+                    EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+                };
 
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
@@ -516,44 +519,56 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
-                for (k, v) in get_mut_arcmutex!(self.draft)
-                    .cache()
-                    .lock()
-                    .iter_mut()
-                    .flatten()
-                {
-                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-                }
-                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-                    for (k, v) in get_mut_arcmutex!(self.draft)
-                        .cache()
-                        .xlora_lock()
-                        .iter_mut()
-                        .flatten()
-                    {
-                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                match get_mut_arcmutex!(self.draft).cache() {
+                    EitherCache::Full(full) => {
+                        for (k, v) in full.lock().iter_mut().flatten() {
+                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for cache in &mut *normal.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
                     }
                 }
-                for (k, v) in get_mut_arcmutex!(self.target)
-                    .cache()
-                    .lock()
-                    .iter_mut()
-                    .flatten()
-                {
-                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+                    match get_mut_arcmutex!(self.draft).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.xlora_lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
+                        }
+                        EitherCache::Normal(_) => {
+                            unreachable!()
+                        }
+                    }
+                }
+                match get_mut_arcmutex!(self.target).cache() {
+                    EitherCache::Full(full) => {
+                        for (k, v) in full.lock().iter_mut().flatten() {
+                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for cache in &mut *normal.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-                    for (k, v) in get_mut_arcmutex!(self.target)
-                        .cache()
-                        .xlora_lock()
-                        .iter_mut()
-                        .flatten()
-                    {
-                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                    match get_mut_arcmutex!(self.target).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.xlora_lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
+                        }
+                        EitherCache::Normal(_) => {
+                            unreachable!()
+                        }
                     }
                 }
 

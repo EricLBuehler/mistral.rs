@@ -1,12 +1,13 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::{DefaultCacheManager, NormalCacheManager};
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -18,9 +19,9 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -427,7 +428,10 @@ impl Loader for NormalLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let num_hidden_layers = model.cache().lock().len();
+        let num_hidden_layers = match model.cache() {
+            EitherCache::Full(full) => full.lock().len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+        };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
         Ok(Arc::new(Mutex::new(NormalPipeline {
@@ -512,18 +516,30 @@ impl IsqPipelineMixin for NormalPipeline {
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+        } else {
+            NormalCacheManager.set_none_cache(self, modify_draft_cache);
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.model.cache()
     }
 }
@@ -548,7 +564,7 @@ impl MetadataMixin for NormalPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
