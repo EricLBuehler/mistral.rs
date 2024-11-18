@@ -135,7 +135,7 @@ impl CausalSelfAttention {
                 )?
             }
             None => {
-                let (k, v) = kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
