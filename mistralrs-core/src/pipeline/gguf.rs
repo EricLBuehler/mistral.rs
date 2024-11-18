@@ -534,6 +534,7 @@ impl Loader for GGUFLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(Arc::new(model_config_metadata)),
             }),
         })))
     }
@@ -574,8 +575,14 @@ impl CacheManagerMixin for GGUFPipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

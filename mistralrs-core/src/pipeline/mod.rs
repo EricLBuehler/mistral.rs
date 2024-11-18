@@ -19,7 +19,7 @@ pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::diffusion_models::response::send_responses;
-use crate::paged_attention::{CacheConfig, CacheEngine};
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
@@ -81,6 +81,7 @@ pub struct GeneralMetadata {
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
 pub enum AdapterInstruction {
@@ -91,7 +92,9 @@ pub enum AdapterInstruction {
 pub enum CacheInstruction {
     In(AdapterInstruction),
     Out,
+    /// load_preallocated_cache means to load the preallocated cache, if applicable.
     Reset {
+        load_preallocated_cache: bool,
         reset_non_granular: bool,
         adapter_inst: AdapterInstruction,
     },
@@ -121,7 +124,13 @@ pub trait CacheManagerMixin {
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    );
     fn cache(&self) -> &EitherCache;
 }
 
@@ -344,6 +353,7 @@ pub trait Pipeline:
                                 };
                             }
                             CacheInstruction::Reset {
+                                load_preallocated_cache,
                                 reset_non_granular,
                                 ref adapter_inst,
                             } => {
@@ -359,7 +369,12 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                self.set_none_cache(reset_non_granular, false)
+                                self.set_none_cache(
+                                    input_seqs,
+                                    reset_non_granular,
+                                    false,
+                                    load_preallocated_cache,
+                                )
                             }
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
@@ -384,9 +399,15 @@ pub trait Pipeline:
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
+                        load_preallocated_cache,
                         reset_non_granular,
                         adapter_inst: _,
-                    } => self.set_none_cache(reset_non_granular, false),
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        false,
+                        load_preallocated_cache,
+                    ),
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 

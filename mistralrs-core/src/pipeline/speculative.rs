@@ -242,6 +242,7 @@ impl IsqPipelineMixin for SpeculativePipeline {
     }
 }
 
+// TODO: correct handling of cloning in and out for normal cache
 impl CacheManagerMixin for SpeculativePipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_in_cache(
@@ -259,9 +260,25 @@ impl CacheManagerMixin for SpeculativePipeline {
         );
         DefaultCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.target), false);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        DefaultCacheManager.set_none_cache(
+            &*get_mut_arcmutex!(self.draft),
+            seqs,
+            modify_draft_cache,
+            load_preallocated_cache,
+        );
+        DefaultCacheManager.set_none_cache(
+            &*get_mut_arcmutex!(self.target),
+            seqs,
+            false,
+            load_preallocated_cache,
+        );
         if reset_non_granular {
             self.reset_non_granular_state()
         }
@@ -364,6 +381,7 @@ impl Pipeline for SpeculativePipeline {
                     CacheInstruction::Reset {
                         reset_non_granular,
                         adapter_inst,
+                        load_preallocated_cache,
                     } => {
                         match adapter_inst {
                             AdapterInstruction::Activate(adapters) => {
@@ -377,7 +395,12 @@ impl Pipeline for SpeculativePipeline {
                             }
                             AdapterInstruction::None => 0,
                         };
-                        self.set_none_cache(reset_non_granular, false)
+                        self.set_none_cache(
+                            input_seqs,
+                            reset_non_granular,
+                            false,
+                            load_preallocated_cache,
+                        )
                     }
                     _ => unreachable!("Unreachable PRE cache op."),
                 }
@@ -643,7 +666,13 @@ impl Pipeline for SpeculativePipeline {
                     CacheInstruction::Reset {
                         reset_non_granular,
                         adapter_inst: _,
-                    } => self.set_none_cache(reset_non_granular, true),
+                        load_preallocated_cache,
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        true,
+                        load_preallocated_cache,
+                    ),
                     _ => unreachable!("Unreachable pre cache op."),
                 }
 

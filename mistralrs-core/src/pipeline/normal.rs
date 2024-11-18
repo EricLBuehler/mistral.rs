@@ -434,6 +434,7 @@ impl Loader for NormalLoader {
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -459,6 +460,7 @@ impl Loader for NormalLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             topology: self.config.topology.clone(),
             silent,
@@ -529,11 +531,22 @@ impl CacheManagerMixin for NormalPipeline {
             NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         }
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+            DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
         } else {
-            NormalCacheManager.set_none_cache(self, modify_draft_cache);
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
         }
         if reset_non_granular {
             self.reset_non_granular_state()

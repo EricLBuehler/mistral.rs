@@ -387,6 +387,7 @@ impl Loader for GGMLLoader {
                 cache_config: None,
                 cache_engine: None,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: None,
             }),
         })))
     }
@@ -460,8 +461,14 @@ impl CacheManagerMixin for GGMLPipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

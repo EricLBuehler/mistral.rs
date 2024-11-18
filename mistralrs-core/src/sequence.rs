@@ -196,6 +196,9 @@ pub struct Sequence {
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
+    // Preallocated KV cache
+    seq_preallocated_cache: Option<Tensor>,
+
     // Mutables
     tokens: Vec<u32>,
     logprobs: Vec<Logprobs>,
@@ -284,6 +287,9 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
+        // Preallocated KV cache
+        seq_preallocated_cache: Option<Tensor>,
+        //
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -312,6 +318,7 @@ impl Sequence {
             } else {
                 None
             },
+            seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
             stop_tokens,
@@ -479,6 +486,10 @@ impl Sequence {
 
     pub fn completion_bytes(&self) -> &[u8] {
         &self.completion_bytes
+    }
+
+    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+        self.seq_preallocated_cache.as_ref()
     }
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {

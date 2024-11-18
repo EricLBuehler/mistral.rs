@@ -355,6 +355,7 @@ impl Loader for VisionLoader {
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -373,6 +374,7 @@ impl Loader for VisionLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             processor,
             prefixer: self.inner.prefixer(),
@@ -439,8 +441,14 @@ impl CacheManagerMixin for VisionPipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

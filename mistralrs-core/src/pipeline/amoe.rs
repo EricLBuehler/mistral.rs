@@ -194,8 +194,19 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        get_mut_arcmutex!(self.target).set_none_cache(
+            seqs,
+            reset_non_granular,
+            modify_draft_cache,
+            load_preallocated_cache,
+        )
     }
 }
 
@@ -372,9 +383,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             1, false, false, 0,
         )));
 
-        // Clear KV cache in prep for training
-        target.set_none_cache(true, true);
-
         let mut latest_loss = vec![0.0; optimizers.len()];
         let mut all_losses = Vec::new();
 
@@ -442,6 +450,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
+
+                // Clear KV cache in prep for training
+                target.set_none_cache(&mut input_seqs, true, true, false);
+
                 let inputs = inputs_processor
                     .process_inputs(
                         tokenizer.clone(),
@@ -464,7 +476,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let _ = target.forward_inputs(inputs.unwrap().inputs)?;
 
                 // Clear the KV cache
-                target.set_none_cache(true, true);
+                target.set_none_cache(&mut input_seqs, true, true, false);
 
                 // === BACKWARD STEP ==
                 #[allow(clippy::cast_possible_truncation)]
@@ -570,6 +582,7 @@ fn new_dummy_seq(
         None,
         None,
         SeqStepType::PromptAndDecode,
+        None,
         None,
     )
 }

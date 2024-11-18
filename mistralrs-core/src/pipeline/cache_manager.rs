@@ -14,7 +14,13 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
         modify_draft_cache: bool,
     );
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
-    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool);
+    fn set_none_cache(
+        &self,
+        pipeline: &T,
+        seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    );
 }
 
 pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
@@ -48,19 +54,21 @@ pub struct SingleCache {
     // on the first call where the batch size is easily known.
     // Also this makes it safe to clone a KvCache that has been reseted (as in it will not share
     // its internal state with the cloned instance).
-    all_data: Option<Tensor>,
-    dim: usize,
-    current_seq_len: usize,
-    max_seq_len: usize,
+    pub all_data: Option<Tensor>,
+    pub dim: usize,
+    pub current_seq_len: usize,
+    pub capacity_seq_len: usize,
+    pub max_seq_len: usize,
 }
 
 impl SingleCache {
-    pub fn new(dim: usize, max_seq_len: usize) -> Self {
+    pub fn new(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
         Self {
             all_data: None,
             dim,
             current_seq_len: 0,
             max_seq_len,
+            capacity_seq_len,
         }
     }
 
@@ -103,18 +111,26 @@ impl SingleCache {
         // self.all_data.get_or_insert_with.
         if self.all_data.is_none() {
             let mut shape = src.dims().to_vec();
-            shape[self.dim] = self.max_seq_len;
+            shape[self.dim] = self.capacity_seq_len;
             let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
-            self.all_data = Some(ad)
+            self.all_data = Some(ad);
         };
-        let ad = self.all_data.as_mut().unwrap();
-        if self.current_seq_len + seq_len > self.max_seq_len {
-            candle_core::bail!(
-                "kv-cache: above max-seq-len {}+{seq_len}>{}",
-                self.current_seq_len,
-                self.max_seq_len
-            )
+        if self.current_seq_len + seq_len > self.capacity_seq_len {
+            self.capacity_seq_len += NormalCache::CACHE_GROW_SIZE;
+            if self.capacity_seq_len < self.max_seq_len {
+                candle_core::bail!(
+                    "kv-cache: requested capacity ({}) above max seq len ({})",
+                    self.capacity_seq_len,
+                    self.max_seq_len
+                )
+            }
+            let mut shape = src.dims().to_vec();
+            shape[self.dim] = self.capacity_seq_len;
+            let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+            ad.slice_set(self.all_data.as_ref().unwrap(), self.dim, 0)?;
+            self.all_data = Some(ad);
         }
+        let ad = self.all_data.as_mut().unwrap();
         ad.slice_set(src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
         Ok(())
@@ -123,14 +139,14 @@ impl SingleCache {
 
 #[derive(Debug, Clone)]
 pub struct KvCache {
-    k: SingleCache,
-    v: SingleCache,
+    pub k: SingleCache,
+    pub v: SingleCache,
 }
 
 impl KvCache {
-    pub fn new(dim: usize, max_seq_len: usize) -> Self {
-        let k = SingleCache::new(dim, max_seq_len);
-        let v = SingleCache::new(dim, max_seq_len);
+    pub fn new(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
+        let k = SingleCache::new(dim, max_seq_len, capacity_seq_len);
+        let v = SingleCache::new(dim, max_seq_len, capacity_seq_len);
         Self { k, v }
     }
 
@@ -201,8 +217,18 @@ impl KvCache {
 pub struct NormalCache(pub Vec<KvCache>);
 
 impl NormalCache {
+    /// The number of tokens to grow the cache by
+    pub const CACHE_GROW_SIZE: usize = 512;
+
     pub fn new(len: usize, max_seq_len: usize) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self(vec![KvCache::new(2, max_seq_len); len])))
+        Arc::new(Mutex::new(Self(vec![
+            KvCache::new(
+                2,
+                max_seq_len,
+                Self::CACHE_GROW_SIZE
+            );
+            len
+        ])))
     }
 }
 
@@ -225,6 +251,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             .k
             .current_seq_len;
         let template_cache_msl = seqs[0].normal_cache()[0].as_ref().unwrap().k.max_seq_len;
+        let template_cache_capsl = seqs[0].normal_cache()[0]
+            .as_ref()
+            .unwrap()
+            .k
+            .capacity_seq_len;
 
         'outer: for layer in 0..pipeline.get_metadata().num_hidden_layers {
             let mut k_vec = Vec::new();
@@ -263,12 +294,14 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     dim: template_cache_dim,
                     current_seq_len: template_cache_csl,
                     max_seq_len: template_cache_msl,
+                    capacity_seq_len: template_cache_capsl,
                 },
                 v: SingleCache {
                     all_data: v_cache.map(|x| x.contiguous().unwrap()),
                     dim: template_cache_dim,
                     current_seq_len: template_cache_csl,
                     max_seq_len: template_cache_msl,
+                    capacity_seq_len: template_cache_capsl,
                 },
             });
         }
@@ -302,20 +335,69 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                         dim: cache.k.dim,
                         current_seq_len: cache.k.current_seq_len,
                         max_seq_len: cache.k.max_seq_len,
+                        capacity_seq_len: cache.k.capacity_seq_len,
                     },
                     v: SingleCache {
                         all_data: Some(v),
                         dim: cache.v.dim,
                         current_seq_len: cache.v.current_seq_len,
                         max_seq_len: cache.v.max_seq_len,
+                        capacity_seq_len: cache.v.capacity_seq_len,
                     },
                 });
             }
         }
     }
-    fn set_none_cache(&self, pipeline: &T, _modify_draft_cache: bool) {
+    fn set_none_cache(
+        &self,
+        pipeline: &T,
+        seqs: &mut [&mut Sequence],
+        _modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        // Use this for the various parameters. Assumes all seqs are from one model.
+        let template_cache_dim = pipeline.cache().normal().0[0].k.dim;
+        let template_cache_msl = pipeline.cache().normal().0[0].k.max_seq_len;
+
         for layer in pipeline.cache().normal().0.iter_mut() {
-            layer.reset();
+            if !load_preallocated_cache {
+                layer.reset();
+                continue;
+            }
+
+            let mut k_caches = Vec::new();
+            let mut v_caches = Vec::new();
+            for seq in seqs.iter_mut() {
+                k_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
+                v_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
+            }
+            let k_cache = if k_caches.len() > 1 {
+                Tensor::cat(&k_caches, 0).unwrap()
+            } else {
+                k_caches[0].clone()
+            };
+            let v_cache = if v_caches.len() > 1 {
+                Tensor::cat(&v_caches, 0).unwrap()
+            } else {
+                v_caches[0].clone()
+            };
+            let cache = KvCache {
+                k: SingleCache {
+                    all_data: Some(k_cache.zeros_like().unwrap()),
+                    dim: template_cache_dim,
+                    current_seq_len: 0,
+                    max_seq_len: template_cache_msl,
+                    capacity_seq_len: k_cache.dims()[template_cache_dim],
+                },
+                v: SingleCache {
+                    all_data: Some(v_cache.zeros_like().unwrap()),
+                    dim: template_cache_dim,
+                    current_seq_len: 0,
+                    max_seq_len: template_cache_msl,
+                    capacity_seq_len: k_cache.dims()[template_cache_dim],
+                },
+            };
+            *layer = cache;
         }
     }
 }
@@ -617,7 +699,13 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultC
         }
     }
 
-    fn set_none_cache(&self, pipeline: &T, modify_draft_cache: bool) {
+    fn set_none_cache(
+        &self,
+        pipeline: &T,
+        _seqs: &mut [&mut Sequence],
+        modify_draft_cache: bool,
+        _load_preallocated_cache: bool,
+    ) {
         let mut new_cache = Vec::new();
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);

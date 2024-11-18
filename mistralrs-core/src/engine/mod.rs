@@ -1,3 +1,4 @@
+use candle_core::Tensor;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -13,7 +14,7 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
-        CacheInstruction,
+        CacheInstruction, EitherCache, NormalCache,
     },
     request::NormalRequest,
     response::CompletionChoice,
@@ -162,6 +163,7 @@ impl Engine {
                                 CacheInstruction::Out
                             } else {
                                 CacheInstruction::Reset {
+                                    load_preallocated_cache: false,
                                     reset_non_granular: false,
                                     adapter_inst: AdapterInstruction::None,
                                 }
@@ -212,6 +214,7 @@ impl Engine {
                                 CacheInstruction::Out
                             } else {
                                 CacheInstruction::Reset {
+                                    load_preallocated_cache: false,
                                     reset_non_granular: false,
                                     adapter_inst: AdapterInstruction::None,
                                 }
@@ -232,6 +235,7 @@ impl Engine {
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
                                         pre_op: CacheInstruction::Reset {
+                                            load_preallocated_cache: true,
                                             reset_non_granular: false,
                                             adapter_inst,
                                         },
@@ -733,9 +737,6 @@ impl Engine {
             is_chat,
             best_of,
         )));
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!");
 
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -790,6 +791,49 @@ impl Engine {
                 .tok_trie
                 .as_ref()
                 .map(|x| (**x).clone());
+
+            let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
+            let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {
+                let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
+                let model_metadata = metadata
+                    .model_metadata
+                    .as_ref()
+                    .expect("If a model has a NormalCache it must have a model metadata");
+                let max_seq_len = NormalCache::CACHE_GROW_SIZE;
+                let kv_shape = (
+                    1usize,
+                    model_metadata.num_kv_heads(),
+                    max_seq_len,
+                    model_metadata.head_dim(),
+                );
+                let dtype = get_mut_arcmutex!(self.pipeline)
+                    .get_metadata()
+                    .activation_dtype;
+                let seq_cache =
+                    Tensor::zeros(kv_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
+                let seq_cache = match seq_cache {
+                    Ok(x) => x,
+                    Err(_) => {
+                        request
+                            .response
+                            .send(Response::InternalError(
+                                "Failed to allocate preallocated KV cache."
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                Some(seq_cache)
+            } else {
+                None
+            };
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!");
             let seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -821,6 +865,7 @@ impl Engine {
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
+                seq_preallocated_cache,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
