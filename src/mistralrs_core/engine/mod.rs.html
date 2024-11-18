@@ -877,6 +877,9 @@
 <a href="#877" id="877">877</a>
 <a href="#878" id="878">878</a>
 <a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
@@ -1674,7 +1677,10 @@
                     .model_metadata
                     .as_ref()
                     .expect(<span class="string">"If a model has a NormalCache it must have a model metadata"</span>);
-                <span class="kw">let </span>max_seq_len = NormalCache::CACHE_GROW_SIZE;
+                <span class="kw">let </span>n_tokens = prompt_tokens.len();
+                <span class="kw">let </span>required_blocks =
+                    (n_tokens + NormalCache::CACHE_GROW_SIZE - <span class="number">1</span>) / NormalCache::CACHE_GROW_SIZE;
+                <span class="kw">let </span>max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
                 <span class="kw">let </span>kv_shape = (
                     <span class="number">1usize</span>,
                     model_metadata.num_kv_heads(),

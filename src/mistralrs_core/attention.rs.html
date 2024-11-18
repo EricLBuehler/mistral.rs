@@ -404,8 +404,8 @@
             );
         }
 
-        <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
         <span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
             <span class="kw">if </span>!get_use_matmul_via_f16() {
                 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]

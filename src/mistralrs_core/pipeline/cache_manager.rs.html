@@ -750,6 +750,10 @@
 <a href="#750" id="750">750</a>
 <a href="#751" id="751">751</a>
 <a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
@@ -867,9 +871,13 @@
             <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
             <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
         };
-        <span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len {
-            <span class="self">self</span>.capacity_seq_len += NormalCache::CACHE_GROW_SIZE;
-            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &lt; <span class="self">self</span>.max_seq_len {
+        <span class="comment">// Expand kv cache
+        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len {
+            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
+            <span class="kw">let </span>n_blocks_needed =
+                (diff + NormalCache::CACHE_GROW_SIZE - <span class="number">1</span>) / NormalCache::CACHE_GROW_SIZE;
+            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
                 <span class="macro">candle_core::bail!</span>(
                     <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
                     <span class="self">self</span>.capacity_seq_len,
