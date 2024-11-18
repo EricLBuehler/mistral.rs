@@ -2212,6 +2212,7 @@ dependencies = [
  "tqdm",
  "tracing",
  "tracing-subscriber",
+ "ureq",
  "uuid 1.10.0",
  "variantly",
  "vob",
