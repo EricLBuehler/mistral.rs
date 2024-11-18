@@ -189,13 +189,13 @@
                     <a class="class" href="#ResponseMessage">ResponseMessage</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ResponseMessage.content">content</a>
+                                <a class="variable" href="#ResponseMessage.tool_calls">tool_calls</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseMessage.role">role</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseMessage.tool_calls">tool_calls</a>
+                                <a class="variable" href="#ResponseMessage.content">content</a>
                         </li>
                 </ul>
 
@@ -204,10 +204,10 @@
                     <a class="class" href="#Delta">Delta</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Delta.role">role</a>
+                                <a class="variable" href="#Delta.content">content</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Delta.content">content</a>
+                                <a class="variable" href="#Delta.role">role</a>
                         </li>
                 </ul>
 
@@ -216,7 +216,7 @@
                     <a class="class" href="#ResponseLogprob">ResponseLogprob</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
+                                <a class="variable" href="#ResponseLogprob.top_logprobs">top_logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ResponseLogprob.bytes">bytes</a>
@@ -225,7 +225,7 @@
                                 <a class="variable" href="#ResponseLogprob.token">token</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ResponseLogprob.top_logprobs">top_logprobs</a>
+                                <a class="variable" href="#ResponseLogprob.logprob">logprob</a>
                         </li>
                 </ul>
 
@@ -243,16 +243,16 @@
                     <a class="class" href="#Choice">Choice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#Choice.logprobs">logprobs</a>
+                                <a class="variable" href="#Choice.message">message</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Choice.index">index</a>
+                                <a class="variable" href="#Choice.logprobs">logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Choice.finish_reason">finish_reason</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Choice.message">message</a>
+                                <a class="variable" href="#Choice.index">index</a>
                         </li>
                 </ul>
 
@@ -264,13 +264,13 @@
                                 <a class="variable" href="#ChunkChoice.finish_reason">finish_reason</a>
                         </li>
                         <li>
+                                <a class="variable" href="#ChunkChoice.index">index</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#ChunkChoice.logprobs">logprobs</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChunkChoice.delta">delta</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChunkChoice.index">index</a>
                         </li>
                 </ul>
 
@@ -278,6 +278,12 @@
             <li>
                     <a class="class" href="#Usage">Usage</a>
                             <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
+                        </li>
                         <li>
                                 <a class="variable" href="#Usage.total_tokens">total_tokens</a>
                         </li>
@@ -288,22 +294,16 @@
                                 <a class="variable" href="#Usage.total_prompt_time_sec">total_prompt_time_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
+                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
                         </li>
                         <li>
                                 <a class="variable" href="#Usage.total_time_sec">total_time_sec</a>
                         </li>
                         <li>
-                                <a class="variable" href="#Usage.completion_tokens">completion_tokens</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.avg_compl_tok_per_sec">avg_compl_tok_per_sec</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#Usage.prompt_tokens">prompt_tokens</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#Usage.avg_prompt_tok_per_sec">avg_prompt_tok_per_sec</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#Usage.total_completion_time_sec">total_completion_time_sec</a>
                         </li>
                 </ul>
 
@@ -311,6 +311,15 @@
             <li>
                     <a class="class" href="#ChatCompletionResponse">ChatCompletionResponse</a>
                             <ul class="memberlist">
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
+                        </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionResponse.id">id</a>
                         </li>
@@ -321,16 +330,7 @@
                                 <a class="variable" href="#ChatCompletionResponse.choices">choices</a>
                         </li>
                         <li>
-                                <a class="variable" href="#ChatCompletionResponse.object">object</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.usage">usage</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionResponse.system_fingerprint">system_fingerprint</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionResponse.model">model</a>
                         </li>
                 </ul>
 
@@ -339,22 +339,22 @@
                     <a class="class" href="#ChatCompletionChunkResponse">ChatCompletionChunkResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.choices">choices</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.created">created</a>
                         </li>
                         <li>
                                 <a class="variable" href="#ChatCompletionChunkResponse.model">model</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.system_fingerprint">system_fingerprint</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.object">object</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ChatCompletionChunkResponse.id">id</a>
                         </li>
                 </ul>
 
@@ -363,16 +363,16 @@
                     <a class="class" href="#CompletionChoice">CompletionChoice</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#CompletionChoice.index">index</a>
+                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionChoice.text">text</a>
+                                <a class="variable" href="#CompletionChoice.index">index</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionChoice.logprobs">logprobs</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionChoice.finish_reason">finish_reason</a>
+                                <a class="variable" href="#CompletionChoice.text">text</a>
                         </li>
                 </ul>
 
@@ -381,7 +381,7 @@
                     <a class="class" href="#CompletionResponse">CompletionResponse</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#CompletionResponse.choices">choices</a>
+                                <a class="variable" href="#CompletionResponse.system_fingerprint">system_fingerprint</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.id">id</a>
@@ -390,16 +390,16 @@
                                 <a class="variable" href="#CompletionResponse.created">created</a>
                         </li>
                         <li>
-                                <a class="variable" href="#CompletionResponse.model">model</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#CompletionResponse.system_fingerprint">system_fingerprint</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#CompletionResponse.object">object</a>
                         </li>
                         <li>
                                 <a class="variable" href="#CompletionResponse.usage">usage</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.choices">choices</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#CompletionResponse.model">model</a>
                         </li>
                 </ul>
 
@@ -408,13 +408,13 @@
                     <a class="class" href="#TopLogprob">TopLogprob</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="variable" href="#TopLogprob.logprob">logprob</a>
+                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
                         </li>
                         <li>
                                 <a class="variable" href="#TopLogprob.token">token</a>
                         </li>
                         <li>
-                                <a class="variable" href="#TopLogprob.bytes">bytes</a>
+                                <a class="variable" href="#TopLogprob.logprob">logprob</a>
                         </li>
                 </ul>
 
@@ -1064,13 +1064,13 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="ResponseMessage.content" class="classattr">
+                            <div id="ResponseMessage.tool_calls" class="classattr">
                                 <div class="attr variable">
-            <span class="name">content</span>
+            <span class="name">tool_calls</span>
 
         
     </div>
-    <a class="headerlink" href="#ResponseMessage.content"></a>
+    <a class="headerlink" href="#ResponseMessage.tool_calls"></a>
     
     
 
@@ -1086,13 +1086,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="ResponseMessage.tool_calls" class="classattr">
+                            <div id="ResponseMessage.content" class="classattr">
                                 <div class="attr variable">
-            <span class="name">tool_calls</span>
+            <span class="name">content</span>
 
         
     </div>
-    <a class="headerlink" href="#ResponseMessage.tool_calls"></a>
+    <a class="headerlink" href="#ResponseMessage.content"></a>
     
     
 
@@ -1112,17 +1112,6 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="Delta.role" class="classattr">
-                                <div class="attr variable">
-            <span class="name">role</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Delta.role"></a>
-    
-    
-
-                            </div>
                             <div id="Delta.content" class="classattr">
                                 <div class="attr variable">
             <span class="name">content</span>
@@ -1130,6 +1119,17 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#Delta.content"></a>
+    
+    
+
+                            </div>
+                            <div id="Delta.role" class="classattr">
+                                <div class="attr variable">
+            <span class="name">role</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Delta.role"></a>
     
     
 
@@ -1149,13 +1149,13 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="ResponseLogprob.logprob" class="classattr">
+                            <div id="ResponseLogprob.top_logprobs" class="classattr">
                                 <div class="attr variable">
-            <span class="name">logprob</span>
+            <span class="name">top_logprobs</span>
 
         
     </div>
-    <a class="headerlink" href="#ResponseLogprob.logprob"></a>
+    <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
     
     
 
@@ -1182,13 +1182,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="ResponseLogprob.top_logprobs" class="classattr">
+                            <div id="ResponseLogprob.logprob" class="classattr">
                                 <div class="attr variable">
-            <span class="name">top_logprobs</span>
+            <span class="name">logprob</span>
 
         
     </div>
-    <a class="headerlink" href="#ResponseLogprob.top_logprobs"></a>
+    <a class="headerlink" href="#ResponseLogprob.logprob"></a>
     
     
 
@@ -1234,6 +1234,17 @@ then nothing will happen.</p>
 </div>
 
 
+                            <div id="Choice.message" class="classattr">
+                                <div class="attr variable">
+            <span class="name">message</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Choice.message"></a>
+    
+    
+
+                            </div>
                             <div id="Choice.logprobs" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprobs</span>
@@ -1241,17 +1252,6 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#Choice.logprobs"></a>
-    
-    
-
-                            </div>
-                            <div id="Choice.index" class="classattr">
-                                <div class="attr variable">
-            <span class="name">index</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Choice.index"></a>
     
     
 
@@ -1267,13 +1267,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="Choice.message" class="classattr">
+                            <div id="Choice.index" class="classattr">
                                 <div class="attr variable">
-            <span class="name">message</span>
+            <span class="name">index</span>
 
         
     </div>
-    <a class="headerlink" href="#Choice.message"></a>
+    <a class="headerlink" href="#Choice.index"></a>
     
     
 
@@ -1304,6 +1304,17 @@ then nothing will happen.</p>
     
 
                             </div>
+                            <div id="ChunkChoice.index" class="classattr">
+                                <div class="attr variable">
+            <span class="name">index</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChunkChoice.index"></a>
+    
+    
+
+                            </div>
                             <div id="ChunkChoice.logprobs" class="classattr">
                                 <div class="attr variable">
             <span class="name">logprobs</span>
@@ -1326,17 +1337,6 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="ChunkChoice.index" class="classattr">
-                                <div class="attr variable">
-            <span class="name">index</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChunkChoice.index"></a>
-    
-    
-
-                            </div>
                 </section>
                 <section id="Usage">
                     <div class="attr class">
@@ -1352,6 +1352,28 @@ then nothing will happen.</p>
 </div>
 
 
+                            <div id="Usage.prompt_tokens" class="classattr">
+                                <div class="attr variable">
+            <span class="name">prompt_tokens</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.prompt_tokens"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">avg_compl_tok_per_sec</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
+    
+    
+
+                            </div>
                             <div id="Usage.total_tokens" class="classattr">
                                 <div class="attr variable">
             <span class="name">total_tokens</span>
@@ -1385,13 +1407,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="Usage.total_completion_time_sec" class="classattr">
+                            <div id="Usage.completion_tokens" class="classattr">
                                 <div class="attr variable">
-            <span class="name">total_completion_time_sec</span>
+            <span class="name">completion_tokens</span>
 
         
     </div>
-    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
+    <a class="headerlink" href="#Usage.completion_tokens"></a>
     
     
 
@@ -1407,39 +1429,6 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="Usage.completion_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">completion_tokens</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.completion_tokens"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.avg_compl_tok_per_sec" class="classattr">
-                                <div class="attr variable">
-            <span class="name">avg_compl_tok_per_sec</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.avg_compl_tok_per_sec"></a>
-    
-    
-
-                            </div>
-                            <div id="Usage.prompt_tokens" class="classattr">
-                                <div class="attr variable">
-            <span class="name">prompt_tokens</span>
-
-        
-    </div>
-    <a class="headerlink" href="#Usage.prompt_tokens"></a>
-    
-    
-
-                            </div>
                             <div id="Usage.avg_prompt_tok_per_sec" class="classattr">
                                 <div class="attr variable">
             <span class="name">avg_prompt_tok_per_sec</span>
@@ -1447,6 +1436,17 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#Usage.avg_prompt_tok_per_sec"></a>
+    
+    
+
+                            </div>
+                            <div id="Usage.total_completion_time_sec" class="classattr">
+                                <div class="attr variable">
+            <span class="name">total_completion_time_sec</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Usage.total_completion_time_sec"></a>
     
     
 
@@ -1466,6 +1466,39 @@ then nothing will happen.</p>
 </div>
 
 
+                            <div id="ChatCompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionResponse.usage" class="classattr">
+                                <div class="attr variable">
+            <span class="name">usage</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
+    
+    
+
+                            </div>
                             <div id="ChatCompletionResponse.id" class="classattr">
                                 <div class="attr variable">
             <span class="name">id</span>
@@ -1499,28 +1532,6 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="ChatCompletionResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.object"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.usage" class="classattr">
-                                <div class="attr variable">
-            <span class="name">usage</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.usage"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
             <span class="name">system_fingerprint</span>
@@ -1528,17 +1539,6 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionResponse.system_fingerprint"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionResponse.model" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionResponse.model"></a>
     
     
 
@@ -1558,28 +1558,6 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
-                                <div class="attr variable">
-            <span class="name">system_fingerprint</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.object" class="classattr">
-                                <div class="attr variable">
-            <span class="name">object</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
-    
-    
-
-                            </div>
                             <div id="ChatCompletionChunkResponse.choices" class="classattr">
                                 <div class="attr variable">
             <span class="name">choices</span>
@@ -1587,17 +1565,6 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#ChatCompletionChunkResponse.choices"></a>
-    
-    
-
-                            </div>
-                            <div id="ChatCompletionChunkResponse.id" class="classattr">
-                                <div class="attr variable">
-            <span class="name">id</span>
-
-        
-    </div>
-    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
     
     
 
@@ -1624,6 +1591,39 @@ then nothing will happen.</p>
     
 
                             </div>
+                            <div id="ChatCompletionChunkResponse.system_fingerprint" class="classattr">
+                                <div class="attr variable">
+            <span class="name">system_fingerprint</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.system_fingerprint"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.object" class="classattr">
+                                <div class="attr variable">
+            <span class="name">object</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.object"></a>
+    
+    
+
+                            </div>
+                            <div id="ChatCompletionChunkResponse.id" class="classattr">
+                                <div class="attr variable">
+            <span class="name">id</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ChatCompletionChunkResponse.id"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="CompletionChoice">
                     <div class="attr class">
@@ -1639,6 +1639,17 @@ then nothing will happen.</p>
 </div>
 
 
+                            <div id="CompletionChoice.finish_reason" class="classattr">
+                                <div class="attr variable">
+            <span class="name">finish_reason</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
+    
+    
+
+                            </div>
                             <div id="CompletionChoice.index" class="classattr">
                                 <div class="attr variable">
             <span class="name">index</span>
@@ -1646,17 +1657,6 @@ then nothing will happen.</p>
         
     </div>
     <a class="headerlink" href="#CompletionChoice.index"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionChoice.text" class="classattr">
-                                <div class="attr variable">
-            <span class="name">text</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionChoice.text"></a>
     
     
 
@@ -1672,13 +1672,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="CompletionChoice.finish_reason" class="classattr">
+                            <div id="CompletionChoice.text" class="classattr">
                                 <div class="attr variable">
-            <span class="name">finish_reason</span>
+            <span class="name">text</span>
 
         
     </div>
-    <a class="headerlink" href="#CompletionChoice.finish_reason"></a>
+    <a class="headerlink" href="#CompletionChoice.text"></a>
     
     
 
@@ -1698,13 +1698,13 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="CompletionResponse.choices" class="classattr">
+                            <div id="CompletionResponse.system_fingerprint" class="classattr">
                                 <div class="attr variable">
-            <span class="name">choices</span>
+            <span class="name">system_fingerprint</span>
 
         
     </div>
-    <a class="headerlink" href="#CompletionResponse.choices"></a>
+    <a class="headerlink" href="#CompletionResponse.system_fingerprint"></a>
     
     
 
@@ -1731,28 +1731,6 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="CompletionResponse.model" class="classattr">
-                                <div class="attr variable">
-            <span class="name">model</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.model"></a>
-    
-    
-
-                            </div>
-                            <div id="CompletionResponse.system_fingerprint" class="classattr">
-                                <div class="attr variable">
-            <span class="name">system_fingerprint</span>
-
-        
-    </div>
-    <a class="headerlink" href="#CompletionResponse.system_fingerprint"></a>
-    
-    
-
-                            </div>
                             <div id="CompletionResponse.object" class="classattr">
                                 <div class="attr variable">
             <span class="name">object</span>
@@ -1775,6 +1753,28 @@ then nothing will happen.</p>
     
 
                             </div>
+                            <div id="CompletionResponse.choices" class="classattr">
+                                <div class="attr variable">
+            <span class="name">choices</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.choices"></a>
+    
+    
+
+                            </div>
+                            <div id="CompletionResponse.model" class="classattr">
+                                <div class="attr variable">
+            <span class="name">model</span>
+
+        
+    </div>
+    <a class="headerlink" href="#CompletionResponse.model"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="TopLogprob">
                     <div class="attr class">
@@ -1790,13 +1790,13 @@ then nothing will happen.</p>
 </div>
 
 
-                            <div id="TopLogprob.logprob" class="classattr">
+                            <div id="TopLogprob.bytes" class="classattr">
                                 <div class="attr variable">
-            <span class="name">logprob</span>
+            <span class="name">bytes</span>
 
         
     </div>
-    <a class="headerlink" href="#TopLogprob.logprob"></a>
+    <a class="headerlink" href="#TopLogprob.bytes"></a>
     
     
 
@@ -1812,13 +1812,13 @@ then nothing will happen.</p>
     
 
                             </div>
-                            <div id="TopLogprob.bytes" class="classattr">
+                            <div id="TopLogprob.logprob" class="classattr">
                                 <div class="attr variable">
-            <span class="name">bytes</span>
+            <span class="name">logprob</span>
 
         
     </div>
-    <a class="headerlink" href="#TopLogprob.bytes"></a>
+    <a class="headerlink" href="#TopLogprob.logprob"></a>
     
     
 
