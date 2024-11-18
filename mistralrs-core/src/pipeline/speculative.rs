@@ -2,6 +2,7 @@ use std::{
     any::Any,
     iter::zip,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result as anyhowResult;
@@ -345,7 +346,7 @@ impl Pipeline for SpeculativePipeline {
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<()> {
+    ) -> Result<Duration> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 match pre_op {
@@ -405,6 +406,7 @@ impl Pipeline for SpeculativePipeline {
                     _ => unreachable!("Unreachable PRE cache op."),
                 }
 
+                let start = Instant::now();
                 assert_eq!(input_seqs.len(), 1);
 
                 let seq = &mut input_seqs[0];
@@ -657,6 +659,8 @@ impl Pipeline for SpeculativePipeline {
                 .await?;
                 finish_or_add_toks_to_seq(self, prefix_cacher, seq, sample, eos_tok, false);
                 */
+                let end = Instant::now();
+                let exec_duration = end.duration_since(start);
 
                 match post_op {
                     CacheInstruction::Out => {
@@ -685,7 +689,7 @@ impl Pipeline for SpeculativePipeline {
                 // - Added the accepted tokens to buffer and trie
                 // - Maybe fixed up cache of base model based on accepted tokens.
 
-                Ok(())
+                Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention {
                 metadata: _,

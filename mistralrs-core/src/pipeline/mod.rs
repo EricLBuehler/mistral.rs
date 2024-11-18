@@ -49,6 +49,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
@@ -289,6 +290,7 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
         &mut self,
@@ -298,7 +300,7 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -316,6 +318,7 @@ pub trait Pipeline:
 
                 let mut logits = vec![None; input_seqs.len()];
 
+                let mut exec_duration = Duration::ZERO;
                 for (i, inputs) in inputs_iter.enumerate() {
                     let InputProcessorOutput {
                         inputs,
@@ -380,7 +383,10 @@ pub trait Pipeline:
                         }
                     }
 
+                    let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
@@ -411,6 +417,7 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
+                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
@@ -457,7 +464,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention {
                 metadata,
@@ -486,13 +496,17 @@ pub trait Pipeline:
 
                 let mut logits = vec![None; input_seqs.len()];
 
+                let mut exec_duration = Duration::ZERO;
                 for inputs in inputs_iter {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
                     } = inputs.map_err(candle_core::Error::msg)?;
 
+                    let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
@@ -507,6 +521,7 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
+                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
@@ -551,7 +566,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
         }
     }

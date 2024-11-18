@@ -205,8 +205,7 @@ impl Engine {
                     }
 
                     if scheduled.prompt.len() > 0 {
-                        let throughput_start = Instant::now();
-                        let logits = {
+                        let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                             // Run the prompt seqs
@@ -245,16 +244,15 @@ impl Engine {
                                 .await
                         };
 
-                        handle_pipeline_forward_error!(
+                        let prompt_exec_time = handle_pipeline_forward_error!(
                             "prompt step",
-                            logits,
+                            prompt_exec_time,
                             &mut scheduled.prompt,
                             self.pipeline,
                             'lp,
                             self.prefix_cacher
                         );
 
-                        let throughput_end = Instant::now();
                         #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
                             prompt_ts = Some(
@@ -263,9 +261,7 @@ impl Engine {
                                     .iter()
                                     .map(|seq| seq.get_toks().len())
                                     .sum::<usize>() as f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
+                                    / prompt_exec_time.as_secs_f64(),
                             );
                         }
 
@@ -284,8 +280,8 @@ impl Engine {
                                 .as_millis();
                             #[allow(clippy::cast_precision_loss)]
                             let prompt_tok_per_sec =
-                                seq.len() as f32 / (now - seq.timestamp()) as f32;
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                seq.len() as f32 / prompt_exec_time.as_secs_f32();
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
                         }
                         last_completion_ids = vec![];
