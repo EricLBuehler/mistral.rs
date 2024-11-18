@@ -323,7 +323,7 @@ impl VisionModel for Model {
         &self.device
     }
 
-    fn cache(&self) -> &crate::pipeline::Cache {
+    fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
 

@@ -19,7 +19,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -223,7 +223,7 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -290,7 +290,7 @@ impl Attention {
                 )?
             }
             None => {
-                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
@@ -368,7 +368,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -399,7 +399,7 @@ pub struct Model {
     lm_head: Arc<dyn QuantMethod>,
     sliding_window: usize,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
@@ -513,7 +513,10 @@ impl Model {
             lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -537,13 +540,13 @@ impl Model {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let mut cache = self.cache.lock();
+        let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+                .unwrap_or(cache as &dyn PastKvLenCache),
             Some(self.sliding_window),
             xs.dtype(),
         )?;
@@ -655,7 +658,7 @@ impl NormalModel for Model {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {

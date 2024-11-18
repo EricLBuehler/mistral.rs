@@ -351,7 +351,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    kv_cache: crate::pipeline::Cache,
+    kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
@@ -447,7 +447,10 @@ impl Llama {
             blocks,
             ln_f,
             lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
-            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: crate::pipeline::EitherCache::Full(crate::pipeline::Cache::new(
+                cfg.num_hidden_layers,
+                false,
+            )),
             device: normal_loading_metadata.real_device,
             mapper,
             rope_parameters,
@@ -509,7 +512,7 @@ impl LLaVALLM for Llama {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
-        let mut cache = self.kv_cache.lock();
+        let mut cache = self.kv_cache.full().lock();
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
@@ -581,7 +584,7 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &crate::pipeline::Cache {
+    fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
     }
     fn device(&self) -> &Device {

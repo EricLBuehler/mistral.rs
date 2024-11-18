@@ -20,7 +20,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -68,8 +68,7 @@ impl CausalSelfAttention {
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: &mut crate::pipeline::LayerCaches,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -136,8 +135,7 @@ impl CausalSelfAttention {
                 )?
             }
             None => {
-                let (k, v) =
-                    crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
@@ -331,8 +329,7 @@ impl Block {
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: &mut crate::pipeline::LayerCaches,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -343,7 +340,6 @@ impl Block {
             attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
-            block_idx,
             kv_cache,
             metadata,
             flash_params,
@@ -393,7 +389,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    kv_cache: crate::pipeline::Cache,
+    kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
@@ -410,13 +406,13 @@ impl Llama {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = self.wte.forward(input_ids)?;
-        let mut cache = self.kv_cache.lock();
+        let cache = &mut self.kv_cache.normal().0;
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+                .unwrap_or(cache as &dyn PastKvLenCache),
             x.dtype(),
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -426,8 +422,7 @@ impl Llama {
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                block_idx,
-                &mut cache,
+                &mut cache[block_idx],
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
@@ -544,7 +539,10 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device,
             mapper,
             cfg: ModelConfigMetadata {
@@ -639,7 +637,7 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &crate::pipeline::Cache {
+    fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
     }
     fn device(&self) -> &Device {

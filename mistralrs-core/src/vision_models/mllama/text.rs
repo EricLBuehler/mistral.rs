@@ -12,7 +12,7 @@ use crate::{
     layers::{CausalMasker, F32RmsNorm, Llama3RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -516,7 +516,7 @@ pub(super) struct MLlamaTextModel {
     norm: F32RmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
     pub(crate) cfg: ModelConfigMetadata,
-    pub(crate) cache: Cache,
+    pub(crate) cache: EitherCache,
     pub(crate) device: Device,
     pub(crate) max_position_embeddings: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -626,7 +626,7 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 head_dim: None,
             },
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
@@ -646,7 +646,7 @@ impl MLlamaTextModel {
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,

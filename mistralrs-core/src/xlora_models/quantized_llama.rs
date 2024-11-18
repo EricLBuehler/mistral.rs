@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
-use crate::pipeline::{extract_logits, Cache};
+use crate::pipeline::{extract_logits, Cache, EitherCache};
 use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
@@ -278,7 +278,7 @@ pub struct ModelWeights {
     norm: QRmsNorm,
     output: QLoraLinear,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     xlora_classifier: Option<XLoraClassifier>,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
@@ -469,7 +469,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
             norm,
             output,
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer as usize, true),
+            cache: EitherCache::Full(Cache::new(ct.hparams.n_layer as usize, true)),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
                     .unwrap()
@@ -767,7 +767,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             norm,
             output,
             device: device.clone(),
-            cache: Cache::new(block_count, true),
+            cache: EitherCache::Full(Cache::new(block_count, true)),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
                     .unwrap()
@@ -827,15 +827,15 @@ impl ModelWeights {
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
-                for _ in 0..self.cache.xlora_lock().len() {
+                for _ in 0..self.cache.full().xlora_lock().len() {
                     new_cache.push(None);
                 }
 
-                self.cache.xlora_lock().clone_from(&new_cache);
+                self.cache.full().xlora_lock().clone_from(&new_cache);
             }
-            self.cache.xlora_lock()
+            self.cache.full().xlora_lock()
         } else {
-            self.cache.lock()
+            self.cache.full().lock()
         };
         let mask = CausalMasker.make_causal_mask_matrix(x, &*cache, DType::F32)?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -983,7 +983,7 @@ impl ScalingsMaker for ModelWeights {
     fn dtype(&self) -> DType {
         DType::F32 // for dummy scalings
     }
-    fn get_cache(&self) -> &Cache {
+    fn get_cache(&self) -> &EitherCache {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

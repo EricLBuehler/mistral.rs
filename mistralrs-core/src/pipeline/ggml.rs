@@ -1,19 +1,19 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::FullCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
     XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, Cache};
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -358,8 +358,8 @@ impl Loader for GGMLLoader {
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.lock().len(),
-            Model::XLoraLlama(ref model) => model.cache.lock().len(),
+            Model::Llama(ref model) => model.cache.normal().0.len(),
+            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         Ok(Arc::new(Mutex::new(GGMLPipeline {
@@ -387,6 +387,7 @@ impl Loader for GGMLLoader {
                 cache_config: None,
                 cache_engine: None,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: None,
             }),
         })))
     }
@@ -455,18 +456,24 @@ impl IsqPipelineMixin for GGMLPipeline {
 
 impl CacheManagerMixin for GGMLPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
@@ -505,7 +512,7 @@ impl MetadataMixin for GGMLPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }

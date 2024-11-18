@@ -25,7 +25,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -182,7 +182,7 @@ pub(crate) struct MLlamaSpecificArgs {
 }
 
 impl VisionModel for MLlamaModel {
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {

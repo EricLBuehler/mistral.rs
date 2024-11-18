@@ -1,8 +1,8 @@
 use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -30,7 +30,7 @@ pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
-    dummy_cache: Cache,
+    dummy_cache: EitherCache,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -227,8 +227,9 @@ impl Loader for DiffusionLoader {
                 cache_config: None,
                 cache_engine: None,
                 prompt_batchsize: None,
+                model_metadata: None,
             }),
-            dummy_cache: Cache::new(0, false),
+            dummy_cache: EitherCache::Full(Cache::new(0, false)),
         })))
     }
 
@@ -262,8 +263,15 @@ impl IsqPipelineMixin for DiffusionPipeline {
 impl CacheManagerMixin for DiffusionPipeline {
     fn clone_in_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
-    fn set_none_cache(&self, _reset_non_granular: bool, _modify_draft_cache: bool) {}
-    fn cache(&self) -> &Cache {
+    fn set_none_cache(
+        &self,
+        _seqs: &mut [&mut Sequence],
+        _reset_non_granular: bool,
+        _modify_draft_cache: bool,
+        _load_preallocated_cache: bool,
+    ) {
+    }
+    fn cache(&self) -> &EitherCache {
         &self.dummy_cache
     }
 }

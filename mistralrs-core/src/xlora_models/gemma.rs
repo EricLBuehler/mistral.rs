@@ -10,7 +10,7 @@ use crate::{
     paged_attention::ModelConfigMetadata,
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -443,7 +443,7 @@ pub struct XLoraModel {
     dtype: DType,
     hidden_size: usize,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -579,7 +579,7 @@ impl XLoraModel {
             device: normal_loading_metadata.real_device,
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
-            cache: Cache::new(cfg.num_hidden_layers, true),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, true)),
             max_seq_len: default_max_position_embeddings(),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
@@ -611,15 +611,15 @@ impl XLoraModel {
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
-                for _ in 0..self.cache.xlora_lock().len() {
+                for _ in 0..self.cache.full().xlora_lock().len() {
                     new_cache.push(None);
                 }
 
-                self.cache.xlora_lock().clone_from(&new_cache);
+                self.cache.full().xlora_lock().clone_from(&new_cache);
             }
-            self.cache.xlora_lock()
+            self.cache.full().xlora_lock()
         } else {
-            self.cache.lock()
+            self.cache.full().lock()
         };
         let xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask =
@@ -846,7 +846,7 @@ impl NormalModel for XLoraModel {
             flash_params_full,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {
@@ -898,7 +898,7 @@ impl ScalingsMaker for XLoraModel {
     fn dtype(&self) -> DType {
         self.dtype
     }
-    fn get_cache(&self) -> &Cache {
+    fn get_cache(&self) -> &EitherCache {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

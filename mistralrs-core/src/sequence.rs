@@ -11,7 +11,7 @@ use tokio::sync::{
 use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::DiffusionGenerationParams,
+    pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -190,10 +190,14 @@ pub struct Sequence {
     adapters: Option<Vec<String>>,
 
     // Cache
+    normal_cache: Vec<Option<KvCache>>,
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
+
+    // Preallocated KV cache
+    seq_preallocated_cache: Option<Tensor>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -283,6 +287,9 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
+        // Preallocated KV cache
+        seq_preallocated_cache: Option<Tensor>,
+        //
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -303,6 +310,7 @@ impl Sequence {
             id,
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
+            normal_cache: vec![None; layers],
             cache: vec![None; layers],
             draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
@@ -310,6 +318,7 @@ impl Sequence {
             } else {
                 None
             },
+            seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
             stop_tokens,
@@ -477,6 +486,14 @@ impl Sequence {
 
     pub fn completion_bytes(&self) -> &[u8] {
         &self.completion_bytes
+    }
+
+    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+        self.seq_preallocated_cache.as_ref()
+    }
+
+    pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
+        &mut self.normal_cache
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {

@@ -19,7 +19,7 @@ pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::diffusion_models::response::send_responses;
-use crate::paged_attention::{CacheConfig, CacheEngine};
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
@@ -49,6 +49,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
@@ -57,7 +58,9 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
+pub use self::cache_manager::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache,
+};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
@@ -79,6 +82,7 @@ pub struct GeneralMetadata {
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
 pub enum AdapterInstruction {
@@ -89,7 +93,9 @@ pub enum AdapterInstruction {
 pub enum CacheInstruction {
     In(AdapterInstruction),
     Out,
+    /// load_preallocated_cache means to load the preallocated cache, if applicable.
     Reset {
+        load_preallocated_cache: bool,
         reset_non_granular: bool,
         adapter_inst: AdapterInstruction,
     },
@@ -119,8 +125,14 @@ pub trait CacheManagerMixin {
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
-    fn cache(&self) -> &Cache;
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    );
+    fn cache(&self) -> &EitherCache;
 }
 
 pub trait AdapterActivationMixin {
@@ -278,6 +290,7 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
         &mut self,
@@ -287,7 +300,7 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -305,6 +318,7 @@ pub trait Pipeline:
 
                 let mut logits = vec![None; input_seqs.len()];
 
+                let mut exec_duration = Duration::ZERO;
                 for (i, inputs) in inputs_iter.enumerate() {
                     let InputProcessorOutput {
                         inputs,
@@ -342,6 +356,7 @@ pub trait Pipeline:
                                 };
                             }
                             CacheInstruction::Reset {
+                                load_preallocated_cache,
                                 reset_non_granular,
                                 ref adapter_inst,
                             } => {
@@ -357,13 +372,21 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                self.set_none_cache(reset_non_granular, false)
+                                self.set_none_cache(
+                                    input_seqs,
+                                    reset_non_granular,
+                                    false,
+                                    load_preallocated_cache,
+                                )
                             }
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
 
+                    let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
@@ -382,12 +405,19 @@ pub trait Pipeline:
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
+                        load_preallocated_cache,
                         reset_non_granular,
                         adapter_inst: _,
-                    } => self.set_none_cache(reset_non_granular, false),
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        false,
+                        load_preallocated_cache,
+                    ),
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
+                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
@@ -434,7 +464,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention {
                 metadata,
@@ -463,13 +496,17 @@ pub trait Pipeline:
 
                 let mut logits = vec![None; input_seqs.len()];
 
+                let mut exec_duration = Duration::ZERO;
                 for inputs in inputs_iter {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
                     } = inputs.map_err(candle_core::Error::msg)?;
 
+                    let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
@@ -484,6 +521,7 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
+                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
@@ -528,7 +566,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
         }
     }

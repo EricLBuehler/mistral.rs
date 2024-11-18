@@ -1,9 +1,9 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::FullCacheManager;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
+    MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
     Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
     XLoraPaths,
 };
@@ -349,9 +349,13 @@ impl Loader for VisionLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let num_hidden_layers = model.cache().lock().len();
+        let num_hidden_layers = match model.cache() {
+            EitherCache::Full(full) => full.lock().len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+        };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -370,6 +374,7 @@ impl Loader for VisionLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             processor,
             prefixer: self.inner.prefixer(),
@@ -431,18 +436,24 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.model.cache()
     }
 }
