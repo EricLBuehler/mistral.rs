@@ -52,7 +52,7 @@ impl EitherCache {
 pub struct SingleCache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
-    // Also this makes it safe to clone a KvCache that has been reseted (as in it will not share
+    // Also this makes it safe to clone a KvCache that has been reset (as in it will not share
     // its internal state with the cloned instance).
     pub all_data: Option<Tensor>,
     pub dim: usize,
