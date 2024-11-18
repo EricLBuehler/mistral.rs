@@ -371,6 +371,17 @@
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
@@ -389,10 +400,14 @@
 <span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
 <span class="kw">use </span><span class="kw">crate</span>::layers::Sdpa;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QLinear};
+<span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::PagedAttention;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::extract_logits;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::EitherCache;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::KvCache;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalCache;
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
@@ -448,7 +463,7 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
@@ -483,7 +498,7 @@
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
                 Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
@@ -505,7 +520,7 @@
     output_norm: LayerNorm,
     output: QLinear,
     <span class="kw">pub </span>device: Device,
-    <span class="kw">pub </span>cache: Cache,
+    <span class="kw">pub </span>cache: EitherCache,
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
@@ -703,7 +718,7 @@
             output_norm,
             output,
             device: device.clone(),
-            cache: Cache::new(block_count, <span class="bool-val">false</span>),
+            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper,
         })
@@ -719,8 +734,15 @@
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.tok_embeddings.forward(input_ids)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
+                .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
+            DType::F32,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;
@@ -731,7 +753,7 @@
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                cache.get_mut(i).unwrap(),
+                <span class="kw-2">&amp;mut </span>cache[i],
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),

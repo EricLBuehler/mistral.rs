@@ -901,7 +901,7 @@
     paged_attention::ModelConfigMetadata,
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel,
+        EitherCache, IsqModel,
     },
     utils::progress::NiceProgressBar,
 };
@@ -1318,7 +1318,7 @@
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
     lm_head: Arc&lt;<span class="kw">dyn </span>LinearLayerLike + Send + Sync&gt;,
-    kv_cache: pipeline::Cache,
+    kv_cache: pipeline::EitherCache,
     device: Device,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     dtype: DType,
@@ -1343,15 +1343,15 @@
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
                 <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-                <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.kv_cache.xlora_lock().len() {
+                <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.kv_cache.full().xlora_lock().len() {
                     new_cache.push(<span class="prelude-val">None</span>);
                 }
 
-                <span class="self">self</span>.kv_cache.xlora_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+                <span class="self">self</span>.kv_cache.full().xlora_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
             }
-            <span class="self">self</span>.kv_cache.xlora_lock()
+            <span class="self">self</span>.kv_cache.full().xlora_lock()
         } <span class="kw">else </span>{
-            <span class="self">self</span>.kv_cache.lock()
+            <span class="self">self</span>.kv_cache.full().lock()
         };
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, x.dtype())<span class="question-mark">?</span>;
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
@@ -1592,7 +1592,7 @@
             blocks,
             ln_f,
             lm_head,
-            kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>),
+            kv_cache: EitherCache::Full(pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">true</span>)),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, <span class="bool-val">false</span>).unwrap()
@@ -1700,7 +1700,7 @@
             flash_params_full,
         )
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">super</span>::Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">super</span>::EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
@@ -1752,7 +1752,7 @@
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
         <span class="self">self</span>.dtype
     }
-    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>pipeline::Cache {
+    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>pipeline::EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {

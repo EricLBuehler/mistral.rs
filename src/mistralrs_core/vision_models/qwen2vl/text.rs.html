@@ -478,7 +478,7 @@
     layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, Cache, IsqModel,
+        extract_logits, text_models_inputs_processor::FlashParams, Cache, EitherCache, IsqModel,
         NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -744,7 +744,7 @@
     layers: Vec&lt;DecoderLayer&gt;,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    <span class="kw">pub</span>(<span class="kw">super</span>) cache: Cache,
+    <span class="kw">pub</span>(<span class="kw">super</span>) cache: EitherCache,
     <span class="kw">pub</span>(<span class="kw">super</span>) cfg: ModelConfigMetadata,
     <span class="kw">pub</span>(<span class="kw">super</span>) device: Device,
     <span class="kw">pub</span>(<span class="kw">super</span>) dtype: DType,
@@ -839,7 +839,7 @@
             norm,
             layers,
             lm_head,
-            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -867,7 +867,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.full().lock();
         <span class="kw">let </span>cos_sin = <span class="self">self</span>.layers[<span class="number">0</span>]
             .self_attn
             .rotary_emb

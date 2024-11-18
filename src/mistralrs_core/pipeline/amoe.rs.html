@@ -573,6 +573,19 @@
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -604,8 +617,8 @@
 };
 
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 <span class="kw">pub struct </span>AnyMoeLoader {
@@ -760,7 +773,7 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>AnyMoePipeline {
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">super</span>::Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="macro">unreachable!</span>()
     }
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
@@ -769,8 +782,19 @@
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).clone_out_cache(seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).set_none_cache(reset_non_granular, modify_draft_cache)
+    <span class="kw">fn </span>set_none_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).set_none_cache(
+            seqs,
+            reset_non_granular,
+            modify_draft_cache,
+            load_preallocated_cache,
+        )
     }
 }
 
@@ -947,9 +971,6 @@
             <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="number">0</span>,
         )));
 
-        <span class="comment">// Clear KV cache in prep for training
-        </span>target.set_none_cache(<span class="bool-val">true</span>, <span class="bool-val">true</span>);
-
         <span class="kw">let </span><span class="kw-2">mut </span>latest_loss = <span class="macro">vec!</span>[<span class="number">0.0</span>; optimizers.len()];
         <span class="kw">let </span><span class="kw-2">mut </span>all_losses = Vec::new();
 
@@ -1017,6 +1038,10 @@
                     ));
                 }
                 <span class="kw">let </span><span class="kw-2">mut </span>input_seqs = seqs.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+
+                <span class="comment">// Clear KV cache in prep for training
+                </span>target.set_none_cache(<span class="kw-2">&amp;mut </span>input_seqs, <span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>);
+
                 <span class="kw">let </span>inputs = inputs_processor
                     .process_inputs(
                         tokenizer.clone(),
@@ -1039,7 +1064,7 @@
                 </span><span class="kw">let _ </span>= target.forward_inputs(inputs.unwrap().inputs)<span class="question-mark">?</span>;
 
                 <span class="comment">// Clear the KV cache
-                </span>target.set_none_cache(<span class="bool-val">true</span>, <span class="bool-val">true</span>);
+                </span>target.set_none_cache(<span class="kw-2">&amp;mut </span>input_seqs, <span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>);
 
                 <span class="comment">// === BACKWARD STEP ==
                 </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
@@ -1145,6 +1170,7 @@
         <span class="prelude-val">None</span>,
         <span class="prelude-val">None</span>,
         SeqStepType::PromptAndDecode,
+        <span class="prelude-val">None</span>,
         <span class="prelude-val">None</span>,
     )
 }

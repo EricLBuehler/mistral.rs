@@ -503,6 +503,51 @@
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
 </pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::Device;
@@ -514,6 +559,7 @@
 <span class="kw">pub use </span>pipeline::Pipeline;
 <span class="attr">#[cfg(feature = <span class="string">"pyo3_macros"</span>)]
 </span><span class="kw">use </span>pyo3::exceptions::PyValueError;
+<span class="kw">use </span>std::time::Instant;
 <span class="kw">use </span>std::{
     cell::RefCell,
     error::Error,
@@ -527,6 +573,8 @@
     time::{SystemTime, UNIX_EPOCH},
 };
 <span class="kw">use </span>tokio::sync::mpsc::{channel, Sender};
+<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::warn;
 
 <span class="kw">mod </span>aici;
 <span class="kw">mod </span>cuda;
@@ -862,6 +910,48 @@
         });
 
         <span class="kw">let </span>engine_id = ENGINE_ID.fetch_add(<span class="number">1</span>, atomic::Ordering::SeqCst);
+
+        <span class="comment">// Do a dummy run
+        </span><span class="kw">if </span><span class="macro">matches!</span>(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+            <span class="kw">let </span>clone_sender = sender.read().unwrap().clone();
+            tokio::task::block_in_place(|| {
+                <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">1</span>);
+                <span class="kw">let </span>req = Request::Normal(NormalRequest {
+                    id: <span class="number">0</span>,
+                    messages: RequestMessage::Completion {
+                        text: <span class="string">"dummy"</span>.to_string(),
+                        echo_prompt: <span class="bool-val">false</span>,
+                        best_of: <span class="number">1</span>,
+                    },
+                    sampling_params: SamplingParams {
+                        max_len: <span class="prelude-val">Some</span>(<span class="number">1</span>),
+                        ..SamplingParams::deterministic()
+                    },
+                    response: tx,
+                    return_logprobs: <span class="bool-val">false</span>,
+                    is_streaming: <span class="bool-val">true</span>,
+                    constraint: Constraint::None,
+                    suffix: <span class="prelude-val">None</span>,
+                    adapters: <span class="prelude-val">None</span>,
+                    tool_choice: <span class="prelude-val">None</span>,
+                    tools: <span class="prelude-val">None</span>,
+                    logits_processors: <span class="prelude-val">None</span>,
+                });
+                <span class="macro">info!</span>(<span class="string">"Beginning dummy run."</span>);
+                <span class="kw">let </span>start = Instant::now();
+                clone_sender.blocking_send(req).unwrap();
+
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(_resp) = rx.blocking_recv() {
+                    <span class="kw">let </span>end = Instant::now();
+                    <span class="macro">info!</span>(
+                        <span class="string">"Dummy run completed in {}s."</span>,
+                        end.duration_since(start).as_secs_f64()
+                    );
+                } <span class="kw">else </span>{
+                    <span class="macro">warn!</span>(<span class="string">"Dummy run failed!"</span>);
+                }
+            });
+        }
 
         Arc::new(<span class="self">Self </span>{
             engine_id,

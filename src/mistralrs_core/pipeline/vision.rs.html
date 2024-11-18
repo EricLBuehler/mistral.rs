@@ -661,12 +661,23 @@
 <a href="#661" id="661">661</a>
 <a href="#662" id="662">662</a>
 <a href="#663" id="663">663</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
+    MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
     Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
     XLoraPaths,
 };
@@ -1012,9 +1023,13 @@
 
         <span class="kw">let </span>max_seq_len = model.max_seq_len();
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
-        <span class="kw">let </span>num_hidden_layers = model.cache().lock().len();
+        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
+            EitherCache::Full(full) =&gt; full.lock().len(),
+            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>[<span class="number">0</span>].current_seq_len(),
+        };
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
         <span class="kw">let </span>sliding_window = model.config().sliding_window;
+        <span class="kw">let </span>model_metadata = Arc::new(model.config().clone());
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(VisionPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1033,6 +1048,7 @@
                 cache_config,
                 cache_engine,
                 prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
+                model_metadata: <span class="prelude-val">Some</span>(model_metadata),
             }),
             processor,
             prefixer: <span class="self">self</span>.inner.prefixer(),
@@ -1094,18 +1110,24 @@
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>VisionPipeline {
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
+    <span class="kw">fn </span>set_none_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, load_preallocated_cache);
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
         }
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="self">self</span>.model.cache()
     }
 }

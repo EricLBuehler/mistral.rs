@@ -902,6 +902,23 @@
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -915,7 +932,7 @@
 <span class="kw">use crate</span>::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::DiffusionGenerationParams,
+    pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -1094,10 +1111,14 @@
     </span>adapters: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
     <span class="comment">// Cache
-    </span>scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    </span>normal_cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;,
+    scaling_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     cache: LayerCaches,
     draft_cache: LayerCaches,
     xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
+
+    <span class="comment">// Preallocated KV cache
+    </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
 
     <span class="comment">// Mutables
     </span>tokens: Vec&lt;u32&gt;,
@@ -1187,7 +1208,10 @@
         image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
         sequence_stepping_type: SeqStepType,
         diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
-    ) -&gt; <span class="self">Self </span>{
+        <span class="comment">// Preallocated KV cache
+        </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        <span class="comment">//
+    </span>) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
             SequenceCustomMetadata::PagedAttention {
@@ -1207,6 +1231,7 @@
             id,
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
+            normal_cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
             cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
             draft_cache: <span class="macro">vec!</span>[<span class="prelude-val">None</span>; layers],
             xlora_cache: <span class="kw">if </span>is_xlora {
@@ -1214,6 +1239,7 @@
             } <span class="kw">else </span>{
                 <span class="prelude-val">None
             </span>},
+            seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
             stop_tokens,
@@ -1381,6 +1407,14 @@
 
     <span class="kw">pub fn </span>completion_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u8] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes
+    }
+
+    <span class="kw">pub fn </span>preallocated_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
+        <span class="self">self</span>.seq_preallocated_cache.as_ref()
+    }
+
+    <span class="kw">pub fn </span>normal_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt; {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.normal_cache
     }
 
     <span class="kw">pub fn </span>cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>Vec&lt;<span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt; {

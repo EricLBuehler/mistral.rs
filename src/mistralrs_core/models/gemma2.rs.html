@@ -881,9 +881,6 @@
 <a href="#881" id="881">881</a>
 <a href="#882" id="882">882</a>
 <a href="#883" id="883">883</a>
-<a href="#884" id="884">884</a>
-<a href="#885" id="885">885</a>
-<a href="#886" id="886">886</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -905,7 +902,7 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -1148,7 +1145,7 @@
         sliding_attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1222,14 +1219,8 @@
             </span>}
             <span class="prelude-val">None </span>=&gt; {
                 <span class="comment">// self.sliding_window is None if !self.use_sliding_window
-                </span><span class="kw">let </span>(k, v, mask) = Cache::update_kv_cache_sliding_window(
-                    kv_cache,
-                    k,
-                    v,
-                    mask,
-                    <span class="self">self</span>.sliding_window,
-                    <span class="bool-val">false</span>,
-                )<span class="question-mark">?</span>;
+                </span><span class="kw">let </span>(k, v, mask) =
+                    kv_cache.append_sliding_window(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="self">self</span>.sliding_window)<span class="question-mark">?</span>;
 
                 Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
@@ -1323,7 +1314,7 @@
         sliding_attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1359,7 +1350,7 @@
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     hidden_size: usize,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     sliding_window: usize,
@@ -1467,7 +1458,10 @@
             ))<span class="question-mark">?</span>),
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
-            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -1494,7 +1488,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = (xs * (<span class="self">self</span>.hidden_size <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
         <span class="kw">let </span>attention_mask =
             CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, xs.dtype())<span class="question-mark">?</span>;
         <span class="kw">let </span>sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
@@ -1632,7 +1626,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

@@ -331,11 +331,22 @@
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::ops::Add;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
+
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::KvCache;
 
 <span class="comment">// https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 </span><span class="kw">pub struct </span>CausalMasker;
@@ -377,6 +388,13 @@
         }
         <span class="kw">let </span>k_cache_1 = <span class="kw-2">&amp;</span>kv_cache_1.as_ref().unwrap().<span class="number">0</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(k_cache_1.dims()[<span class="number">2</span>]);
+    }
+}
+
+<span class="kw">impl </span>PastKvLenCache <span class="kw">for </span>Vec&lt;KvCache&gt; {
+    <span class="kw">fn </span>get_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>kv_cache_1 = <span class="kw-2">&amp;</span><span class="self">self</span>[<span class="number">0</span>];
+        <span class="prelude-val">Ok</span>(kv_cache_1.current_seq_len())
     }
 }
 

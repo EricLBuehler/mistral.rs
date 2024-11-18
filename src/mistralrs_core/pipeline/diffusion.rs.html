@@ -327,11 +327,19 @@
 <a href="#327" id="327">327</a>
 <a href="#328" id="328">328</a>
 <a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 <span class="kw">use </span><span class="kw">crate</span>::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -359,7 +367,7 @@
     model: Box&lt;<span class="kw">dyn </span>DiffusionModel + Send + Sync&gt;,
     model_id: String,
     metadata: Arc&lt;GeneralMetadata&gt;,
-    dummy_cache: Cache,
+    dummy_cache: EitherCache,
 }
 
 <span class="doccomment">/// A loader for a vision (non-quantized) model.
@@ -556,8 +564,9 @@
                 cache_config: <span class="prelude-val">None</span>,
                 cache_engine: <span class="prelude-val">None</span>,
                 prompt_batchsize: <span class="prelude-val">None</span>,
+                model_metadata: <span class="prelude-val">None</span>,
             }),
-            dummy_cache: Cache::new(<span class="number">0</span>, <span class="bool-val">false</span>),
+            dummy_cache: EitherCache::Full(Cache::new(<span class="number">0</span>, <span class="bool-val">false</span>)),
         })))
     }
 
@@ -591,8 +600,15 @@
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>DiffusionPipeline {
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], _modify_draft_cache: bool) {}
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], _modify_draft_cache: bool) {}
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, _reset_non_granular: bool, _modify_draft_cache: bool) {}
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>set_none_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        _reset_non_granular: bool,
+        _modify_draft_cache: bool,
+        _load_preallocated_cache: bool,
+    ) {
+    }
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.dummy_cache
     }
 }

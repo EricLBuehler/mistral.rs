@@ -1034,7 +1034,7 @@
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache, EitherCache};
 <span class="kw">use crate</span>::{DeviceMapMetadata, Topology};
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
@@ -1293,7 +1293,7 @@
     norm: QRmsNorm,
     output: QLoraLinear,
     <span class="kw">pub </span>device: Device,
-    <span class="kw">pub </span>cache: Cache,
+    <span class="kw">pub </span>cache: EitherCache,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
@@ -1484,7 +1484,7 @@
             norm,
             output,
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">true</span>),
+            cache: EitherCache::Full(Cache::new(ct.hparams.n_layer <span class="kw">as </span>usize, <span class="bool-val">true</span>)),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), <span class="bool-val">true</span>)
                     .unwrap()
@@ -1782,7 +1782,7 @@
             norm,
             output,
             device: device.clone(),
-            cache: Cache::new(block_count, <span class="bool-val">true</span>),
+            cache: EitherCache::Full(Cache::new(block_count, <span class="bool-val">true</span>)),
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), <span class="bool-val">true</span>)
                     .unwrap()
@@ -1842,15 +1842,15 @@
         <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="kw">if </span>is_full_pass {
             <span class="kw">if </span>no_kv_cache {
                 <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-                <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.cache.xlora_lock().len() {
+                <span class="kw">for _ in </span><span class="number">0</span>..<span class="self">self</span>.cache.full().xlora_lock().len() {
                     new_cache.push(<span class="prelude-val">None</span>);
                 }
 
-                <span class="self">self</span>.cache.xlora_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+                <span class="self">self</span>.cache.full().xlora_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
             }
-            <span class="self">self</span>.cache.xlora_lock()
+            <span class="self">self</span>.cache.full().xlora_lock()
         } <span class="kw">else </span>{
-            <span class="self">self</span>.cache.lock()
+            <span class="self">self</span>.cache.full().lock()
         };
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(x, <span class="kw-2">&amp;*</span>cache, DType::F32)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
@@ -1998,7 +1998,7 @@
     <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
         DType::F32 <span class="comment">// for dummy scalings
     </span>}
-    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {

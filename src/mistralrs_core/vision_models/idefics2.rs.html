@@ -1298,7 +1298,7 @@
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -2432,7 +2432,7 @@
                 <span class="kw-2">&amp;</span>patch_attention_mask.reshape((pixel_values.dim(<span class="number">0</span>)<span class="question-mark">?</span>, ()))<span class="question-mark">?</span>,
             )<span class="question-mark">?</span>;
 
-            <span class="kw">if </span>CausalMasker.calculate_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>.text_model.cache.lock())<span class="question-mark">? </span>== <span class="number">0 </span>{
+            <span class="kw">if </span>CausalMasker.calculate_past_kv_len(<span class="kw-2">&amp;</span><span class="self">self</span>.text_model.cache.full().lock())<span class="question-mark">? </span>== <span class="number">0 </span>{
                 <span class="self">self</span>.inputs_merger(
                     input_ids,
                     <span class="kw-2">&amp;</span><span class="self">self</span>.text_model.get_input_embeddings(input_ids)<span class="question-mark">?</span>,
@@ -2546,7 +2546,7 @@
             flash_params,
         )
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="self">self</span>.text_model.cache()
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

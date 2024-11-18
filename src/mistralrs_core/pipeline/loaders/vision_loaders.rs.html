@@ -620,7 +620,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::IsqModelLoader;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{Cache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config <span class="kw">as </span>LLaVAConfig;
@@ -651,7 +651,7 @@
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache;
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata;

@@ -1334,7 +1334,7 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -2238,7 +2238,7 @@
     norm: RmsNorm,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
@@ -2341,7 +2341,7 @@
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -2375,7 +2375,7 @@
         </span>} <span class="kw">else </span>{
             <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?
         </span>};
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.full().lock();
         <span class="kw">let </span>attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
@@ -2489,7 +2489,7 @@
             flash_params,
         )
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

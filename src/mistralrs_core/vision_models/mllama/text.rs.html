@@ -789,7 +789,7 @@
     layers::{CausalMasker, F32RmsNorm, Llama3RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, IsqModel, NormalLoadingMetadata},
+    pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -1293,7 +1293,7 @@
     norm: F32RmsNorm,
     layers: Vec&lt;MLlamaDecoderLayer&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) cfg: ModelConfigMetadata,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) cache: Cache,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) cache: EitherCache,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device: Device,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_position_embeddings: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
@@ -1403,7 +1403,7 @@
                 sliding_window: <span class="prelude-val">None</span>,
                 head_dim: <span class="prelude-val">None</span>,
             },
-            cache: Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
             device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
@@ -1423,7 +1423,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.lock();
+        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.full().lock();
         <span class="kw">let </span>self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,

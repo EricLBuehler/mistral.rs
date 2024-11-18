@@ -775,8 +775,6 @@
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
 <a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -799,7 +797,7 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -847,8 +845,7 @@
         attention_mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -915,8 +912,7 @@
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>(k, v) =
-                    <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
                 Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
@@ -1110,8 +1106,7 @@
         attention_mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1122,7 +1117,6 @@
             attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
-            block_idx,
             kv_cache,
             metadata,
             flash_params,
@@ -1172,7 +1166,7 @@
     blocks: Vec&lt;Block&gt;,
     ln_f: RmsNorm,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    kv_cache: <span class="kw">crate</span>::pipeline::Cache,
+    kv_cache: <span class="kw">crate</span>::pipeline::EitherCache,
     device: Device,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
     cfg: ModelConfigMetadata,
@@ -1189,13 +1183,13 @@
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.wte.forward(input_ids)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.kv_cache.lock();
+        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.kv_cache.normal().<span class="number">0</span>;
         <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
-                .unwrap_or(<span class="kw-2">&amp;*</span>cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
+                .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
             x.dtype(),
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
@@ -1205,8 +1199,7 @@
                 <span class="kw-2">&amp;</span>mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 start_offsets_kernel.clone(),
-                block_idx,
-                <span class="kw-2">&amp;mut </span>cache,
+                <span class="kw-2">&amp;mut </span>cache[block_idx],
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
@@ -1323,7 +1316,10 @@
             blocks,
             ln_f,
             lm_head,
-            kv_cache: <span class="kw">crate</span>::pipeline::Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>),
+            kv_cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device,
             mapper,
             cfg: ModelConfigMetadata {
@@ -1418,7 +1414,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unimplemented!</span>()
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {

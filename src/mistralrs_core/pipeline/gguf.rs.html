@@ -748,15 +748,39 @@
 <a href="#748" id="748">748</a>
 <a href="#749" id="749">749</a>
 <a href="#750" id="750">750</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::DefaultCacheManager;
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
     TokenSource, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
@@ -769,9 +793,9 @@
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, Cache};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
@@ -1236,13 +1260,13 @@
         };
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
-            Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
-            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.cache.lock().len(),
+            Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.cache.full().lock().len(),
+            Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.full().lock().len(),
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
         };
 
         <span class="kw">if </span>chat_template.bos_token.is_none() &amp;&amp; bos.is_some() {
@@ -1284,6 +1308,7 @@
                 cache_config,
                 cache_engine,
                 prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
+                model_metadata: <span class="prelude-val">Some</span>(Arc::new(model_config_metadata)),
             }),
         })))
     }
@@ -1319,18 +1344,41 @@
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>GGUFPipeline {
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        } <span class="kw">else </span>{
+            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        }
     }
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        } <span class="kw">else </span>{
+            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        }
     }
-    <span class="kw">fn </span>set_none_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(<span class="self">self</span>, modify_draft_cache);
+    <span class="kw">fn </span>set_none_cache(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, <span class="bool-val">false</span>);
+        } <span class="kw">else </span>{
+            NormalCacheManager.set_none_cache(
+                <span class="self">self</span>,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
         }
     }
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache {
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw">match </span><span class="self">self</span>.model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; <span class="kw-2">&amp;</span>model.cache,
@@ -1382,7 +1430,7 @@
     }
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(s) = <span class="self">self</span>.non_granular_state.as_ref() {
-            <span class="kw-2">*</span><span class="self">self</span>.cache().get_scalings_cache() = <span class="prelude-val">None</span>;
+            <span class="kw-2">*</span><span class="self">self</span>.cache().full().get_scalings_cache() = <span class="prelude-val">None</span>;
             <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(s.non_granular_index) = <span class="number">0</span>;
         }
     }

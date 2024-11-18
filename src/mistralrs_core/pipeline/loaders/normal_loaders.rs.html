@@ -1527,7 +1527,7 @@
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel,
+        EitherCache, IsqModel,
     },
     serde_default_fn,
     utils::log::once_log_info,
@@ -1579,7 +1579,7 @@
     ) -&gt; candle_core::Result&lt;Tensor&gt;;
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
-    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Cache;
+    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache;
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw">_</span>: Vec&lt;String&gt;) -&gt; candle_core::Result&lt;usize&gt; {
         <span class="comment">// NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
