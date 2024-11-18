@@ -13,7 +13,7 @@ use crate::{
         t5::{self, T5EncoderModel},
         DiffusionGenerationParams,
     },
-    pipeline::DiffusionModel,
+    pipeline::{DiffusionModel, IsqModel},
     utils::varbuilder_utils::from_mmaped_safetensors,
 };
 
@@ -159,7 +159,12 @@ impl FluxStepper {
         device: &Device,
         silent: bool,
         offloaded: bool,
+        loading_isq: bool,
     ) -> anyhow::Result<Self> {
+        if offloaded {
+            anyhow::bail!("`offloaded` is not tsupported.");
+        }
+
         let api = Api::new()?;
 
         info!("Loading T5 XXL tokenizer.");
@@ -172,7 +177,7 @@ impl FluxStepper {
             t5_tok: t5_tokenizer,
             clip_tok: clip_tokenizer,
             clip_text: clip_encoder,
-            flux_model: Flux::new(flux_cfg, flux_vb, device.clone(), offloaded)?,
+            flux_model: Flux::new(flux_cfg, flux_vb, device.clone(), loading_isq)?,
             flux_vae: AutoEncoder::new(flux_ae_cfg, flux_ae_vb)?,
             is_guidance: cfg.is_guidance,
             device: device.clone(),
@@ -279,5 +284,19 @@ impl DiffusionModel for FluxStepper {
         } else {
             256
         }
+    }
+}
+
+impl IsqModel for FluxStepper {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn crate::device_map::DeviceMapper,
+    ) {
+        self.flux_model.get_layers()
     }
 }

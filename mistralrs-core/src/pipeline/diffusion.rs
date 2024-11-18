@@ -2,7 +2,7 @@ use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    IsqOrganization, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -150,10 +150,6 @@ impl Loader for DiffusionLoader {
             anyhow::bail!("Device mapping is not supported for Diffusion models.");
         }
 
-        if in_situ_quant.is_some() {
-            anyhow::bail!("ISQ is not supported for Diffusion models.");
-        }
-
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for Diffusion models, disabling it.");
 
@@ -175,12 +171,12 @@ impl Loader for DiffusionLoader {
             AttentionImplementation::Eager
         };
 
-        let model = match self.kind {
+        let mut model = match self.kind {
             ModelKind::Normal => {
                 let vbs = paths
                     .filenames
                     .iter()
-                    .zip(self.inner.force_cpu_vb())
+                    .zip(self.inner.force_cpu_vb(in_situ_quant.is_some()))
                     .map(|(path, force_cpu)| {
                         from_mmaped_safetensors(
                             vec![path.clone()],
@@ -200,7 +196,7 @@ impl Loader for DiffusionLoader {
                     vbs,
                     crate::pipeline::NormalLoadingMetadata {
                         mapper,
-                        loading_isq: false,
+                        loading_isq: in_situ_quant.is_some(),
                         real_device: device.clone(),
                     },
                     attention_mechanism,
@@ -209,6 +205,17 @@ impl Loader for DiffusionLoader {
             }
             _ => unreachable!(),
         };
+
+        if in_situ_quant.is_some() {
+            model.quantize(
+                in_situ_quant,
+                device.clone(),
+                None,
+                silent,
+                IsqOrganization::Default,
+                None, // self.config.write_uqff.as_ref(),
+            )?;
+        }
 
         let max_seq_len = model.max_seq_len();
         Ok(Arc::new(Mutex::new(DiffusionPipeline {

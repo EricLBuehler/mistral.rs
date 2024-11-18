@@ -448,7 +448,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
 
     info!("Starting interactive loop with generation params: {diffusion_params:?}");
     println!(
-        "{}{TEXT_INTERACTIVE_HELP}{}",
+        "{}{DIFFUSION_INTERACTIVE_HELP}{}",
         "=".repeat(20),
         "=".repeat(20)
     );
