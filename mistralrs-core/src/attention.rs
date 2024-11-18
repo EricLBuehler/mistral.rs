@@ -170,8 +170,8 @@ impl Sdpa {
             );
         }
 
-        let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?.contiguous()?;
-        let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?.contiguous()?;
+        let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
+        let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]

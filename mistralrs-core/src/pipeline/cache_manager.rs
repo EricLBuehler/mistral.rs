@@ -115,9 +115,13 @@ impl SingleCache {
             let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
             self.all_data = Some(ad);
         };
+        // Expand kv cache
         if self.current_seq_len + seq_len > self.capacity_seq_len {
-            self.capacity_seq_len += NormalCache::CACHE_GROW_SIZE;
-            if self.capacity_seq_len < self.max_seq_len {
+            let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
+            let n_blocks_needed =
+                (diff + NormalCache::CACHE_GROW_SIZE - 1) / NormalCache::CACHE_GROW_SIZE;
+            self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            if self.capacity_seq_len > self.max_seq_len {
                 candle_core::bail!(
                     "kv-cache: requested capacity ({}) above max seq len ({})",
                     self.capacity_seq_len,
