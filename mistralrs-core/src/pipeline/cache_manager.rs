@@ -568,7 +568,7 @@ impl Cache {
     }
 }
 
-pub struct DefaultCacheManager;
+pub struct FullCacheManager;
 
 enum SeqCache {
     Normal,
@@ -655,7 +655,7 @@ fn clone_out_cache(
     }
 }
 
-impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for DefaultCacheManager {
+impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCacheManager {
     fn clone_in_cache(
         &self,
         pipeline: &T,

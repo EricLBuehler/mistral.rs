@@ -1,4 +1,4 @@
-use super::cache_manager::{DefaultCacheManager, NormalCacheManager};
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -519,14 +519,14 @@ impl IsqPipelineMixin for NormalPipeline {
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         }
@@ -539,7 +539,7 @@ impl CacheManagerMixin for NormalPipeline {
         load_preallocated_cache: bool,
     ) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
         } else {
             NormalCacheManager.set_none_cache(
                 self,

@@ -1,4 +1,4 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::FullCacheManager;
 use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
@@ -436,10 +436,10 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
     fn set_none_cache(
         &self,
@@ -448,7 +448,7 @@ impl CacheManagerMixin for VisionPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
+        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }

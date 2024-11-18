@@ -1,4 +1,4 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::FullCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
@@ -456,10 +456,10 @@ impl IsqPipelineMixin for GGMLPipeline {
 
 impl CacheManagerMixin for GGMLPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
     }
     fn set_none_cache(
         &self,
@@ -468,7 +468,7 @@ impl CacheManagerMixin for GGMLPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        DefaultCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
+        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
         if reset_non_granular {
             self.reset_non_granular_state()
         }
