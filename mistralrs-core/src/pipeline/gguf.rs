@@ -486,7 +486,7 @@ impl Loader for GGUFLoader {
         };
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.full().lock().len(),
+            Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.full().lock().len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
             Model::Phi3(ref model) => model.cache.full().lock().len(),
