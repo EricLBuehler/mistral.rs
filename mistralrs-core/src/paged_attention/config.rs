@@ -8,6 +8,7 @@ pub trait ModelConfigLike {
     }
 }
 
+#[derive(Clone)]
 pub struct ModelConfigMetadata {
     pub num_layers: usize,
     pub hidden_size: usize,
