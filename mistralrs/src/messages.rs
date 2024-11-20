@@ -4,8 +4,8 @@ use super::*;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 /// A type which can be used as a request.
 pub trait RequestLike {
@@ -28,6 +28,7 @@ pub trait RequestLike {
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
 /// A chat message role.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TextMessageRole {
     User,
     Assistant,
