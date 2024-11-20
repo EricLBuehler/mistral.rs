@@ -1,4 +1,4 @@
-use candle_core::{quantized::GgmlDType, Tensor};
+use mcandle_core::{quantized::GgmlDType, Tensor};
 
 pub enum QuantizationBehaviour {
     Quantize(GgmlDType),
@@ -57,11 +57,11 @@ macro_rules! generate_isq {
                 $crate::utils::isq::QuantizationBehaviour::Skip => {
                     let shape = $tensor.shape();
                     tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    Arc::new(candle_core::quantized::QTensor::quantize_onto(&$tensor, GgmlDType::F32, &$device)?)
+                    Arc::new(mcandle_core::quantized::QTensor::quantize_onto(&$tensor, GgmlDType::F32, &$device)?)
                 },
                 $crate::utils::isq::QuantizationBehaviour::Quantize(dtype) => {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    Arc::new(candle_core::quantized::QTensor::quantize_onto(&$tensor, dtype, &$device)?)
+                    Arc::new(mcandle_core::quantized::QTensor::quantize_onto(&$tensor, dtype, &$device)?)
                 }
             }
         }

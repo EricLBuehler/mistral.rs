@@ -24,7 +24,7 @@ use crate::{
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, Usage,
 };
-use candle_core::Tensor;
+use mcandle_core::Tensor;
 use regex_automata::util::primitives::StateID;
 
 #[derive(Clone, Copy, PartialEq, Debug)]

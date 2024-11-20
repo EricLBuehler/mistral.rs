@@ -7,11 +7,11 @@ use std::{
 };
 
 use base64::{engine::general_purpose, Engine};
-use candle_core::{DType, Device, Tensor};
-use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use mcandle_core::{DType, Device, Tensor};
+use mcandle_nn::{AdamW, Optimizer, ParamsAdamW};
 use mistralrs_quant::IsqType;
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -251,7 +251,7 @@ impl Pipeline for AnyMoePipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-    ) -> Result<ForwardInputsResult, candle_core::Error> {
+    ) -> Result<ForwardInputsResult, mcandle_core::Error> {
         get_mut_arcmutex!(self.target).forward_inputs(inputs)
     }
 
@@ -262,7 +262,7 @@ impl Pipeline for AnyMoePipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), mcandle_core::Error> {
         get_mut_arcmutex!(self.target)
             .sample_causal_gen(seqs, logits, prefix_cacher, disable_eos_stop, rng)
             .await
@@ -284,10 +284,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         revision: Option<String>,
         layers: Vec<usize>,
         silent: bool,
-    ) -> anyhow::Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
+    ) -> anyhow::Result<Option<AnyMoeTrainingResult>, mcandle_core::Error> {
         let mut target = get_mut_arcmutex!(self.target);
         if !target.amoe_supported() {
-            candle_core::bail!("AnyMoE is not supported for this model.");
+            mcandle_core::bail!("AnyMoE is not supported for this model.");
         }
 
         let device = target.device();
@@ -358,7 +358,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     },
                 )
             })
-            .collect::<candle_core::Result<Vec<_>>>()?;
+            .collect::<mcandle_core::Result<Vec<_>>>()?;
 
         let mut rng = thread_rng();
         let mut samples = inputs.into_inner();
@@ -377,7 +377,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             0.0,
             vec![],
         )
-        .map_err(candle_core::Error::msg)?;
+        .map_err(mcandle_core::Error::msg)?;
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             1, false, false, 0,
@@ -409,7 +409,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             true,
                             Vec::new(),
                         )
-                        .map_err(candle_core::Error::msg)?;
+                        .map_err(mcandle_core::Error::msg)?;
                     let images = image_urls.as_ref().map(|urls| {
                         urls.iter()
                             .map(|url| -> anyhow::Result<DynamicImage> {
@@ -437,7 +437,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     let images = match images {
                         Some(Ok(x)) => Some(x),
                         Some(Err(e)) => {
-                            return anyhow::Result::Err(candle_core::Error::Msg(e.to_string()))
+                            return anyhow::Result::Err(mcandle_core::Error::Msg(e.to_string()))
                         }
                         None => None,
                     };
@@ -497,7 +497,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
                 let cached = target.amoe_take_cached_gating_outputs();
                 for (layer, (optimizer, output)) in optimizers.iter_mut().zip(cached).enumerate() {
-                    let loss = candle_nn::loss::cross_entropy(
+                    let loss = mcandle_nn::loss::cross_entropy(
                         &output,
                         &labels.to_device(output.device())?,
                     )?;
@@ -518,26 +518,26 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 .extension()
                 .is_some_and(|e| e.to_string_lossy() == *"csv")
             {
-                candle_core::bail!("`loss_csv_path` must have an extension `csv`.");
+                mcandle_core::bail!("`loss_csv_path` must have an extension `csv`.");
             }
 
-            let mut writer = csv::Writer::from_path(path).map_err(candle_core::Error::msg)?;
+            let mut writer = csv::Writer::from_path(path).map_err(mcandle_core::Error::msg)?;
 
             let mut header = vec![format!("Step")];
             header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
             writer
                 .write_record(&header)
-                .map_err(candle_core::Error::msg)?;
+                .map_err(mcandle_core::Error::msg)?;
 
             for (i, row) in all_losses.into_iter().enumerate() {
                 let mut new_row = vec![format!("Step {i}")];
                 new_row.extend(row.iter().map(|x| format!("{x:.4}")));
                 writer
                     .write_record(&new_row)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
             }
 
-            writer.flush().map_err(candle_core::Error::msg)?;
+            writer.flush().map_err(mcandle_core::Error::msg)?;
         }
 
         Ok(Some(AnyMoeTrainingResult {

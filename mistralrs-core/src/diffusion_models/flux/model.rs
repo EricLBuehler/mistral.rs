@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+use mcandle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use mcandle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
 use serde::Deserialize;
 
 const MLP_RATIO: f64 = 4.;
@@ -35,7 +35,7 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let k = k.flatten_to(batch_dims.len() - 1)?;
     let v = v.flatten_to(batch_dims.len() - 1)?;
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    let attn_scores = candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
+    let attn_scores = mcandle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
     batch_dims.push(attn_scores.dim(D::Minus2)?);
     batch_dims.push(attn_scores.dim(D::Minus1)?);
     attn_scores.reshape(batch_dims)
@@ -43,7 +43,7 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
 
 fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
     if dim % 2 == 1 {
-        candle_core::bail!("dim {dim} is odd")
+        mcandle_core::bail!("dim {dim} is odd")
     }
     let dev = pos.device();
     let theta = theta as f64;
@@ -84,16 +84,16 @@ fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
     const TIME_FACTOR: f64 = 1000.;
     const MAX_PERIOD: f64 = 10000.;
     if dim % 2 == 1 {
-        candle_core::bail!("{dim} is odd")
+        mcandle_core::bail!("{dim} is odd")
     }
     let dev = t.device();
     let half = dim / 2;
     let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle_core::DType::F32)?;
+    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(mcandle_core::DType::F32)?;
     let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
     let args = t
         .unsqueeze(1)?
-        .to_dtype(candle_core::DType::F32)?
+        .to_dtype(mcandle_core::DType::F32)?
         .broadcast_mul(&freqs.unsqueeze(0)?)?;
     let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
     Ok(emb)
@@ -117,7 +117,7 @@ impl EmbedNd {
     }
 }
 
-impl candle_core::Module for EmbedNd {
+impl mcandle_core::Module for EmbedNd {
     fn forward(&self, ids: &Tensor) -> Result<Tensor> {
         let n_axes = ids.dim(D::Minus1)?;
         let mut emb = Vec::with_capacity(n_axes);
@@ -142,8 +142,8 @@ pub struct MlpEmbedder {
 
 impl MlpEmbedder {
     fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let in_layer = candle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
-        let out_layer = candle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
+        let in_layer = mcandle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
+        let out_layer = mcandle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
         Ok(Self {
             in_layer,
             out_layer,
@@ -151,7 +151,7 @@ impl MlpEmbedder {
     }
 }
 
-impl candle_core::Module for MlpEmbedder {
+impl mcandle_core::Module for MlpEmbedder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         xs.apply(&self.in_layer)?.silu()?.apply(&self.out_layer)
     }
@@ -200,7 +200,7 @@ struct Modulation1 {
 
 impl Modulation1 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
+        let lin = mcandle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -211,7 +211,7 @@ impl Modulation1 {
             .unsqueeze(1)?
             .chunk(3, D::Minus1)?;
         if ys.len() != 3 {
-            candle_core::bail!("unexpected len from chunk {ys:?}")
+            mcandle_core::bail!("unexpected len from chunk {ys:?}")
         }
         Ok(ModulationOut {
             shift: ys[0].clone(),
@@ -228,7 +228,7 @@ struct Modulation2 {
 
 impl Modulation2 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
+        let lin = mcandle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -239,7 +239,7 @@ impl Modulation2 {
             .unsqueeze(1)?
             .chunk(6, D::Minus1)?;
         if ys.len() != 6 {
-            candle_core::bail!("unexpected len from chunk {ys:?}")
+            mcandle_core::bail!("unexpected len from chunk {ys:?}")
         }
         let mod1 = ModulationOut {
             shift: ys[0].clone(),
@@ -266,9 +266,9 @@ pub struct SelfAttention {
 impl SelfAttention {
     fn new(dim: usize, num_attention_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
         let head_dim = dim / num_attention_heads;
-        let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
+        let qkv = mcandle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
-        let proj = candle_nn::linear(dim, dim, vb.pp("proj"))?;
+        let proj = mcandle_nn::linear(dim, dim, vb.pp("proj"))?;
         Ok(Self {
             qkv,
             norm,
@@ -326,8 +326,8 @@ struct Mlp {
 
 impl Mlp {
     fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
-        let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
+        let lin1 = mcandle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
+        let lin2 = mcandle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 
@@ -344,7 +344,7 @@ impl Mlp {
     }
 }
 
-impl candle_core::Module for Mlp {
+impl mcandle_core::Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
     }
@@ -498,8 +498,8 @@ impl SingleStreamBlock {
         let h_sz = HIDDEN_SIZE;
         let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
         let head_dim = h_sz / cfg.num_attention_heads;
-        let linear1 = candle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
-        let linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
+        let linear1 = mcandle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
+        let linear2 = mcandle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
         let pre_norm = layer_norm(h_sz, vb.pp("pre_norm"))?;
         let modulation = Modulation1::new(h_sz, vb.pp("modulation"))?;
@@ -578,8 +578,8 @@ pub struct LastLayer {
 impl LastLayer {
     fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
-        let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
-        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
+        let linear = mcandle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
+        let ada_ln_modulation = mcandle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
         Ok(Self {
             norm_final,
             linear,
@@ -615,12 +615,12 @@ pub struct Flux {
 
 impl Flux {
     pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
-        let img_in = candle_nn::linear(
+        let img_in = mcandle_nn::linear(
             cfg.in_channels,
             HIDDEN_SIZE,
             vb.pp("img_in").set_device(device.clone()),
         )?;
-        let txt_in = candle_nn::linear(
+        let txt_in = mcandle_nn::linear(
             cfg.joint_attention_dim,
             HIDDEN_SIZE,
             vb.pp("txt_in").set_device(device.clone()),
@@ -692,10 +692,10 @@ impl Flux {
         guidance: Option<&Tensor>,
     ) -> Result<Tensor> {
         if txt.rank() != 3 {
-            candle_core::bail!("unexpected shape for txt {:?}", txt.shape())
+            mcandle_core::bail!("unexpected shape for txt {:?}", txt.shape())
         }
         if img.rank() != 3 {
-            candle_core::bail!("unexpected shape for img {:?}", img.shape())
+            mcandle_core::bail!("unexpected shape for img {:?}", img.shape())
         }
         let dtype = img.dtype();
         let pe = {

@@ -7,10 +7,10 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use candle_core::{
+use mcandle_core::{
     pickle::PthTensors, safetensors::MmapedSafetensors, DType, Device, Result, Tensor,
 };
-use candle_nn::{
+use mcandle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
@@ -59,7 +59,7 @@ impl TensorLoaderBackend for PickleBackend {
         let t = self
             .0
             .get(name)?
-            .ok_or(candle_core::Error::Msg(format!(
+            .ok_or(mcandle_core::Error::Msg(format!(
                 "Could not load tensor {name}"
             )))?
             .to_device(device)?;
@@ -197,12 +197,12 @@ trait LoadTensors {
             .expect("Expected to convert")
         {
             "safetensors" => Box::new(SafetensorBackend(unsafe {
-                candle_core::safetensors::MmapedSafetensors::new(path)?
+                mcandle_core::safetensors::MmapedSafetensors::new(path)?
             })),
             "pth" | "pt" | "bin" => Box::new(PickleBackend(
-                candle_core::pickle::PthTensors::new(path, None)?
+                mcandle_core::pickle::PthTensors::new(path, None)?
             )),
-            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
+            other => mcandle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
         };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:

@@ -15,10 +15,10 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::{DeviceMapMetadata, Topology};
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm};
+use mcandle_core::quantized::QMatMul;
+use mcandle_core::quantized::QTensor;
+use mcandle_core::{DType, Device, IndexOp, Module, Result, Tensor};
+use mcandle_nn::{Embedding, LayerNorm};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -32,7 +32,7 @@ impl Module for Mlp {
         MatMul.qmethod_matmul(
             &MatMul
                 .qmethod_matmul(xs, &*self.ffn_up)?
-                .apply(&candle_nn::Activation::GeluPytorchTanh)?,
+                .apply(&mcandle_nn::Activation::GeluPytorchTanh)?,
             &*self.ffn_down,
         )
     }
@@ -216,7 +216,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             layer_norm_epsilon,
             context_window,
             rope_freq_base,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| mcandle_core::bail!("{err}"))?;
 
         let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;

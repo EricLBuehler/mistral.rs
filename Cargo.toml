@@ -7,9 +7,14 @@ members = [
     "mistralrs-bench",
     "mistralrs-vision",
     "mistralrs-quant",
+    "mcandle/mcandle-core",
+    "mcandle/mcandle-nn",
 ]
 exclude = [
     "mistralrs-paged_attn",
+    "mcandle/mcandle-flash-attn",
+    "mcandle/mcandle-kernels",
+    "mcandle/mcandle-metal-kernels",
 ]
 resolver = "2"
 
@@ -25,8 +30,11 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb8082b" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb8082b" }
+mcandle-core = { path = "./mcandle/mcandle-core", package = "mcandle-core" }
+mcandle-flash-attn = { path = "./mcandle/mcandle-flash-attn" }
+mcandle-kernels = { path = "./mcandle/mcandle-kernels" }
+mcandle-metal-kernels = { path = "./mcandle/mcandle-metal-kernels" }
+mcandle-nn = { path = "./mcandle/mcandle-nn" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -49,5 +57,23 @@ rayon = "1.1.0"
 url = "2.5.2"
 data-url = "0.3.1"
 buildstructor = "0.5.4"
-float8 = "0.1.1"
+float8 = { version = "0.1.0", features = ["num-traits", "rand_distr"] }
 regex = "1.10.6"
+byteorder = "1.4.3"
+cudarc = { version = "0.12.1", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
+gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
+libc = { version = "0.2.147" }
+memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
+yoke = { version = "0.7.2", features = ["derive"] }
+zip = { version = "1.1.1", default-features = false }
+metal = { version = "0.27.0", features = ["mps"]}
+num_cpus = "1.15.0"
+num-traits = "0.2.15"
+rand = "0.8.5"
+rand_distr = "0.4.3"
+safetensors = "0.4.1"
+thiserror = "1"
+ug = "0.0.2"
+ug-cuda = "0.0.2"
+ug-metal = "0.0.2"
+criterion = { version = "0.5.1", default-features=false }

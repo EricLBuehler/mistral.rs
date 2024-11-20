@@ -4,7 +4,7 @@
 //!
 //! ## Example
 //! ```rust
-//! use candle_core::Device;
+//! use mcandle_core::Device;
 //! use image::{ColorType, DynamicImage};
 //! use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 //!
@@ -20,8 +20,8 @@
 //! assert_eq!(transformed.dims(), &[3, 4, 3]);
 //! ```
 
-use candle_core::{Device, Result, Tensor};
 use image::DynamicImage;
+use mcandle_core::{Device, Result, Tensor};
 mod ops;
 mod pad;
 mod transforms;

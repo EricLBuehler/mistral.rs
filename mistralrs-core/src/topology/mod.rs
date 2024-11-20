@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, io::Read, ops::Range, path::Path};
 
-use candle_core::Device;
 use itertools::Itertools;
+use mcandle_core::Device;
 use mistralrs_quant::IsqType;
 use regex::Regex;
 use serde::Deserialize;

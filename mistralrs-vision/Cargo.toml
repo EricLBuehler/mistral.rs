@@ -12,5 +12,5 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-candle-core.workspace = true
+mcandle-core.workspace = true
 image.workspace = true

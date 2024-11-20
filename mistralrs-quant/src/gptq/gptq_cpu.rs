@@ -1,6 +1,6 @@
 use crate::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::VarBuilder;
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::VarBuilder;
 use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -15,7 +15,9 @@ impl QuantMethod for GptqLayer {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gptq { .. } => candle_core::bail!("GPTQ is only supported on CUDA."),
+            QuantMethodConfig::Gptq { .. } => {
+                mcandle_core::bail!("GPTQ is only supported on CUDA.")
+            }
             QuantMethodConfig::Gguf { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
@@ -38,7 +40,7 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, mcandle_core::Device) {
         todo!()
     }
 

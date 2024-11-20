@@ -1,10 +1,10 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
+use mcandle_core::Device;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
@@ -242,30 +242,30 @@ pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {
-    use candle_core::{DType, Device, Tensor};
+    use mcandle_core::{DType, Device, Tensor};
 
     // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
     let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
-    candle_core::cuda::set_gemm_reduced_precision_bf16(true);
+    mcandle_core::cuda::set_gemm_reduced_precision_bf16(true);
     match a.matmul(&a) {
         Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in BF16 not supported.");
-                candle_core::cuda::set_gemm_reduced_precision_bf16(false);
+                mcandle_core::cuda::set_gemm_reduced_precision_bf16(false);
                 INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
 
     let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
-    candle_core::cuda::set_gemm_reduced_precision_f16(true);
+    mcandle_core::cuda::set_gemm_reduced_precision_f16(true);
     match a.matmul(&a) {
         Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
         Err(e) => {
             if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
                 tracing::info!("GEMM reduced precision in F16 not supported.");
-                candle_core::cuda::set_gemm_reduced_precision_f16(false);
+                mcandle_core::cuda::set_gemm_reduced_precision_f16(false);
                 INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }

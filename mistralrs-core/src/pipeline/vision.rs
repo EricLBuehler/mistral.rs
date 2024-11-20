@@ -28,8 +28,8 @@ use crate::{
     TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mcandle_core::{Device, Tensor, Var};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -482,7 +482,10 @@ impl MetadataMixin for VisionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> mcandle_core::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -501,11 +504,11 @@ impl Pipeline for VisionPipeline {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
-                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+                mcandle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
             }
             (None, Some(_)) => {
                 // This should never happen but we handle it anyway
-                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+                mcandle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
             }
             (None, None) => None,
         };
@@ -529,7 +532,7 @@ impl Pipeline for VisionPipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), mcandle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
@@ -542,7 +545,7 @@ impl Pipeline for VisionPipeline {
 }
 
 impl AnyMoePipelineMixin for VisionPipeline {
-    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
+    fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> mcandle_core::Result<()> {
         self.model.finish_training(gate_model_id)
     }
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
@@ -561,26 +564,26 @@ impl AnyMoePipelineMixin for VisionPipeline {
         revision: Option<String>,
         match_regex: &str,
         config: crate::amoe::AnyMoeConfig,
-        dtype: candle_core::DType,
+        dtype: mcandle_core::DType,
         dev: &Device,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
         silent: bool,
         gate_model_id: Option<String>,
-    ) -> candle_core::Result<()> {
+    ) -> mcandle_core::Result<()> {
         let mut vbs = Vec::new();
         // Precompile regex here
-        let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
+        let regex = Regex::new(match_regex).map_err(mcandle_core::Error::msg)?;
         for model_id in model_ids {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
+                .with_token(get_token(token).map_err(mcandle_core::Error::msg)?)
                 .build()
-                .map_err(candle_core::Error::msg)?;
+                .map_err(mcandle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -627,9 +630,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
 
             let api = ApiBuilder::new()
                 .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
+                .with_token(get_token(token).map_err(mcandle_core::Error::msg)?)
                 .build()
-                .map_err(candle_core::Error::msg)?;
+                .map_err(mcandle_core::Error::msg)?;
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),

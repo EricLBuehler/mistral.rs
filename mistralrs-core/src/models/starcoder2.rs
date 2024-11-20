@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
+use mcandle_core::{DType, Device, Module, Result, Tensor};
+use mcandle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{collections::HashMap, sync::Arc};
 
@@ -387,7 +387,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -417,7 +417,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),

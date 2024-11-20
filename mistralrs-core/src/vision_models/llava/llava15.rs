@@ -19,8 +19,8 @@ use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
-use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, Activation, Linear, VarBuilder};
+use mcandle_core::{bail, DType, Device, IndexOp, Result, Tensor};
+use mcandle_nn::{linear, Activation, Linear, VarBuilder};
 
 pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait
 
@@ -302,7 +302,7 @@ impl VisionModel for Model {
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> mcandle_core::Result<Tensor> {
         self.forward_inputs(
             input_ids,
             pixel_values,

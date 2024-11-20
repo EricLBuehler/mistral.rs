@@ -19,8 +19,8 @@ use crate::{
 /// There is an alternative implementation of the phi model in mixformers.rs.
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, layer_norm, Embedding, LayerNorm, RotaryEmbedding, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{embedding, layer_norm, Embedding, LayerNorm, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use tqdm::Iter;
 use tracing::info;
@@ -530,7 +530,7 @@ impl Model {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             embed_tokens,
@@ -809,7 +809,7 @@ impl NormalModel for Model {
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+            mcandle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
         }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

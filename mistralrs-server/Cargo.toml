@@ -15,7 +15,7 @@ default-run = "mistralrs-server"
 [dependencies]
 anyhow.workspace = true
 ctrlc = "3.4.4"
-candle-core.workspace = true
+mcandle-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum = { version = "0.7.4", features = ["tokio"] }

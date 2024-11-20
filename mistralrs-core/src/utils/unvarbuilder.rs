@@ -3,9 +3,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::{quantized::QMatMul, Tensor};
-use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use itertools::Itertools;
+use mcandle_core::{quantized::QMatMul, Tensor};
+use mcandle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use mistralrs_quant::QuantMethod;
 
 use crate::layers::{F32RmsNorm, QLinear, RmsNorm};

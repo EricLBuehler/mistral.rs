@@ -6,7 +6,7 @@ use std::{
     ptr::{addr_of, NonNull},
 };
 
-use candle_core::{
+use mcandle_core::{
     cuda::cudarc::driver::DeviceRepr, cuda_backend::cudarc::driver::CudaFunction, CudaDevice,
     DType, Result,
 };

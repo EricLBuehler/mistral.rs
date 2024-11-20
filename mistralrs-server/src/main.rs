@@ -5,8 +5,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use candle_core::Device;
 use clap::Parser;
+use mcandle_core::Device;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
     parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
@@ -311,10 +311,10 @@ async fn main() -> Result<()> {
 
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        candle_core::utils::with_avx(),
-        candle_core::utils::with_neon(),
-        candle_core::utils::with_simd128(),
-        candle_core::utils::with_f16c()
+        mcandle_core::utils::with_avx(),
+        mcandle_core::utils::with_neon(),
+        mcandle_core::utils::with_simd128(),
+        mcandle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
     if use_flash_attn {

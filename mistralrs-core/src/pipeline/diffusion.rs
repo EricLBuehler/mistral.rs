@@ -14,9 +14,9 @@ use crate::utils::debug::DeviceRepr;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapMetadata, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
+use mcandle_core::{DType, Device, Tensor};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -192,7 +192,7 @@ impl Loader for DiffusionLoader {
                             |_| true,
                         )
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<mcandle_core::Result<Vec<_>>>()?;
 
                 self.inner.load(
                     configs,
@@ -300,7 +300,10 @@ impl MetadataMixin for DiffusionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+    ) -> mcandle_core::Result<ForwardInputsResult> {
         let ModelInputs { prompts, params } = *inputs.downcast().expect("Downcast failed.");
         let img = self.model.forward(prompts, params)?.to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;
@@ -308,12 +311,12 @@ impl Pipeline for DiffusionPipeline {
         for b_img in img.chunk(img.dim(0)?, 0)? {
             let flattened = b_img.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?;
             if c != 3 {
-                candle_core::bail!("Expected 3 channels in image output");
+                mcandle_core::bail!("Expected 3 channels in image output");
             }
             #[allow(clippy::cast_possible_truncation)]
             images.push(DynamicImage::ImageRgb8(
                 RgbImage::from_raw(w as u32, h as u32, flattened.to_vec1::<u8>()?).ok_or(
-                    candle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
+                    mcandle_core::Error::Msg("RgbImage has invalid capacity.".to_string()),
                 )?,
             ));
         }
@@ -326,8 +329,8 @@ impl Pipeline for DiffusionPipeline {
         _prefix_cacher: &mut PrefixCacheManager,
         _disable_eos_stop: bool,
         _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
-        candle_core::bail!("`sample_causal_gen` is incompatible with `DiffusionPipeline`");
+    ) -> Result<(), mcandle_core::Error> {
+        mcandle_core::bail!("`sample_causal_gen` is incompatible with `DiffusionPipeline`");
     }
     fn category(&self) -> ModelCategory {
         ModelCategory::Diffusion

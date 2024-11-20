@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use mcandle_core::{DType, Device, Result, Tensor};
 use mistralrs_paged_attn::{copy_blocks, swap_blocks};
 
 use super::config::ModelConfigLike;

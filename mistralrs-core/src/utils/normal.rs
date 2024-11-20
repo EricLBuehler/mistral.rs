@@ -1,7 +1,7 @@
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use mcandle_core::{DType, Device, Tensor};
 use serde::Deserialize;
 use tracing::info;
 
@@ -115,7 +115,7 @@ fn get_dtypes() -> Vec<DType> {
     get_dtypes_non_cuda()
 }
 
-fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
+fn determine_auto_dtype_all(devices: &[&Device]) -> mcandle_core::Result<DType> {
     let dev_dtypes = get_dtypes();
     for dtype in get_dtypes_non_cuda()
         .iter()
@@ -135,14 +135,14 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
                     Ok(_) => (),
                     Err(e) => match e {
                         // For CUDA
-                        candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
+                        mcandle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
                         // Accelerate backend doesn't support f16/bf16
                         // Metal backend doesn't support f16
-                        candle_core::Error::Msg(_) => continue,
+                        mcandle_core::Error::Msg(_) => continue,
                         // This is when the metal backend doesn't support bf16
-                        candle_core::Error::Metal(_) => continue,
+                        mcandle_core::Error::Metal(_) => continue,
                         // If running with RUST_BACKTRACE=1
-                        candle_core::Error::WithBacktrace { .. } => continue,
+                        mcandle_core::Error::WithBacktrace { .. } => continue,
                         other => return Err(other),
                     },
                 }

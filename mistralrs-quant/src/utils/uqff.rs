@@ -1,8 +1,8 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
+use mcandle_core::{DType, Device, Result, Tensor, WithDType};
 
 // v0.1.0: initial release
 // v0.1.1: add i16 dtype
@@ -23,7 +23,7 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
     let _patch = version;
 
     if major != HQFF_VERSION_MAJOR {
-        candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({HQFF_VERSION_MAJOR})");
+        mcandle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({HQFF_VERSION_MAJOR})");
     }
 
     Ok(())
@@ -61,7 +61,7 @@ pub(crate) fn read_dtype<R: std::io::Read>(buffer: &mut R) -> Result<DType> {
         7 => DType::F64,
         8 => DType::I16,
         9 => DType::F8E4M3,
-        _ => candle_core::bail!("unknown dtype for quantized tensor {dtype}"),
+        _ => mcandle_core::bail!("unknown dtype for quantized tensor {dtype}"),
     };
     Ok(dtype)
 }
@@ -164,7 +164,7 @@ fn data_to_bytes<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
 fn bytes_to_data<T: WithDType>(
     data: &[u8],
     shape: &[usize],
-    device: &candle_core::Device,
+    device: &mcandle_core::Device,
 ) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;

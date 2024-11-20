@@ -597,7 +597,7 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 
 ## Credits
-This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
+This project would not be possible without the excellent work at [`mcandle`](https://github.com/huggingface/mcandle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
 
 <p align="right">
   <a href="#top">⬆️ Back to Top</a>

@@ -2,8 +2,8 @@
 
 use std::{any::Any, sync::Arc};
 
-use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use mcandle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use mcandle_nn::VarBuilder;
 use mistralrs_quant::QuantMethod;
 use text::Qwen2VLTextModel;
 use vision::Qwen2VLVisionModel;
@@ -46,7 +46,7 @@ impl Qwen2VLModel {
     ) -> Result<Self> {
         if cfg.use_sliding_window {
             // TODO!
-            candle_core::bail!("Sliding window is unsupported for now!");
+            mcandle_core::bail!("Sliding window is unsupported for now!");
         }
         let vision = Qwen2VLVisionModel::new(
             &cfg.vision_config,
@@ -447,7 +447,7 @@ impl VisionModel for Qwen2VLModel {
             (None, Some(_)) => (None, pixel_values),
             (None, None) => (None, None),
             (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
+                mcandle_core::bail!("Images and videos cannot be provided together.")
             }
         };
         self.forward(

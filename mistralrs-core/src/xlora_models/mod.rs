@@ -17,11 +17,11 @@ use crate::{
     lora::Ordering,
     pipeline::{text_models_inputs_processor::FlashParams, EitherCache},
 };
-use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
 pub(crate) use gemma2::Model as XLoraGemma2;
 pub(crate) use llama::XLoraLlama;
+use mcandle_core::{DType, Device, Result, Tensor};
 pub(crate) use mistral::XLoraModel as XLoraMistral;
 pub(crate) use mixtral::XLoraModel as XLoraMixtral;
 pub(crate) use phi2::Model as XLoraPhi2;
@@ -148,7 +148,7 @@ fn verify_sanity_adapters(ordering: &Ordering, supported_layers: &[&str]) -> Res
     }
     for path in ordering.layers.as_ref().unwrap().keys() {
         if !supported_layers.iter().any(|layer| path.ends_with(layer)) {
-            candle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
+            mcandle_core::bail!("Got a layer name `{path}` in the ordering, expected it to end with one of {supported_layers:?}");
         }
     }
     Ok(())

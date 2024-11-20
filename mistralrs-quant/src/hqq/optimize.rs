@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor};
+use mcandle_core::{DType, Result, Tensor};
 
 use super::{HqqAxis, HqqLayer, OPTIMIZER_HQQ_DEFAULT_STEPS};
 

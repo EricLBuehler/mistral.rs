@@ -6,11 +6,11 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{
+use mcandle_core::{
     quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
-use candle_nn::Module;
+use mcandle_nn::Module;
 
 use crate::{
     generate_isq,
@@ -86,14 +86,14 @@ impl QuantMethod for GgufMatMul {
             } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 let w = QMatMul::QTensor(std::sync::Arc::new(
-                    candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
+                    mcandle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
                 Ok(Arc::new(Self { w, b: b.clone() }))
             }
         }
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, mcandle_core::Device) {
         match &self.w {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
@@ -229,7 +229,7 @@ impl QuantizedSerde for GgufMatMul {
                 buffer
             }
             QMatMul::TensorF16(_) | QMatMul::Tensor(_) => {
-                candle_core::bail!("Cannot serialize non-quantized")
+                mcandle_core::bail!("Cannot serialize non-quantized")
             }
         };
 
@@ -245,12 +245,12 @@ impl QuantizedSerde for GgufMatMul {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(mcandle_core::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Gguf as usize {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Gguf as usize
             );
@@ -278,7 +278,7 @@ impl QuantizedSerde for GgufMatMul {
             15 => GgmlDType::Q8K,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
+            _ => mcandle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
         };
 
         let n_dims = buffer.read_u32::<LittleEndian>()? as usize;

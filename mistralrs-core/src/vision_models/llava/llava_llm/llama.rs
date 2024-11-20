@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{embedding, linear_no_bias as linear, Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
@@ -227,7 +227,7 @@ impl MlpLayer for Mlp {
         if let Some(t) = self.c_fc1.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
+        let x = (mcandle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
         if self.c_fc1.quantized_act_type().is_some() {

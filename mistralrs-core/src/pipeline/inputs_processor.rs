@@ -3,7 +3,7 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::Result;
-use candle_core::Device;
+use mcandle_core::Device;
 use text_models_inputs_processor::PagedAttentionMeta;
 use tokenizers::Tokenizer;
 
@@ -50,7 +50,7 @@ pub mod text_models_inputs_processor {
     use std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
-    use candle_core::{DType, Device, Tensor, WithDType};
+    use mcandle_core::{DType, Device, Tensor, WithDType};
     use tokenizers::Tokenizer;
 
     use crate::{

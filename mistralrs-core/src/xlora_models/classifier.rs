@@ -1,5 +1,5 @@
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{
+use mcandle_core::{DType, Device, Result, Tensor, D};
+use mcandle_nn::{
     activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
     VarBuilder,
 };
@@ -38,7 +38,7 @@ impl XLoraClassifier {
         is_quantized: bool,
     ) -> Result<Self> {
         if config.enable_softmax_topk {
-            candle_core::bail!("`enable_softmax_topk` is not implemented");
+            mcandle_core::bail!("`enable_softmax_topk` is not implemented");
         }
 
         let (last, inner): (Linear, Vec<Box<dyn ModuleT + Send + Sync>>) = if config.xlora_depth

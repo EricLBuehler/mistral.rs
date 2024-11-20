@@ -17,7 +17,7 @@ use stream::ChatCompletionStreamer;
 use tokio::sync::mpsc::channel;
 use util::{PyApiErr, PyApiResult};
 
-use candle_core::{Device, Result};
+use mcandle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,

@@ -1,8 +1,8 @@
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Context, Result};
-use candle_core::Device;
 use indexmap::IndexMap;
+use mcandle_core::Device;
 use tokenizers::Tokenizer;
 
 use crate::{

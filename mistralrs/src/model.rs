@@ -1,5 +1,5 @@
 use anyhow::Context;
-use candle_core::{Device, Result};
+use mcandle_core::{Device, Result};
 use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;

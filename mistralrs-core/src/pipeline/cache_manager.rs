@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use candle_core::{Result, Tensor, D};
+use mcandle_core::{Result, Tensor, D};
 
 use crate::{get_mut_arcmutex, sequence::Sequence};
 
@@ -122,7 +122,7 @@ impl SingleCache {
                 (diff + NormalCache::CACHE_GROW_SIZE - 1) / NormalCache::CACHE_GROW_SIZE;
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
             if self.capacity_seq_len > self.max_seq_len {
-                candle_core::bail!(
+                mcandle_core::bail!(
                     "kv-cache: requested capacity ({}) above max seq len ({})",
                     self.capacity_seq_len,
                     self.max_seq_len
@@ -501,8 +501,8 @@ impl Cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
                 if !slow_cat {
-                    let k = candle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
-                    let v = candle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
+                    let k = mcandle_nn::ops::kvconcat(k_cache, &k, 2)?.contiguous()?;
+                    let v = mcandle_nn::ops::kvconcat(v_cache, &v, 2)?.contiguous()?;
                     (k, v)
                 } else {
                     let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
@@ -556,8 +556,8 @@ impl Cache {
                     }
                 }
                 let (k, v) = if !slow_cat {
-                    let k = candle_nn::ops::kvconcat(&prev_k, &k, 2)?;
-                    let v = candle_nn::ops::kvconcat(&prev_v, &v, 2)?;
+                    let k = mcandle_nn::ops::kvconcat(&prev_k, &k, 2)?;
+                    let v = mcandle_nn::ops::kvconcat(&prev_v, &v, 2)?;
                     (k, v)
                 } else {
                     let k = Tensor::cat(&[prev_k, k], 2)?.contiguous()?;

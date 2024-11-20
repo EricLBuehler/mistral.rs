@@ -1,8 +1,8 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
-use candle_nn::{Linear, VarBuilder};
 use either::Either;
+use mcandle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
+use mcandle_nn::{Linear, VarBuilder};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use super::{
@@ -41,7 +41,7 @@ impl QLoraLinear {
                 .as_ref()
                 .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
             {
-                candle_core::bail!("Expected all target modules to be the same.");
+                mcandle_core::bail!("Expected all target modules to be the same.");
             }
         }
 

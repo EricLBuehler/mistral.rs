@@ -1,12 +1,12 @@
 use super::marlin_ffi::{
     gptq_marlin_repack, marlin_4bit_bf16, marlin_4bit_f16, HAVE_MARLIN_KERNELS,
 };
-use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::DevicePtr;
-use candle::cuda_backend::WrapErr;
-use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
-use candle_core as candle;
 use half::{bf16, f16};
+use mcandle::backend::BackendStorage;
+use mcandle::cuda_backend::cudarc::driver::DevicePtr;
+use mcandle::cuda_backend::WrapErr;
+use mcandle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
+use mcandle_core as mcandle;
 
 struct GPTQMatMul {
     workspace: Tensor,
@@ -15,7 +15,7 @@ struct GPTQMatMul {
 
 impl GPTQMatMul {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: mcandle::cuda_backend::CudaDType + mcandle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         x: &CudaStorage,
@@ -61,7 +61,7 @@ impl GPTQMatMul {
             let (workspace, workspace_l) = self.workspace.storage_and_layout();
             let workspace = match &*workspace {
                 Storage::Cuda(p) => p,
-                _ => candle::bail!("workspace must be a cuda tensor"),
+                _ => mcandle::bail!("workspace must be a cuda tensor"),
             };
             let workspace_ = workspace.as_cuda_slice::<u32>()?;
             let workspace_ = workspace_.slice(workspace_l.start_offset()..);
@@ -74,7 +74,7 @@ impl GPTQMatMul {
             (size_k / scale_shape[0]) as i32
         };
         if !HAVE_MARLIN_KERNELS {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Marlin INT4xF16 matmul kernels were not compiled, please raise an issue."
             )
         }
@@ -113,7 +113,7 @@ impl GPTQMatMul {
     }
 }
 
-impl candle::CustomOp3 for GPTQMatMul {
+impl mcandle::CustomOp3 for GPTQMatMul {
     fn name(&self) -> &'static str {
         "GPTQMatMul"
     }
@@ -127,7 +127,7 @@ impl candle::CustomOp3 for GPTQMatMul {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for GPTQMatMul")
+        mcandle::bail!("no cpu support for GPTQMatMul")
     }
 
     fn cuda_fwd(
@@ -142,7 +142,7 @@ impl candle::CustomOp3 for GPTQMatMul {
         match x.dtype() {
             DType::F16 => self.cuda_fwd_t::<f16>(x, x_l, qweight, qweight_l, scale, scale_l),
             DType::BF16 => self.cuda_fwd_t::<bf16>(x, x_l, qweight, qweight_l, scale, scale_l),
-            dt => candle::bail!("GPTQMatMul is only supported for f16 and bf16 ({dt:?})"),
+            dt => mcandle::bail!("GPTQMatMul is only supported for f16 and bf16 ({dt:?})"),
         }
     }
 }
@@ -168,7 +168,7 @@ struct GPTQRepack {
 
 impl GPTQRepack {
     fn cuda_fwd_t<
-        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+        T: mcandle::cuda_backend::CudaDType + mcandle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
         &self,
         qweight: &CudaStorage,
@@ -204,7 +204,7 @@ impl GPTQRepack {
                 gptq_marlin_repack(q_ptr, q_perm, out_ptr, self.k, q_shape[1] as i32, self.bits)
             }
         } else {
-            candle_core::bail!("Not compiled with marlin kernels, but attempted to use one. Please raise an issue.");
+            mcandle_core::bail!("Not compiled with marlin kernels, but attempted to use one. Please raise an issue.");
         }
 
         let out = CudaStorage::wrap_cuda_slice(out, dev.clone());
@@ -212,7 +212,7 @@ impl GPTQRepack {
     }
 }
 
-impl candle::CustomOp2 for GPTQRepack {
+impl mcandle::CustomOp2 for GPTQRepack {
     fn name(&self) -> &'static str {
         "GPTQRepack"
     }
@@ -224,7 +224,7 @@ impl candle::CustomOp2 for GPTQRepack {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for GPTQRepack")
+        mcandle::bail!("no cpu support for GPTQRepack")
     }
 
     fn cuda_fwd(
@@ -237,7 +237,7 @@ impl candle::CustomOp2 for GPTQRepack {
         match qweight.dtype() {
             DType::U32 => self.cuda_fwd_t::<u32>(qweight, qweight_l, perm, perm_l),
             DType::I32 => self.cuda_fwd_t::<i32>(qweight, qweight_l, perm, perm_l),
-            dt => candle::bail!("GPTQRepack is only supported for i32/u32 weight ({dt:?})"),
+            dt => mcandle::bail!("GPTQRepack is only supported for i32/u32 weight ({dt:?})"),
         }
     }
 }

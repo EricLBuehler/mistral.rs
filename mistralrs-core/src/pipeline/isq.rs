@@ -9,8 +9,8 @@ use std::{
 };
 
 use anyhow::Result;
-use candle_core::{Context, Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use mcandle_core::{Context, Device, Tensor};
 use mistralrs_quant::{
     FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
     UnquantLinear,
@@ -168,7 +168,7 @@ pub trait IsqModel {
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
-    ) -> candle_core::Result<()> {
+    ) -> mcandle_core::Result<()> {
         {
             let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
@@ -269,7 +269,7 @@ pub trait IsqModel {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(minimum_max_threads)
                 .build()
-                .map_err(candle_core::Error::msg)?;
+                .map_err(mcandle_core::Error::msg)?;
 
             pool.install(|| {
                 use indicatif::ParallelProgressIterator;
@@ -308,7 +308,7 @@ pub trait IsqModel {
                 );
 
                 if !serialized.extension().is_some_and(|ext| ext == "uqff") {
-                    candle_core::bail!("UQFF output path extension must be `.uqff`",);
+                    mcandle_core::bail!("UQFF output path extension must be `.uqff`",);
                 }
 
                 let bar = ProgressBar::new(total_tensors as u64);
@@ -322,7 +322,7 @@ pub trait IsqModel {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(2)
                     .build()
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
 
                 let quantized_values = pool.install(|| {
                     if silent {
@@ -336,7 +336,7 @@ pub trait IsqModel {
                                     Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
                                 ))
                             })
-                            .collect::<candle_core::Result<Vec<_>>>()
+                            .collect::<mcandle_core::Result<Vec<_>>>()
                     } else {
                         tensors
                             .par_iter()
@@ -349,7 +349,7 @@ pub trait IsqModel {
                                     Tensor::new(Cow::into_owned(layer.serialize()?), &Device::Cpu)?,
                                 ))
                             })
-                            .collect::<candle_core::Result<Vec<_>>>()
+                            .collect::<mcandle_core::Result<Vec<_>>>()
                     }
                 });
 
@@ -400,7 +400,7 @@ pub trait IsqModel {
                 info!("Serializing tokenizer to `{}`.", tokenizer_out.display());
 
                 serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
 
                 if let Some(template_filename) = template_filename {
                     info!(
@@ -409,9 +409,9 @@ pub trait IsqModel {
                     );
 
                     let template =
-                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
+                        std::fs::read(template_filename).map_err(mcandle_core::Error::msg)?;
                     std::fs::write(&tokenizer_cfg_out, template)
-                        .map_err(candle_core::Error::msg)?;
+                        .map_err(mcandle_core::Error::msg)?;
                 }
 
                 if let Some(generation_config) = generation_config {
@@ -420,8 +420,8 @@ pub trait IsqModel {
                         gen_cfg_out.display()
                     );
 
-                    let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    let cfg = std::fs::read(generation_config).map_err(mcandle_core::Error::msg)?;
+                    std::fs::write(&gen_cfg_out, cfg).map_err(mcandle_core::Error::msg)?;
                 }
 
                 if let Some(processor_config) = processor_filename {
@@ -430,8 +430,8 @@ pub trait IsqModel {
                         processor_out.display()
                     );
 
-                    let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    let cfg = std::fs::read(processor_config).map_err(mcandle_core::Error::msg)?;
+                    std::fs::write(&processor_out, cfg).map_err(mcandle_core::Error::msg)?;
                 }
 
                 if let Some(preprocessor_config) = preprocessor_filename {
@@ -441,8 +441,8 @@ pub trait IsqModel {
                     );
 
                     let cfg =
-                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                        std::fs::read(preprocessor_config).map_err(mcandle_core::Error::msg)?;
+                    std::fs::write(&preprocessor_out, cfg).map_err(mcandle_core::Error::msg)?;
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
@@ -457,7 +457,7 @@ pub trait IsqModel {
         topology: Option<&Topology>,
         silent: bool,
         artifacts: &PathBuf,
-    ) -> candle_core::Result<()> {
+    ) -> mcandle_core::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
 
@@ -491,7 +491,7 @@ pub trait IsqModel {
             devices.push(device);
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+        let artifacts = unsafe { mcandle_core::safetensors::MmapedSafetensors::new(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()
@@ -506,7 +506,7 @@ pub trait IsqModel {
             .collect::<HashMap<_, _>>();
 
         if artifact_isqs.len() != total_tensors {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Number of artifacts ({}) does not match the number of ISQ layers ({total_tensors})",
                 artifact_isqs.len(),
             );
@@ -549,7 +549,7 @@ pub trait IsqModel {
                     }
                     Ok(())
                 })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+                .collect::<mcandle_core::Result<Vec<_>>>()?;
         } else {
             (0..tensors.len())
                 .into_par_iter()
@@ -578,7 +578,7 @@ pub trait IsqModel {
                     }
                     Ok(())
                 })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+                .collect::<mcandle_core::Result<Vec<_>>>()?;
         }
 
         let delta = Instant::now().duration_since(t_start).as_secs_f32();

@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use mcandle_core::{Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -100,7 +100,7 @@ impl PagedAttention {
                 };
 
                 let att = att.broadcast_add(&mask.unsqueeze(0)?.unsqueeze(0)?)?;
-                let att = candle_nn::ops::softmax_last_dim(&att)?;
+                let att = mcandle_nn::ops::softmax_last_dim(&att)?;
                 if key_value_heads != attention_heads {
                     let value_repeat = if key_value_heads == 1 {
                         value.broadcast_as((batch_size, attention_heads, seq_len, head_size))?

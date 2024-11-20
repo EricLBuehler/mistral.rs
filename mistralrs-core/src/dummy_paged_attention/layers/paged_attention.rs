@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use mcandle_core::{Device, Result, Tensor};
 
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 

@@ -13,8 +13,8 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{RotaryEmbedding, VarBuilder};
+use mcandle_core::{DType, Device, Module, Result, Tensor};
+use mcandle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -433,7 +433,7 @@ impl DecoderLayer {
 }
 
 pub struct XLoraModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -469,7 +469,7 @@ impl XLoraModel {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -564,7 +564,7 @@ impl XLoraModel {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             embed_tokens,
@@ -858,7 +858,7 @@ impl NormalModel for XLoraModel {
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+            mcandle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
         }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

@@ -6,8 +6,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
-use candle_nn::Linear;
+use mcandle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
+use mcandle_nn::Linear;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
@@ -25,7 +25,7 @@ pub struct UnquantLinear {
 }
 
 impl QuantMethod for UnquantLinear {
-    fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
+    fn new(method: QuantMethodConfig) -> mcandle_core::Result<Self>
     where
         Self: Sized,
     {
@@ -109,7 +109,7 @@ impl QuantMethod for UnquantLinear {
         }))
     }
 
-    fn dtype_and_device(&self) -> (DType, candle_core::Device) {
+    fn dtype_and_device(&self) -> (DType, mcandle_core::Device) {
         (self.w.dtype(), self.w.device().clone())
     }
 
@@ -282,12 +282,12 @@ impl QuantizedSerde for UnquantLinear {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(mcandle_core::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Unquant as usize {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Unquant as usize
             );

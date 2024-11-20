@@ -21,11 +21,11 @@ use crate::pipeline::EitherCache;
 use crate::utils::progress::NiceProgressBar;
 use crate::DeviceMapMetadata;
 use crate::Topology;
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Embedding;
-use candle_nn::VarBuilder;
+use mcandle_core::quantized::QMatMul;
+use mcandle_core::quantized::QTensor;
+use mcandle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use mcandle_nn::Embedding;
+use mcandle_nn::VarBuilder;
 use tqdm::Iter;
 use tracing::info;
 
@@ -104,7 +104,7 @@ impl LayerWeights {
         for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
+            outputs.push(mcandle_nn::rotary_emb::rope(
                 &xs.i(i)?.unsqueeze(0)?.contiguous()?,
                 &cos,
                 &sin,
@@ -250,7 +250,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             rope_dim,
             rms_eps,
             context_window,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| mcandle_core::bail!("{err}"))?;
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 
@@ -368,7 +368,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         )?;
         if xlora_config.is_some() && output.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
@@ -390,7 +390,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+            mcandle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
         }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

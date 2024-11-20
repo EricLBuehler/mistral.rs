@@ -1,8 +1,8 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{bail, DType, Module, Result, Tensor};
-use candle_nn::{Linear, VarBuilder};
 use either::Either;
+use mcandle_core::{bail, DType, Module, Result, Tensor};
+use mcandle_nn::{Linear, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use super::{

@@ -12,8 +12,8 @@ use crate::{
     },
     utils::progress::NiceProgressBar,
 };
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{embedding, Embedding, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
@@ -244,7 +244,7 @@ impl Mlp {
         if let Some(t) = self.c_fc1.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let x = (candle_nn::ops::silu(&self.c_fc1.lora_forward(
+        let x = (mcandle_nn::ops::silu(&self.c_fc1.lora_forward(
             &x,
             scalings.clone(),
             global_scaling_weight,
@@ -617,7 +617,7 @@ impl XLoraLlama {
         )?;
         if xlora_config.is_some() && lm_head.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -821,7 +821,7 @@ impl NormalModel for XLoraLlama {
     }
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+            mcandle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
         }
         let mut sum = 0;
         for layer in self.blocks.iter_mut() {

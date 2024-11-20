@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
-use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
+use mcandle_core::{Device, Tensor};
+use mcandle_nn::VarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
@@ -46,7 +46,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> mcandle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;

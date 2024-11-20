@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result as anyhowResult;
-use candle_core::{Device, IndexOp, Result, Tensor};
+use mcandle_core::{Device, IndexOp, Result, Tensor};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use tokenizers::Tokenizer;
@@ -184,7 +184,7 @@ impl SpeculativePipeline {
         if get_mut_arcmutex!(target)
             .tokenizer()
             .as_ref()
-            .ok_or(candle_core::Error::Msg(
+            .ok_or(mcandle_core::Error::Msg(
                 "`SpeculativePipeline::new` requires the target pipeline to have a token trie"
                     .to_string(),
             ))?
@@ -192,16 +192,16 @@ impl SpeculativePipeline {
             != get_mut_arcmutex!(draft)
                 .tokenizer()
                 .as_ref()
-                .ok_or(candle_core::Error::Msg(
+                .ok_or(mcandle_core::Error::Msg(
                     "`SpeculativePipeline::new` requires the draft pipeline to have a token trie"
                         .to_string(),
                 ))?
                 .get_vocab(true)
         {
-            candle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
+            mcandle_core::bail!("Target and draft models' tokenizer vocab do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target).category() != get_mut_arcmutex!(draft).category() {
-            candle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
+            mcandle_core::bail!("Target and draft models' category do not match. This is required for speculative decoding.");
         }
         if get_mut_arcmutex!(target)
             .get_processor()
@@ -212,7 +212,7 @@ impl SpeculativePipeline {
                 .inputs_processor()
                 .get_type()
         {
-            candle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
+            mcandle_core::bail!("Target and draft models' input processors do not match. This is required for speculative decoding.");
         }
         let metadata = get_mut_arcmutex!(target).get_metadata().clone();
         let category = get_mut_arcmutex!(target).category();
@@ -346,7 +346,7 @@ impl Pipeline for SpeculativePipeline {
                         match adapter_inst {
                             AdapterInstruction::Activate(adapters) => {
                                 self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                    mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                         dyn std::error::Error,
                                     >>::as_ref(
                                         &e
@@ -361,7 +361,7 @@ impl Pipeline for SpeculativePipeline {
                         match adapter_inst {
                             AdapterInstruction::Activate(adapters) => {
                                 self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                    mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                         dyn std::error::Error,
                                     >>::as_ref(
                                         &e
@@ -379,7 +379,7 @@ impl Pipeline for SpeculativePipeline {
                         match adapter_inst {
                             AdapterInstruction::Activate(adapters) => {
                                 self.activate_adapters(adapters).map_err(|e| {
-                                    candle_core::Error::msg(<anyhow::Error as AsRef<
+                                    mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                         dyn std::error::Error,
                                     >>::as_ref(
                                         &e
@@ -433,7 +433,7 @@ impl Pipeline for SpeculativePipeline {
                     #[allow(irrefutable_let_patterns)]
                     let ForwardInputsResult::CausalGeneration { logits } = logits
                     else {
-                        candle_core::bail!(
+                        mcandle_core::bail!(
                             "Speculative decoding requires `CausalGeneration` forward results"
                         );
                     };
@@ -506,7 +506,7 @@ impl Pipeline for SpeculativePipeline {
                 #[allow(irrefutable_let_patterns)]
                 let ForwardInputsResult::CausalGeneration { logits } = logits
                 else {
-                    candle_core::bail!(
+                    mcandle_core::bail!(
                         "Speculative decoding requires `CausalGeneration` forward results"
                     );
                 };
@@ -616,22 +616,22 @@ impl Pipeline for SpeculativePipeline {
                                 .get_metadata()
                                 .tok_trie
                                 .as_ref()
-                                .ok_or(candle_core::Error::Msg(
+                                .ok_or(mcandle_core::Error::Msg(
                                     "`SpeculativePipeline::step` requires a token trie".to_string(),
                                 ))?
                                 .append_token(rx.as_mut(), accepted.token)
-                                .map_err(candle_core::Error::msg)?;
+                                .map_err(mcandle_core::Error::msg)?;
                         }
                         SequenceRecognizer::Cfg(ref mut cfg) => {
                             get_mut_arcmutex!(self.target)
                                 .get_metadata()
                                 .tok_trie
                                 .as_ref()
-                                .ok_or(candle_core::Error::Msg(
+                                .ok_or(mcandle_core::Error::Msg(
                                     "`SpeculativePipeline::step` requires a token trie".to_string(),
                                 ))?
                                 .append_token(cfg.as_mut(), accepted.token)
-                                .map_err(candle_core::Error::msg)?;
+                                .map_err(mcandle_core::Error::msg)?;
                         }
                         SequenceRecognizer::None => {}
                     }

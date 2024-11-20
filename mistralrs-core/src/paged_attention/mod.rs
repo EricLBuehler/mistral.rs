@@ -14,9 +14,9 @@ pub const _PAD_SLOT_ID: i64 = -1;
 pub use block_engine::{BlockEngine, BlockTables, LogicalTokenBlock};
 pub use block_engine_sequence::BlockEngineSequence;
 pub use cache_engine::{CacheConfig, CacheEngine};
-use candle_core::{DType, Device};
 pub use config::{ModelConfigLike, ModelConfigMetadata};
 pub use layers::PagedAttention;
+use mcandle_core::{DType, Device};
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };

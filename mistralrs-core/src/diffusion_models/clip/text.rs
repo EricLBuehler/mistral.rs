@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn as nn;
-use candle_nn::Module;
+use mcandle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use mcandle_nn as nn;
+use mcandle_nn::Module;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -39,16 +39,16 @@ pub struct ClipConfig {
 // TODO rewrite to be more similar to https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L142
 #[derive(Clone, Debug)]
 struct ClipTextEmbeddings {
-    token_embedding: candle_nn::Embedding,
-    position_embedding: candle_nn::Embedding,
+    token_embedding: mcandle_nn::Embedding,
+    position_embedding: mcandle_nn::Embedding,
     position_ids: Tensor,
 }
 
 impl ClipTextEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let token_embedding =
-            candle_nn::embedding(c.vocab_size, c.projection_dim, vs.pp("token_embedding"))?;
-        let position_embedding: nn::Embedding = candle_nn::embedding(
+            mcandle_nn::embedding(c.vocab_size, c.projection_dim, vs.pp("token_embedding"))?;
+        let position_embedding: nn::Embedding = mcandle_nn::embedding(
             c.max_position_embeddings,
             c.projection_dim,
             vs.pp("position_embedding"),
@@ -75,23 +75,23 @@ impl Module for ClipTextEmbeddings {
 
 #[derive(Clone, Debug)]
 struct ClipAttention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: candle_nn::Linear,
+    k_proj: mcandle_nn::Linear,
+    v_proj: mcandle_nn::Linear,
+    q_proj: mcandle_nn::Linear,
+    out_proj: mcandle_nn::Linear,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
 impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let projection_dim = c.projection_dim;
         let num_attention_heads = c.num_attention_heads;
-        let k_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("v_proj"))?;
-        let q_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("q_proj"))?;
-        let out_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("out_proj"))?;
+        let k_proj = mcandle_nn::linear(projection_dim, projection_dim, vs.pp("k_proj"))?;
+        let v_proj = mcandle_nn::linear(projection_dim, projection_dim, vs.pp("v_proj"))?;
+        let q_proj = mcandle_nn::linear(projection_dim, projection_dim, vs.pp("q_proj"))?;
+        let out_proj = mcandle_nn::linear(projection_dim, projection_dim, vs.pp("out_proj"))?;
         let head_dim = projection_dim / num_attention_heads;
         let scale = (head_dim as f64).powf(-0.5);
 
@@ -143,7 +143,7 @@ impl ClipAttention {
             attn_weights
         };
 
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = mcandle_nn::ops::softmax(&attn_weights, D::Minus1)?;
 
         let attn_output = attn_weights.matmul(&value_states)?.to_dtype(in_dtype)?;
         let attn_output = attn_output
@@ -156,15 +156,15 @@ impl ClipAttention {
 
 #[derive(Clone, Debug)]
 struct ClipMlp {
-    fc1: candle_nn::Linear,
-    fc2: candle_nn::Linear,
+    fc1: mcandle_nn::Linear,
+    fc2: mcandle_nn::Linear,
     activation: Activation,
 }
 
 impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
-        let fc1 = candle_nn::linear(c.projection_dim, c.intermediate_size, vs.pp("fc1"))?;
-        let fc2 = candle_nn::linear(c.intermediate_size, c.projection_dim, vs.pp("fc2"))?;
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+        let fc1 = mcandle_nn::linear(c.projection_dim, c.intermediate_size, vs.pp("fc1"))?;
+        let fc2 = mcandle_nn::linear(c.intermediate_size, c.projection_dim, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
             fc1,
@@ -184,17 +184,17 @@ impl ClipMlp {
 #[derive(Clone, Debug)]
 struct ClipEncoderLayer {
     self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
+    layer_norm1: mcandle_nn::LayerNorm,
     mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+    layer_norm2: mcandle_nn::LayerNorm,
 }
 
 impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
-        let layer_norm1 = candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm1"))?;
+        let layer_norm1 = mcandle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm1"))?;
         let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
-        let layer_norm2 = candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm2"))?;
+        let layer_norm2 = mcandle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm2"))?;
 
         Ok(ClipEncoderLayer {
             self_attn,
@@ -223,7 +223,7 @@ pub struct ClipEncoder {
 }
 
 impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    pub fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
@@ -247,15 +247,15 @@ impl ClipEncoder {
 pub struct ClipTextTransformer {
     embeddings: ClipTextEmbeddings,
     encoder: ClipEncoder,
-    final_layer_norm: candle_nn::LayerNorm,
+    final_layer_norm: mcandle_nn::LayerNorm,
 }
 
 impl ClipTextTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    pub fn new(vs: mcandle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let embeddings = ClipTextEmbeddings::new(vs.pp("embeddings"), c)?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), c)?;
         let final_layer_norm =
-            candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("final_layer_norm"))?;
+            mcandle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("final_layer_norm"))?;
         Ok(ClipTextTransformer {
             embeddings,
             encoder,

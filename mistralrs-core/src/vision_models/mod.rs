@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use candle_core::Tensor;
+use mcandle_core::Tensor;
 
 pub(crate) mod clip;
 pub(crate) mod idefics2;

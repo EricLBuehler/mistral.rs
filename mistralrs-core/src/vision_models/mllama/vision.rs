@@ -2,8 +2,8 @@
 
 use std::{ops::Mul, sync::Arc};
 
-use candle_core::{DType, Result, Tensor, D};
-use candle_nn::{
+use mcandle_core::{DType, Result, Tensor, D};
+use mcandle_nn::{
     conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
     LayerNormConfig, Linear, Module, VarBuilder,
 };
@@ -139,22 +139,22 @@ impl MLlamaVisionAttention {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            q_proj: candle_nn::linear_no_bias(
+            q_proj: mcandle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("q_proj"),
             )?,
-            k_proj: candle_nn::linear_no_bias(
+            k_proj: mcandle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("k_proj"),
             )?,
-            v_proj: candle_nn::linear_no_bias(
+            v_proj: mcandle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("v_proj"),
             )?,
-            o_proj: candle_nn::linear_no_bias(
+            o_proj: mcandle_nn::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
                 vb.pp("o_proj"),

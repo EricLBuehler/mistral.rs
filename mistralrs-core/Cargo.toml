@@ -13,11 +13,11 @@ homepage.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-candle-core.workspace = true
-candle-nn.workspace = true
+mcandle-core.workspace = true
+mcandle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb8082b", optional = true }
+mcandle-flash-attn = { workspace = true, optional = true }
 dirs = "5.0.1"
 hf-hub = "0.3.2"
 thiserror = "1.0.57"
@@ -82,12 +82,12 @@ float8.workspace = true
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/cuda"]
-cudnn = ["candle-core/cudnn"]
-metal = ["candle-core/metal", "candle-nn/metal"]
-flash-attn = ["cuda", "dep:candle-flash-attn"]
-accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
-mkl = ["candle-core/mkl", "candle-nn/mkl"]
+cuda = ["mcandle-core/cuda", "mcandle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/cuda"]
+cudnn = ["mcandle-core/cudnn"]
+metal = ["mcandle-core/metal", "mcandle-nn/metal"]
+flash-attn = ["cuda", "dep:mcandle-flash-attn"]
+accelerate = ["mcandle-core/accelerate", "mcandle-nn/accelerate"]
+mkl = ["mcandle-core/mkl", "mcandle-nn/mkl"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

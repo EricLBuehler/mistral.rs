@@ -1,8 +1,8 @@
 use std::{cmp::Ordering, fs::File};
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Module, VarBuilder};
 use hf_hub::api::sync::{Api, ApiError};
+use mcandle_core::{DType, Device, Result, Tensor, D};
+use mcandle_nn::{Module, VarBuilder};
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -88,7 +88,7 @@ fn get_t5_model(
     device: &Device,
     silent: bool,
     offloaded: bool,
-) -> candle_core::Result<T5EncoderModel> {
+) -> mcandle_core::Result<T5EncoderModel> {
     let repo = api.repo(hf_hub::Repo::with_revision(
         "EricB/t5-v1_1-xxl-enc-only".to_string(),
         hf_hub::RepoType::Model,
@@ -100,7 +100,7 @@ fn get_t5_model(
             .iter()
             .map(|f| repo.get(f))
             .collect::<std::result::Result<Vec<_>, ApiError>>()
-            .map_err(candle_core::Error::msg)?,
+            .map_err(mcandle_core::Error::msg)?,
         vec![],
         Some(dtype),
         device,
@@ -108,9 +108,9 @@ fn get_t5_model(
         None,
         |_| true,
     )?;
-    let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
+    let config_filename = repo.get("config.json").map_err(mcandle_core::Error::msg)?;
     let config = std::fs::read_to_string(config_filename)?;
-    let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
+    let config: t5::Config = serde_json::from_str(&config).map_err(mcandle_core::Error::msg)?;
 
     t5::T5EncoderModel::load(vb, &config, device, offloaded)
 }
@@ -142,7 +142,7 @@ fn get_clip_model_and_tokenizer(
 fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> Result<Tensor> {
     Tensor::new(
         tok.encode_batch(prompts, true)
-            .map_err(|e| candle_core::Error::Msg(e.to_string()))?
+            .map_err(|e| mcandle_core::Error::Msg(e.to_string()))?
             .into_iter()
             .map(|e| e.get_ids().to_vec())
             .collect::<Vec<_>>(),
@@ -194,7 +194,7 @@ impl DiffusionModel for FluxStepper {
         if !self.is_guidance {
             match t5_input_ids.dim(1)?.cmp(&256) {
                 Ordering::Greater => {
-                    candle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
+                    mcandle_core::bail!("T5 embedding length greater than 256, please shrink the prompt or use the -dev (with guidance distillation) version.")
                 }
                 Ordering::Less | Ordering::Equal => {
                     t5_input_ids =

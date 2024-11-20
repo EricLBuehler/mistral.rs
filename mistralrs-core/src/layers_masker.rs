@@ -2,14 +2,14 @@
 
 use std::ops::Add;
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use mcandle_core::{DType, Device, Result, Tensor, WithDType};
 
 use crate::pipeline::KvCache;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
 
-// https://github.com/mokeyish/candle-ext/blob/main/src/triangular.rs
+// https://github.com/mokeyish/mcandle-ext/blob/main/src/triangular.rs
 fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
     let device = xs.device();
     let (l, s) = xs.dims2()?;
@@ -23,7 +23,7 @@ fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
     xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
 }
 
-// https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
+// https://github.com/mokeyish/mcandle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
 pub fn masked_fill<D: WithDType>(xs: &Tensor, mask: &Tensor, value: D) -> Result<Tensor> {
     let on_true = Tensor::full(value, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
@@ -82,7 +82,7 @@ impl<'a> PastKvLenCache for Option<&'a [(Tensor, Tensor)]> {
         match self {
             None => Ok(0),
             Some([(k_cache_1, _), ..]) => Ok(k_cache_1.dims()[2]),
-            _ => candle_core::bail!("Unreachable"),
+            _ => mcandle_core::bail!("Unreachable"),
         }
     }
 }
@@ -122,7 +122,7 @@ impl CausalMasker {
     pub fn calculate_past_kv_len(
         &self,
         cache: &[Option<(Tensor, Tensor)>],
-    ) -> candle_core::Result<usize> {
+    ) -> mcandle_core::Result<usize> {
         let kv_cache_1 = &cache[0];
         if kv_cache_1.is_none() {
             return Ok(0);

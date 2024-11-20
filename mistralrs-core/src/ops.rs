@@ -1,4 +1,4 @@
-use candle_core::{
+use mcandle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType, D,
 };
@@ -11,9 +11,9 @@ use std::{
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
-#[cfg(feature = "cuda")]
 use half::{bf16, f16};
+#[cfg(feature = "cuda")]
+use mcandle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
 pub enum BitWiseOpEnum {
@@ -322,9 +322,9 @@ impl BitWiseOp for Tensor {
     #[cfg(feature = "metal")]
     fn bitwise_and(&self, rhs: &Tensor) -> Result<Tensor> {
         let original_device = rhs.device();
-        self.to_device(&candle_core::Device::Cpu)?
+        self.to_device(&mcandle_core::Device::Cpu)?
             .apply_op2_no_bwd(
-                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &rhs.to_device(&mcandle_core::Device::Cpu)?,
                 &BitWise::new(BitWiseOpEnum::And),
             )?
             .to_device(original_device)
@@ -337,9 +337,9 @@ impl BitWiseOp for Tensor {
     #[cfg(feature = "metal")]
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
         let original_device = rhs.device();
-        self.to_device(&candle_core::Device::Cpu)?
+        self.to_device(&mcandle_core::Device::Cpu)?
             .apply_op2_no_bwd(
-                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &rhs.to_device(&mcandle_core::Device::Cpu)?,
                 &BitWise::new(BitWiseOpEnum::Or),
             )?
             .to_device(original_device)
@@ -352,9 +352,9 @@ impl BitWiseOp for Tensor {
     #[cfg(feature = "metal")]
     fn bitwise_xor(&self, rhs: &Tensor) -> Result<Tensor> {
         let original_device = rhs.device();
-        self.to_device(&candle_core::Device::Cpu)?
+        self.to_device(&mcandle_core::Device::Cpu)?
             .apply_op2_no_bwd(
-                &rhs.to_device(&candle_core::Device::Cpu)?,
+                &rhs.to_device(&mcandle_core::Device::Cpu)?,
                 &BitWise::new(BitWiseOpEnum::Xor),
             )?
             .to_device(original_device)
@@ -389,26 +389,26 @@ impl NonZero {
 }
 
 #[cfg(feature = "cuda")]
-fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) -> u32 {
+fn count_nonzero_cuda(dtype: mcandle_core::DType, d_in: *const c_void, n: u32) -> u32 {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n),
-            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n),
-            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
-            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
-            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
-            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
-            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
-            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
-            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n),
-            candle_core::DType::F8E4M3 => todo!(),
+            mcandle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n),
+            mcandle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n),
+            mcandle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
+            mcandle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
+            mcandle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
+            mcandle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
+            mcandle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
+            mcandle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
+            mcandle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n),
+            mcandle_core::DType::F8E4M3 => todo!(),
         }
     }
 }
 
 #[cfg(feature = "cuda")]
 fn nonzero_cuda(
-    dtype: candle_core::DType,
+    dtype: mcandle_core::DType,
     d_in: *const c_void,
     n: u32,
     num_nonzero: u32,
@@ -418,32 +418,32 @@ fn nonzero_cuda(
 ) {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out),
-            candle_core::DType::U32 => {
+            mcandle_core::DType::U8 => ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out),
+            mcandle_core::DType::U32 => {
                 ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::I64 => {
+            mcandle_core::DType::I64 => {
                 ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::I32 => {
+            mcandle_core::DType::I32 => {
                 ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::I16 => {
+            mcandle_core::DType::I16 => {
                 ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::BF16 => {
+            mcandle_core::DType::BF16 => {
                 ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::F16 => {
+            mcandle_core::DType::F16 => {
                 ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::F32 => {
+            mcandle_core::DType::F32 => {
                 ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::F64 => {
+            mcandle_core::DType::F64 => {
                 ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out)
             }
-            candle_core::DType::F8E4M3 => todo!(),
+            mcandle_core::DType::F8E4M3 => todo!(),
         }
     }
 }
@@ -458,16 +458,16 @@ impl CustomOp1 for NonZero {
             return Err(Error::RequiresContiguous { op: "nonzero" });
         }
         let result = match storage {
-            candle_core::CpuStorage::U8(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::U32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::I64(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F16(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F32(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F64(vs) => self.nonzero(vs, layout),
-            candle_core::CpuStorage::F8E4M3(_vs) => todo!(),
+            mcandle_core::CpuStorage::U8(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::U32(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::I16(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::I32(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::I64(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::F16(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::F32(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            mcandle_core::CpuStorage::F8E4M3(_vs) => todo!(),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
@@ -478,24 +478,24 @@ impl CustomOp1 for NonZero {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        storage: &candle_core::CudaStorage,
+        storage: &mcandle_core::CudaStorage,
         layout: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         if !layout.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(mcandle_core::Error::RequiresContiguous { op: "nonzero" });
         }
         let dev = storage.device().clone();
         let d_in = match storage.dtype() {
-            candle_core::DType::U8 => *storage.as_cuda_slice::<u8>()?.device_ptr(),
-            candle_core::DType::U32 => *storage.as_cuda_slice::<u32>()?.device_ptr(),
-            candle_core::DType::I32 => *storage.as_cuda_slice::<i32>()?.device_ptr(),
-            candle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
-            candle_core::DType::I64 => *storage.as_cuda_slice::<i64>()?.device_ptr(),
-            candle_core::DType::BF16 => *storage.as_cuda_slice::<bf16>()?.device_ptr(),
-            candle_core::DType::F16 => *storage.as_cuda_slice::<f16>()?.device_ptr(),
-            candle_core::DType::F32 => *storage.as_cuda_slice::<f32>()?.device_ptr(),
-            candle_core::DType::F64 => *storage.as_cuda_slice::<f64>()?.device_ptr(),
-            candle_core::DType::F8E4M3 => todo!(),
+            mcandle_core::DType::U8 => *storage.as_cuda_slice::<u8>()?.device_ptr(),
+            mcandle_core::DType::U32 => *storage.as_cuda_slice::<u32>()?.device_ptr(),
+            mcandle_core::DType::I32 => *storage.as_cuda_slice::<i32>()?.device_ptr(),
+            mcandle_core::DType::I16 => *storage.as_cuda_slice::<i16>()?.device_ptr(),
+            mcandle_core::DType::I64 => *storage.as_cuda_slice::<i64>()?.device_ptr(),
+            mcandle_core::DType::BF16 => *storage.as_cuda_slice::<bf16>()?.device_ptr(),
+            mcandle_core::DType::F16 => *storage.as_cuda_slice::<f16>()?.device_ptr(),
+            mcandle_core::DType::F32 => *storage.as_cuda_slice::<f32>()?.device_ptr(),
+            mcandle_core::DType::F64 => *storage.as_cuda_slice::<f64>()?.device_ptr(),
+            mcandle_core::DType::F8E4M3 => todo!(),
         } as *const c_void;
         let n = layout.shape().elem_count();
         let num_nonzero = count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?);
@@ -521,7 +521,7 @@ impl CustomOp1 for NonZero {
             d_out_ptr,
         );
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
-        let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
+        let dst = mcandle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
         Ok((dst, shape))
     }
 }
@@ -534,17 +534,17 @@ impl NonZeroOp for Tensor {
     #[cfg(feature = "metal")]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(mcandle_core::Error::RequiresContiguous { op: "nonzero" });
         }
         let original_device = self.device();
-        self.to_device(&candle_core::Device::Cpu)?
+        self.to_device(&mcandle_core::Device::Cpu)?
             .apply_op1_no_bwd(&NonZero {})?
             .to_device(original_device)
     }
     #[cfg(not(feature = "metal"))]
     fn nonzero(&self) -> Result<Tensor> {
         if !self.is_contiguous() {
-            return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
+            return Err(mcandle_core::Error::RequiresContiguous { op: "nonzero" });
         }
         self.apply_op1_no_bwd(&NonZero {})
     }
@@ -596,7 +596,7 @@ impl RepeatInterleaveOp for Tensor {
     fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor> {
         let xs = self.flatten_all()?;
         if repeats.len() != xs.dim(0)? {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "repeats ({}) must match flattened self length ({})",
                 repeats.len(),
                 xs.dim(0)?
@@ -634,8 +634,8 @@ mod tests {
     #[test]
     fn test_topk() {
         use crate::ops::{TopKLastDimOp, TopKOutput};
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         //  [[1, 3, 5],
         //   [2, 4, 6]]
         let x = Tensor::arange(1f32, 7f32, &device)
@@ -664,8 +664,8 @@ mod tests {
     #[test]
     fn test_nonzero_cpu() {
         use crate::ops::NonZeroOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a = Tensor::from_vec(
             vec![1f32, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
             &[2, 4],
@@ -680,8 +680,8 @@ mod tests {
     #[test]
     fn test_nonzero_cuda() {
         use crate::ops::NonZeroOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a = Tensor::from_vec(
             vec![1f32, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
             &[2, 4],
@@ -695,8 +695,8 @@ mod tests {
     #[test]
     fn test_bitwise_and_cpu() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b =
@@ -709,8 +709,8 @@ mod tests {
     #[test]
     fn test_bitwise_and_cuda() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b =
@@ -722,8 +722,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cpu() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -735,8 +735,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cuda() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -747,8 +747,8 @@ mod tests {
     #[test]
     fn test_bitwise_xor_cpu() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -760,8 +760,8 @@ mod tests {
     #[test]
     fn test_bitwise_xor_cuda() {
         use crate::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn test_nonzero_and() {
         use crate::ops::{BitWiseOp, NonZeroOp};
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
 
         let input1 = Tensor::from_vec(
             vec![1i64, 2, 3, -1, -1, -1, -1, 4, 5, 7],
@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn nonzero_and_cuda() {
         use crate::ops::{BitWiseOp, NonZeroOp};
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
 
         let device = Device::new_cuda(0).unwrap();
         let input1 =
@@ -852,9 +852,9 @@ mod tests {
     }
 
     #[test]
-    fn test_repeat_interleave() -> candle_core::Result<()> {
+    fn test_repeat_interleave() -> mcandle_core::Result<()> {
         use crate::ops::RepeatInterleaveOp;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
 
         let input = Tensor::new(
             vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
@@ -874,9 +874,9 @@ mod tests {
     }
 
     #[test]
-    fn test_repeat_interleave_flat() -> candle_core::Result<()> {
+    fn test_repeat_interleave_flat() -> mcandle_core::Result<()> {
         use crate::ops::RepeatInterleaveOp;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
 
         let input = Tensor::new(vec![1., 2., 3., 4.], &Device::Cpu)?;
 

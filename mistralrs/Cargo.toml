@@ -15,7 +15,7 @@ homepage.workspace = true
 mistralrs-core = { version = "0.3.2", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
-candle-core.workspace = true
+mcandle-core.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 image.workspace = true

@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Error, Result, Tensor, D};
+use mcandle_core::{Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -153,7 +153,7 @@ impl DrySamplingParamsInner {
 /// ```rust
 /// use std::{sync::Arc, ops::Mul};
 /// use mistralrs_core::CustomLogitsProcessor;
-/// use candle_core::{Result, Tensor};
+/// use mcandle_core::{Result, Tensor};
 ///
 /// struct ThresholdLogitsProcessor;
 /// impl CustomLogitsProcessor for ThresholdLogitsProcessor {
@@ -526,7 +526,7 @@ impl Sampler {
 
     fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
         if context.is_empty() {
-            candle_core::bail!("Penalty context is empty, this should not happen.");
+            mcandle_core::bail!("Penalty context is empty, this should not happen.");
         }
 
         // Dry penalty
@@ -661,7 +661,7 @@ impl Sampler {
                 )?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
-                    let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+                    let probs = mcandle_nn::ops::softmax_last_dim(&logits)?;
 
                     self.sample_speculative_top_kp_min_p(
                         probs,
@@ -677,7 +677,7 @@ impl Sampler {
                 None => self.sample_argmax(logits, return_logprobs)?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
-                    let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+                    let probs = mcandle_nn::ops::softmax_last_dim(&logits)?;
                     let mut probs: Vec<f32> = probs.to_vec1()?;
 
                     self.sample_top_kp_min_p(
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn test_argmax() {
         use super::Sampler;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;
@@ -747,7 +747,7 @@ mod tests {
     #[test]
     fn test_gumbel_speculative() {
         use super::Sampler;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
         use rand::SeedableRng;
         use rand_isaac::Isaac64Rng;
         use std::sync::Arc;

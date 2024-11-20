@@ -6,8 +6,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
+use mcandle_core::{Device, Tensor};
+use mcandle_nn::VarBuilder;
 
 use hf_hub::api::sync::ApiRepo;
 #[cfg(feature = "pyo3_macros")]
@@ -40,7 +40,7 @@ pub trait DiffusionModel {
         &mut self,
         prompts: Vec<String>,
         params: DiffusionGenerationParams,
-    ) -> candle_core::Result<Tensor>;
+    ) -> mcandle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn max_seq_len(&self) -> usize;
 }

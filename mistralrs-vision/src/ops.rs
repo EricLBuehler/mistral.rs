@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use mcandle_core::{Result, Tensor};
 
 /// Pad an image of shape (c, h, w) to (c, max_h, max_w) by padding with zeros on the right and bottom.
 pub fn pad(image: &Tensor, max_h: usize, max_w: usize) -> Result<Tensor> {
@@ -15,7 +15,7 @@ pub fn make_pixel_mask(image: &Tensor, h: usize, w: usize) -> Result<Tensor> {
     let (_c, max_h, max_w) = image.dims3()?;
     let mask = Tensor::ones((h, w), image.dtype(), image.device())?;
     let zeros = Tensor::zeros((max_h, max_w), image.dtype(), image.device())?;
-    // TODO(EricLBuehler): https://github.com/huggingface/candle/pull/2223 will make this nicer
+    // TODO(EricLBuehler): https://github.com/huggingface/mcandle/pull/2223 will make this nicer
     zeros.slice_assign(&[&(..h), &(..w)], &mask)
 }
 

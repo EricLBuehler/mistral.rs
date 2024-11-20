@@ -1,9 +1,9 @@
-// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
+// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/mcandle/src/layers/cublaslt.rs
 
 #![allow(unused_variables, unused_imports, dead_code)]
 
-use candle_core::{Device, Result, Tensor};
-use candle_nn::Activation as CandleActivation;
+use mcandle_core::{Device, Result, Tensor};
+use mcandle_nn::Activation as CandleActivation;
 use once_cell::sync::Lazy;
 use std::sync::{Mutex, Once};
 
@@ -33,7 +33,7 @@ pub fn setup_cublas_lt_wrapper() {
                 // Check if we can call the driver
                 // Then check if we can create a device
                 // Then check that the device is CUDA
-                use candle_core::cuda_backend::cudarc::driver;
+                use mcandle_core::cuda_backend::cudarc::driver;
                 CUBLASLT = driver::result::init()
                     .ok()
                     .and_then(|_| Device::cuda_if_available(0).ok())
@@ -88,13 +88,13 @@ impl CublasLtWrapper {
             )?;
 
             if Some(CandleActivation::Swiglu) == act {
-                result = candle_nn::ops::swiglu(&result)?;
+                result = mcandle_nn::ops::swiglu(&result)?;
             }
             Ok(result)
         }
         #[cfg(not(feature = "cuda"))]
         {
-            candle_core::bail!("`cuda` feature is not enabled")
+            mcandle_core::bail!("`cuda` feature is not enabled")
         }
     }
 }

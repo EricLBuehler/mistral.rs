@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use mcandle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use mcandle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
@@ -23,7 +23,7 @@ struct PatchEmbed {
 impl PatchEmbed {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         if cfg.temporal_patch_size != 2 {
-            candle_core::bail!("Only support temporal patch size of 2");
+            mcandle_core::bail!("Only support temporal patch size of 2");
         }
         Ok(Self {
             proj: Conv3dNoBias::new(
@@ -143,7 +143,7 @@ impl VisionAttention {
                 Some(m) => att.broadcast_add(m)?,
                 None => att,
             };
-            att = candle_nn::ops::softmax_last_dim(&att)?;
+            att = mcandle_nn::ops::softmax_last_dim(&att)?;
             att.matmul(&v)?
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
@@ -208,8 +208,8 @@ impl PatchMerger {
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_size = context_dim * spatial_merge_size.pow(2);
-        let mlp0 = candle_nn::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;
-        let mlp2 = candle_nn::linear(hidden_size, dim, vb.pp("mlp.2"))?;
+        let mlp0 = mcandle_nn::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;
+        let mlp2 = mcandle_nn::linear(hidden_size, dim, vb.pp("mlp.2"))?;
         Ok(Self {
             ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
             mlp0,

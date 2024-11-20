@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
+use mcandle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use mcandle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
     LayerNorm, Module, VarBuilder,
 };
@@ -416,7 +416,7 @@ impl Attention {
             attn_weights,
             &self.neg_inf,
         )?;
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = mcandle_nn::ops::softmax_last_dim(&attn_weights)?;
         let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
@@ -773,7 +773,7 @@ impl PerceiverAttention {
             attn_weights,
             &self.neg_inf,
         )?;
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = mcandle_nn::ops::softmax_last_dim(&attn_weights)?;
         let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
@@ -1157,7 +1157,7 @@ impl Idefics2 {
                     &image_hidden_states,
                 )?
             } else {
-                candle_core::bail!("Pixel values were specified for a non-prompt.")
+                mcandle_core::bail!("Pixel values were specified for a non-prompt.")
             }
         } else {
             self.text_model.get_input_embeddings(input_ids)?
@@ -1249,7 +1249,7 @@ impl VisionModel for Idefics2 {
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> mcandle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Option<Tensor>`");

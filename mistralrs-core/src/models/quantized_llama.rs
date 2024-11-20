@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use candle_core::quantized::ggml_file;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding};
+use mcandle_core::quantized::ggml_file;
+use mcandle_core::quantized::QTensor;
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{Embedding, Module, RotaryEmbedding};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
@@ -37,7 +37,7 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
         let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
-        let y = &(candle_nn::ops::silu(&w1)? * w3)?;
+        let y = &(mcandle_nn::ops::silu(&w1)? * w3)?;
         MatMul.qmethod_matmul(y, &*self.feed_forward_w2)
     }
 }
@@ -62,7 +62,7 @@ impl MlpOrMoe {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
                 let router_logits = MatMul.qmethod_matmul(&xs, &**feed_forward_gate_inp)?;
-                let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+                let routing_weights = mcandle_nn::ops::softmax_last_dim(&router_logits)?;
 
                 // In order to extract topk, we extract the data from the tensor and manipulate it
                 // directly. Maybe we will want to use some custom ops instead at some point.
@@ -424,7 +424,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_freq_base,
             key_length,
             value_length,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| mcandle_core::bail!("{err}"))?;
 
         let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = qtok_embeddings.dequantize(device)?;
@@ -440,7 +440,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
 
         let head_dim = key_length;
         if key_length != value_length {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Expected key_length == value_length, got {key_length} != {value_length}"
             );
         }

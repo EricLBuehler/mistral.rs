@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{Result, Tensor, D};
-use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
+use mcandle_core::{Result, Tensor, D};
+use mcandle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -20,7 +20,7 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
+    mcandle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ impl AttnBlock {
     }
 }
 
-impl candle_core::Module for AttnBlock {
+impl mcandle_core::Module for AttnBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let init_xs = xs;
         let xs = xs.apply(&self.norm)?;
@@ -77,7 +77,7 @@ struct ResnetBlock {
 
 impl ResnetBlock {
     fn new(in_c: usize, out_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = mcandle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -106,14 +106,14 @@ impl ResnetBlock {
     }
 }
 
-impl candle_core::Module for ResnetBlock {
+impl mcandle_core::Module for ResnetBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let h = xs
             .apply(&self.norm1)?
-            .apply(&candle_nn::Activation::Swish)?
+            .apply(&mcandle_nn::Activation::Swish)?
             .apply(&self.conv1)?
             .apply(&self.norm2)?
-            .apply(&candle_nn::Activation::Swish)?
+            .apply(&mcandle_nn::Activation::Swish)?
             .apply(&self.conv2)?;
         match self.nin_shortcut.as_ref() {
             None => xs + h,
@@ -129,7 +129,7 @@ struct Downsample {
 
 impl Downsample {
     fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = mcandle_nn::Conv2dConfig {
             stride: 2,
             ..Default::default()
         };
@@ -138,7 +138,7 @@ impl Downsample {
     }
 }
 
-impl candle_core::Module for Downsample {
+impl mcandle_core::Module for Downsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.pad_with_zeros(D::Minus1, 0, 1)?;
         let xs = xs.pad_with_zeros(D::Minus2, 0, 1)?;
@@ -153,7 +153,7 @@ struct Upsample {
 
 impl Upsample {
     fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = mcandle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -162,7 +162,7 @@ impl Upsample {
     }
 }
 
-impl candle_core::Module for Upsample {
+impl mcandle_core::Module for Upsample {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_, _, h, w) = xs.dims4()?;
         xs.upsample_nearest2d(h * 2, w * 2)?.apply(&self.conv)
@@ -188,7 +188,7 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = mcandle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -245,7 +245,7 @@ impl Encoder {
     }
 }
 
-impl candle_nn::Module for Encoder {
+impl mcandle_nn::Module for Encoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut h = xs.apply(&self.conv_in)?;
         for block in self.down.iter() {
@@ -260,7 +260,7 @@ impl candle_nn::Module for Encoder {
             .apply(&self.mid_attn_1)?
             .apply(&self.mid_block_2)?
             .apply(&self.norm_out)?
-            .apply(&candle_nn::Activation::Swish)?
+            .apply(&mcandle_nn::Activation::Swish)?
             .apply(&self.conv_out)
     }
 }
@@ -284,7 +284,7 @@ pub struct Decoder {
 
 impl Decoder {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let conv_cfg = candle_nn::Conv2dConfig {
+        let conv_cfg = mcandle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
@@ -331,7 +331,7 @@ impl Decoder {
     }
 }
 
-impl candle_nn::Module for Decoder {
+impl mcandle_nn::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let h = xs.apply(&self.conv_in)?;
         let mut h = h
@@ -347,7 +347,7 @@ impl candle_nn::Module for Decoder {
             }
         }
         h.apply(&self.norm_out)?
-            .apply(&candle_nn::Activation::Swish)?
+            .apply(&mcandle_nn::Activation::Swish)?
             .apply(&self.conv_out)
     }
 }
@@ -364,7 +364,7 @@ impl DiagonalGaussian {
     }
 }
 
-impl candle_nn::Module for DiagonalGaussian {
+impl mcandle_nn::Module for DiagonalGaussian {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let chunks = xs.chunk(2, self.chunk_dim)?;
         if self.sample {
@@ -409,7 +409,7 @@ impl AutoEncoder {
     }
 }
 
-impl candle_core::Module for AutoEncoder {
+impl mcandle_core::Module for AutoEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.decode(&self.encode(xs)?)
     }

@@ -1,0 +1,15 @@
+[package]
+name = "mcandle-kernels"
+version = "0.3.2"
+edition = "2021"
+
+description = "CUDA kernels for Candle"
+repository = "https://github.com/huggingface/mcandle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[build-dependencies]
+bindgen_cuda = "0.1.1"

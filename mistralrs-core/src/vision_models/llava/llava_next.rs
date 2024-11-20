@@ -3,8 +3,8 @@
     clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
-use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, Activation, Linear, VarBuilder};
+use mcandle_core::{bail, DType, Device, IndexOp, Result, Tensor};
+use mcandle_nn::{linear, Activation, Linear, VarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
@@ -383,7 +383,7 @@ impl VisionModel for Model {
         model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
-    ) -> candle_core::Result<Tensor> {
+    ) -> mcandle_core::Result<Tensor> {
         let LLaVANextVisionSpecificArgs {
             image_sizes,
             num_image_tokens,

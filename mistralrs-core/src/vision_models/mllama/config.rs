@@ -1,5 +1,5 @@
-use candle_core::{Result, Tensor};
-use candle_nn::Module;
+use mcandle_core::{Result, Tensor};
+use mcandle_nn::Module;
 use mistralrs_quant::QuantizedConfig;
 
 use crate::serde_default_fn;
@@ -18,7 +18,7 @@ pub(super) enum VisionActivation {
 impl Module for VisionActivation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+            Self::QuickGelu => xs * mcandle_nn::ops::sigmoid(&(xs * 1.702f64)?),
             Self::Gelu => xs.gelu_erf(),
             // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
             Self::NewGelu => xs.gelu(),
@@ -93,7 +93,7 @@ pub struct MLlamaTextConfig {
     pub(crate) rope_scaling: Option<MLlamaRopeScaling>,
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
-    pub(crate) hidden_act: candle_nn::Activation,
+    pub(crate) hidden_act: mcandle_nn::Activation,
     pub(crate) num_hidden_layers: usize,
     pub(crate) num_attention_heads: usize,
     pub(crate) num_key_value_heads: usize,

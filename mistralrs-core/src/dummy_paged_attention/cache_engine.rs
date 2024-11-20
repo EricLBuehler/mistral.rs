@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use candle_core::{DType, Device, Result, Tensor};
+use mcandle_core::{DType, Device, Result, Tensor};
 
 use super::config::ModelConfigLike;
 

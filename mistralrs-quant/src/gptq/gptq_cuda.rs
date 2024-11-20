@@ -4,7 +4,9 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
-use candle_core::{
+use half::f16;
+use lazy_static::lazy_static;
+use mcandle_core::{
     cuda::{
         cudarc::{
             cublas::{result::hgemm, sys::cublasOperation_t},
@@ -14,9 +16,7 @@ use candle_core::{
     },
     from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-use candle_nn::VarBuilder;
-use half::f16;
-use lazy_static::lazy_static;
+use mcandle_nn::VarBuilder;
 
 use crate::{
     gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
@@ -65,7 +65,7 @@ impl GptqLayer {
         use_exllama: bool,
     ) -> Result<Tensor> {
         if !a.is_contiguous() {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Expected `a` to be contiguous, got strides {:?}",
                 a.layout().stride()
             )
@@ -278,7 +278,7 @@ impl QuantMethod for GptqLayer {
         );
         let reshaped_a = a.reshape(((), a.dim(D::Minus1)?))?;
         if !reshaped_a.device().is_cuda() {
-            candle_core::bail!("Expected CUDA input to GptqLayer");
+            mcandle_core::bail!("Expected CUDA input to GptqLayer");
         }
 
         let out = match (
@@ -317,7 +317,7 @@ impl QuantMethod for GptqLayer {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("GPTQ quantization does not support adding weight delta.")
+        mcandle_core::bail!("GPTQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -334,7 +334,7 @@ impl QuantMethod for GptqLayer {
         _device: Device,
         _n_quantized: &AtomicUsize,
     ) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("GPTQ quantization does not support ISQ.")
+        mcandle_core::bail!("GPTQ quantization does not support ISQ.")
     }
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {

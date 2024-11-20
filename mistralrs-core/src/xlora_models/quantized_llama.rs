@@ -10,10 +10,10 @@ use crate::lora::{
 };
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::utils::progress::NiceProgressBar;
-use candle_core::quantized::ggml_file;
-use candle_core::quantized::QMatMul;
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
+use mcandle_core::quantized::ggml_file;
+use mcandle_core::quantized::QMatMul;
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -68,7 +68,7 @@ impl Mlp {
             is_scaling_pass,
         )?;
         self.feed_forward_w2.lora_forward(
-            &(candle_nn::ops::silu(&w1)? * w3)?,
+            &(mcandle_nn::ops::silu(&w1)? * w3)?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -103,7 +103,7 @@ impl MlpOrMoe {
                 let (b_size, seq_len, hidden_dim) = xs.dims3()?;
                 let xs = xs.reshape(((), hidden_dim))?;
                 let router_logits = MatMul.qmatmul(&xs, feed_forward_gate_inp)?;
-                let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+                let routing_weights = mcandle_nn::ops::softmax_last_dim(&router_logits)?;
 
                 // In order to extract topk, we extract the data from the tensor and manipulate it
                 // directly. Maybe we will want to use some custom ops instead at some point.
@@ -461,7 +461,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
         )?;
         if xlora_config.is_some() && output.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
@@ -513,11 +513,11 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             rope_freq_base,
             key_length,
             value_length,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| mcandle_core::bail!("{err}"))?;
 
         let head_dim = key_length;
         if key_length != value_length {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Expected key_length == value_length, got {key_length} != {value_length}"
             );
         }
@@ -759,7 +759,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         )?;
         if xlora_config.is_some() && output.is_lora() {
             // This is why we can pass dummy values (..., None, 1.0, None)?
-            candle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
+            mcandle_core::bail!("Got an adapter `lm_head` layer, this is unsupported with X-LoRA.");
         }
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
@@ -781,7 +781,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 impl ModelWeights {
     pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
         if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
+            mcandle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
         }
         let mut sum = 0;
         for layer in self.layers.iter_mut() {

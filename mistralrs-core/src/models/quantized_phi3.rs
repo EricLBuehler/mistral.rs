@@ -14,10 +14,10 @@ use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
 use crate::{DeviceMapMetadata, Topology};
-use candle_core::quantized::QMatMul;
-use candle_core::quantized::QTensor;
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::Embedding;
+use mcandle_core::quantized::QMatMul;
+use mcandle_core::quantized::QTensor;
+use mcandle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use mcandle_nn::Embedding;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 #[derive(Clone)]
@@ -66,7 +66,7 @@ impl LayerWeights {
         for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = self.cos.narrow(0, *offset, seq_len)?;
             let sin = self.sin.narrow(0, *offset, seq_len)?;
-            outputs.push(candle_nn::rotary_emb::rope(
+            outputs.push(mcandle_nn::rotary_emb::rope(
                 &xs.i(i)?.unsqueeze(0)?.contiguous()?,
                 &cos,
                 &sin,
@@ -249,7 +249,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             rope_dim,
             rms_eps,
             context_window,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
+        } = PropsGGUF::try_from(metadata).or_else(|err| mcandle_core::bail!("{err}"))?;
 
         let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
 

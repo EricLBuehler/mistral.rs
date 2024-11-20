@@ -6,7 +6,7 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
 };
 
-use candle_core::{Device, Result, Tensor};
+use mcandle_core::{Device, Result, Tensor};
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
@@ -37,7 +37,7 @@ fn flash_attn(
         let window_size_right = if causal { Some(0) } else { None };
 
         //dbg!(&qshape);
-        candle_flash_attn::flash_attn_varlen_windowed_softcap(
+        mcandle_flash_attn::flash_attn_varlen_windowed_softcap(
             &q,
             &k,
             &v,
@@ -52,7 +52,7 @@ fn flash_attn(
         )?
         .reshape(qshape)
     } else {
-        candle_flash_attn::flash_attn_softcap(
+        mcandle_flash_attn::flash_attn_softcap(
             q,
             k,
             v,
@@ -100,7 +100,8 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        let att = candle_nn::ops::attn_softmax_last_dim(&att, mask, 1. / (head_dim as f32).sqrt())?;
+        let att =
+            mcandle_nn::ops::attn_softmax_last_dim(&att, mask, 1. / (head_dim as f32).sqrt())?;
         MatMul.matmul(&att, v)
     } else {
         let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
@@ -114,7 +115,7 @@ fn naive_sdpa(
             Some(m) => att.broadcast_add(m)?,
             None => att,
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        let att = mcandle_nn::ops::softmax_last_dim(&att)?;
         MatMul.matmul(&att, v)
     }
 }
@@ -161,7 +162,7 @@ impl Sdpa {
         }
 
         if q.device().is_metal() && seq_len == 1 {
-            return candle_nn::ops::sdpa(
+            return mcandle_nn::ops::sdpa(
                 q,
                 k,
                 v,
@@ -203,7 +204,7 @@ impl Sdpa {
                     if let Some(softcap) = sdpa_params.softcap {
                         attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                     }
-                    let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                    let attention_probs = mcandle_nn::ops::softmax_last_dim(&attention_scores)?;
 
                     let context_layer = cublaslt.batch_matmul(
                         &v.t()?.contiguous()?,
@@ -221,7 +222,7 @@ impl Sdpa {
                 }
                 #[cfg(not(feature = "cuda"))]
                 {
-                    candle_core::bail!("`cuda` feature is not enabled")
+                    mcandle_core::bail!("`cuda` feature is not enabled")
                 }
             } else {
                 // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt

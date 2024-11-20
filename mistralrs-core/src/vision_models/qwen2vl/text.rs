@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
@@ -292,12 +292,12 @@ impl Qwen2VLTextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
+            mcandle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -356,7 +356,7 @@ impl Qwen2VLTextModel {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(
                         embed_tokens.embeddings(),
                         normal_loading_metadata.loading_isq,

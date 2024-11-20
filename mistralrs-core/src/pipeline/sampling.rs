@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Result, Tensor};
+use mcandle_core::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
@@ -26,7 +26,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         this.get_metadata()
             .tok_trie
             .as_ref()
-            .ok_or(candle_core::Error::Msg(
+            .ok_or(mcandle_core::Error::Msg(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
                     .to_string(),
             ))?
@@ -125,7 +125,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         token: crate::handle_seq_error_ok!(
                             tokenizer
                             .as_ref()
-                            .ok_or(candle_core::Error::Msg(
+                            .ok_or(mcandle_core::Error::Msg(
                                 "`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
                                     .to_string(),
                             ))?.decode(&[logprob.token], false),
@@ -160,7 +160,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     txt[..completion_bytes_pos].trim_start().to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage => {
-                    candle_core::bail!("Stop reason was `GeneratedImage`.")
+                    mcandle_core::bail!("Stop reason was `GeneratedImage`.")
                 }
             };
 
@@ -168,7 +168,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let mut tool_calls = Vec::new();
                 let mut text_new = Some(text.clone());
                 if let Some(ref matcher) = seq.tools {
-                    let calls = matcher.get_call(&text).map_err(candle_core::Error::msg)?;
+                    let calls = matcher.get_call(&text).map_err(mcandle_core::Error::msg)?;
                     if !calls.is_empty() {
                         text_new = None;
                     }
@@ -216,7 +216,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         seq.responder(),
                     )
                     .await
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
             } else {
                 group
                     .maybe_send_completion_done_response(
@@ -232,7 +232,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         seq.responder(),
                     )
                     .await
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
             }
         }
         this.reset_non_granular_state();
@@ -339,7 +339,7 @@ pub async fn sample_sequence(
                 -f32::INFINITY;
                 seq.tok_trie
                     .as_ref()
-                    .ok_or(candle_core::Error::Msg(
+                    .ok_or(mcandle_core::Error::Msg(
                         "TokTrie must be present in pipeline if bias is calculated".to_string()
                     ))?
                     .vocab_size()
@@ -381,14 +381,14 @@ pub async fn sample_sequence(
                     .as_ref()
                     .unwrap()
                     .append_token(rx.as_mut(), second_logprobs_response.token)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
             }
             SequenceRecognizer::Cfg(ref mut cfg) => {
                 seq.tok_trie
                     .as_ref()
                     .unwrap()
                     .append_token(cfg.as_mut(), second_logprobs_response.token)
-                    .map_err(candle_core::Error::msg)?;
+                    .map_err(mcandle_core::Error::msg)?;
             }
             SequenceRecognizer::None => {}
         }

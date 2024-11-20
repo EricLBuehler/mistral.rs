@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::{utils::debug::DeviceRepr, Topology, TryIntoDType};
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::VarBuilder;
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::VarBuilder;
 use serde::Deserialize;
 use tracing::info;
 
@@ -90,7 +90,7 @@ impl DeviceMapMetadata {
             .host_layers
             .unwrap_or(model_layers.saturating_sub(n_device_layers));
         if n_device_layers + n_host_layers != model_layers {
-            candle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
+            mcandle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
         }
         info!("Model has {model_layers} repeating layers.");
 
@@ -203,7 +203,7 @@ impl DeviceMapper for LayerDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
-            .map_err(candle_core::Error::msg)
+            .map_err(mcandle_core::Error::msg)
     }
 }
 
@@ -251,6 +251,6 @@ impl DeviceMapper for DummyDeviceMapper {
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
         dtype
             .try_into_dtype(&[&self.nm_device])
-            .map_err(candle_core::Error::msg)
+            .map_err(mcandle_core::Error::msg)
     }
 }

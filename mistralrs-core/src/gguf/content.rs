@@ -1,14 +1,14 @@
 use std::{collections::HashMap, fs};
 
 use anyhow::Context;
-use candle_core::{
+use indexmap::IndexMap;
+use mcandle_core::{
     quantized::{
         gguf_file::{self, Value},
         QTensor,
     },
     Device, Result,
 };
-use indexmap::IndexMap;
 use tracing::info;
 
 use crate::DEBUG;
@@ -68,11 +68,11 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                 accum
             });
         if n_splits.len() > 1 {
-            candle_core::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
+            mcandle_core::bail!("GGUF files have differing `split.count` values: {n_splits:?}. Perhaps the GGUF files do not match?");
         }
         #[allow(clippy::cast_possible_truncation)]
         if !n_splits.is_empty() && n_readers != n_splits[0] as usize {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Number of GGUF files does not match the number of splits, expected {} files.",
                 n_splits[0]
             );
@@ -120,7 +120,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                 return tensor_info.read(reader, ct.tensor_data_offset, device);
             }
         }
-        candle_core::bail!("Cannot find tensor info for {name}")
+        mcandle_core::bail!("Cannot find tensor info for {name}")
     }
 
     /// Check for a tensor, searching through each content.

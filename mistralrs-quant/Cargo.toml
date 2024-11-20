@@ -12,8 +12,8 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
+mcandle-core.workspace = true
+mcandle-nn.workspace = true
 half.workspace = true
 serde.workspace = true
 lazy_static = "1.4"
@@ -27,8 +27,8 @@ metal = { version = "0.27.0", features = ["mps"], optional = true }
 thiserror = "1"
 
 [features]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
-metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
+cuda = ["mcandle-core/cuda", "mcandle-nn/cuda", "dep:bindgen_cuda"]
+metal = ["mcandle-core/metal", "mcandle-nn/metal", "dep:metal"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

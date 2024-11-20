@@ -2,8 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Linear, RotaryEmbedding, VarBuilder};
+use mcandle_core::{DType, Device, Module, Result, Tensor};
+use mcandle_nn::{Linear, RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 use crate::{
@@ -62,9 +62,9 @@ impl Config {
         match (self.hidden_act, self.hidden_activation) {
             (None, Some(act)) | (Some(act), None) => Ok(act),
             (Some(_), Some(_)) => {
-                candle_core::bail!("both hidden_act and hidden_activation are set")
+                mcandle_core::bail!("both hidden_act and hidden_activation are set")
             }
-            (None, None) => candle_core::bail!("none of hidden_act and hidden_activation are set"),
+            (None, None) => mcandle_core::bail!("none of hidden_act and hidden_activation are set"),
         }
     }
 }
@@ -424,7 +424,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -454,7 +454,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),

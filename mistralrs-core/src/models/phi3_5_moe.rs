@@ -2,8 +2,8 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+use mcandle_core::{Device, IndexOp, Module, Result, Tensor, D};
+use mcandle_nn::{layer_norm, LayerNorm, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantizedConfig};
 use std::{collections::HashMap, sync::Arc};
 
@@ -301,7 +301,7 @@ impl Mlp {
 }
 
 struct MoeMlp {
-    gate: candle_nn::Linear,
+    gate: mcandle_nn::Linear,
     experts: Vec<Mlp>,
     router_jitter_noise: f64,
     num_experts: usize,
@@ -310,7 +310,7 @@ struct MoeMlp {
 impl MoeMlp {
     fn new(cfg: &Config, vb: VarBuilder, layer_device: Device) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
-        let gate = candle_nn::linear_no_bias(
+        let gate = mcandle_nn::linear_no_bias(
             cfg.hidden_size,
             num_experts,
             vb.pp("gate").set_device(layer_device),
@@ -344,7 +344,7 @@ impl MoeMlp {
         let masked_gates = masked_fill(scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
 
         // Compute scores
-        let masked_gates = candle_nn::ops::softmax_last_dim(&masked_gates)?;
+        let masked_gates = mcandle_nn::ops::softmax_last_dim(&masked_gates)?;
         let multiplier = masked_gates.gather(&selected_experts, D::Minus1)?;
 
         // Mask out first expert
@@ -368,7 +368,7 @@ impl MoeMlp {
         // Apply mask
         let masked_gates_top2 =
             masked_fill(&masked_scores, &mask_logits_threshold, f64::NEG_INFINITY)?;
-        let masked_gates_top2 = candle_nn::ops::softmax_last_dim(&masked_gates_top2)?;
+        let masked_gates_top2 = mcandle_nn::ops::softmax_last_dim(&masked_gates_top2)?;
         let multiplier_top2 = masked_gates_top2.gather(&selected_experts_top2, D::Minus1)?;
 
         let multiplier = Tensor::cat(&[multiplier, multiplier_top2], D::Minus1)?;
@@ -399,7 +399,7 @@ impl MoeMlp {
         // One hot encode the selected experts to create an expert mask
         // this will be used to easily index which expert to activate
         let experts_mask =
-            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
+            mcandle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
                 .permute((2, 1, 0))?;
 
         // Loop over all avail experts in the model and perform the computation on each expert
@@ -524,7 +524,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -554,7 +554,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),

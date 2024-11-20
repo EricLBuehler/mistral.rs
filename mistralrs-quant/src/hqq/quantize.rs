@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor};
+use mcandle_core::{DType, Device, Result, Tensor};
 
 use crate::hqq::optimize::OptResults;
 
@@ -9,7 +9,7 @@ impl HqqLayer {
     pub fn quantize(input: &Tensor, device: &Device, cfg: HqqConfig) -> Result<Self> {
         let group_size: usize = cfg.group_size.into();
         if input.elem_count() % group_size != 0 {
-            candle_core::bail!("`group_size` should be divisible by the tensor number of elements, which are {}, got a group size of {group_size}.", input.elem_count());
+            mcandle_core::bail!("`group_size` should be divisible by the tensor number of elements, which are {}, got a group size of {group_size}.", input.elem_count());
         }
 
         let mut w = input.clone().to_dtype(DType::F32)?;
@@ -99,11 +99,11 @@ impl HqqLayer {
 
 #[cfg(test)]
 mod test {
-    use candle_core::{Device, Result, Tensor};
+    use mcandle_core::{Device, Result, Tensor};
 
     #[test]
     fn test_quantize_hqq() -> Result<()> {
-        use candle_core::DType;
+        use mcandle_core::DType;
 
         use crate::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 

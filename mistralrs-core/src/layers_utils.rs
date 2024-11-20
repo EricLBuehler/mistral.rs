@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use mcandle_core::{Result, Tensor};
 
 pub fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {

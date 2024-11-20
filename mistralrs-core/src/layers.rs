@@ -10,11 +10,11 @@ use std::{
     },
 };
 
-use candle_core::{
+use mcandle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+use mcandle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use serde::{Deserialize, Serialize};
 
@@ -37,14 +37,14 @@ pub struct RmsNorm {
 
 impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        let inner = mcandle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = inner.inner().weight().clone();
         Ok(Self { eps, weight: w })
     }
 
     /// Gemma uses weight + 1.0
     pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
+        let inner = mcandle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = (inner.inner().weight().clone() + 1.0)?;
         Ok(Self { eps, weight: w })
     }
@@ -68,7 +68,7 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        mcandle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -117,7 +117,7 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        mcandle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -142,12 +142,12 @@ pub enum ScaledRopeType {
 }
 
 impl FromStr for ScaledRopeType {
-    type Err = candle_core::Error;
+    type Err = mcandle_core::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
-            _ => Err(candle_core::Error::Msg(
+            _ => Err(mcandle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
             )),
         }
@@ -290,18 +290,18 @@ impl PhiRotaryEmbedding {
         let dim = cfg.head_dim;
 
         if !matches!(scaling_type, ScaledRopeType::Su) {
-            candle_core::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
+            mcandle_core::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
         }
 
         if short_factor.len() != dim / 2 {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Misaligned length {}, expected {} for `su`/`longrope` short rescale factors",
                 short_factor.len(),
                 dim / 2
             );
         }
         if long_factor.len() != dim / 2 {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "Misaligned length {}, expected {} for `su`/`longrope` long rescale factors",
                 long_factor.len(),
                 dim / 2
@@ -414,9 +414,9 @@ impl PhiRotaryEmbedding {
             let cos = cos.narrow(0, *offset, seq_len)?;
             let sin = sin.narrow(0, *offset, seq_len)?;
             let q_embed =
-                candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                mcandle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             let k_embed =
-                candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                mcandle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }
@@ -600,7 +600,7 @@ impl Llama3RotaryEmbedding {
             Some(MLlamaRopeScaling {
                 rope_type: other, ..
             }) => {
-                candle_core::bail!(
+                mcandle_core::bail!(
                     "MLlama doesn't support any other RoPE type than `llama3`, got {other:?}"
                 )
             }
@@ -633,9 +633,9 @@ impl Llama3RotaryEmbedding {
                     let cos = cos.narrow(0, *offset, seq_len)?;
                     let sin = sin.narrow(0, *offset, seq_len)?;
                     let rope = if *is_gptx {
-                        candle_nn::rotary_emb::rope
+                        mcandle_nn::rotary_emb::rope
                     } else {
-                        candle_nn::rotary_emb::rope_i
+                        mcandle_nn::rotary_emb::rope_i
                     };
                     let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
                     let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
@@ -723,8 +723,8 @@ impl Qwen2VLRotaryEmbedding {
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
-        *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
-        *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
+        *q = mcandle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
+        *k = mcandle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
     }
 }
@@ -886,7 +886,7 @@ impl Module for QLinear {
 }
 
 #[derive(Debug, Clone)]
-pub struct RotaryEmbedding(candle_nn::RotaryEmbedding);
+pub struct RotaryEmbedding(mcandle_nn::RotaryEmbedding);
 
 impl RotaryEmbedding {
     pub fn new(
@@ -897,7 +897,7 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        Ok(Self(candle_nn::RotaryEmbedding::new(
+        Ok(Self(mcandle_nn::RotaryEmbedding::new(
             base,
             head_dim,
             max_position_embeddings,
@@ -916,7 +916,7 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        Ok(Self(candle_nn::RotaryEmbedding::new_partial(
+        Ok(Self(mcandle_nn::RotaryEmbedding::new_partial(
             base,
             head_dim,
             rot_dim,
@@ -973,15 +973,15 @@ impl Module for Activation {
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
             Self::Silu => xs.silu(),
-            Self::Sigmoid => candle_nn::ops::sigmoid(xs),
-            Self::HardSigmoid => candle_nn::ops::hard_sigmoid(xs),
-            Self::Swiglu => candle_nn::ops::swiglu(xs),
-            Self::Swish => xs * candle_nn::ops::sigmoid(xs)?,
-            Self::HardSwish => xs * candle_nn::ops::hard_sigmoid(xs)?,
+            Self::Sigmoid => mcandle_nn::ops::sigmoid(xs),
+            Self::HardSigmoid => mcandle_nn::ops::hard_sigmoid(xs),
+            Self::Swiglu => mcandle_nn::ops::swiglu(xs),
+            Self::Swish => xs * mcandle_nn::ops::sigmoid(xs)?,
+            Self::HardSwish => xs * mcandle_nn::ops::hard_sigmoid(xs)?,
             &Self::Elu(alpha) => xs.elu(alpha),
-            &Self::LeakyRelu(negative_slope) => candle_nn::ops::leaky_relu(xs, negative_slope),
+            &Self::LeakyRelu(negative_slope) => mcandle_nn::ops::leaky_relu(xs, negative_slope),
             Self::GeluPytorchTanh => xs.gelu(),
-            Self::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+            Self::QuickGelu => xs * mcandle_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }

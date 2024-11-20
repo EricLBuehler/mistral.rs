@@ -3,8 +3,8 @@
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{RotaryEmbedding, VarBuilder};
+use mcandle_core::{DType, Device, Module, Result, Tensor};
+use mcandle_nn::{RotaryEmbedding, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -323,7 +323,7 @@ impl Module for SparseMoeBlock {
             router_logits = router_logits.to_dtype(original_dtype)?;
         }
 
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let routing_weights = mcandle_nn::ops::softmax_last_dim(&router_logits)?;
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
         // directly. Maybe we will want to use some custom ops instead at some point.
@@ -455,7 +455,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -485,7 +485,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -557,7 +557,7 @@ impl Model {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(
                         embed_tokens.embeddings(),
                         normal_loading_metadata.loading_isq,

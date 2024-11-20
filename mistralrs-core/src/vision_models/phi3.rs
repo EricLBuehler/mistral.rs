@@ -2,11 +2,11 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{
+use either::Either;
+use mcandle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
-use candle_nn::VarBuilder;
-use either::Either;
+use mcandle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
@@ -56,7 +56,7 @@ serde_default_fn!(bool, word_emb_default, false);
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
     pub vocab_size: usize,
-    pub hidden_act: candle_nn::Activation,
+    pub hidden_act: mcandle_nn::Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
@@ -120,7 +120,7 @@ impl ModuleWithMetadata for QuantMethodWrapper {
     }
 }
 
-impl ModuleWithMetadata for candle_nn::Activation {
+impl ModuleWithMetadata for mcandle_nn::Activation {
     fn device(&self) -> Device {
         unreachable!()
     }
@@ -134,10 +134,10 @@ struct BigShapeWithOneHole((usize, usize, usize, usize, usize, ()));
 
 fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<usize> {
     if prod_d == 0 {
-        candle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
+        mcandle_core::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
     }
     if el_count % prod_d != 0 {
-        candle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
+        mcandle_core::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
     }
     Ok(el_count / prod_d)
 }
@@ -317,7 +317,7 @@ impl Attention {
 struct Mlp {
     gate_up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: mcandle_nn::Activation,
     i_size: usize,
     params: Vec<usize>,
 }
@@ -500,7 +500,7 @@ impl Module for EmbeddingLayers {
 
 #[derive(Debug)]
 pub struct ImageEmbedding {
-    wte: candle_nn::Embedding,
+    wte: mcandle_nn::Embedding,
     image_dim_out: usize,
     num_img_tokens: usize,
     glb_gn: Option<Tensor>,
@@ -518,13 +518,13 @@ pub struct ImageEmbedding {
 impl ImageEmbedding {
     fn new(
         config: &Config,
-        wte: candle_nn::Embedding,
+        wte: mcandle_nn::Embedding,
         embed_config: &EmbedLayerConfig,
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_size = config.hidden_size;
         if config.img_processor.name != "clip_vision_model" {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "img_processor=`{}` nor supported.",
                 config.img_processor.name
             );
@@ -615,7 +615,7 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(mcandle_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
@@ -647,12 +647,12 @@ impl ImageEmbedding {
                     }
                     vec![
                         Box::new(QuantMethodWrapper(a)),
-                        Box::new(candle_nn::Activation::Gelu),
+                        Box::new(mcandle_nn::Activation::Gelu),
                         Box::new(QuantMethodWrapper(b)),
                     ]
                 }
                 _ => {
-                    candle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
+                    mcandle_core::bail!("projection_cls=`{projection_cls}` not implemented.");
                 }
             };
 
@@ -691,7 +691,7 @@ impl ImageEmbedding {
         } else if self.type_feature == "cls_patch" {
             Ok(img_feature)
         } else {
-            candle_core::bail!("Unsupported image feature type {}", self.type_feature)
+            mcandle_core::bail!("Unsupported image feature type {}", self.type_feature)
         }
     }
 
@@ -818,7 +818,7 @@ impl ImageEmbedding {
                             )?);
                         }
                         other => {
-                            candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                            mcandle_core::bail!("Invalid hd_transform_order=`{other}`");
                         }
                     }
 
@@ -924,7 +924,7 @@ impl ImageEmbedding {
 
 pub struct Model {
     vision_embed_tokens: ImageEmbedding,
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -947,7 +947,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -1017,7 +1017,7 @@ impl Model {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(
                         embed_tokens.embeddings(),
                         normal_loading_metadata.loading_isq,

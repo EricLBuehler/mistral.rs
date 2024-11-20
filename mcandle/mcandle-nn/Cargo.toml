@@ -1,0 +1,42 @@
+[package]
+name = "mcandle-nn"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+accelerate-src = { workspace = true, optional = true }
+mcandle-core = { workspace = true }
+half = { workspace = true }
+thiserror = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
+num-traits = { workspace = true }
+rayon = { workspace = true }
+safetensors = { workspace = true }
+serde = { workspace = true }
+metal = { workspace = true, optional = true }
+mcandle-metal-kernels = { workspace = true, optional = true }
+mcandle-flash-attn = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+rand = { workspace = true }
+criterion = { workspace = true }
+
+[features]
+default = []
+accelerate = ["dep:accelerate-src", "mcandle-core/accelerate"]
+cuda = ["mcandle-core/cuda"]
+mkl = ["dep:intel-mkl-src", "mcandle-core/mkl"]
+metal = ["mcandle-core/metal", "dep:mcandle-metal-kernels", "dep:metal"]
+flash-attn = ["cuda", "dep:mcandle-flash-attn"]
+
+[[bench]]
+name = "bench_main"
+harness = false

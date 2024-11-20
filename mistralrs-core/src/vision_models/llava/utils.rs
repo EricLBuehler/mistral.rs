@@ -4,11 +4,11 @@
     clippy::too_many_arguments
 )]
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
-use candle_core::{DType, Device, Result, Tensor};
 use image::{
     imageops::{overlay, FilterType},
     DynamicImage, GenericImageView, Rgb, RgbImage,
 };
+use mcandle_core::{DType, Device, Result, Tensor};
 use std::cmp::min;
 
 pub(crate) fn get_anyres_image_grid_shape(

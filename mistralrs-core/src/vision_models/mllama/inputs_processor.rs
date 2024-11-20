@@ -7,9 +7,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::{Context, DType, Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage};
 use itertools::Itertools;
+use mcandle_core::{Context, DType, Device, Result, Tensor};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
     Transforms,
@@ -125,7 +125,7 @@ fn convert_sparse_cross_attention_mask_to_dense(
     max_num_tiles: usize,
     length: usize,
     dev: &Device,
-) -> candle_core::Result<Tensor> {
+) -> mcandle_core::Result<Tensor> {
     let bs = cross_attn_token_mask.len();
     let max_num_images = cross_attn_token_mask.iter().map(|x| x.len()).max().unwrap();
 

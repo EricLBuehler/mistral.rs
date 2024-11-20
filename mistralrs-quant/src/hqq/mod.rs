@@ -1,8 +1,8 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Shape, Tensor};
+use mcandle_core::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
-use candle_core::{
+use mcandle_core::{
     cuda::{cudarc::driver::DevicePtr, CudaStorageSlice, WrapErr},
     from_storage_no_op, CudaStorage, Storage,
 };
@@ -86,12 +86,12 @@ pub enum HqqAxis {
 }
 
 impl TryFrom<usize> for HqqAxis {
-    type Error = candle_core::Error;
+    type Error = mcandle_core::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Zero),
             1 => Ok(Self::One),
-            other => candle_core::bail!("Unexpected value for HQQ axis {other}"),
+            other => mcandle_core::bail!("Unexpected value for HQQ axis {other}"),
         }
     }
 }
@@ -106,7 +106,7 @@ pub enum HqqBits {
 }
 
 impl TryFrom<usize> for HqqBits {
-    type Error = candle_core::Error;
+    type Error = mcandle_core::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             8 => Ok(Self::Eight),
@@ -114,7 +114,7 @@ impl TryFrom<usize> for HqqBits {
             3 => Ok(Self::Three),
             2 => Ok(Self::Two),
             1 => Ok(Self::One),
-            other => candle_core::bail!("Unexpected value for HQQ bits {other}"),
+            other => mcandle_core::bail!("Unexpected value for HQQ bits {other}"),
         }
     }
 }
@@ -236,15 +236,15 @@ impl HqqLayer {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
             (a, b) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
+                mcandle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
         {
-            candle_core::bail!("All tensors must be contiguous!");
+            mcandle_core::bail!("All tensors must be contiguous!");
         }
         if self.cfg.axis as usize != 0 {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "CPU HQQ dequantization requires axis == 0, got {}.",
                 self.cfg.axis as usize
             );
@@ -272,7 +272,7 @@ impl HqqLayer {
                 .w_q
                 .apply_op3_no_bwd(&self.scales, &self.zeros, &Dequant1Bit { h, w })?
                 .reshape(&self.w_shape),
-            b => candle_core::bail!("Unreachable bits {b}"),
+            b => mcandle_core::bail!("Unreachable bits {b}"),
         }
     }
 
@@ -282,15 +282,15 @@ impl HqqLayer {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
             (a, b) => {
-                candle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
+                mcandle_core::bail!("Expected all dtypes to be the same, got ({a:?}, {b:?}).")
             }
         }
         if !(self.w_q.is_contiguous() && self.scales.is_contiguous() && self.zeros.is_contiguous())
         {
-            candle_core::bail!("All tensors must be contiguous!");
+            mcandle_core::bail!("All tensors must be contiguous!");
         }
         if self.cfg.axis as usize != 0 {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "CUDA HQQ dequantization requires axis == 0, got {}.",
                 self.cfg.axis as usize
             );
@@ -491,7 +491,9 @@ impl HqqLayer {
                     1bit_u8_kernel_bf16
                 )
             }
-            (bits, dtype) => candle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}"),
+            (bits, dtype) => {
+                mcandle_core::bail!("Unsupported bit width {bits} and dtype {dtype:?}")
+            }
         };
         inner.reshape(&self.w_shape)
     }
@@ -574,7 +576,7 @@ impl QuantMethod for HqqLayer {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("HQQ quantization does not support adding weight delta.")
+        mcandle_core::bail!("HQQ quantization does not support adding weight delta.")
     }
 
     fn dtype_and_device(&self) -> (DType, Device) {
@@ -598,7 +600,7 @@ impl QuantMethod for HqqLayer {
             // Some(IsqType::HQQ3) => HqqBits::Three,
             // Some(IsqType::HQQ2) => HqqBits::Two,
             // Some(IsqType::HQQ1) => HqqBits::One,
-            _ => candle_core::bail!("Expected a HQQ ISQ type."),
+            _ => mcandle_core::bail!("Expected a HQQ ISQ type."),
         };
         let cfg = HqqConfig {
             bits,
@@ -717,12 +719,12 @@ impl QuantizedSerde for HqqLayer {
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+            return Err(mcandle_core::Error::wrap(e));
         }
 
         let isq_type = buffer.read_u8()? as usize;
         if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
+            mcandle_core::bail!(
                 "ISQ type ({isq_type}) doesn't match expected type {}",
                 QuantizedSerdeType::Hqq as usize
             );

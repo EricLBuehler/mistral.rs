@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use candle_core::{Device, Result, Tensor};
+use mcandle_core::{Device, Result, Tensor};
 use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};

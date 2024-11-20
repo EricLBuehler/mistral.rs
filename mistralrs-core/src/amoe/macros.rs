@@ -29,7 +29,7 @@ macro_rules! merge_delta {
             QMatMul::QTensor(w) => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 QMatMul::QTensor(std::sync::Arc::new(
-                    candle_core::quantized::QTensor::quantize(&(w + $delta)?, dtype)?,
+                    mcandle_core::quantized::QTensor::quantize(&(w + $delta)?, dtype)?,
                 ))
             }
         }

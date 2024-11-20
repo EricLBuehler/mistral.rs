@@ -2,9 +2,9 @@
 
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
 use itertools::Itertools;
+use mcandle_core::{Device, Result, Tensor};
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex_automata::meta::Regex;
 use tokenizers::Tokenizer;
@@ -543,7 +543,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             num_img_tokens.push(num_image_tokens);
         }
         if padded_images.len() > 1 {
-            candle_core::bail!("Can only process one image per batch");
+            mcandle_core::bail!("Can only process one image per batch");
         }
         let image_sizes = image_sizes[0];
 

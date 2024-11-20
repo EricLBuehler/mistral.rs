@@ -1,5 +1,5 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-use candle_core::{DType, Device, Result, Tensor};
+use mcandle_core::{DType, Device, Result, Tensor};
 
 use crate::pipeline::{
     text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -50,7 +50,7 @@ impl OrdinaryRoPE {
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
         let cos = cos.narrow(0, index_pos, seq_len)?;
         let sin = sin.narrow(0, index_pos, seq_len)?;
-        candle_nn::rotary_emb::rope(x, &cos, &sin)
+        mcandle_nn::rotary_emb::rope(x, &cos, &sin)
     }
 }
 pub(crate) mod llama;

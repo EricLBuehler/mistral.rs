@@ -1,0 +1,14 @@
+pub const AFFINE: &str = include_str!(concat!(env!("OUT_DIR"), "/affine.ptx"));
+pub const BINARY: &str = include_str!(concat!(env!("OUT_DIR"), "/binary.ptx"));
+pub const CAST: &str = include_str!(concat!(env!("OUT_DIR"), "/cast.ptx"));
+pub const CONV: &str = include_str!(concat!(env!("OUT_DIR"), "/conv.ptx"));
+pub const FILL: &str = include_str!(concat!(env!("OUT_DIR"), "/fill.ptx"));
+pub const FUSED_RMS_NORM: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_rms_norm.ptx"));
+pub const FUSED_ROPE: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_rope.ptx"));
+pub const INDEXING: &str = include_str!(concat!(env!("OUT_DIR"), "/indexing.ptx"));
+pub const KVCONCAT: &str = include_str!(concat!(env!("OUT_DIR"), "/kvconcat.ptx"));
+pub const QUANTIZED: &str = include_str!(concat!(env!("OUT_DIR"), "/quantized.ptx"));
+pub const REDUCE: &str = include_str!(concat!(env!("OUT_DIR"), "/reduce.ptx"));
+pub const SORT: &str = include_str!(concat!(env!("OUT_DIR"), "/sort.ptx"));
+pub const TERNARY: &str = include_str!(concat!(env!("OUT_DIR"), "/ternary.ptx"));
+pub const UNARY: &str = include_str!(concat!(env!("OUT_DIR"), "/unary.ptx"));

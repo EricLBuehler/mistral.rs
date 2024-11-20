@@ -12,9 +12,9 @@ use crate::{
 pub async fn send_responses(
     input_seqs: &mut [&mut Sequence],
     images: Vec<DynamicImage>,
-) -> candle_core::Result<()> {
+) -> mcandle_core::Result<()> {
     if input_seqs.len() != images.len() {
-        candle_core::bail!(
+        mcandle_core::bail!(
             "Input seqs len ({}) does not match images generated len ({})",
             input_seqs.len(),
             images.len()
@@ -30,7 +30,7 @@ pub async fn send_responses(
                 let saved_path = format!("image-generation-{}.png", Uuid::new_v4());
                 image
                     .save_with_format(&saved_path, image::ImageFormat::Png)
-                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
+                    .map_err(|e| mcandle_core::Error::Msg(e.to_string()))?;
                 ImageChoice {
                     url: Some(saved_path),
                     b64_json: None,
@@ -61,7 +61,7 @@ pub async fn send_responses(
                 seq.responder(),
             )
             .await
-            .map_err(candle_core::Error::msg)?;
+            .map_err(mcandle_core::Error::msg)?;
 
         seq.set_state(SequenceState::Done(StopReason::GeneratedImage));
     }

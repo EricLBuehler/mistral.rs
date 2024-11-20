@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::Result;
 use as_any::AsAny;
-use candle_core::Device;
+use mcandle_core::Device;
 use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
 
@@ -354,7 +354,7 @@ impl ModelKind {
 /// # Example
 /// ```no_run
 /// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
-/// use candle_core::Device;
+/// use mcandle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
 /// let pipeline = loader.load_model_from_hf(

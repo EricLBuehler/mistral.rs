@@ -1,4 +1,4 @@
-use candle_core::{
+use mcandle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
     Tensor, WithDType,
 };
@@ -9,7 +9,7 @@ use std::ops::{BitOr, Shl};
 #[cfg(feature = "cuda")]
 use crate::utils::ffi;
 #[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
+use mcandle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
@@ -54,15 +54,15 @@ impl CustomOp2 for BitWiseOr {
             CpuStorage::U8(vs1) => {
                 let vs1 = match l1.contiguous_offsets() {
                     Some((start, end)) => &vs1[start..end],
-                    None => candle_core::bail!("Input tensor s1 must be contiguous"),
+                    None => mcandle_core::bail!("Input tensor s1 must be contiguous"),
                 };
                 let vs2 = s2.as_slice::<u8>()?;
                 let vs2 = match l2.contiguous_offsets() {
                     Some((start, end)) => &vs2[start..end],
-                    None => candle_core::bail!("Input tensor s2 must be contiguous"),
+                    None => mcandle_core::bail!("Input tensor s2 must be contiguous"),
                 };
                 if vs1.len() != vs2.len() {
-                    candle_core::bail!("Input tensors must have the same number of elements");
+                    mcandle_core::bail!("Input tensors must have the same number of elements");
                 };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
@@ -191,11 +191,11 @@ impl CustomOp2 for BitWiseOr {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &mcandle_core::MetalStorage,
         l1: &Layout,
-        s2: &candle_core::MetalStorage,
+        s2: &mcandle_core::MetalStorage,
         l2: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(mcandle_core::MetalStorage, Shape)> {
         if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
@@ -211,10 +211,10 @@ impl CustomOp2 for BitWiseOr {
             });
         }
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            mcandle_core::bail!("Input tensor s1 must be contiguous");
         }
         if !l2.is_contiguous() {
-            candle_core::bail!("Input tensor s2 must be contiguous");
+            mcandle_core::bail!("Input tensor s2 must be contiguous");
         }
 
         let command_buffer = s1.device().command_buffer()?;
@@ -236,9 +236,9 @@ impl CustomOp2 for BitWiseOr {
             out_shape.elem_count(),
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(mcandle_core::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = mcandle_core::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -274,7 +274,7 @@ impl CustomOp1 for Leftshift {
 
     fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            mcandle_core::bail!("Input tensor s1 must be contiguous");
         }
         match s1 {
             CpuStorage::U8(vs1) => {
@@ -300,7 +300,7 @@ impl CustomOp1 for Leftshift {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            mcandle_core::bail!("Input tensor s1 must be contiguous");
         }
         let dev = s1.device().clone();
         let (d_in1_ptr, elem_count) = match s1.dtype() {
@@ -379,11 +379,11 @@ impl CustomOp1 for Leftshift {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        s1: &candle_core::MetalStorage,
+        s1: &mcandle_core::MetalStorage,
         l1: &Layout,
-    ) -> Result<(candle_core::MetalStorage, Shape)> {
+    ) -> Result<(mcandle_core::MetalStorage, Shape)> {
         if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
+            mcandle_core::bail!("Input tensor s1 must be contiguous");
         }
 
         let command_buffer = s1.device().command_buffer()?;
@@ -405,9 +405,9 @@ impl CustomOp1 for Leftshift {
             out_shape.elem_count(),
             &output,
         )
-        .map_err(candle_core::Error::wrap)?;
+        .map_err(mcandle_core::Error::wrap)?;
 
-        let newstorage = candle_core::MetalStorage::new(
+        let newstorage = mcandle_core::MetalStorage::new(
             output,
             device.clone(),
             out_shape.elem_count(),
@@ -432,8 +432,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cpu() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a =
             Tensor::from_vec(vec![1i32, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i32, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -445,8 +445,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_cuda() {
         use crate::utils::ops::BitWiseOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a =
             Tensor::from_vec(vec![1i32, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
         let b = Tensor::from_vec(vec![-1i32, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
@@ -457,8 +457,8 @@ mod tests {
     #[test]
     fn test_leftshift_cpu() {
         use crate::utils::ops::LeftshiftOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::Cpu;
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::Cpu;
         let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
@@ -468,8 +468,8 @@ mod tests {
     #[test]
     fn test_leftshift_cuda() {
         use crate::utils::ops::LeftshiftOp;
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
@@ -479,8 +479,8 @@ mod tests {
     #[test]
     fn test_bitwise_or_and_leftshift_cuda() {
         use crate::utils::{ops::BitWiseOp, LeftshiftOp};
-        use candle_core::Tensor;
-        let device = candle_core::Device::new_cuda(0).unwrap();
+        use mcandle_core::Tensor;
+        let device = mcandle_core::Device::new_cuda(0).unwrap();
         let a = Tensor::from_vec(vec![0b00001111u8], (1,), &device).unwrap();
         let b = Tensor::from_vec(vec![0b00001111u8], (1,), &device).unwrap();
         let c = a
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn test_bitpack_8bit() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
@@ -516,8 +516,8 @@ mod tests {
     #[test]
     fn test_bitpack_8bit() {
         use crate::HqqBits;
-        use candle_core::DType;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::DType;
+        use mcandle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
         let device = Device::new_cuda(0).unwrap();
         let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn test_bitpack_4bit() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::Cpu;
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_bitpack_4bit() {
         use crate::HqqBits;
-        use candle_core::{Device, Tensor};
+        use mcandle_core::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::new_cuda(0).unwrap();
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();

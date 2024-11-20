@@ -1,5 +1,5 @@
-use candle_core::Device;
 use image::{ColorType, DynamicImage};
+use mcandle_core::Device;
 use mistralrs_vision::{ApplyTransforms, InterpolateResize, Normalize, ToTensor, Transforms};
 
 #[test]

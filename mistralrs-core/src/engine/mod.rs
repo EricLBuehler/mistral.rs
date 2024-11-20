@@ -1,4 +1,4 @@
-use candle_core::Tensor;
+use mcandle_core::Tensor;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,

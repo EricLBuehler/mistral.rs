@@ -5,7 +5,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{
+use mcandle_core::{
     quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
 };
@@ -30,7 +30,7 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use unquantized::UnquantLinear;
 
-use candle_nn::{Linear, Module, VarBuilder};
+use mcandle_nn::{Linear, Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -114,7 +114,7 @@ pub enum IsqType {
 }
 
 impl TryFrom<IsqType> for GgmlDType {
-    type Error = candle_core::Error;
+    type Error = mcandle_core::Error;
 
     fn try_from(value: IsqType) -> Result<Self> {
         let tp = match value {
@@ -130,7 +130,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8K => Self::Q8K,
             IsqType::Q8_0 => Self::Q8_0,
             IsqType::Q8_1 => Self::Q8_1,
-            _ => candle_core::bail!("Expected valid GGML ISQ type."),
+            _ => mcandle_core::bail!("Expected valid GGML ISQ type."),
         };
         #[cfg(feature = "cuda")]
         {
@@ -147,7 +147,7 @@ impl TryFrom<IsqType> for GgmlDType {
                     | GgmlDType::Q5K
                     | GgmlDType::Q6K
             ) {
-                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+                mcandle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
             }
         }
         Ok(tp)
@@ -162,14 +162,14 @@ pub enum QuantizedSerdeType {
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
-    type Error = candle_core::Error;
+    type Error = mcandle_core::Error;
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Gguf),
             1 => Ok(Self::Unquant),
             2 => Ok(Self::Hqq),
             3 => Ok(Self::Fp8),
-            other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
+            other => mcandle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }
 }
@@ -180,13 +180,13 @@ pub trait QuantizedSerde {
         false
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+        mcandle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
     fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+        mcandle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
     }
 }
 
@@ -254,7 +254,7 @@ pub fn linear_no_bias(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
+            let layer = mcandle_nn::linear_no_bias(in_dim, out_dim, vb)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
@@ -279,7 +279,7 @@ pub fn linear(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear(in_dim, out_dim, vb)?;
+            let layer = mcandle_nn::linear(in_dim, out_dim, vb)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
             Arc::new(layer) as Arc<dyn QuantMethod>

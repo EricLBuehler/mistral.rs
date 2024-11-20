@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{linear_no_bias, VarBuilder};
+use mcandle_core::{DType, Device, Module, Result, Tensor};
+use mcandle_nn::{linear_no_bias, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
@@ -359,7 +359,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -401,7 +401,7 @@ impl Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),

@@ -13,8 +13,8 @@ pub(crate) use inputs_processor::MLlamaProcessor;
 use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{linear, Linear, Module, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor, D};
+use mcandle_nn::{linear, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
@@ -133,10 +133,10 @@ impl MLlamaModel {
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
             let Some(aspect_ratio_mask) = aspect_ratio_mask else {
-                candle_core::bail!("`aspect_ratio_mask` must be specified if `pixel_values` is.");
+                mcandle_core::bail!("`aspect_ratio_mask` must be specified if `pixel_values` is.");
             };
             let Some(aspect_ratio_ids) = aspect_ratio_ids else {
-                candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
+                mcandle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
             let vision_outputs =
                 self.vision_model

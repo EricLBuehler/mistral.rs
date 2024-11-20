@@ -1,4 +1,4 @@
-use candle_core::DType;
+use mcandle_core::DType;
 use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library,

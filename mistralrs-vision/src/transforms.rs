@@ -1,6 +1,6 @@
 use crate::utils::{get_pixel_data, n_channels};
-use candle_core::{DType, Device, Result, Tensor};
 use image::{DynamicImage, GenericImageView};
+use mcandle_core::{DType, Device, Result, Tensor};
 
 use crate::ImageTransform;
 
@@ -85,7 +85,7 @@ impl ImageTransform for Normalize {
     fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
         let num_channels = x.dim(0)?;
         if self.mean.len() != num_channels || self.std.len() != num_channels {
-            candle_core::bail!("Num channels must match number of mean and std.");
+            mcandle_core::bail!("Num channels must match number of mean and std.");
         }
         let mut accum = Vec::new();
         for (i, channel) in x.chunk(num_channels, 0)?.iter().enumerate() {
@@ -148,8 +148,8 @@ impl ImageTransform for Rescale {
 mod tests {
     #[test]
     fn test_to_tensor() {
-        use candle_core::Device;
         use image::{ColorType, DynamicImage};
+        use mcandle_core::Device;
 
         use crate::ImageTransform;
 
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn test_normalize() {
         use crate::{ImageTransform, Normalize};
-        use candle_core::{DType, Device, Tensor};
+        use mcandle_core::{DType, Device, Tensor};
 
         let image = Tensor::zeros((3, 5, 4), DType::U8, &Device::Cpu).unwrap();
         let res = Normalize {

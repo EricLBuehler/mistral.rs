@@ -1,6 +1,6 @@
-use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
+use mcandle_core::Device;
 use mistralrs_core::{
     get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType,
@@ -368,10 +368,10 @@ fn main() -> anyhow::Result<()> {
     let token_source = TokenSource::CacheToken;
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
-        candle_core::utils::with_avx(),
-        candle_core::utils::with_neon(),
-        candle_core::utils::with_simd128(),
-        candle_core::utils::with_f16c()
+        mcandle_core::utils::with_avx(),
+        mcandle_core::utils::with_neon(),
+        mcandle_core::utils::with_simd128(),
+        mcandle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
     if use_flash_attn {

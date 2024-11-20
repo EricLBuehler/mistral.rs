@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-candle-core.workspace = true
+mcandle-core.workspace = true
 half.workspace = true
 float8.workspace = true
 

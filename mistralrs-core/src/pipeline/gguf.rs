@@ -42,9 +42,9 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use mcandle_core::{DType, Device, Tensor};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -670,7 +670,7 @@ impl Pipeline for GGUFPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-    ) -> Result<ForwardInputsResult, candle_core::Error> {
+    ) -> Result<ForwardInputsResult, mcandle_core::Error> {
         let ModelInputs {
             input_ids,
             input_ids_full,
@@ -691,11 +691,11 @@ impl Pipeline for GGUFPipeline {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
-                candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
+                mcandle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
             }
             (None, Some(_)) => {
                 // This should never happen but we handle it anyway
-                candle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
+                mcandle_core::bail!("Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue.")
             }
             (None, None) => None,
         };
@@ -762,7 +762,7 @@ impl Pipeline for GGUFPipeline {
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<(), mcandle_core::Error> {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {

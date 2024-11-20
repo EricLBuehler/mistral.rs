@@ -2,9 +2,9 @@
 
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
-use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
-use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
+use mcandle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
+use mcandle_nn::{init, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
@@ -190,7 +190,7 @@ pub fn linear(
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear(d1, d2, base_vb.clone())?;
+    let inner = mcandle_nn::linear(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
@@ -198,7 +198,7 @@ pub fn linear(
             .as_ref()
             .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
         {
-            candle_core::bail!("Expected all target modules to be the same.");
+            mcandle_core::bail!("Expected all target modules to be the same.");
         }
     }
 
@@ -242,7 +242,7 @@ pub fn linear_no_bias(
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear_no_bias(d1, d2, base_vb.clone())?;
+    let inner = mcandle_nn::linear_no_bias(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
@@ -250,7 +250,7 @@ pub fn linear_no_bias(
             .as_ref()
             .is_some_and(|target_modules| &cfg.target_modules != *target_modules)
         {
-            candle_core::bail!("Expected all target modules to be the same.");
+            mcandle_core::bail!("Expected all target modules to be the same.");
         }
     }
 

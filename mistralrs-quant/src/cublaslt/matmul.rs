@@ -1,13 +1,13 @@
-use candle_core::cuda::cudarc::cublaslt::result::set_matrix_layout_attribute;
-use candle_core::cuda::cudarc::cublaslt::{result, result::CublasError, sys};
-use candle_core::cuda::cudarc::driver::sys::{CUdevice_attribute, CUdeviceptr, CUstream};
-use candle_core::cuda::cudarc::driver::{
-    CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DriverError,
-};
 use core::ffi::c_int;
 use core::mem;
 use float8::F8E4M3;
 use half::bf16;
+use mcandle_core::cuda::cudarc::cublaslt::result::set_matrix_layout_attribute;
+use mcandle_core::cuda::cudarc::cublaslt::{result, result::CublasError, sys};
+use mcandle_core::cuda::cudarc::driver::sys::{CUdevice_attribute, CUdeviceptr, CUstream};
+use mcandle_core::cuda::cudarc::driver::{
+    CudaDevice, CudaSlice, DevicePtr, DevicePtrMut, DriverError,
+};
 use std::sync::Arc;
 
 /// Wrapper around [sys::cublasLtHandle_t]

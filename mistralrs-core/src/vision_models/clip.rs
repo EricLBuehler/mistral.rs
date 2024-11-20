@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-// Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
-use candle_core::{IndexOp, Result, Shape, Tensor, D};
-use candle_nn::{Conv2dConfig, Module};
+// Sourced from https://github.com/huggingface/mcandle/blob/main/mcandle-transformers/src/models/clip/vision_model.rs
+use mcandle_core::{IndexOp, Result, Shape, Tensor, D};
+use mcandle_nn::{Conv2dConfig, Module};
 use mistralrs_quant::QuantMethod;
 
 use crate::{serde_default_fn, utils::unvarbuilder::UnVarBuilder};
@@ -17,7 +17,7 @@ pub enum Activation {
 impl Module for Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Activation::QuickGelu => xs * candle_nn::ops::sigmoid(&(xs * 1.702f64)?),
+            Activation::QuickGelu => xs * mcandle_nn::ops::sigmoid(&(xs * 1.702f64)?),
         }
     }
 }
@@ -54,14 +54,14 @@ pub struct ClipConfig {
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L112
 #[derive(Clone, Debug)]
 struct ClipVisionEmbeddings {
-    patch_embedding: candle_nn::Conv2d,
+    patch_embedding: mcandle_nn::Conv2d,
     position_ids: Tensor,
     class_embedding: Tensor,
-    position_embedding: candle_nn::Embedding,
+    position_embedding: mcandle_nn::Embedding,
 }
 
 impl ClipVisionEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         // originally nn.Parameter
         let class_embedding = if vs.contains_tensor("class_embedding") {
             vs.get(c.hidden_size, "class_embedding")?
@@ -78,8 +78,8 @@ impl ClipVisionEmbeddings {
             ..Default::default()
         };
         let position_embedding =
-            candle_nn::embedding(num_positions, c.hidden_size, vs.pp("position_embedding"))?;
-        let patch_embedding = candle_nn::conv2d_no_bias(
+            mcandle_nn::embedding(num_positions, c.hidden_size, vs.pp("position_embedding"))?;
+        let patch_embedding = mcandle_nn::conv2d_no_bias(
             c.num_channels,
             c.hidden_size,
             c.patch_size,
@@ -123,7 +123,7 @@ struct ClipAttention {
 }
 
 impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let hidden_size = c.hidden_size;
         let num_attention_heads = c.num_attention_heads;
         let k_proj = mistralrs_quant::linear(hidden_size, hidden_size, &None, vs.pp("k_proj"))?;
@@ -177,7 +177,7 @@ impl ClipAttention {
             attn_weights
         };
 
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = mcandle_nn::ops::softmax_last_dim(&attn_weights)?;
 
         let attn_output = attn_weights.matmul(&value_states)?;
         let attn_output = attn_output
@@ -196,7 +196,7 @@ struct ClipMlp {
 }
 
 impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let fc1 = mistralrs_quant::linear(c.hidden_size, c.intermediate_size, &None, vs.pp("fc1"))?;
         let fc2 = mistralrs_quant::linear(c.intermediate_size, c.hidden_size, &None, vs.pp("fc2"))?;
 
@@ -218,17 +218,17 @@ impl ClipMlp {
 #[derive(Clone, Debug)]
 struct ClipEncoderLayer {
     self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
+    layer_norm1: mcandle_nn::LayerNorm,
     mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+    layer_norm2: mcandle_nn::LayerNorm,
 }
 
 impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    fn new(vs: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
-        let layer_norm1 = candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm1"))?;
+        let layer_norm1 = mcandle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm1"))?;
         let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
-        let layer_norm2 = candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm2"))?;
+        let layer_norm2 = mcandle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("layer_norm2"))?;
 
         Ok(ClipEncoderLayer {
             self_attn,
@@ -257,7 +257,7 @@ pub struct ClipEncoder {
 }
 
 impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    pub fn new(vs: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
@@ -287,18 +287,19 @@ impl ClipEncoder {
 pub struct ClipVisionTransformer {
     embeddings: ClipVisionEmbeddings,
     encoder: ClipEncoder,
-    pre_layer_norm: candle_nn::LayerNorm,
-    final_layer_norm: candle_nn::LayerNorm,
+    pre_layer_norm: mcandle_nn::LayerNorm,
+    final_layer_norm: mcandle_nn::LayerNorm,
 }
 
 impl ClipVisionTransformer {
     /// Create a CLIP vision transformer model. Expects the vb to point to the root (not model)
     /// where (for example) `.pp("embeddings")` is valid.
-    pub fn new(vb: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+    pub fn new(vb: mcandle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vb.pp("embeddings"), c)?;
-        let pre_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
+        let pre_layer_norm = mcandle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("pre_layrnorm"))?;
         let encoder = ClipEncoder::new(vb.pp("encoder"), c)?;
-        let final_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
+        let final_layer_norm =
+            mcandle_nn::layer_norm(c.hidden_size, 1e-5, vb.pp("post_layernorm"))?;
         Ok(Self {
             embeddings,
             encoder,

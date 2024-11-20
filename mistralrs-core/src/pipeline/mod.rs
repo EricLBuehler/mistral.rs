@@ -54,7 +54,7 @@ use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
 use anyhow::Result;
-use candle_core::{DType, Device, IndexOp, Tensor, Var};
+use mcandle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
@@ -155,7 +155,7 @@ pub trait AnyMoePipelineMixin {
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
         unreachable!()
     }
-    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> candle_core::Result<()> {
+    fn amoe_finish_training(&mut self, _gate_model_id: Option<String>) -> mcandle_core::Result<()> {
         unreachable!()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {
@@ -184,7 +184,7 @@ pub trait AnyMoePipelineMixin {
         _expert_type: AnyMoeExpertType,
         _silent: bool,
         _gate_model_id: Option<String>,
-    ) -> candle_core::Result<()> {
+    ) -> mcandle_core::Result<()> {
         unreachable!()
     }
     /// Pre-train the gating layers
@@ -198,7 +198,7 @@ pub trait AnyMoePipelineMixin {
         _revision: Option<String>,
         _layers: Vec<usize>,
         _silent: bool,
-    ) -> Result<Option<AnyMoeTrainingResult>, candle_core::Error> {
+    ) -> Result<Option<AnyMoeTrainingResult>, mcandle_core::Error> {
         unreachable!()
     }
 }
@@ -253,7 +253,7 @@ pub enum ForwardInputsResult {
 }
 
 impl ForwardInputsResult {
-    fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
+    fn index_bs(&self, bs_idx: usize) -> mcandle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
@@ -264,7 +264,7 @@ impl ForwardInputsResult {
         }
     }
 
-    fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+    fn to_device(&self, device: &Device) -> mcandle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
@@ -288,7 +288,7 @@ pub trait Pipeline:
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-    ) -> Result<ForwardInputsResult, candle_core::Error>;
+    ) -> Result<ForwardInputsResult, mcandle_core::Error>;
 
     /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
@@ -300,7 +300,7 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<Duration, candle_core::Error> {
+    ) -> Result<Duration, mcandle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -323,14 +323,14 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                    } = inputs.map_err(mcandle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In(ref adapter_inst) => {
                                 match adapter_inst {
                                     AdapterInstruction::Activate(adapters) => {
                                         self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                                 dyn std::error::Error,
                                             >>::as_ref(
                                                 &e
@@ -345,7 +345,7 @@ pub trait Pipeline:
                                 match adapter_inst {
                                     AdapterInstruction::Activate(adapters) => {
                                         self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                                 dyn std::error::Error,
                                             >>::as_ref(
                                                 &e
@@ -363,7 +363,7 @@ pub trait Pipeline:
                                 match adapter_inst {
                                     AdapterInstruction::Activate(adapters) => {
                                         self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
+                                            mcandle_core::Error::msg(<anyhow::Error as AsRef<
                                                 dyn std::error::Error,
                                             >>::as_ref(
                                                 &e
@@ -399,7 +399,7 @@ pub trait Pipeline:
                         l.expect("Did not get any inputs. This is shocking.")
                             .to_device(&Device::Cpu)
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<mcandle_core::Result<Vec<_>>>()?;
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -501,7 +501,7 @@ pub trait Pipeline:
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                    } = inputs.map_err(mcandle_core::Error::msg)?;
 
                     let start = Instant::now();
                     let raw_logits = self.forward_inputs(inputs)?;
@@ -519,7 +519,7 @@ pub trait Pipeline:
                         l.expect("Did not get any inputs. This is shocking.")
                             .to_device(&Device::Cpu)
                     })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .collect::<mcandle_core::Result<Vec<_>>>()?;
 
                 let start = Instant::now();
                 match &logits[0] {
@@ -581,7 +581,7 @@ pub trait Pipeline:
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    ) -> Result<(), candle_core::Error>;
+    ) -> Result<(), mcandle_core::Error>;
 
     fn category(&self) -> ModelCategory;
 }
@@ -589,7 +589,7 @@ pub trait Pipeline:
 pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
-) -> candle_core::Result<Tensor> {
+) -> mcandle_core::Result<Tensor> {
     let mut toks = Vec::new();
     for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
         toks.push(dim.narrow(1, start, len)?);

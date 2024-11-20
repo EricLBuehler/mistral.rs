@@ -2,8 +2,8 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use mcandle_core::{DType, Device, Module, Result, Tensor, D};
+use mcandle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use std::{collections::HashMap, sync::Arc};
 
@@ -396,7 +396,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: mcandle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -426,7 +426,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = mcandle_nn::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -490,7 +490,7 @@ impl Model {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(
                         embed_tokens.embeddings(),
                         normal_loading_metadata.loading_isq,

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use candle_core::Result;
 use image::imageops::FilterType;
+use mcandle_core::Result;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -45,7 +45,7 @@ impl ToFilter for Option<usize> {
             Some(2) | None => Ok(FilterType::Triangle), // BiLinear
             Some(3) => Ok(FilterType::CatmullRom),      // BiCubic
             Some(4) => Ok(FilterType::Nearest),
-            Some(x) => candle_core::bail!("Filter number {x} not supported"),
+            Some(x) => mcandle_core::bail!("Filter number {x} not supported"),
         }
     }
 }

@@ -1,11 +1,11 @@
-use candle_core::cuda::cudarc::driver::DevicePtr;
 use float8::F8E4M3;
+use mcandle_core::cuda::cudarc::driver::DevicePtr;
 use std::ffi::c_int;
 
-use candle_core::backend::BackendStorage;
-use candle_core::cuda_backend::WrapErr;
-use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor};
 use half::{bf16, f16};
+use mcandle_core::backend::BackendStorage;
+use mcandle_core::cuda_backend::WrapErr;
+use mcandle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor};
 use std::sync::Arc;
 
 use super::matmul::{Activation, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
@@ -18,7 +18,7 @@ impl CublasLt {
     pub fn new(device: &Device) -> Result<Self> {
         let dev = match device {
             Device::Cuda(d) => d,
-            _ => candle_core::bail!("`device` must be a `cuda` device"),
+            _ => mcandle_core::bail!("`device` must be a `cuda` device"),
         };
 
         let inner = CudaBlasLT::new(dev.cuda_device()).unwrap();
@@ -44,13 +44,13 @@ pub struct CublasLTBatchMatmulF8 {
 impl CublasLTBatchMatmulF8 {
     pub fn fwd_f8e4m3(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: Option<&candle_core::CudaStorage>,
+        bias: Option<&mcandle_core::CudaStorage>,
         bias_l: Option<&Layout>,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         let dev = a.device();
 
         // Assume TN
@@ -58,21 +58,21 @@ impl CublasLTBatchMatmulF8 {
         let (b_0, n, b_2) = b_l.shape().dims3()?;
 
         if b_2 != k {
-            candle_core::bail!("This layer only supports TN layout");
+            mcandle_core::bail!("This layer only supports TN layout");
         }
 
         if b_0 != batch_size {
-            candle_core::bail!("`b` must have the same batch size as `a`")
+            mcandle_core::bail!("`b` must have the same batch size as `a`")
         }
 
         if !self.a_scale.dims().is_empty() || self.a_scale.dtype() != DType::F32 {
-            candle_core::bail!("`a_scale` must be a f32 scalar.");
+            mcandle_core::bail!("`a_scale` must be a f32 scalar.");
         }
         if !self.b_scale.dims().is_empty() || self.b_scale.dtype() != DType::F32 {
-            candle_core::bail!("`b_scale` must be a f32 scalar.");
+            mcandle_core::bail!("`b_scale` must be a f32 scalar.");
         }
         if !self.d_scale.dims().is_empty() || self.d_scale.dtype() != DType::F32 {
-            candle_core::bail!("`d_scale` must be a f32 scalar.");
+            mcandle_core::bail!("`d_scale` must be a f32 scalar.");
         }
         let (a_s, _) = self.a_scale.storage_and_layout();
         let (b_s, _) = self.b_scale.storage_and_layout();
@@ -80,15 +80,15 @@ impl CublasLTBatchMatmulF8 {
 
         let a_scale = match &*a_s {
             Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
-            _ => candle_core::bail!("`a_scale` must be a cuda tensor"),
+            _ => mcandle_core::bail!("`a_scale` must be a cuda tensor"),
         };
         let b_scale = match &*b_s {
             Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
-            _ => candle_core::bail!("`b_scale` must be a cuda tensor"),
+            _ => mcandle_core::bail!("`b_scale` must be a cuda tensor"),
         };
         let d_scale = match &*d_s {
             Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
-            _ => candle_core::bail!("`d_scale` must be a cuda tensor"),
+            _ => mcandle_core::bail!("`d_scale` must be a cuda tensor"),
         };
 
         let lda = k;
@@ -103,7 +103,7 @@ impl CublasLTBatchMatmulF8 {
         let (bias, bias_stride) = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
             if bias_l.dims().len() == 1 {
                 if bias_l.shape().dims1()? != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+                    mcandle_core::bail!("Bias does not have the correct shape");
                 }
                 (
                     Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..)),
@@ -111,10 +111,10 @@ impl CublasLTBatchMatmulF8 {
                 )
             } else {
                 if bias_l.shape().dims2()?.1 != m {
-                    candle_core::bail!("Bias does not have the correct shape");
+                    mcandle_core::bail!("Bias does not have the correct shape");
                 }
                 if bias_l.shape().dims2()?.0 != batch_size {
-                    candle_core::bail!("Bias batch size must match batch size of `a`");
+                    mcandle_core::bail!("Bias batch size must match batch size of `a`");
                 }
                 let bias_stride = bias_l.stride()[0] as i64;
                 (
@@ -130,22 +130,22 @@ impl CublasLTBatchMatmulF8 {
             let (c, c_l) = c.storage_and_layout();
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("`c` must be a cuda tensor"),
+                _ => mcandle_core::bail!("`c` must be a cuda tensor"),
             };
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        mcandle_core::bail!("`c` start offset must be 0");
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        mcandle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => mcandle_core::bail!("`c` has to be contiguous"),
             };
 
             if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+                mcandle_core::bail!("`c` does not have the correct shape");
             }
 
             // Set beta to 0.0 if it is not set
@@ -185,7 +185,7 @@ impl CublasLTBatchMatmulF8 {
 
         for case in cases {
             if case % 16 != 0 {
-                candle_core::bail!("F8 cuBLASlt matmul must match all cases described here: https://docs.nvidia.com/cuda/cublas/#tensor-core-usage");
+                mcandle_core::bail!("F8 cuBLASlt matmul must match all cases described here: https://docs.nvidia.com/cuda/cublas/#tensor-core-usage");
             }
         }
 
@@ -224,12 +224,12 @@ impl CublasLTBatchMatmulF8 {
                     bias.as_ref(),
                     self.act.as_ref(),
                 )
-                .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
+                .map_err(|e| mcandle_core::Error::Cuda(Box::new(e)))?;
         }
 
         let out = match out {
-            OutSlice::BF16(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
-            OutSlice::F8(s) => candle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
+            OutSlice::BF16(s) => mcandle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
+            OutSlice::F8(s) => mcandle_core::CudaStorage::wrap_cuda_slice(s, dev.clone()),
         };
 
         Ok((out, out_shape))
@@ -288,7 +288,7 @@ pub fn fused_batch_matmul_f8(
     }
 }
 
-impl candle_core::CustomOp2 for CublasLTBatchMatmulF8 {
+impl mcandle_core::CustomOp2 for CublasLTBatchMatmulF8 {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul-f8"
     }
@@ -300,26 +300,26 @@ impl candle_core::CustomOp2 for CublasLTBatchMatmulF8 {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("no cpu support for cublaslt-batch-matmul-f8")
+        mcandle_core::bail!("no cpu support for cublaslt-batch-matmul-f8")
     }
 
     fn cuda_fwd(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F8E4M3 => self.fwd_f8e4m3(a, a_l, b, b_l, None, None),
+            mcandle_core::DType::F8E4M3 => self.fwd_f8e4m3(a, a_l, b, b_l, None, None),
             dt => {
-                candle_core::bail!("cublaslt-batch-matmul is only supported for f8e4m3 ({dt:?})")
+                mcandle_core::bail!("cublaslt-batch-matmul is only supported for f8e4m3 ({dt:?})")
             }
         }
     }
 }
 
-impl candle_core::CustomOp3 for CublasLTBatchMatmulF8 {
+impl mcandle_core::CustomOp3 for CublasLTBatchMatmulF8 {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul-add-f8"
     }
@@ -333,21 +333,23 @@ impl candle_core::CustomOp3 for CublasLTBatchMatmulF8 {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("no cpu support for cublaslt-batch-matmul-add-f8")
+        mcandle_core::bail!("no cpu support for cublaslt-batch-matmul-add-f8")
     }
 
     fn cuda_fwd(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: &candle_core::CudaStorage,
+        bias: &mcandle_core::CudaStorage,
         bias_l: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F8E4M3 => self.fwd_f8e4m3(a, a_l, b, b_l, Some(bias), Some(bias_l)),
-            dt => candle_core::bail!(
+            mcandle_core::DType::F8E4M3 => {
+                self.fwd_f8e4m3(a, a_l, b, b_l, Some(bias), Some(bias_l))
+            }
+            dt => mcandle_core::bail!(
                 "cublaslt-batch-matmul-add is only supported for f8e4m3 ({dt:?})"
             ),
         }
@@ -365,13 +367,13 @@ pub struct CublasLTBatchMatmul {
 impl CublasLTBatchMatmul {
     pub fn fwd_f16(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: Option<&candle_core::CudaStorage>,
+        bias: Option<&mcandle_core::CudaStorage>,
         bias_l: Option<&Layout>,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         let dev = a.device();
 
         // Assume TN
@@ -379,11 +381,11 @@ impl CublasLTBatchMatmul {
         let (b_0, n, b_2) = b_l.shape().dims3()?;
 
         if b_2 != k {
-            candle_core::bail!("This layer only supports TN layout");
+            mcandle_core::bail!("This layer only supports TN layout");
         }
 
         if b_0 != batch_size {
-            candle_core::bail!("`b` must have the same batch size as `a`")
+            mcandle_core::bail!("`b` must have the same batch size as `a`")
         }
 
         let lda = k;
@@ -397,7 +399,7 @@ impl CublasLTBatchMatmul {
 
         let bias = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
             if bias_l.shape().dims1()? != m {
-                candle_core::bail!("Bias does not have the correct shape");
+                mcandle_core::bail!("Bias does not have the correct shape");
             }
 
             Some(bias.as_cuda_slice::<f16>()?.slice(bias_l.start_offset()..))
@@ -409,22 +411,22 @@ impl CublasLTBatchMatmul {
             let (c, c_l) = c.storage_and_layout();
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<f16>()?,
-                _ => candle_core::bail!("`c` must be a cuda tensor"),
+                _ => mcandle_core::bail!("`c` must be a cuda tensor"),
             };
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        mcandle_core::bail!("`c` start offset must be 0");
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        mcandle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => mcandle_core::bail!("`c` has to be contiguous"),
             };
 
             if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+                mcandle_core::bail!("`c` does not have the correct shape");
             }
 
             // Set beta to 0.0 if it is not set
@@ -458,23 +460,23 @@ impl CublasLTBatchMatmul {
         unsafe {
             self.cublaslt
                 .matmul(config, &a, &b, &mut out, bias.as_ref(), self.act.as_ref())
-                .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
+                .map_err(|e| mcandle_core::Error::Cuda(Box::new(e)))?;
         }
 
-        let out = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
+        let out = mcandle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
 
         Ok((out, out_shape))
     }
 
     pub fn fwd_bf16(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: Option<&candle_core::CudaStorage>,
+        bias: Option<&mcandle_core::CudaStorage>,
         bias_l: Option<&Layout>,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         let dev = a.device();
 
         // Assume TN
@@ -482,11 +484,11 @@ impl CublasLTBatchMatmul {
         let (b_0, n, b_2) = b_l.shape().dims3()?;
 
         if b_2 != k {
-            candle_core::bail!("This layer only supports TN layout");
+            mcandle_core::bail!("This layer only supports TN layout");
         }
 
         if b_0 != batch_size {
-            candle_core::bail!("`b` must have the same batch size as `a`")
+            mcandle_core::bail!("`b` must have the same batch size as `a`")
         }
 
         let lda = k;
@@ -500,7 +502,7 @@ impl CublasLTBatchMatmul {
 
         let bias = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
             if bias_l.shape().dims1()? != m {
-                candle_core::bail!("Bias does not have the correct shape");
+                mcandle_core::bail!("Bias does not have the correct shape");
             }
 
             Some(bias.as_cuda_slice::<bf16>()?.slice(bias_l.start_offset()..))
@@ -512,22 +514,22 @@ impl CublasLTBatchMatmul {
             let (c, c_l) = c.storage_and_layout();
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<bf16>()?,
-                _ => candle_core::bail!("`c` must be a cuda tensor"),
+                _ => mcandle_core::bail!("`c` must be a cuda tensor"),
             };
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        mcandle_core::bail!("`c` start offset must be 0");
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        mcandle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => mcandle_core::bail!("`c` has to be contiguous"),
             };
 
             if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+                mcandle_core::bail!("`c` does not have the correct shape");
             }
 
             // Set beta to 0.0 if it is not set
@@ -561,23 +563,23 @@ impl CublasLTBatchMatmul {
         unsafe {
             self.cublaslt
                 .matmul(config, &a, &b, &mut out, bias.as_ref(), self.act.as_ref())
-                .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
+                .map_err(|e| mcandle_core::Error::Cuda(Box::new(e)))?;
         }
 
-        let out = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
+        let out = mcandle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
 
         Ok((out, out_shape))
     }
 
     pub fn fwd_f32(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: Option<&candle_core::CudaStorage>,
+        bias: Option<&mcandle_core::CudaStorage>,
         bias_l: Option<&Layout>,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         let dev = a.device();
 
         // Assume TN
@@ -585,11 +587,11 @@ impl CublasLTBatchMatmul {
         let (b_0, n, b_2) = b_l.shape().dims3()?;
 
         if b_2 != k {
-            candle_core::bail!("This layer only supports TN layout");
+            mcandle_core::bail!("This layer only supports TN layout");
         }
 
         if b_0 != batch_size {
-            candle_core::bail!("`b` must have the same batch size as `a`")
+            mcandle_core::bail!("`b` must have the same batch size as `a`")
         }
 
         let lda = k;
@@ -603,7 +605,7 @@ impl CublasLTBatchMatmul {
 
         let bias = if let (Some(bias), Some(bias_l)) = (bias, bias_l) {
             if bias_l.shape().dims1()? != m {
-                candle_core::bail!("Bias does not have the correct shape");
+                mcandle_core::bail!("Bias does not have the correct shape");
             }
 
             Some(bias.as_cuda_slice::<f32>()?.slice(bias_l.start_offset()..))
@@ -615,22 +617,22 @@ impl CublasLTBatchMatmul {
             let (c, c_l) = c.storage_and_layout();
             let c = match &*c {
                 Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
-                _ => candle_core::bail!("`c` must be a cuda tensor"),
+                _ => mcandle_core::bail!("`c` must be a cuda tensor"),
             };
             match c_l.contiguous_offsets() {
                 Some((o1, o2)) => {
                     if o1 != 0 {
-                        candle_core::bail!("`c` start offset must be 0");
+                        mcandle_core::bail!("`c` start offset must be 0");
                     }
                     if o2 != out_shape.elem_count() {
-                        candle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
+                        mcandle_core::bail!("`c` end offset must be {}", out_shape.elem_count())
                     }
                 }
-                None => candle_core::bail!("`c` has to be contiguous"),
+                None => mcandle_core::bail!("`c` has to be contiguous"),
             };
 
             if c_l.shape().dims3()? != (batch_size, n, m) {
-                candle_core::bail!("`c` does not have the correct shape");
+                mcandle_core::bail!("`c` does not have the correct shape");
             }
 
             // Set beta to 0.0 if it is not set
@@ -664,16 +666,16 @@ impl CublasLTBatchMatmul {
         unsafe {
             self.cublaslt
                 .matmul(config, &a, &b, &mut out, bias.as_ref(), self.act.as_ref())
-                .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?;
+                .map_err(|e| mcandle_core::Error::Cuda(Box::new(e)))?;
         }
 
-        let out = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
+        let out = mcandle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
 
         Ok((out, out_shape))
     }
 }
 
-impl candle_core::CustomOp2 for CublasLTBatchMatmul {
+impl mcandle_core::CustomOp2 for CublasLTBatchMatmul {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul"
     }
@@ -685,22 +687,22 @@ impl candle_core::CustomOp2 for CublasLTBatchMatmul {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("no cpu support for cublaslt-batch-matmul")
+        mcandle_core::bail!("no cpu support for cublaslt-batch-matmul")
     }
 
     fn cuda_fwd(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F16 => self.fwd_f16(a, a_l, b, b_l, None, None),
-            candle_core::DType::BF16 => self.fwd_bf16(a, a_l, b, b_l, None, None),
-            candle_core::DType::F32 => self.fwd_f32(a, a_l, b, b_l, None, None),
+            mcandle_core::DType::F16 => self.fwd_f16(a, a_l, b, b_l, None, None),
+            mcandle_core::DType::BF16 => self.fwd_bf16(a, a_l, b, b_l, None, None),
+            mcandle_core::DType::F32 => self.fwd_f32(a, a_l, b, b_l, None, None),
             dt => {
-                candle_core::bail!(
+                mcandle_core::bail!(
                     "cublaslt-batch-matmul is only supported for f16/bf16/f32 ({dt:?})"
                 )
             }
@@ -708,7 +710,7 @@ impl candle_core::CustomOp2 for CublasLTBatchMatmul {
     }
 }
 
-impl candle_core::CustomOp3 for CublasLTBatchMatmul {
+impl mcandle_core::CustomOp3 for CublasLTBatchMatmul {
     fn name(&self) -> &'static str {
         "cublaslt-batch-matmul-add"
     }
@@ -722,23 +724,23 @@ impl candle_core::CustomOp3 for CublasLTBatchMatmul {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle_core::bail!("no cpu support for cublaslt-batch-matmul-add")
+        mcandle_core::bail!("no cpu support for cublaslt-batch-matmul-add")
     }
 
     fn cuda_fwd(
         &self,
-        a: &candle_core::CudaStorage,
+        a: &mcandle_core::CudaStorage,
         a_l: &Layout,
-        b: &candle_core::CudaStorage,
+        b: &mcandle_core::CudaStorage,
         b_l: &Layout,
-        bias: &candle_core::CudaStorage,
+        bias: &mcandle_core::CudaStorage,
         bias_l: &Layout,
-    ) -> Result<(candle_core::CudaStorage, Shape)> {
+    ) -> Result<(mcandle_core::CudaStorage, Shape)> {
         match a.dtype() {
-            candle_core::DType::F16 => self.fwd_f16(a, a_l, b, b_l, Some(bias), Some(bias_l)),
-            candle_core::DType::BF16 => self.fwd_bf16(a, a_l, b, b_l, Some(bias), Some(bias_l)),
-            candle_core::DType::F32 => self.fwd_f32(a, a_l, b, b_l, Some(bias), Some(bias_l)),
-            dt => candle_core::bail!(
+            mcandle_core::DType::F16 => self.fwd_f16(a, a_l, b, b_l, Some(bias), Some(bias_l)),
+            mcandle_core::DType::BF16 => self.fwd_bf16(a, a_l, b, b_l, Some(bias), Some(bias_l)),
+            mcandle_core::DType::F32 => self.fwd_f32(a, a_l, b, b_l, Some(bias), Some(bias_l)),
+            dt => mcandle_core::bail!(
                 "cublaslt-batch-matmul-add is only supported for f16/bf16/f32 ({dt:?})"
             ),
         }
@@ -791,7 +793,7 @@ mod tests {
     use std::f32::consts::PI;
 
     use super::*;
-    use candle_core::{DType, Device, IndexOp};
+    use mcandle_core::{DType, Device, IndexOp};
 
     // The bias bit seems to trip the test up. Not really sure why; it may be something locally.
     #[test]

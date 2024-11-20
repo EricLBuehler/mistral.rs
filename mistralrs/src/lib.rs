@@ -81,5 +81,5 @@ pub mod v0_4_api {
 
 pub use v0_4_api::*;
 
-pub use candle_core::{DType, Device, Result, Tensor};
+pub use mcandle_core::{DType, Device, Result, Tensor};
 pub use mistralrs_core::*;

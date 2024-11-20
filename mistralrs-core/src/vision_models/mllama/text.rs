@@ -2,8 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
+use mcandle_core::{DType, Device, IndexOp, Result, Tensor};
+use mcandle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
 use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
@@ -390,7 +390,7 @@ impl MLlamaTextCrossAttention {
         } else if let Some((k_cache, v_cache)) = kv_cache {
             (k_cache.clone(), v_cache.clone())
         } else {
-            candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
+            mcandle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
         let mut attn_output = Sdpa
@@ -531,7 +531,7 @@ impl MLlamaTextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
+            mcandle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
 
@@ -550,7 +550,7 @@ impl MLlamaTextModel {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
                     None,
                 ),

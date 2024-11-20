@@ -20,7 +20,7 @@ pyo3.workspace = true
 mistralrs-core = { version = "0.3.2", path = "../mistralrs-core", features = ["pyo3_macros"] }
 serde.workspace = true
 serde_json.workspace = true
-candle-core.workspace = true
+mcandle-core.workspace = true
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -38,9 +38,9 @@ anyhow.workspace = true
 pyo3-build-config = "0.22"
 
 [features]
-cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
-cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
-metal = ["candle-core/metal", "mistralrs-core/metal"]
+cuda = ["mcandle-core/cuda", "mistralrs-core/cuda"]
+cudnn = ["mcandle-core/cudnn", "mistralrs-core/cudnn"]
+metal = ["mcandle-core/metal", "mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]

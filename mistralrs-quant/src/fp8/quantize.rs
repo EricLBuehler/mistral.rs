@@ -1,6 +1,6 @@
-use candle_core::{DType, Result, Tensor};
-use candle_nn::Linear;
 use float8::F8E4M3;
+use mcandle_core::{DType, Result, Tensor};
+use mcandle_nn::Linear;
 
 use super::FP8Linear;
 
@@ -58,7 +58,7 @@ impl FP8Linear {
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{
+    use mcandle_core::{
         quantized::{GgmlDType, QTensor},
         DType, Device, Result, Tensor,
     };

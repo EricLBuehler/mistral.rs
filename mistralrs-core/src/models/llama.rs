@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use mcandle_core::{DType, Device, Result, Tensor};
+use mcandle_nn::{embedding, Embedding, Module, VarBuilder};
 use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -266,7 +266,7 @@ impl MlpLayer for Mlp {
         if let Some(t) = self.c_fc1.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
+        let x = (mcandle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
         if self.c_fc1.quantized_act_type().is_some() {
@@ -468,7 +468,7 @@ impl Llama {
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
+                mcandle_nn::Linear::new(
                     mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
                     None,
                 ),
