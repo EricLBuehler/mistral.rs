@@ -5,6 +5,7 @@ use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 
 /// A type which can be used as a request.
 pub trait RequestLike {
@@ -18,7 +19,7 @@ pub trait RequestLike {
     fn take_sampling_params(&mut self) -> SamplingParams;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 /// Plain text (chat) messages.
 ///
 /// No constraints, logits processors, logprobs, tools, or adapters.

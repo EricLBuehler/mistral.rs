@@ -1,6 +1,6 @@
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallType {
     Function,
@@ -24,7 +24,7 @@ pub struct CalledFunction {
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallResponse {
     pub id: String,
     #[serde(rename = "type")]
