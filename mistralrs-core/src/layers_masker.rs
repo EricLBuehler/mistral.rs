@@ -4,7 +4,7 @@ use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 
-use crate::pipeline::KvCache;
+use crate::{cublaslt::CUBLASLT_HANDLE, layers::get_use_matmul_via_f16, pipeline::KvCache};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
@@ -256,7 +256,15 @@ impl CausalMasker {
             Ok(mask)
         });
         let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            Some(mask?)
+            let mut mask = mask?;
+            // IMPORTANT: this must match the logic in attention.rs
+            if mask.device().is_cuda()
+                && CUBLASLT_HANDLE.lock().unwrap().is_some()
+                && !get_use_matmul_via_f16()
+            {
+                mask = mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+            }
+            Some(mask)
         } else {
             None
         };
@@ -312,7 +320,15 @@ impl CausalMasker {
             Ok(mask)
         });
         let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            Some(mask?)
+            let mut mask = mask?;
+            // IMPORTANT: this must match the logic in attention.rs
+            if mask.device().is_cuda()
+                && CUBLASLT_HANDLE.lock().unwrap().is_some()
+                && !get_use_matmul_via_f16()
+            {
+                mask = mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+            }
+            Some(mask)
         } else {
             None
         };

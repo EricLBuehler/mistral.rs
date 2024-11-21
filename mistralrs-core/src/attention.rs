@@ -180,7 +180,10 @@ impl Sdpa {
                     let k = k.flatten(0, 1)?;
                     let q = q.flatten(0, 1)?;
                     let v = v.flatten(0, 1)?;
-                    let attention_bias = mask.map(|mask| mask.flatten(0, 1)).transpose()?;
+                    let attention_bias = match mask {
+                        Some(mask) => Some(mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?),
+                        None => None,
+                    };
 
                     // If attention_bias is set, we fuse the add by giving it as the output matrix
                     // and setting beta to 1.0
