@@ -881,6 +881,11 @@
 <a href="#881" id="881">881</a>
 <a href="#882" id="882">882</a>
 <a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1489,13 +1494,18 @@
         <span class="kw">let </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>xs = (xs * (<span class="self">self</span>.hidden_size <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
-        <span class="kw">let </span>attention_mask =
-            CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, xs.dtype())<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            <span class="kw-2">&amp;*</span>cache,
+            xs.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
             xs.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;

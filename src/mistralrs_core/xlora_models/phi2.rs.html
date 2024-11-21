@@ -876,6 +876,11 @@
 <a href="#876" id="876">876</a>
 <a href="#877" id="877">877</a>
 <a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1460,7 +1465,12 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.full().lock()
         };
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, xs.dtype())<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            <span class="kw-2">&amp;*</span>cache,
+            xs.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(

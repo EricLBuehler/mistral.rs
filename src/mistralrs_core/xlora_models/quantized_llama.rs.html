@@ -1013,6 +1013,7 @@
 <a href="#1013" id="1013">1013</a>
 <a href="#1014" id="1014">1014</a>
 <a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
@@ -1852,7 +1853,8 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.full().lock()
         };
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(x, <span class="kw-2">&amp;*</span>cache, DType::F32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask =
+            CausalMasker.make_causal_mask_matrix(x, <span class="kw-2">&amp;*</span>cache, DType::F32, <span class="self">self</span>.layers[<span class="number">0</span>].n_head)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;

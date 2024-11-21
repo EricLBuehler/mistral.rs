@@ -891,6 +891,11 @@
 <a href="#891" id="891">891</a>
 <a href="#892" id="892">892</a>
 <a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -1353,7 +1358,12 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.kv_cache.full().lock()
         };
-        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, x.dtype())<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            <span class="kw-2">&amp;*</span>cache,
+            x.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
+        )<span class="question-mark">?</span>;
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
             x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(

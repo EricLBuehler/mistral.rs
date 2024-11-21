@@ -500,6 +500,7 @@
 <a href="#500" id="500">500</a>
 <a href="#501" id="501">501</a>
 <a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, sync::Arc};
@@ -788,6 +789,7 @@
             <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
             <span class="self">self</span>.text.cfg.sliding_window,
             <span class="self">self</span>.text.dtype,
+            <span class="self">self</span>.text.cfg.num_attn_heads,
         )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>input_embeds = <span class="kw">if </span>pixel_values.is_some() || pixel_values_videos.is_some() {

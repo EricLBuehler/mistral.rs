@@ -997,6 +997,11 @@
 <a href="#997" id="997">997</a>
 <a href="#998" id="998">998</a>
 <a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
@@ -1666,13 +1671,18 @@
         } <span class="kw">else </span>{
             <span class="self">self</span>.cache.full().lock()
         };
-        <span class="kw">let </span>attention_mask =
-            CausalMasker.make_causal_mask_matrix(input_ids, <span class="kw-2">&amp;*</span>cache, xs.dtype())<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            <span class="kw-2">&amp;*</span>cache,
+            xs.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window),
             xs.dtype(),
+            <span class="self">self</span>.cfg.num_attn_heads,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
