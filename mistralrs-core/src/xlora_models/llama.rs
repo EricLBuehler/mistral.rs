@@ -460,7 +460,12 @@ impl XLoraLlama {
         } else {
             self.kv_cache.full().lock()
         };
-        let mask = CausalMasker.make_causal_mask_matrix(input_ids, &*cache, x.dtype())?;
+        let mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            x.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(

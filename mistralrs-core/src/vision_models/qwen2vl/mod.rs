@@ -286,6 +286,7 @@ impl Qwen2VLModel {
             &seqlen_offsets as &dyn PastKvLenCache,
             self.text.cfg.sliding_window,
             self.text.dtype,
+            self.text.cfg.num_attn_heads,
         )?;
 
         let input_embeds = if pixel_values.is_some() || pixel_values_videos.is_some() {

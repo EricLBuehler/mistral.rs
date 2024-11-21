@@ -565,6 +565,7 @@ impl Model {
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
+            self.cfg.num_attn_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

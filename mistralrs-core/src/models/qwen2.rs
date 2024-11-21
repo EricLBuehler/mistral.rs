@@ -549,6 +549,7 @@ impl Model {
                 .unwrap_or(cache as &dyn PastKvLenCache),
             Some(self.sliding_window),
             xs.dtype(),
+            self.cfg.num_attn_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

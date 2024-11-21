@@ -432,6 +432,7 @@ impl ModelWeights {
             &*cache,
             Some(self.max_seq_len),
             DType::F32,
+            self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {

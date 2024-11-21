@@ -531,6 +531,7 @@ impl Model {
                 .unwrap_or(cache as &dyn PastKvLenCache),
             self.sliding_window,
             xs.dtype(),
+            self.cfg.num_attn_heads,
         )?;
 
         for (i, layer) in self.layers.iter().enumerate() {

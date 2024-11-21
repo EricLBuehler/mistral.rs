@@ -667,13 +667,18 @@ impl Model {
         } else {
             self.cache.full().lock()
         };
-        let attention_mask =
-            CausalMasker.make_causal_mask_matrix(input_ids, &*cache, xs.dtype())?;
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
         let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &*cache,
             Some(self.sliding_window),
             xs.dtype(),
+            self.cfg.num_attn_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
