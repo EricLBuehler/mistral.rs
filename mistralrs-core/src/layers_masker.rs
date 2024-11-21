@@ -136,6 +136,7 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &dyn PastKvLenCache,
         dtype: DType,
+        n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
         let past_kv_len = cache.get_past_kv_len()?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
@@ -143,31 +144,31 @@ impl CausalMasker {
             return Ok(None);
         }
 
-        let causal_mask = {
-            let mask = self
-                .make_mask(tgt_len, past_kv_len, input_ids.device())?
-                .to_dtype(DType::U8)?;
-            Some(mask)
-        };
+        let mut causal_mask = self
+            .make_mask(tgt_len, past_kv_len, input_ids.device())?
+            .to_dtype(DType::U8)?;
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;
-        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask = mask.broadcast_as((mask.dims()[0], mask.dims()[1]))?;
+        causal_mask = {
+            let mut mask =
+                causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            let mask = masked_fill(
+            mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
                 &mask,
                 f32::NEG_INFINITY,
             )?;
-
-            Ok(mask)
-        });
-        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            Some(mask?)
-        } else {
-            None
+            mask
         };
-        Ok(mask)
+
+        // IMPORTANT: this must match the logic in attention.rs.
+        if causal_mask.device().is_cuda()
+            && !get_use_matmul_via_f16()
+            && CUBLASLT_HANDLE.lock().unwrap().is_some()
+        {
+            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+        }
+        Ok(Some(causal_mask))
     }
 
     pub fn make_sliding_window_causal_mask_matrix(
@@ -176,9 +177,10 @@ impl CausalMasker {
         cache: &dyn PastKvLenCache,
         sliding_window: Option<usize>,
         dtype: DType,
+        n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
         if sliding_window.is_none() {
-            return self.make_causal_mask_matrix(input_ids, cache, dtype);
+            return self.make_causal_mask_matrix(input_ids, cache, dtype, n_attn_heads);
         }
         let sliding_window = sliding_window.unwrap();
         let past_kv_len = cache.get_past_kv_len()?;
@@ -187,34 +189,35 @@ impl CausalMasker {
             return Ok(None);
         }
 
-        let causal_mask = {
+        let mut causal_mask = {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let diagonal = past_kv_len as isize - sliding_window as isize - 1;
             let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-            let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?
-                .to_dtype(DType::U8)?;
 
-            Some(mask)
+            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?
+                .to_dtype(DType::U8)?
         };
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;
-        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask = mask.broadcast_as((mask.dims()[0], mask.dims()[1]))?;
+        causal_mask = {
+            let mask = causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            let mask = masked_fill(
+
+            masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
                 &mask,
                 f32::NEG_INFINITY,
-            )?;
-
-            Ok(mask)
-        });
-        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            Some(mask?)
-        } else {
-            None
+            )?
         };
-        Ok(mask)
+
+        // IMPORTANT: this must match the logic in attention.rs.
+        if causal_mask.device().is_cuda()
+            && !get_use_matmul_via_f16()
+            && CUBLASLT_HANDLE.lock().unwrap().is_some()
+        {
+            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+        }
+        Ok(Some(causal_mask))
     }
 
     #[deprecated(
@@ -234,41 +237,38 @@ impl CausalMasker {
             return Ok(None);
         }
 
-        let causal_mask = {
-            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-            let mask = mask
+        let mut causal_mask = {
+            let mut mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+            mask = mask
                 .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
                 .to_dtype(DType::U8)?;
-            Some(mask)
+            mask
         };
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;
-        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask =
-                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
+        causal_mask = {
+            let mut mask = causal_mask.broadcast_as((
+                causal_mask.dims()[0],
+                n_attn_heads,
+                causal_mask.dims()[2],
+                causal_mask.dims()[3],
+            ))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            let mask = masked_fill(
+            mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
                 &mask,
                 f32::NEG_INFINITY,
             )?;
 
-            Ok(mask)
-        });
-        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            let mut mask = mask?;
-            // IMPORTANT: this must match the logic in attention.rs
-            if mask.device().is_cuda()
-                && CUBLASLT_HANDLE.lock().unwrap().is_some()
-                && !get_use_matmul_via_f16()
-            {
-                mask = mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-            }
-            Some(mask)
-        } else {
-            None
+            mask
         };
-        Ok(mask)
+
+        // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
+        if causal_mask.device().is_cuda() && !get_use_matmul_via_f16() {
+            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+        }
+
+        Ok(Some(causal_mask))
     }
 
     #[deprecated(
@@ -294,45 +294,41 @@ impl CausalMasker {
             return Ok(None);
         }
 
-        let causal_mask = {
-            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
+        let mut causal_mask = {
+            let mut mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let diagonal = past_kv_len as isize - sliding_window as isize - 1;
             let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-            let mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
-            let mask = mask
+            mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
+            mask = mask
                 .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
                 .to_dtype(DType::U8)?;
 
-            Some(mask)
+            mask
         };
 
         let zero = Tensor::new(0.0f32, input_ids.device())?;
-        let causal_mask: Option<Result<Tensor>> = causal_mask.map(|mask| {
-            let mask =
-                mask.broadcast_as((mask.dims()[0], n_attn_heads, mask.dims()[2], mask.dims()[3]))?;
+        causal_mask = {
+            let mut mask = causal_mask.broadcast_as((
+                causal_mask.dims()[0],
+                n_attn_heads,
+                causal_mask.dims()[2],
+                causal_mask.dims()[3],
+            ))?;
             // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            let mask = masked_fill(
+            mask = masked_fill(
                 &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
                 &mask,
                 f32::NEG_INFINITY,
             )?;
-
-            Ok(mask)
-        });
-        let mask: Option<Tensor> = if let Some(mask) = causal_mask {
-            let mut mask = mask?;
-            // IMPORTANT: this must match the logic in attention.rs
-            if mask.device().is_cuda()
-                && CUBLASLT_HANDLE.lock().unwrap().is_some()
-                && !get_use_matmul_via_f16()
-            {
-                mask = mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-            }
-            Some(mask)
-        } else {
-            None
+            mask
         };
-        Ok(mask)
+
+        // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
+        if causal_mask.device().is_cuda() && !get_use_matmul_via_f16() {
+            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
+        }
+
+        Ok(Some(causal_mask))
     }
 
     pub fn apply_mask_one_and_zero(

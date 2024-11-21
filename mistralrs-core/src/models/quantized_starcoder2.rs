@@ -376,6 +376,7 @@ impl ModelWeights {
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             DType::F32,
+            self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {

@@ -651,6 +651,7 @@ impl MLlamaTextModel {
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
             hidden_states.dtype(),
+            self.cfg.num_attn_heads,
         )?;
 
         for (i, layer) in self.layers.iter().enumerate() {

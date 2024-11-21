@@ -414,6 +414,7 @@ impl Llama {
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;

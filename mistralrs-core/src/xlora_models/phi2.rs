@@ -582,7 +582,12 @@ impl Model {
         } else {
             self.cache.full().lock()
         };
-        let mask = CausalMasker.make_causal_mask_matrix(input_ids, &*cache, xs.dtype())?;
+        let mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

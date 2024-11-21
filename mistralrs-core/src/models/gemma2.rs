@@ -606,13 +606,18 @@ impl Model {
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let cache = &mut self.cache.normal().0;
-        let attention_mask =
-            CausalMasker.make_causal_mask_matrix(input_ids, &*cache, xs.dtype())?;
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
         let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &*cache,
             Some(self.sliding_window),
             xs.dtype(),
+            self.cfg.num_attn_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;

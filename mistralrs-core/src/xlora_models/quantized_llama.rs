@@ -837,7 +837,8 @@ impl ModelWeights {
         } else {
             self.cache.full().lock()
         };
-        let mask = CausalMasker.make_causal_mask_matrix(x, &*cache, DType::F32)?;
+        let mask =
+            CausalMasker.make_causal_mask_matrix(x, &*cache, DType::F32, self.layers[0].n_head)?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
