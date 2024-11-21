@@ -2,7 +2,10 @@ use candle_core::{Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::{
+    attention::SdpaParams, layers::Sdpa,
+    pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
+};
 
 const _PARTITION_SIZE: usize = 512;
 
@@ -80,39 +83,20 @@ impl PagedAttention {
 
         let att = match attention_mask {
             None => None,
-            Some(mask) => {
-                //Only perform key/value repeat in prefiling stage, this will reduce kvcache
-                //and remove redundant repeat_kv in decoding stage
-                let att = if key_value_heads != attention_heads {
-                    let key_repeat = if key_value_heads == 1 {
-                        key.broadcast_as((batch_size, attention_heads, seq_len, head_size))?
-                    } else {
-                        Tensor::cat(&vec![&key; attention_heads / key_value_heads], 2)?
-                            .reshape((batch_size, attention_heads, seq_len, head_size))?
-                    };
-                    (query.matmul(&key_repeat.t()?.contiguous()?)? * self.scale as f64)?
-                } else {
-                    (query.matmul(&key.t()?)? * self.scale as f64)?
-                };
-                let att = match softcapping {
-                    None => att,
-                    Some(sc) => ((att / sc)?.tanh()? * sc)?,
-                };
-
-                let att = att.broadcast_add(&mask.unsqueeze(0)?.unsqueeze(0)?)?;
-                let att = candle_nn::ops::softmax_last_dim(&att)?;
-                if key_value_heads != attention_heads {
-                    let value_repeat = if key_value_heads == 1 {
-                        value.broadcast_as((batch_size, attention_heads, seq_len, head_size))?
-                    } else {
-                        Tensor::cat(&vec![&value; attention_heads / key_value_heads], 2)?
-                            .reshape((batch_size, attention_heads, seq_len, head_size))?
-                    };
-                    Some(att.matmul(&value_repeat.contiguous()?)?)
-                } else {
-                    Some(att.matmul(&value.contiguous()?).unwrap())
-                }
-            }
+            Some(mask) => Some(Sdpa.run_attention(
+                query,
+                key,
+                value,
+                Some(mask),
+                None,
+                &SdpaParams {
+                    n_kv_groups: attention_heads / key_value_heads,
+                    use_flash_attn: false,
+                    softcap: softcapping.map(|x| x as f32),
+                    softmax_scale: self.scale,
+                    sliding_window: None,
+                },
+            )?),
         };
 
         // // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
