@@ -232,6 +232,9 @@
 <a href="#232" id="232">232</a>
 <a href="#233" id="233">233</a>
 <a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -414,7 +417,10 @@
                     </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>attention_bias = mask.map(|mask| mask.flatten(<span class="number">0</span>, <span class="number">1</span>)).transpose()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+                        <span class="prelude-val">Some</span>(mask) =&gt; <span class="prelude-val">Some</span>(mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>),
+                        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+                    };
 
                     <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
                     // and setting beta to 1.0
