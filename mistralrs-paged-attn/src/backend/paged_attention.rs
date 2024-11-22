@@ -16,6 +16,7 @@ struct PagedAttention {
     value_cache: Tensor,
     block_tables: Tensor,
     context_lens: Tensor,
+    alibi_slopes: Option<Tensor>,
     max_context_len: usize,
 }
 
@@ -101,6 +102,19 @@ impl PagedAttention {
         let cl = cl.slice(cl_l.start_offset()..);
         let bt = bt.slice(bt_l.start_offset()..);
 
+        let alibi_s_ptr = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
+            let (alibi_s, alibi_s_l) = alibi_slopes.storage_and_layout();
+            let alibi_s = match &*alibi_s {
+                Storage::Cuda(alibi_s) => alibi_s,
+                _ => candle::bail!("context_lens must be a cuda tensor"),
+            };
+            let alibi_s = alibi_s.as_cuda_slice::<f32>()?;
+            let alibi_s = alibi_s.slice(alibi_s_l.start_offset()..);
+            *alibi_s.device_ptr() as *const core::ffi::c_void
+        } else {
+            std::ptr::null()
+        };
+
         let (num_seqs, num_heads, head_size) = q_l.shape().dims3()?;
         if !(head_size == 64
             || head_size == 80
@@ -173,6 +187,7 @@ impl PagedAttention {
                     q_ptr,
                     kc_ptr,
                     vc_ptr,
+                    alibi_s_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
                     self.softcapping,
@@ -210,6 +225,7 @@ impl PagedAttention {
                     q_ptr,
                     kc_ptr,
                     vc_ptr,
+                    alibi_s_ptr,
                     num_kv_heads as c_int,
                     self.softmax_scale,
                     self.softcapping,
@@ -270,6 +286,7 @@ impl candle::CustomOp1 for PagedAttention {
 /// * `max_context_len` - Max of `context_len`
 /// * `softmax_scale` - scaling factor
 /// * `softcapping`- Softcapping value as in Gemma 2. Using 1.0 means do nothing.
+/// * `alibi_slopes`- Optional alibi slopes, `(num_heads_q)`.
 ///
 /// The resulting tensor has dimensions `(num_sequences, num_heads_q, head_size)`.
 #[allow(clippy::too_many_arguments)]
@@ -279,6 +296,7 @@ pub fn paged_attention(
     value_cache: &Tensor,
     block_tables: &Tensor,
     context_lens: &Tensor,
+    alibi_slopes: Option<&Tensor>,
     max_context_len: usize,
     softmax_scale: f32,
     softcapping: f32,
@@ -291,6 +309,7 @@ pub fn paged_attention(
         context_lens: context_lens.clone(),
         max_context_len,
         softcapping,
+        alibi_slopes: alibi_slopes.cloned(),
     };
     q.apply_op1(op)
 }

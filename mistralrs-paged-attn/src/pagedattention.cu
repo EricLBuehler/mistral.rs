@@ -585,7 +585,7 @@ __global__ void paged_attention_v2_reduce_kernel(
     block_tables,                                                                             \
     context_lens,                                                                             \
     max_num_blocks_per_seq,                                                                   \
-    alibi_slopes_ptr,                                                                         \
+    reinterpret_cast<float*>(alibi_slopes),                                                   \
     q_stride,                                                                                 \
     kv_block_stride,                                                                          \
     kv_head_stride);
@@ -600,6 +600,7 @@ void paged_attention_v1_launcher(
   void *query,
   void *key_cache,
   void *value_cache,
+  void* __restrict__ alibi_slopes,
   int num_kv_heads,
   float scale,
   float softcapping,
@@ -619,8 +620,7 @@ void paged_attention_v1_launcher(
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
   // assert(head_size % thread_group_size == 0);
 
-  // NOTE: alibi_slopes is optional.
-  const float* alibi_slopes_ptr = nullptr;
+  // NOTE: alibi_slopes is optional. It may be nullptr.
 
   constexpr int NUM_WARPS = NUM_THREADS / WARP_SIZE;
   int padded_max_context_len = DIVIDE_ROUND_UP(max_context_len, BLOCK_SIZE) * BLOCK_SIZE;
@@ -666,6 +666,7 @@ void paged_attention_v1_launcher(
     query,                                                          \
     key_cache,                                                      \
     value_cache,                                                    \
+    alibi_slopes,                                                   \
     num_kv_heads,                                                   \
     scale,                                                          \
     softcapping,                                                    \
@@ -702,7 +703,8 @@ extern "C" void paged_attention_v1(
   void *query,           // [num_seqs, num_heads, head_size]
   void *key_cache,       // [num_blocks, num_heads, head_size/x, block_size, x]
   void *value_cache,     // [num_blocks, num_heads, head_size, block_size]
-  int32_t num_kv_heads,               // [num_heads]
+  void *alibi_slopes, // [num_heads]
+  int32_t num_kv_heads,
   float scale,
   float softcapping,
   uint32_t *block_tables,    // [num_seqs, max_num_blocks_per_seq]
@@ -740,11 +742,11 @@ extern "C" void paged_attention_v1(
     reinterpret_cast<T*>(value_cache),                                                        \
     num_kv_heads,                                                                             \
     scale,                                                                                    \
-    softcapping,                                                                                    \
+    softcapping,                                                                              \
     block_tables,                                                                             \
     context_lens,                                                                             \
     max_num_blocks_per_seq,                                                                   \
-    alibi_slopes,                                                                             \
+    reinterpret_cast<float*>(alibi_slopes),                                                   \
     q_stride,                                                                                 \
     kv_block_stride,                                                                          \
     kv_head_stride);                                                                          \
@@ -770,6 +772,7 @@ void paged_attention_v2_launcher(
   void *query,
   void *key_cache,
   void *value_cache,
+  void *alibi_slopes,
   int num_kv_heads,
   float scale,
   float softcapping,
@@ -788,8 +791,7 @@ void paged_attention_v2_launcher(
   ) {
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
 
-  // NOTE: alibi_slopes is optional.
-  const float* alibi_slopes = nullptr;
+  // NOTE: alibi_slopes is optional. It may be nullptr.
 
   T* tmp_out_ptr = reinterpret_cast<T*>(tmp_out);
 
@@ -843,6 +845,7 @@ void paged_attention_v2_launcher(
     query,                                                          \
     key_cache,                                                      \
     value_cache,                                                    \
+    alibi_slopes,                                                   \
     num_kv_heads,                                                   \
     scale,                                                          \
     softcapping,                                                    \
@@ -882,6 +885,7 @@ extern "C" void paged_attention_v2(
   void *query,           // [num_seqs, num_heads, head_size]
   void *key_cache,       // [num_blocks, num_heads, head_size/x, block_size, x]
   void *value_cache,     // [num_blocks, num_heads, head_size, block_size]
+  void *alibi_slopes, // [num_heads]
   int32_t num_kv_heads,
   float scale,
   float softcapping,
