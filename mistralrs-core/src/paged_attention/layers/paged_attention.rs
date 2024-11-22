@@ -7,16 +7,10 @@ use crate::{
     pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
 };
 
-const _PARTITION_SIZE: usize = 512;
-
-#[allow(dead_code)]
 pub struct PagedAttention {
-    num_attention_heads: usize,
-    head_dim: usize,
-    num_key_value_heads: usize,
     scale: f32,
     sliding_window: Option<usize>,
-    num_queries_per_kv: usize,
+    n_kv_groups: usize,
     alibi_slopes: Option<Tensor>,
 }
 
@@ -28,22 +22,20 @@ impl PagedAttention {
         num_key_value_heads: Option<usize>,
         sliding_window: Option<usize>,
         device: &Device,
-        alibi_slopes: Option<Vec<f64>>,
+        alibi_slopes: Option<Vec<f32>>,
     ) -> Result<Self> {
         let num_key_value_heads = num_key_value_heads.unwrap_or(num_attention_heads);
-        let num_queries_per_kv = num_attention_heads / num_key_value_heads;
+        let n_kv_groups = num_attention_heads / num_key_value_heads;
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
+            assert_eq!(alibi_slopes.len(), head_dim);
             Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };
         Ok(Self {
-            num_attention_heads,
-            head_dim,
-            num_key_value_heads,
             scale,
             sliding_window,
-            num_queries_per_kv,
+            n_kv_groups,
             alibi_slopes,
         })
     }
@@ -81,6 +73,7 @@ impl PagedAttention {
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
             None => None,
             Some(mask) => Some(Sdpa.run_attention(
@@ -90,11 +83,11 @@ impl PagedAttention {
                 Some(mask),
                 None,
                 &SdpaParams {
-                    n_kv_groups: attention_heads / key_value_heads,
+                    n_kv_groups: self.n_kv_groups,
                     use_flash_attn: false,
                     softcap: softcapping.map(|x| x as f32),
                     softmax_scale: self.scale,
-                    sliding_window: None,
+                    sliding_window: self.sliding_window,
                 },
             )?),
         };
@@ -159,6 +152,7 @@ impl PagedAttention {
             value_cache.as_ref().unwrap(),
             input_metadata.block_tables.as_ref().unwrap(),
             input_metadata.context_lens.as_ref().unwrap(),
+            self.alibi_slopes.as_ref(),
             input_metadata.max_context_len.unwrap(),
             self.scale,
             softcapping.unwrap_or(1.0f64) as f32,
