@@ -92,7 +92,7 @@ fn naive_sdpa(
     head_dim: usize,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    if let Some(mask) = mask {
+    if mask.is_some_and(|mask| mask.rank() == 2) {
         let mut att = MatMul.matmul(q, &k.t()?)?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
@@ -100,7 +100,11 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        let att = candle_nn::ops::attn_softmax_last_dim(&att, mask, 1. / (head_dim as f32).sqrt())?;
+        let att = candle_nn::ops::attn_softmax_last_dim(
+            &att,
+            mask.unwrap(),
+            1. / (head_dim as f32).sqrt(),
+        )?;
         MatMul.matmul(&att, v)
     } else {
         let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
