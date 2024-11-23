@@ -232,6 +232,18 @@
 <a href="#232" id="232">232</a>
 <a href="#233" id="233">233</a>
 <a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
@@ -326,7 +338,7 @@
     head_dim: usize,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">if let </span><span class="prelude-val">Some</span>(mask) = mask {
+    <span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2</span>) {
         <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
             att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
@@ -334,7 +346,11 @@
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>att = candle_nn::ops::attn_softmax_last_dim(<span class="kw-2">&amp;</span>att, mask, <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span>att = candle_nn::ops::attn_softmax_last_dim(
+            <span class="kw-2">&amp;</span>att,
+            mask.unwrap(),
+            <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
+        )<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     } <span class="kw">else </span>{
         <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
@@ -414,7 +430,15 @@
                     </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>attention_bias = mask.cloned();
+                    <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
+                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
+                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; <span class="prelude-val">Some</span>(mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>),
+                        <span class="prelude-val">Some</span>(mask) =&gt; {
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3, 4, or 2"</span>)
+                        }
+                        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+                    };
 
                     <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
                     // and setting beta to 1.0
