@@ -604,6 +604,11 @@
 <a href="#604" id="604">604</a>
 <a href="#605" id="605">605</a>
 <a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -925,8 +930,13 @@
                         .progress_chars(<span class="string">"#&gt;-"</span>),
                 );
 
+                <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+                </span><span class="kw">let </span>n_threads = <span class="number">2</span>;
+                <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
+                </span><span class="kw">let </span>n_threads = <span class="number">1</span>;
+
                 <span class="kw">let </span>pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(<span class="number">2</span>)
+                    .num_threads(n_threads)
                     .build()
                     .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
 

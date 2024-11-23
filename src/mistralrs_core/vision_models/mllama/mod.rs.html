@@ -254,6 +254,12 @@
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
 <a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
@@ -352,9 +358,8 @@
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             vision_model: MLlamaVisionModel::new(
                 <span class="kw-2">&amp;</span>cfg.vision_config,
-                vb.pp(<span class="string">"vision_model"</span>)
-                    .set_device(real_dev.clone())
-                    .set_dtype(vision_model_dtype),
+                vb.pp(<span class="string">"vision_model"</span>).set_dtype(vision_model_dtype),
+                <span class="kw-2">&amp;</span>real_dev,
             )<span class="question-mark">?</span>,
             language_model: MLlamaTextModel::new(
                 <span class="kw-2">&amp;</span>cfg.text_config,
@@ -492,7 +497,14 @@
         Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
         <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
     ) {
-        <span class="self">self</span>.language_model.get_layers()
+        <span class="kw">let </span>(<span class="kw-2">mut </span>layers, mapper) = <span class="self">self</span>.language_model.get_layers();
+        layers.extend(
+            <span class="self">self</span>.vision_model
+                .get_isq_layers()
+                .into_iter()
+                .map(|layer| (layer, <span class="prelude-val">None</span>)),
+        );
+        (layers, mapper)
     }
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {

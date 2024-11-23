@@ -601,6 +601,8 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
@@ -1107,16 +1109,18 @@
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>VLlamaLoader {
     <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
         <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             <span class="comment">// Attention
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            <span class="comment">// MLP
+            <span class="comment">// MLP text
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP vision
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
         ])
     }
 }
