@@ -504,16 +504,18 @@ impl VisionModelLoader for VLlamaLoader {
 impl IsqModelLoader for VLlamaLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // MLP
+            // MLP text
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MLP vision
+            Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
     }
 }
