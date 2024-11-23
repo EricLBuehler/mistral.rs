@@ -404,16 +404,6 @@ impl MLlamaVisionEncoder {
             if let Some(gate) = layer.gate_ffn.clone() {
                 uvb_l.add_tensor("gate_ffn", gate);
             }
-
-            let uvb_attn = uvb_l.pp("self_attn");
-            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
-            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
-            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
-            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
-
-            let uvb_mlp = uvb_l.pp("mlp");
-            uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
-            uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
         }
 
         uvb_t.to_safetensors()
