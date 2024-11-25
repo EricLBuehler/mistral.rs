@@ -95,11 +95,11 @@ impl Model {
 
     /// Generate with the model, returning raw logits of the first token generated.
     ///
-    /// Returns the logits and the tokens.
+    /// Returns the chunks of the logits (1 or more, determined by prompt batchsize) and the tokens.
     pub async fn send_raw_chat_request<R: RequestLike>(
         &self,
         mut request: R,
-    ) -> anyhow::Result<(Tensor, Vec<u32>)> {
+    ) -> anyhow::Result<(Vec<Tensor>, Vec<u32>)> {
         let (tx, mut rx) = channel(1);
 
         let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
@@ -125,7 +125,10 @@ impl Model {
 
         self.runner.get_sender()?.send(request).await?;
 
-        let ResponseOk::Raw { logits, tokens } = rx
+        let ResponseOk::Raw {
+            logits_chunks,
+            tokens,
+        } = rx
             .recv()
             .await
             .context("Channel was erroneously closed!")?
@@ -134,7 +137,7 @@ impl Model {
             anyhow::bail!("Got unexpected response type.")
         };
 
-        Ok((logits, tokens))
+        Ok((logits_chunks, tokens))
     }
 
     pub async fn generate_image(

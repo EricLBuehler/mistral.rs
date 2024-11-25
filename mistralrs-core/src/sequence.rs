@@ -711,10 +711,10 @@ impl Sequence {
         self.update_time_info();
     }
 
-    pub fn add_raw_choice_to_group(&self, logits: Tensor) {
+    pub fn add_raw_choice_to_group(&self, logit_chunks: Vec<Tensor>) {
         get_mut_group!(self)
             .raw_choices
-            .push((logits, self.tokens.clone()));
+            .push((logit_chunks, self.tokens.clone()));
         self.update_time_info();
     }
 
@@ -786,7 +786,7 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
-    raw_choices: Vec<(Tensor, Vec<u32>)>,
+    raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
@@ -872,8 +872,13 @@ impl SequenceGroup {
     ) -> Result<(), SendError<Response>> {
         if self.raw_choices.len() == self.n_choices {
             assert_eq!(self.raw_choices.len(), 1);
-            let (logits, tokens) = self.raw_choices[0].clone();
-            sender.send(Response::Raw { logits, tokens }).await?;
+            let (logits_chunks, tokens) = self.raw_choices[0].clone();
+            sender
+                .send(Response::Raw {
+                    logits_chunks,
+                    tokens,
+                })
+                .await?;
         }
 
         Ok(())

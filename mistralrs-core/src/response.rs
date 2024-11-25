@@ -240,7 +240,10 @@ pub enum Response {
     // Image generation
     ImageGeneration(ImageGenerationResponse),
     // Raw
-    Raw { logits: Tensor, tokens: Vec<u32> },
+    Raw {
+        logits_chunks: Vec<Tensor>,
+        tokens: Vec<u32>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -254,7 +257,10 @@ pub enum ResponseOk {
     // Image generation
     ImageGeneration(ImageGenerationResponse),
     // Raw
-    Raw { logits: Tensor, tokens: Vec<u32> },
+    Raw {
+        logits_chunks: Vec<Tensor>,
+        tokens: Vec<u32>,
+    },
 }
 
 pub enum ResponseErr {
@@ -317,7 +323,13 @@ impl Response {
                 Err(Box::new(ResponseErr::CompletionModelError(e, x)))
             }
             Self::ImageGeneration(x) => Ok(ResponseOk::ImageGeneration(x)),
-            Self::Raw { logits, tokens } => Ok(ResponseOk::Raw { logits, tokens }),
+            Self::Raw {
+                logits_chunks,
+                tokens,
+            } => Ok(ResponseOk::Raw {
+                logits_chunks,
+                tokens,
+            }),
         }
     }
 }

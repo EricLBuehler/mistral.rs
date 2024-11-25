@@ -327,9 +327,20 @@ pub trait Pipeline:
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                for (i, inputs) in inputs_iter.enumerate() {
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -399,6 +410,9 @@ pub trait Pipeline:
                     exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] = Some(logits.i(logit_idx)?);
+                        }
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
                 }
@@ -432,17 +446,10 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. } => {
                         response::send_raw_responses(
                             input_seqs,
-                            logits
-                                .iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::RawLogits { logits } = r
-                                    else {
-                                        unreachable!("All results must have same type")
-                                    };
-                                    logits.clone()
-                                })
-                                .collect::<Vec<_>>(),
+                            raw_out_logits
+                                .into_iter()
+                                .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                                .collect(),
                         )
                         .await?;
                     }
@@ -523,9 +530,20 @@ pub trait Pipeline:
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                for inputs in inputs_iter {
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -537,6 +555,9 @@ pub trait Pipeline:
                     exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] = Some(logits.i(logit_idx)?);
+                        }
                         logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
                 }
@@ -554,17 +575,10 @@ pub trait Pipeline:
                     ForwardInputsResult::RawLogits { .. } => {
                         response::send_raw_responses(
                             input_seqs,
-                            logits
-                                .iter()
-                                .map(|r| {
-                                    #[allow(irrefutable_let_patterns)]
-                                    let ForwardInputsResult::RawLogits { logits } = r
-                                    else {
-                                        unreachable!("All results must have same type")
-                                    };
-                                    logits.clone()
-                                })
-                                .collect::<Vec<_>>(),
+                            raw_out_logits
+                                .into_iter()
+                                .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                                .collect(),
                         )
                         .await?;
                     }

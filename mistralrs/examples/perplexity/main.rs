@@ -1,4 +1,4 @@
-use std::fs::read_to_string;
+use std::{fs::read_to_string, num::NonZeroUsize};
 
 use anyhow::Result;
 use clap::Parser;
@@ -34,8 +34,10 @@ async fn main() -> Result<()> {
         None
     };
 
+    let prompt_batchsize = 2048;
     let mut model_builder = TextModelBuilder::new(&args.model_id)
         .with_logging()
+        .with_prompt_batchsize(NonZeroUsize::new(prompt_batchsize).unwrap())
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
@@ -47,18 +49,26 @@ async fn main() -> Result<()> {
 
     let (logits, tokens) = model.send_raw_chat_request(messages).await?;
 
-    // Upcast to float if we need to compute the loss to avoid potential precision issues
-    let logits = logits.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
-    // Shift so that tokens < n predict n
-    let shift_logits = logits.narrow(0, 0, logits.dim(0)? - 1)?.contiguous()?;
-    let shift_labels = Tensor::from_slice(&tokens[1..], (tokens.len() - 1,), &Device::Cpu)?;
+    for (i, (logits, tokens)) in logits
+        .into_iter()
+        .zip(tokens.chunks(prompt_batchsize))
+        .enumerate()
+    {
+        // Upcast to float if we need to compute the loss to avoid potential precision issues
+        let logits = logits.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+        // Shift so that tokens < n predict n
+        let shift_logits = logits.narrow(0, 0, logits.dim(0)? - 1)?.contiguous()?;
+        let shift_labels = Tensor::from_slice(&tokens[1..], (tokens.len() - 1,), &Device::Cpu)?;
 
-    let loss_fct = cross_entropy_loss(&shift_logits, &shift_labels)?;
-    let perplexity = loss_fct.exp()?.to_scalar::<f32>()?;
-    println!(
-        "Perplexity for `{}`, ISQ `{:?}`: {perplexity}",
-        args.file, quant
-    );
+        let loss_fct = cross_entropy_loss(&shift_logits, &shift_labels)?;
+        let perplexity = loss_fct.exp()?.to_scalar::<f32>()?;
+        println!(
+            "Chunk {i} ({} tokens): Perplexity for `{}`, ISQ `{:?}`: {perplexity}",
+            tokens.len(),
+            args.file,
+            quant
+        );
+    }
 
     Ok(())
 }

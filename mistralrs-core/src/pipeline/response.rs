@@ -72,10 +72,10 @@ pub async fn send_image_responses(
 
 pub async fn send_raw_responses(
     input_seqs: &mut [&mut Sequence],
-    logits: Vec<Tensor>,
+    logits_chunks: Vec<Vec<Tensor>>,
 ) -> candle_core::Result<()> {
-    let logits = if logits.len() == 1 {
-        logits[0].clone()
+    let logits_chunks = if logits_chunks.len() == 1 {
+        logits_chunks[0].clone()
     } else {
         candle_core::bail!("Raw response only supports batch size of 1.");
     };
@@ -83,7 +83,7 @@ pub async fn send_raw_responses(
 
     let seq = &mut *input_seqs[0];
 
-    seq.add_raw_choice_to_group(logits);
+    seq.add_raw_choice_to_group(logits_chunks);
 
     let group = seq.get_mut_group();
     group
