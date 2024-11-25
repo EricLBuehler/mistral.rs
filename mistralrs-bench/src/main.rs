@@ -83,6 +83,7 @@ fn run_bench(
         tools: None,
         tool_choice: None,
         logits_processors: None,
+        return_raw_logits: false,
     });
 
     let mut usages = Vec::new();
@@ -115,6 +116,7 @@ fn run_bench(
                     }
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
@@ -252,6 +254,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         tools: None,
         tool_choice: None,
         logits_processors: None,
+        return_raw_logits: false,
     });
 
     sender

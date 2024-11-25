@@ -169,10 +169,20 @@ impl Engine {
                                 }
                             };
 
+                            let return_raw_logits = scheduled.completion[0].return_raw_logits;
+                            assert!(
+                                scheduled
+                                    .completion
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             pipeline
                                 .step(
                                     &mut scheduled.completion,
                                     false,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
@@ -223,12 +233,22 @@ impl Engine {
                                 .map(AdapterInstruction::Activate)
                                 .unwrap_or(AdapterInstruction::None);
 
+                            let return_raw_logits = scheduled.prompt[0].return_raw_logits;
+                            assert!(
+                                scheduled
+                                    .prompt
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             // Reset non granular state because the old sequence must be dead.
                             // Technically we don't need to do this but it is better to be safe.
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
                                     true,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
@@ -368,10 +388,19 @@ impl Engine {
                                 block_engine: self.scheduler.block_engine().unwrap(),
                             };
 
+                            let return_raw_logits = guards_mut[0].return_raw_logits;
+                            assert!(
+                                guards_mut
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             pipeline
                                 .step(
                                     &mut guards_mut,
                                     is_prompt,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
@@ -865,6 +894,7 @@ impl Engine {
                 seq_step_type,
                 diffusion_params.clone(),
                 seq_preallocated_cache,
+                request.return_raw_logits,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(

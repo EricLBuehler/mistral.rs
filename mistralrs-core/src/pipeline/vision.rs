@@ -482,7 +482,11 @@ impl MetadataMixin for VisionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> candle_core::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -520,7 +524,11 @@ impl Pipeline for VisionPipeline {
             paged_attn_meta,
             &flash_meta,
         )?;
-        Ok(ForwardInputsResult::CausalGeneration { logits })
+        if return_raw_logits {
+            Ok(ForwardInputsResult::RawLogits { logits })
+        } else {
+            Ok(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     async fn sample_causal_gen(
         &self,

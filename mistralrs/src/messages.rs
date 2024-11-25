@@ -608,6 +608,7 @@ impl RequestLike for RequestBuilder {
             Some((other_ts, other_tc))
         }
     }
+
     fn take_sampling_params(&mut self) -> SamplingParams {
         let mut other = SamplingParams::deterministic();
         std::mem::swap(&mut other, &mut self.sampling_params);

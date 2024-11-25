@@ -64,6 +64,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _device: &Device,
         _no_kv_cache: bool,
         _last_n_context_len: Option<(usize, usize)>,
+        _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
