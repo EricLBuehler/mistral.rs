@@ -3,8 +3,8 @@ use std::{fs::read_to_string, num::NonZeroUsize};
 use anyhow::Result;
 use clap::Parser;
 use mistralrs::{
-    cross_entropy_loss, parse_isq_value, DType, Device, PagedAttentionMetaBuilder, Tensor,
-    TextMessageRole, TextMessages, TextModelBuilder,
+    cross_entropy_loss, parse_isq_value, DType, Device, Tensor, TextMessageRole, TextMessages,
+    TextModelBuilder,
 };
 
 /// Calculate perplexity of a model. By default, this uses the Llama 3.1 8B model.
@@ -37,11 +37,11 @@ async fn main() -> Result<()> {
     let prompt_batchsize = 2048;
     let mut model_builder = TextModelBuilder::new(&args.model_id)
         .with_logging()
-        .with_prompt_batchsize(NonZeroUsize::new(prompt_batchsize).unwrap())
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?;
+        .with_prompt_batchsize(NonZeroUsize::new(prompt_batchsize).unwrap());
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
     }
+
     let model = model_builder.build().await?;
 
     let messages =
