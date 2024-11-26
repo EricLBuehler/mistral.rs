@@ -29,7 +29,7 @@ For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.
 
 ## Accuracy
 
-Accuracy of ISQ can be measured by the performance degredation versus the unquantized model.
+Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
 
 This is commonly measured with perplexity. Please see the [perplexity](../mistralrs/examples/perplexity/README.md) example.
 
