@@ -70,6 +70,7 @@ pub enum RequestMessage {
 ///     2) Apply these custom logits processors sequentially
 ///     3) Apply temperature and softmax
 ///     4) Sample the next token (topk, topp, minp, etc)
+/// - `return_raw_logits`: Return raw logits.
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
@@ -83,6 +84,7 @@ pub struct NormalRequest {
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
+    pub return_raw_logits: bool,
 }
 
 impl NormalRequest {
@@ -107,6 +109,7 @@ impl NormalRequest {
             suffix: None,
             adapters: None,
             logits_processors: None,
+            return_raw_logits: false,
         }
     }
 }

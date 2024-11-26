@@ -386,6 +386,7 @@ impl MistralRs {
                     tool_choice: None,
                     tools: None,
                     logits_processors: None,
+                    return_raw_logits: false,
                 });
                 info!("Beginning dummy run.");
                 let start = Instant::now();

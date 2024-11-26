@@ -867,6 +867,7 @@ impl Runner {
                 tool_choice,
                 tools,
                 logits_processors: None,
+                return_raw_logits: false,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -889,6 +890,7 @@ impl Runner {
                     Response::CompletionModelError(_, _) => unreachable!(),
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
                 }
             }
         })
@@ -990,6 +992,7 @@ impl Runner {
                 tool_choice,
                 tools,
                 logits_processors: None,
+                return_raw_logits: false,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1008,6 +1011,7 @@ impl Runner {
                 Response::ModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         })
     }
@@ -1045,6 +1049,7 @@ impl Runner {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
 
         let sender = self.runner.get_sender()?;

@@ -251,8 +251,9 @@ impl Pipeline for AnyMoePipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        _return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
-        get_mut_arcmutex!(self.target).forward_inputs(inputs)
+        get_mut_arcmutex!(self.target).forward_inputs(inputs, false)
     }
 
     async fn sample_causal_gen(
@@ -463,6 +464,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         &device,
                         metadata.has_no_kv_cache,
                         None,
+                        false,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
                         None, // TODO: prompt chunking doesn't work.
@@ -473,7 +475,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs, false)?;
 
                 // Clear the KV cache
                 target.set_none_cache(&mut input_seqs, true, true, false);
@@ -584,5 +586,6 @@ fn new_dummy_seq(
         SeqStepType::PromptAndDecode,
         None,
         None,
+        false,
     )
 }

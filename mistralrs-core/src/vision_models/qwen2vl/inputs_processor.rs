@@ -129,6 +129,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -179,6 +180,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -195,6 +197,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )

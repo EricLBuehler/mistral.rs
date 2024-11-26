@@ -176,6 +176,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 
@@ -215,6 +216,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         }
         if throughput {
@@ -386,6 +388,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 
@@ -425,6 +428,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         }
         if throughput {
@@ -507,6 +511,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 

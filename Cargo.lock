@@ -2136,6 +2136,8 @@ version = "0.3.2"
 dependencies = [
  "anyhow",
  "candle-core",
+ "candle-nn",
+ "clap",
  "either",
  "futures",
  "image",

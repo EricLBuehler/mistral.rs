@@ -670,6 +670,7 @@ impl Pipeline for GGUFPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -753,7 +754,11 @@ impl Pipeline for GGUFPipeline {
                 paged_attn_meta,
             )?,
         };
-        Ok(ForwardInputsResult::CausalGeneration { logits })
+        if return_raw_logits {
+            Ok(ForwardInputsResult::RawLogits { logits })
+        } else {
+            Ok(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     async fn sample_causal_gen(
         &self,

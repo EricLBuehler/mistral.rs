@@ -1,5 +1,5 @@
 use anyhow::Context;
-use candle_core::{Device, Result};
+use candle_core::{Device, Result, Tensor};
 use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
@@ -76,6 +76,7 @@ impl Model {
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
+            return_raw_logits: false,
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -90,6 +91,53 @@ impl Model {
         };
 
         Ok(response)
+    }
+
+    /// Generate with the model, returning raw logits of the first token generated.
+    ///
+    /// Returns the chunks of the logits (1 or more, determined by prompt batchsize) and the tokens.
+    pub async fn send_raw_chat_request<R: RequestLike>(
+        &self,
+        mut request: R,
+    ) -> anyhow::Result<(Vec<Tensor>, Vec<u32>)> {
+        let (tx, mut rx) = channel(1);
+
+        let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
+            (Some(a), Some(b))
+        } else {
+            (None, None)
+        };
+        let request = Request::Normal(NormalRequest {
+            messages: request.take_messages(),
+            sampling_params: request.take_sampling_params(),
+            response: tx,
+            return_logprobs: request.return_logprobs(),
+            is_streaming: false,
+            id: 0,
+            constraint: request.take_constraint(),
+            suffix: None,
+            adapters: request.take_adapters(),
+            tools,
+            tool_choice,
+            logits_processors: request.take_logits_processors(),
+            return_raw_logits: true,
+        });
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let ResponseOk::Raw {
+            logits_chunks,
+            tokens,
+        } = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+
+        Ok((logits_chunks, tokens))
     }
 
     pub async fn generate_image(
@@ -117,6 +165,7 @@ impl Model {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
 
         self.runner.get_sender()?.send(request).await?;

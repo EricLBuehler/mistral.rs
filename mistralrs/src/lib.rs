@@ -82,4 +82,5 @@ pub mod v0_4_api {
 pub use v0_4_api::*;
 
 pub use candle_core::{DType, Device, Result, Tensor};
+pub use candle_nn::loss::cross_entropy as cross_entropy_loss;
 pub use mistralrs_core::*;

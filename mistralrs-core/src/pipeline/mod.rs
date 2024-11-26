@@ -11,6 +11,7 @@ mod macros;
 mod normal;
 mod paths;
 mod processing;
+mod response;
 mod sampling;
 mod speculative;
 mod vision;
@@ -18,7 +19,6 @@ mod vision;
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
-use crate::diffusion_models::response::send_responses;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -248,6 +248,7 @@ pub enum CacheBackendMetadata<'a> {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
+    RawLogits { logits: Tensor },
     CausalGeneration { logits: Tensor },
     Image { images: Vec<DynamicImage> },
 }
@@ -256,6 +257,9 @@ impl ForwardInputsResult {
     fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.i(bs_idx)?,
+            }),
+            Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.i(bs_idx)?,
             }),
             Self::Image { images } => Ok(Self::Image {
@@ -267,6 +271,9 @@ impl ForwardInputsResult {
     fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.to_device(device)?,
+            }),
+            Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
@@ -288,6 +295,7 @@ pub trait Pipeline:
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
     /// Returns the total of model execution time.
@@ -296,6 +304,7 @@ pub trait Pipeline:
         &mut self,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
+        return_raw_logits: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -311,15 +320,27 @@ pub trait Pipeline:
                     &self.device(),
                     self.get_metadata().has_no_kv_cache,
                     None,
+                    return_raw_logits,
                     self.get_input_processor_config(),
                     None,
                     self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                for (i, inputs) in inputs_iter.enumerate() {
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -384,22 +405,19 @@ pub trait Pipeline:
                     }
 
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs)?;
+                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        }
                     }
                 }
-
-                let logits = logits
-                    .into_iter()
-                    .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -417,8 +435,33 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
+                }
+
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+
                 let start = Instant::now();
                 match &logits[0] {
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -442,7 +485,7 @@ pub trait Pipeline:
                         .await?;
                     }
                     ForwardInputsResult::Image { .. } => {
-                        send_responses(
+                        response::send_image_responses(
                             input_seqs,
                             logits
                                 .into_iter()
@@ -489,28 +532,61 @@ pub trait Pipeline:
                     &self.device(),
                     self.get_metadata().has_no_kv_cache,
                     None,
+                    return_raw_logits,
                     self.get_input_processor_config(),
                     Some(metadata),
                     self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                for inputs in inputs_iter {
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
                     } = inputs.map_err(candle_core::Error::msg)?;
 
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs)?;
+                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        }
                     }
+                }
+
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
                 }
 
                 let logits = logits
@@ -523,6 +599,7 @@ pub trait Pipeline:
 
                 let start = Instant::now();
                 match &logits[0] {
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -544,7 +621,7 @@ pub trait Pipeline:
                         .await?;
                     }
                     ForwardInputsResult::Image { .. } => {
-                        send_responses(
+                        response::send_image_responses(
                             input_seqs,
                             logits
                                 .into_iter()

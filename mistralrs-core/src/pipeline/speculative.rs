@@ -317,7 +317,11 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        _inputs: Box<dyn Any>,
+        _return_raw_logits: bool,
+    ) -> Result<ForwardInputsResult> {
         unreachable!()
     }
     async fn sample_causal_gen(
@@ -334,6 +338,7 @@ impl Pipeline for SpeculativePipeline {
         &mut self,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
+        _return_raw_logits: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
@@ -422,6 +427,7 @@ impl Pipeline for SpeculativePipeline {
                             &device,
                             has_no_kv_cache,
                             None,
+                            false,
                             None,
                             None, // TODO: get block tables/handle it
                             None, // TODO: do we support???
@@ -429,7 +435,8 @@ impl Pipeline for SpeculativePipeline {
                         .nth(0)
                         .unwrap()
                         .unwrap();
-                    let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
+                    let logits =
+                        get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs), false)?;
                     #[allow(irrefutable_let_patterns)]
                     let ForwardInputsResult::CausalGeneration { logits } = logits
                     else {
@@ -494,6 +501,7 @@ impl Pipeline for SpeculativePipeline {
                         &device,
                         has_no_kv_cache,
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
+                        false,
                         None,
                         None, // TODO: get block tables/handle it
                         None, // TODO: do we support???
@@ -502,7 +510,8 @@ impl Pipeline for SpeculativePipeline {
                     .unwrap()
                     .unwrap();
 
-                let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
+                let logits =
+                    get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs), false)?;
                 #[allow(irrefutable_let_patterns)]
                 let ForwardInputsResult::CausalGeneration { logits } = logits
                 else {
