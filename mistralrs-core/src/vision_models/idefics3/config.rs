@@ -18,9 +18,7 @@ pub struct Idefics3VisionConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Idefics3Config {
     pub image_token_id: usize,
-    pub tie_word_embeddings: bool,
     pub vision_config: Idefics3VisionConfig,
     pub text_config: models::llama::Config,
     pub scale_factor: usize,
-    pub pad_token_id: usize,
 }

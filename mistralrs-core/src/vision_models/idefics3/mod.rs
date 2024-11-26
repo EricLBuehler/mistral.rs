@@ -4,23 +4,28 @@ mod config;
 mod inputs_processor;
 mod vision;
 
-use candle_core::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{Linear, VarBuilder};
-use config::Idefics3Config;
+use std::any::Any;
+
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::VarBuilder;
+pub use config::Idefics3Config;
+pub use inputs_processor::Idefics3Processor;
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::{
-    dummy_paged_attention::AttentionImplementation,
+    amoe::{AnyMoeBaseModelMixin, MlpLayer},
+    device_map::DeviceMapper,
+    dummy_paged_attention::{AttentionImplementation, ModelConfigMetadata},
     layers::CausalMasker,
     models::llama::Llama,
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    AnyMoeConfig, AnyMoeExpertType,
 };
 
 pub struct Idefics3Model {
-    lm_head: Linear,
     text_model: Llama,
     connector: Idefics3Connector,
     vision: Idefics3VisionTransformer,
@@ -36,25 +41,19 @@ impl Idefics3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let lm_head = candle_nn::linear_no_bias(
-            cfg.text_config.hidden_size,
-            cfg.text_config.vocab_size,
-            vb.pp("lm_head"),
-        )?;
-
-        let vb = vb.pp("model");
-        let text_model = Llama::new(
+        let vb_m = vb.pp("model");
+        let text_model = Llama::new_inner(
             &cfg.text_config,
-            vb.pp("text_model"),
+            vb_m.pp("text_model"),
+            vb.pp("lm_head"),
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let connector = Idefics3Connector::new(cfg, vb.pp("connector"))?;
-        let vision = Idefics3VisionTransformer::new(&cfg.vision_config, vb.pp("vision_model"))?;
+        let connector = Idefics3Connector::new(cfg, vb_m.pp("connector"))?;
+        let vision = Idefics3VisionTransformer::new(&cfg.vision_config, vb_m.pp("vision_model"))?;
 
         Ok(Self {
-            lm_head,
             text_model,
             connector,
             vision,
@@ -217,5 +216,98 @@ impl Idefics3Model {
             metadata,
             flash_params,
         )
+    }
+}
+
+impl IsqModel for Idefics3Model {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(
+            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
+            Option<usize>,
+        )>,
+        &dyn DeviceMapper,
+    ) {
+        self.text_model.get_layers()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!()
+    }
+}
+
+// AnyMoE is forwarded to the base model
+impl AnyMoeBaseModelMixin for Idefics3Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        self.text_model.get_mlps()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        self.text_model.get_mlps_mut()
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<VarBuilder>,
+        config: AnyMoeConfig,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        gate_vb: Option<VarBuilder>,
+    ) -> Result<()> {
+        self.text_model.create_anymoe_layers(
+            additional_vbs,
+            config,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
+    }
+    fn amoe_supported(&self) -> bool {
+        true
+    }
+}
+
+impl VisionModel for Idefics3Model {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _: Vec<usize>, // Ignore, it is for phi3
+        model_specific_args: Box<dyn Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> candle_core::Result<Tensor> {
+        let pixel_attention_mask: Option<Tensor> = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Option<Tensor>`");
+        self.forward_inner(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            pixel_attention_mask,
+            metadata,
+            flash_params,
+        )
+    }
+    fn cache(&self) -> &EitherCache {
+        self.text_model.cache()
+    }
+    fn device(&self) -> &Device {
+        self.text_model.device()
+    }
+    fn max_seq_len(&self) -> usize {
+        self.text_model.max_seq_len()
+    }
+    fn has_conv2d(&self) -> bool {
+        true
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        self.text_model.config()
     }
 }

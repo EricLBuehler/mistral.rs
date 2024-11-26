@@ -27,9 +27,9 @@ use crate::vision_models::{
 
 // 4k resolution as absolute maximum
 const MAX_IMAGE_SIZE: usize = 4096;
-const FAKE_IMAGE_TOKEN: &'static str = "<fake_token_around_image>";
-const IMAGE_TOKEN: &'static str = "<image>";
-const GLOBAL_IMAGE_TOKEN: &'static str = "<global-img>";
+const FAKE_IMAGE_TOKEN: &str = "<fake_token_around_image>";
+const IMAGE_TOKEN: &str = "<image>";
+const GLOBAL_IMAGE_TOKEN: &str = "<global-img>";
 
 pub struct Idefics3ImageProcessor {
     max_edge: Option<u32>,
@@ -231,7 +231,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                 let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
                 let mut sample = split_sample
-                    .get(0)
+                    .first()
                     .expect("The image token <image> should be present in the text.")
                     .to_string();
                 for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
@@ -475,7 +475,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             // Resize
             if config.do_resize.is_some_and(|x| x) {
                 *image = resize(
-                    &image,
+                    image,
                     config.size.as_ref().unwrap(),
                     config.resampling.to_filter()?,
                 )?;
@@ -500,7 +500,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
                     image.resize_exact(new_w as u32, new_h as u32, config.resampling.to_filter()?);
 
                 let (split_image_array, rows, cols) =
-                    split_image(&image, max_image_size["longest_edge"] as usize)?;
+                    split_image(image, max_image_size["longest_edge"] as usize)?;
                 new_images.extend(split_image_array.into_iter());
                 image_rows.push(rows);
                 image_cols.push(cols);
@@ -511,8 +511,8 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
                 new_images.push(resize(
                     image,
                     &HashMap::from([
-                        ("height".to_string(), max_image_size["longest_edge"] as u32),
-                        ("width".to_string(), max_image_size["longest_edge"] as u32),
+                        ("height".to_string(), max_image_size["longest_edge"]),
+                        ("width".to_string(), max_image_size["longest_edge"]),
                     ]),
                     FilterType::Lanczos3,
                 )?);

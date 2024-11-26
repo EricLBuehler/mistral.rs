@@ -403,6 +403,26 @@ impl Llama {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let vb_m = vb.pp("model");
+        let vb_lm_head = vb.pp("lm_head");
+        Self::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            normal_loading_metadata,
+            attention_mechanism,
+        )
+    }
+
+    pub fn new_inner(
+        cfg: &Config,
+        vb_m: VarBuilder,
+        vb_lm_head: VarBuilder,
+        is_gptx: bool,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization in {} bits.",
@@ -415,14 +435,14 @@ impl Llama {
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
             mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
@@ -435,7 +455,7 @@ impl Llama {
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("model.norm"), false),
+            mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut ropes = HashMap::new();
@@ -446,7 +466,7 @@ impl Llama {
             ropes.insert(
                 device.location(),
                 Arc::new(Llama3RotaryEmbedding::new_llama3(
-                    vb.dtype(),
+                    vb_m.dtype(),
                     cfg,
                     device,
                     is_gptx,
@@ -480,7 +500,7 @@ impl Llama {
                         ),
                     };
                     Block::load(
-                        vb.pp(format!("model.layers.{i}")),
+                        vb_m.pp(format!("layers.{i}")),
                         cfg,
                         &*mapper,
                         i,

@@ -7,7 +7,9 @@ use super::{
     Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
     XLoraPaths,
 };
-use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
+use super::{
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -123,6 +125,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
+            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
