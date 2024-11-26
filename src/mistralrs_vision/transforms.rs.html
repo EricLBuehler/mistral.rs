@@ -175,6 +175,11 @@
 <a href="#175" id="175">175</a>
 <a href="#176" id="176">176</a>
 <a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">crate</span>::utils::{get_pixel_data, n_channels};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::{DynamicImage, GenericImageView};
@@ -262,7 +267,12 @@
     <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>::Input, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Output&gt; {
         <span class="kw">let </span>num_channels = x.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="self">self</span>.mean.len() != num_channels || <span class="self">self</span>.std.len() != num_channels {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Num channels must match number of mean and std."</span>);
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"Num channels ({}) must match number of mean ({}) and std ({})."</span>,
+                num_channels,
+                <span class="self">self</span>.mean.len(),
+                <span class="self">self</span>.std.len()
+            );
         }
         <span class="kw">let </span><span class="kw-2">mut </span>accum = Vec::new();
         <span class="kw">for </span>(i, channel) <span class="kw">in </span>x.chunk(num_channels, <span class="number">0</span>)<span class="question-mark">?</span>.iter().enumerate() {

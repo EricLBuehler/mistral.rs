@@ -719,6 +719,7 @@
 <a href="#719" id="719">719</a>
 <a href="#720" id="720">720</a>
 <a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
@@ -1273,6 +1274,7 @@
                     .map(|resample| <span class="prelude-val">Some</span>(resample).to_filter())
                     .unwrap_or(<span class="prelude-val">Ok</span>(FilterType::CatmullRom))<span class="question-mark">?</span>,
             );
+            image = DynamicImage::ImageRgb8(image.to_rgb8());
             <span class="kw">if </span>config.do_resize.is_none() || config.do_resize.is_some_and(|x| x) {
                 <span class="kw">let </span>(resized_height, resized_width) = <span class="self">self</span>.smart_resize(
                     height <span class="kw">as </span>usize,
