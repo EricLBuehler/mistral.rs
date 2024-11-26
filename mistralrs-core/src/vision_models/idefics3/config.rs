@@ -1,6 +1,8 @@
+use serde::Deserialize;
+
 use crate::{layers::Activation, models};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Idefics3VisionConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -13,7 +15,7 @@ pub struct Idefics3VisionConfig {
     pub layer_norm_eps: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Idefics3Config {
     pub image_token_id: usize,
     pub tie_word_embeddings: bool,

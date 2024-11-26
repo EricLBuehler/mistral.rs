@@ -1,5 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+mod config;
+mod inputs_processor;
+mod vision;
+
 use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Linear, VarBuilder};
 use config::Idefics3Config;
@@ -14,9 +18,6 @@ use crate::{
         NormalLoadingMetadata, NormalModel,
     },
 };
-
-mod config;
-mod vision;
 
 pub struct Idefics3Model {
     lm_head: Linear,
