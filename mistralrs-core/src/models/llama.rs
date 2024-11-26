@@ -396,49 +396,6 @@ pub struct Llama {
 }
 
 impl Llama {
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        let mut x = self.wte.forward(input_ids)?;
-        let cache = &mut self.kv_cache.normal().0;
-        let mask = CausalMasker.make_causal_mask_matrix(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
-            x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = self.mapper.map(x, block_idx)?;
-            x = block.forward(
-                &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                &mut cache[block_idx],
-                metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
-                flash_params,
-            )?;
-        }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
-    }
-
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
@@ -555,6 +512,75 @@ impl Llama {
                 head_dim: None,
             },
         })
+    }
+
+    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.wte.forward(input_ids)
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        self.forward_embeds(
+            input_ids,
+            self.wte.forward(input_ids)?,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            metadata,
+            flash_params,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_embeds(
+        &self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let mut x = input_embeds;
+        let cache = &mut self.kv_cache.normal().0;
+        let mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
+            x = block.forward(
+                &x,
+                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                seqlen_offsets,
+                start_offsets_kernel.clone(),
+                &mut cache[block_idx],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                flash_params,
+            )?;
+        }
+        let x = x.to_device(&self.device)?;
+        let mut x = self.ln_f.forward(&x)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            x = x.to_dtype(t)?;
+        }
+        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        extract_logits(&xs, context_lens)
     }
 }
 

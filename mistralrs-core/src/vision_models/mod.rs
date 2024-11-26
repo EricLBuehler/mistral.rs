@@ -9,7 +9,7 @@ pub(crate) mod image_processor;
 pub(crate) mod llava;
 pub(crate) mod mllama;
 pub(crate) mod phi3;
-pub(crate) mod phi3_inputs_processor;
+pub(crate) use phi3::phi3_inputs_processor;
 pub(crate) mod preprocessor_config;
 pub(crate) mod processor_config;
 pub(crate) mod qwen2vl;

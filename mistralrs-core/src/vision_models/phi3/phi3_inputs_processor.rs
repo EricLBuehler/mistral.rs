@@ -21,7 +21,7 @@ use crate::{
     sequence::Sequence,
 };
 
-use super::{
+use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     phi3::Phi3VisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,

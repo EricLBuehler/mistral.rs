@@ -1134,7 +1134,7 @@ impl Idefics2 {
 
             let patch_attention_mask = patches_subgrid
                 .sum((D::Minus1, D::Minus2))?
-                .gt(0.0)?
+                .eq((patch_size * patch_size) as f64)?
                 .to_dtype(DType::U8)?;
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
