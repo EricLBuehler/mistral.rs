@@ -373,19 +373,21 @@ impl MLlamaVisionEncoder {
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L394
-    /// Also return hidden states, all hidden states for this later
+    /// Also (optionally) return hidden states at some indices
     fn forward_with_states(
         &self,
         hidden_state: &Tensor,
         attention_mask: Option<&Tensor>,
+        intermediate_layers_indices: Option<&[usize]>,
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut hidden_state = hidden_state.clone();
         let mut hidden_states = Vec::new();
-        for layer in &self.layers {
-            hidden_states.push(hidden_state.clone());
+        for (i, layer) in self.layers.iter().enumerate() {
+            if intermediate_layers_indices.is_some_and(|indices| indices.contains(&i)) {
+                hidden_states.push(hidden_state.clone());
+            }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
         }
-        hidden_states.push(hidden_state.clone());
         Ok((hidden_state, hidden_states))
     }
 
@@ -459,7 +461,7 @@ pub(super) struct MLlamaVisionModel {
     transformer: MLlamaVisionEncoder,
     global_transformer: MLlamaVisionEncoder,
     pub(super) num_patches: usize,
-    intermediate_layers_indices: Tensor,
+    intermediate_layers_indices: Vec<usize>,
     num_attn_heads: usize,
 }
 
@@ -533,13 +535,7 @@ impl MLlamaVisionModel {
             transformer,
             global_transformer,
             num_patches: (cfg.image_size / cfg.patch_size).pow(2) + 1,
-            intermediate_layers_indices: Tensor::new(
-                cfg.intermediate_layers_indices
-                    .iter()
-                    .map(|i| *i as u32)
-                    .collect::<Vec<_>>(),
-                real_dev,
-            )?,
+            intermediate_layers_indices: cfg.intermediate_layers_indices.clone(),
             num_attn_heads: cfg.num_attention_heads,
         })
     }
@@ -622,9 +618,17 @@ impl MLlamaVisionModel {
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
-        let (mut hidden_state, all_intermediate_hidden_states) = self
-            .transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask))?;
+        let (mut hidden_state, all_intermediate_hidden_states) =
+            self.transformer.forward_with_states(
+                &hidden_state,
+                Some(&attention_mask),
+                Some(&self.intermediate_layers_indices),
+            )?;
+
+        // Collect intermediate layer outputs from encoder output
+        let mut intermediate_hidden_states =
+            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?;
+        drop(all_intermediate_hidden_states);
 
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
 
@@ -643,9 +647,11 @@ impl MLlamaVisionModel {
             num_tiles * (num_patches as isize + num_padding_patches) as usize,
             dim,
         ))?;
-        (hidden_state, _) = self
-            .global_transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask))?;
+        (hidden_state, _) = self.global_transformer.forward_with_states(
+            &hidden_state,
+            Some(&attention_mask),
+            None,
+        )?;
 
         // Remove padding from hidden state
         hidden_state = hidden_state.reshape((
@@ -661,13 +667,6 @@ impl MLlamaVisionModel {
         )?;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
-
-        // Collect intermediate layer outputs from encoder output
-        let mut intermediate_hidden_states =
-            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?;
-        drop(all_intermediate_hidden_states);
-        intermediate_hidden_states = intermediate_hidden_states
-            .index_select(&self.intermediate_layers_indices, D::Minus1)?;
 
         // Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape((
