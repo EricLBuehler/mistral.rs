@@ -552,6 +552,7 @@ impl Qwen2VLImageProcessor {
                     .map(|resample| Some(resample).to_filter())
                     .unwrap_or(Ok(FilterType::CatmullRom))?,
             );
+            image = DynamicImage::ImageRgb8(image.to_rgb8());
             if config.do_resize.is_none() || config.do_resize.is_some_and(|x| x) {
                 let (resized_height, resized_width) = self.smart_resize(
                     height as usize,
