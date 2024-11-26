@@ -27,6 +27,12 @@ When using ISQ, it will automatically load ISQ-able weights into CPU memory befo
 
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ organization parameter in all APIs.
 
+## Accuracy
+
+Accuracy of ISQ can be measured by the performance degredation versus the unquantized model.
+
+This is commonly measured with perplexity. Please see the [perplexity](../mistralrs/examples/perplexity/README.md) example.
+
 ## Python Example
 ```python
 runner = Runner(
