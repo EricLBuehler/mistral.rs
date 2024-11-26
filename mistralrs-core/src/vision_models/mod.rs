@@ -4,7 +4,7 @@ use candle_core::Tensor;
 
 pub(crate) mod clip;
 pub(crate) mod idefics2;
-pub(crate) mod idefics2_input_processor;
+pub(crate) use idefics2::idefics2_input_processor;
 pub(crate) mod image_processor;
 pub(crate) mod llava;
 pub(crate) mod mllama;
@@ -17,6 +17,7 @@ pub(crate) use llava::llava15;
 pub(crate) use llava::llava_inputs_processor;
 pub(crate) use llava::llava_next;
 pub(crate) use llava::llava_next_inputs_processor;
+pub(crate) mod idefics3;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
