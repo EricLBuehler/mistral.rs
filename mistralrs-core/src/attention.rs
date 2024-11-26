@@ -100,7 +100,7 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        let att = candle_nn::ops::attn_softmax_last_dim(
+        att = candle_nn::ops::attn_softmax_last_dim(
             &att,
             mask.unwrap(),
             1. / (head_dim as f32).sqrt(),
@@ -114,11 +114,11 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        let att = match mask {
+        att = match mask {
             Some(m) => att.broadcast_add(m)?,
             None => att,
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        att = candle_nn::ops::softmax_last_dim(&att)?;
         MatMul.matmul(&att, v)
     }
 }

@@ -383,10 +383,11 @@ impl MLlamaVisionEncoder {
         let mut hidden_state = hidden_state.clone();
         let mut hidden_states = Vec::new();
         for (i, layer) in self.layers.iter().enumerate() {
-            if intermediate_layers_indices.is_some_and(|indices| indices.contains(&i)) {
+            if intermediate_layers_indices.is_some_and(|indices: &[usize]| indices.contains(&i)) {
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
+            hidden_state.device().synchronize()?;
         }
         Ok((hidden_state, hidden_states))
     }
