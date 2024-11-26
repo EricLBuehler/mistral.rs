@@ -1142,19 +1142,22 @@
     }
 
     <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L394
-    </span><span class="doccomment">/// Also return hidden states, all hidden states for this later
+    </span><span class="doccomment">/// Also (optionally) return hidden states at some indices
     </span><span class="kw">fn </span>forward_with_states(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         hidden_state: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        intermediate_layers_indices: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[usize]&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Vec&lt;Tensor&gt;)&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_state = hidden_state.clone();
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = Vec::new();
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.layers {
-            hidden_states.push(hidden_state.clone());
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+            <span class="kw">if </span>intermediate_layers_indices.is_some_and(|indices: <span class="kw-2">&amp;</span>[usize]| indices.contains(<span class="kw-2">&amp;</span>i)) {
+                hidden_states.push(hidden_state.clone());
+            }
             hidden_state = layer.forward(<span class="kw-2">&amp;</span>hidden_state, attention_mask)<span class="question-mark">?</span>;
+            hidden_state.device().synchronize()<span class="question-mark">?</span>;
         }
-        hidden_states.push(hidden_state.clone());
         <span class="prelude-val">Ok</span>((hidden_state, hidden_states))
     }
 
@@ -1228,7 +1231,7 @@
     transformer: MLlamaVisionEncoder,
     global_transformer: MLlamaVisionEncoder,
     <span class="kw">pub</span>(<span class="kw">super</span>) num_patches: usize,
-    intermediate_layers_indices: Tensor,
+    intermediate_layers_indices: Vec&lt;usize&gt;,
     num_attn_heads: usize,
 }
 
@@ -1302,13 +1305,7 @@
             transformer,
             global_transformer,
             num_patches: (cfg.image_size / cfg.patch_size).pow(<span class="number">2</span>) + <span class="number">1</span>,
-            intermediate_layers_indices: Tensor::new(
-                cfg.intermediate_layers_indices
-                    .iter()
-                    .map(|i| <span class="kw-2">*</span>i <span class="kw">as </span>u32)
-                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                real_dev,
-            )<span class="question-mark">?</span>,
+            intermediate_layers_indices: cfg.intermediate_layers_indices.clone(),
             num_attn_heads: cfg.num_attention_heads,
         })
     }
@@ -1391,9 +1388,17 @@
 
         <span class="comment">// Apply encoder
         </span>hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>(<span class="kw-2">mut </span>hidden_state, all_intermediate_hidden_states) = <span class="self">self
-            </span>.transformer
-            .forward_with_states(<span class="kw-2">&amp;</span>hidden_state, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>attention_mask))<span class="question-mark">?</span>;
+        <span class="kw">let </span>(<span class="kw-2">mut </span>hidden_state, all_intermediate_hidden_states) =
+            <span class="self">self</span>.transformer.forward_with_states(
+                <span class="kw-2">&amp;</span>hidden_state,
+                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>attention_mask),
+                <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.intermediate_layers_indices),
+            )<span class="question-mark">?</span>;
+
+        <span class="comment">// Collect intermediate layer outputs from encoder output
+        </span><span class="kw">let </span><span class="kw-2">mut </span>intermediate_hidden_states =
+            Tensor::stack(<span class="kw-2">&amp;</span>all_intermediate_hidden_states, D::Minus1)<span class="question-mark">?</span>;
+        drop(all_intermediate_hidden_states);
 
         hidden_state = <span class="self">self</span>.layernorm_post.forward(<span class="kw-2">&amp;</span>hidden_state)<span class="question-mark">?</span>;
 
@@ -1412,9 +1417,11 @@
             num_tiles * (num_patches <span class="kw">as </span>isize + num_padding_patches) <span class="kw">as </span>usize,
             dim,
         ))<span class="question-mark">?</span>;
-        (hidden_state, <span class="kw">_</span>) = <span class="self">self
-            </span>.global_transformer
-            .forward_with_states(<span class="kw-2">&amp;</span>hidden_state, <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>attention_mask))<span class="question-mark">?</span>;
+        (hidden_state, <span class="kw">_</span>) = <span class="self">self</span>.global_transformer.forward_with_states(
+            <span class="kw-2">&amp;</span>hidden_state,
+            <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>attention_mask),
+            <span class="prelude-val">None</span>,
+        )<span class="question-mark">?</span>;
 
         <span class="comment">// Remove padding from hidden state
         </span>hidden_state = hidden_state.reshape((
@@ -1430,13 +1437,6 @@
         )<span class="question-mark">?</span>;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))<span class="question-mark">?</span>;
-
-        <span class="comment">// Collect intermediate layer outputs from encoder output
-        </span><span class="kw">let </span><span class="kw-2">mut </span>intermediate_hidden_states =
-            Tensor::stack(<span class="kw-2">&amp;</span>all_intermediate_hidden_states, D::Minus1)<span class="question-mark">?</span>;
-        drop(all_intermediate_hidden_states);
-        intermediate_hidden_states = intermediate_hidden_states
-            .index_select(<span class="kw-2">&amp;</span><span class="self">self</span>.intermediate_layers_indices, D::Minus1)<span class="question-mark">?</span>;
 
         <span class="comment">// Remove padding from intermediate hidden states
         </span>intermediate_hidden_states = intermediate_hidden_states.reshape((

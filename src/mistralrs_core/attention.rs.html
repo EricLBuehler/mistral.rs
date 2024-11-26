@@ -346,7 +346,7 @@
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>att = candle_nn::ops::attn_softmax_last_dim(
+        att = candle_nn::ops::attn_softmax_last_dim(
             <span class="kw-2">&amp;</span>att,
             mask.unwrap(),
             <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
@@ -360,11 +360,11 @@
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>att = <span class="kw">match </span>mask {
+        att = <span class="kw">match </span>mask {
             <span class="prelude-val">Some</span>(m) =&gt; att.broadcast_add(m)<span class="question-mark">?</span>,
             <span class="prelude-val">None </span>=&gt; att,
         };
-        <span class="kw">let </span>att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
+        att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     }
 }
