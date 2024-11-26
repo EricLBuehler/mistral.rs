@@ -586,6 +586,9 @@
 <a href="#586" id="586">586</a>
 <a href="#587" id="587">587</a>
 <a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
@@ -839,8 +842,9 @@
     <span class="kw">fn </span>forward_inputs(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+        _return_raw_logits: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs)
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs, <span class="bool-val">false</span>)
     }
 
     <span class="kw">async fn </span>sample_causal_gen(
@@ -1051,6 +1055,7 @@
                         <span class="kw-2">&amp;</span>device,
                         metadata.has_no_kv_cache,
                         <span class="prelude-val">None</span>,
+                        <span class="bool-val">false</span>,
                         input_processor_cfg.clone(),
                         <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it for PagedAttention
                         </span><span class="prelude-val">None</span>, <span class="comment">// TODO: prompt chunking doesn't work.
@@ -1061,7 +1066,7 @@
                 <span class="comment">// === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                </span><span class="kw">let _ </span>= target.forward_inputs(inputs.unwrap().inputs)<span class="question-mark">?</span>;
+                </span><span class="kw">let _ </span>= target.forward_inputs(inputs.unwrap().inputs, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
                 <span class="comment">// Clear the KV cache
                 </span>target.set_none_cache(<span class="kw-2">&amp;mut </span>input_seqs, <span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>);
@@ -1172,6 +1177,7 @@
         SeqStepType::PromptAndDecode,
         <span class="prelude-val">None</span>,
         <span class="prelude-val">None</span>,
+        <span class="bool-val">false</span>,
     )
 }
 </code></pre></div></section></main></body></html>

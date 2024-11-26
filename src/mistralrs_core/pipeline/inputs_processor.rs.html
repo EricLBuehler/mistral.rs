@@ -813,6 +813,29 @@
 <a href="#813" id="813">813</a>
 <a href="#814" id="814">814</a>
 <a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -851,6 +874,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -940,6 +964,7 @@
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
         <span class="kw">let </span>max_len = toks
@@ -965,10 +990,19 @@
 
             position_ids.push(ctxt.len() + chunk_offset_toks);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-            context_lens.push((
-                ctxt.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
-                last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
-            ));
+            <span class="comment">// If we are returning raw logits, we want to not trim the logits at all.
+            </span><span class="kw">if </span>return_raw_logits {
+                <span class="kw">if </span>last_n_context_len.is_some() {
+                    <span class="macro">anyhow::bail!</span>(<span class="string">"`return_raw_logits` is incompatible with `last_n_context_len`"</span>);
+                }
+
+                context_lens.push((<span class="number">0</span>, ctxt.len()));
+            } <span class="kw">else </span>{
+                context_lens.push((
+                    ctxt.len() - last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
+                    last_n_context_len.map(|(a, <span class="kw">_</span>)| a).unwrap_or(<span class="number">1</span>),
+                ));
+            }
 
             seqlens_q.push(ctxt.len() <span class="kw">as </span>u32);
             seqlens_k.push((ctxt.len() + chunk_offset_toks) <span class="kw">as </span>u32);
@@ -1281,6 +1315,7 @@
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
@@ -1316,6 +1351,7 @@
                         <span class="kw-2">&amp;</span>seq_ns.iter().map(|i| <span class="kw-2">&amp;*</span>input_seqs[<span class="kw-2">*</span>i]).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_deref_mut(),
                     )
                     .map(|inputs| InnerInputProcessorOutput {
@@ -1339,6 +1375,7 @@
                     <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">&amp;**</span>s).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                     device,
                     last_n_context_len,
+                    return_raw_logits,
                     paged_attn_metadata,
                 )
                 .map(|inputs| InnerInputProcessorOutput {
@@ -1349,12 +1386,14 @@
         }
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType + std::fmt::Debug&gt;(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_completion_input&lt;T: WithDType + std::fmt::Debug&gt;(
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
@@ -1364,6 +1403,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata,
                 prompt_batchsize,
             );
@@ -1406,6 +1446,7 @@
             device: <span class="kw-2">&amp;</span>Device,
             no_kv_cache: bool,
             last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+            return_raw_logits: bool,
             <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
             <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
             prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -1420,6 +1461,7 @@
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -1432,6 +1474,7 @@
                         device,
                         no_kv_cache,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     ))
@@ -1491,6 +1534,7 @@
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -1537,6 +1581,7 @@
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -1584,6 +1629,7 @@
                         device,
                         no_kv_cache,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )

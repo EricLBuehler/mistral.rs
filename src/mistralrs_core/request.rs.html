@@ -149,6 +149,9 @@
 <a href="#149" id="149">149</a>
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -221,6 +224,7 @@
 ///     2) Apply these custom logits processors sequentially
 ///     3) Apply temperature and softmax
 ///     4) Sample the next token (topk, topp, minp, etc)
+/// - `return_raw_logits`: Return raw logits.
 </span><span class="kw">pub struct </span>NormalRequest {
     <span class="kw">pub </span>messages: RequestMessage,
     <span class="kw">pub </span>sampling_params: SamplingParams,
@@ -234,6 +238,7 @@
     <span class="kw">pub </span>tools: <span class="prelude-ty">Option</span>&lt;Vec&lt;Tool&gt;&gt;,
     <span class="kw">pub </span>tool_choice: <span class="prelude-ty">Option</span>&lt;ToolChoice&gt;,
     <span class="kw">pub </span>logits_processors: <span class="prelude-ty">Option</span>&lt;Vec&lt;Arc&lt;<span class="kw">dyn </span>CustomLogitsProcessor&gt;&gt;&gt;,
+    <span class="kw">pub </span>return_raw_logits: bool,
 }
 
 <span class="kw">impl </span>NormalRequest {
@@ -258,6 +263,7 @@
             suffix: <span class="prelude-val">None</span>,
             adapters: <span class="prelude-val">None</span>,
             logits_processors: <span class="prelude-val">None</span>,
+            return_raw_logits: <span class="bool-val">false</span>,
         }
     }
 }

@@ -415,6 +415,9 @@
 <a href="#415" id="415">415</a>
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -499,6 +502,7 @@
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
         }
@@ -748,6 +752,7 @@
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: <span class="prelude-val">None</span>,
+            return_raw_logits: <span class="bool-val">false</span>,
         }),
         is_streaming,
     ))
@@ -829,6 +834,7 @@
             Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
         }
     }
 }

@@ -560,6 +560,9 @@
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
@@ -645,6 +648,7 @@
         tools: <span class="prelude-val">None</span>,
         tool_choice: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
+        return_raw_logits: <span class="bool-val">false</span>,
     });
 
     <span class="kw">let </span><span class="kw-2">mut </span>usages = Vec::new();
@@ -677,6 +681,7 @@
                     }
                     Response::CompletionChunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                     Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                    Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
                 },
                 <span class="prelude-val">None </span>=&gt; <span class="macro">unreachable!</span>(<span class="string">"Expected a Done response, got None"</span>,),
             }
@@ -814,6 +819,7 @@
         tools: <span class="prelude-val">None</span>,
         tool_choice: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
+        return_raw_logits: <span class="bool-val">false</span>,
     });
 
     sender

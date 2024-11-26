@@ -879,6 +879,9 @@
 <a href="#879" id="879">879</a>
 <a href="#880" id="880">880</a>
 <a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -1058,6 +1061,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -1103,6 +1107,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
             </span>)
@@ -1119,6 +1124,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
             </span>)

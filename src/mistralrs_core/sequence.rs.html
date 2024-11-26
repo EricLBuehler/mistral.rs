@@ -919,6 +919,36 @@
 <a href="#919" id="919">919</a>
 <a href="#920" id="920">920</a>
 <a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -1089,6 +1119,7 @@
     creation_time: u64,
     prompt: String,
     sequence_stepping_type: SeqStepType,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) return_raw_logits: bool,
 
     <span class="comment">// Image generation
     </span>image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
@@ -1211,7 +1242,8 @@
         <span class="comment">// Preallocated KV cache
         </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         <span class="comment">//
-    </span>) -&gt; <span class="self">Self </span>{
+        </span>return_raw_logits: bool,
+    ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
             SequenceCustomMetadata::PagedAttention {
@@ -1275,6 +1307,7 @@
             cached_pixel_values: <span class="prelude-val">None</span>,
             cached_img_thw: <span class="prelude-val">None</span>,
             cached_vid_thw: <span class="prelude-val">None</span>,
+            return_raw_logits,
         }
     }
 
@@ -1629,6 +1662,13 @@
         <span class="self">self</span>.update_time_info();
     }
 
+    <span class="kw">pub fn </span>add_raw_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, logit_chunks: Vec&lt;Tensor&gt;) {
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>)
+            .raw_choices
+            .push((logit_chunks, <span class="self">self</span>.tokens.clone()));
+        <span class="self">self</span>.update_time_info();
+    }
+
     <span class="kw">pub fn </span>add_completion_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>choice: CompletionChoice) {
         choice.text = <span class="macro">format!</span>(
             <span class="string">"{}{}{}"</span>,
@@ -1697,6 +1737,7 @@
     <span class="kw">pub </span>total_completion_time: u128,
     choices: Vec&lt;Choice&gt;,
     image_choices: Vec&lt;ImageChoice&gt;,
+    raw_choices: Vec&lt;(Vec&lt;Tensor&gt;, Vec&lt;u32&gt;)&gt;,
     completion_choices: Vec&lt;(f32, CompletionChoice)&gt;,
     <span class="kw">pub </span>chat_streaming_chunks: Vec&lt;ChunkChoice&gt;,
     <span class="kw">pub </span>completion_streaming_chunks: Vec&lt;CompletionChunkChoice&gt;,
@@ -1709,6 +1750,7 @@
         <span class="self">Self </span>{
             choices: Vec::new(),
             image_choices: Vec::new(),
+            raw_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: <span class="number">0</span>,
@@ -1770,6 +1812,24 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.choices.len() == <span class="self">self</span>.n_choices {
             sender.send(Response::Done(response)).<span class="kw">await</span><span class="question-mark">?</span>;
+        }
+
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="kw">pub async fn </span>maybe_send_raw_done_response(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        sender: Sender&lt;Response&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), SendError&lt;Response&gt;&gt; {
+        <span class="kw">if </span><span class="self">self</span>.raw_choices.len() == <span class="self">self</span>.n_choices {
+            <span class="macro">assert_eq!</span>(<span class="self">self</span>.raw_choices.len(), <span class="number">1</span>);
+            <span class="kw">let </span>(logits_chunks, tokens) = <span class="self">self</span>.raw_choices[<span class="number">0</span>].clone();
+            sender
+                .send(Response::Raw {
+                    logits_chunks,
+                    tokens,
+                })
+                .<span class="kw">await</span><span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(())

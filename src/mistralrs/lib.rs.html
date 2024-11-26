@@ -83,6 +83,7 @@
 <a href="#83" id="83">83</a>
 <a href="#84" id="84">84</a>
 <a href="#85" id="85">85</a>
+<a href="#86" id="86">86</a>
 </pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
 //!
 //! To get started loading a model, check out the following builders:
@@ -167,5 +168,6 @@
 <span class="kw">pub use </span>v0_4_api::<span class="kw-2">*</span>;
 
 <span class="kw">pub use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">pub use </span>candle_nn::loss::cross_entropy <span class="kw">as </span>cross_entropy_loss;
 <span class="kw">pub use </span>mistralrs_core::<span class="kw-2">*</span>;
 </code></pre></div></section></main></body></html>

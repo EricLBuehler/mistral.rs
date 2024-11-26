@@ -716,6 +716,9 @@
 <a href="#716" id="716">716</a>
 <a href="#717" id="717">717</a>
 <a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
@@ -847,6 +850,7 @@
         device: <span class="kw-2">&amp;</span>Device,
         no_kv_cache: bool,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        return_raw_logits: bool,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -897,6 +901,7 @@
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
             </span>)
@@ -913,6 +918,7 @@
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
             </span>)

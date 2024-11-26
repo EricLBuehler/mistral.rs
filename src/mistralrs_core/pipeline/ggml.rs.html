@@ -581,6 +581,11 @@
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
 <a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1109,6 +1114,7 @@
     <span class="kw">fn </span>forward_inputs(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+        return_raw_logits: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;ForwardInputsResult, candle_core::Error&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
@@ -1145,7 +1151,11 @@
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             )<span class="question-mark">?</span>,
         };
-        <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
+        <span class="kw">if </span>return_raw_logits {
+            <span class="prelude-val">Ok</span>(ForwardInputsResult::RawLogits { logits })
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

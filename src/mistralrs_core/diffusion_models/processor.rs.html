@@ -92,6 +92,7 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -158,6 +159,7 @@
         _device: <span class="kw-2">&amp;</span>Device,
         _no_kv_cache: bool,
         _last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+        _return_raw_logits: bool,
         _other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         _paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,

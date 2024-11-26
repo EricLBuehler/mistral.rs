@@ -146,6 +146,8 @@
 <a href="#146" id="146">146</a>
 <a href="#147" id="147">147</a>
 <a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{error::Error, sync::Arc};
 <span class="kw">use </span>tokio::sync::mpsc::{channel, Sender};
@@ -230,6 +232,7 @@
         tool_choice: <span class="prelude-val">None</span>,
         tools: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
+        return_raw_logits: <span class="bool-val">false</span>,
     }))
 }
 
@@ -292,6 +295,7 @@
         Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
         Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
         Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+        Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
     }
 }
 </code></pre></div></section></main></body></html>

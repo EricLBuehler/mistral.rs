@@ -672,6 +672,14 @@
 <a href="#672" id="672">672</a>
 <a href="#673" id="673">673</a>
 <a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1156,7 +1164,11 @@
 
 <span class="attr">#[async_trait::async_trait]
 </span><span class="kw">impl </span>Pipeline <span class="kw">for </span>VisionPipeline {
-    <span class="kw">fn </span>forward_inputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>, inputs: Box&lt;<span class="kw">dyn </span>Any&gt;) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
+    <span class="kw">fn </span>forward_inputs(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+        return_raw_logits: bool,
+    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
         <span class="kw">let </span>ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -1194,7 +1206,11 @@
             paged_attn_meta,
             <span class="kw-2">&amp;</span>flash_meta,
         )<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
+        <span class="kw">if </span>return_raw_logits {
+            <span class="prelude-val">Ok</span>(ForwardInputsResult::RawLogits { logits })
+        } <span class="kw">else </span>{
+            <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     <span class="kw">async fn </span>sample_causal_gen(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

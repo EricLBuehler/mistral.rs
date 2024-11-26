@@ -299,6 +299,9 @@
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
 <a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
     env,
@@ -376,6 +379,7 @@
                 Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
         }
@@ -509,6 +513,7 @@
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: <span class="prelude-val">None</span>,
+            return_raw_logits: <span class="bool-val">false</span>,
         }),
         is_streaming,
     ))
@@ -597,6 +602,7 @@
             Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
             Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+            Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
         }
     }
 }

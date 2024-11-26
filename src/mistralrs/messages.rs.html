@@ -614,6 +614,7 @@
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
 <a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt::Display, sync::Arc};
 
 <span class="kw">use super</span>::<span class="kw-2">*</span>;
@@ -1224,6 +1225,7 @@
             <span class="prelude-val">Some</span>((other_ts, other_tc))
         }
     }
+
     <span class="kw">fn </span>take_sampling_params(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; SamplingParams {
         <span class="kw">let </span><span class="kw-2">mut </span>other = SamplingParams::deterministic();
         std::mem::swap(<span class="kw-2">&amp;mut </span>other, <span class="kw-2">&amp;mut </span><span class="self">self</span>.sampling_params);
