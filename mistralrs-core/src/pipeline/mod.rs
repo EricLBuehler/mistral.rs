@@ -411,19 +411,13 @@ pub trait Pipeline:
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] = Some(logits.i(logit_idx)?);
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
                 }
-
-                let logits = logits
-                    .into_iter()
-                    .map(|l| {
-                        l.expect("Did not get any inputs. This is shocking.")
-                            .to_device(&Device::Cpu)
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
@@ -441,18 +435,33 @@ pub trait Pipeline:
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
+                }
+
+                let logits = logits
+                    .into_iter()
+                    .map(|l| {
+                        l.expect("Did not get any inputs. This is shocking.")
+                            .to_device(&Device::Cpu)
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+
                 let start = Instant::now();
                 match &logits[0] {
-                    ForwardInputsResult::RawLogits { .. } => {
-                        response::send_raw_responses(
-                            input_seqs,
-                            raw_out_logits
-                                .into_iter()
-                                .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
-                                .collect(),
-                        )
-                        .await?;
-                    }
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -556,10 +565,28 @@ pub trait Pipeline:
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] = Some(logits.i(logit_idx)?);
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                     }
+                }
+
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
                 }
 
                 let logits = logits
@@ -572,16 +599,7 @@ pub trait Pipeline:
 
                 let start = Instant::now();
                 match &logits[0] {
-                    ForwardInputsResult::RawLogits { .. } => {
-                        response::send_raw_responses(
-                            input_seqs,
-                            raw_out_logits
-                                .into_iter()
-                                .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
-                                .collect(),
-                        )
-                        .await?;
-                    }
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
