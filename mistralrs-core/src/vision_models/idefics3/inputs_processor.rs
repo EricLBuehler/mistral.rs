@@ -53,12 +53,10 @@ impl Idefics3Processor {
 
 impl Processor for Idefics3Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
+        // Default image_seq_len is 169.
         Arc::new(Idefics3ImageProcessor {
             max_edge: self.max_edge,
-            image_seq_len: self
-                .config
-                .image_seq_len
-                .expect("Must have `image_seq_len`."),
+            image_seq_len: self.config.image_seq_len.unwrap_or(169),
         })
     }
 
@@ -237,6 +235,13 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
                     sample.push_str(&format!("{image_prompt_string}{}", split_sample[i + 1]));
                 }
+                //                 let sample = r#"<|im_start|>User:<fake_token_around_image><row_1_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
+                // <fake_token_around_image><row_2_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
+                // <fake_token_around_image><row_3_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
+
+                // <fake_token_around_image><global-img><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image>What is this?<end_of_utterance>
+                // Assistant:"#.to_string();
+                //                 dbg!(&sample.len());
 
                 seq.set_initial_prompt(sample.clone());
                 let toks = tokenizer
@@ -454,18 +459,6 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             images = mistralrs_vision::pad_to_max_edge(&images, max_edge);
         }
 
-        let mut max_h = 0;
-        let mut max_w = 0;
-        for image in &images {
-            let (w, h) = image.dimensions();
-            if w > max_w {
-                max_w = w;
-            }
-            if h > max_h {
-                max_h = h;
-            }
-        }
-
         for image in images.iter_mut() {
             // Convert to rgb
             if config.do_convert_rgb.is_some_and(|x| x) {
@@ -485,7 +478,10 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
         let mut image_rows = Vec::new();
         let mut image_cols = Vec::new();
         let mut new_images = Vec::new();
-        let max_image_size = config.max_image_size.as_ref().unwrap();
+        let max_image_size = config
+            .max_image_size
+            .clone()
+            .unwrap_or_else(|| HashMap::from([("longest_edge".to_string(), 364)]));
         if config.do_image_splitting.unwrap_or(true) {
             // We first resize both height and width of each image to the nearest max_image_size multiple, disregarding the aspect ratio
             // for size=(10, max_image_size) -> rescaled_size=(max_image_size, max_image_size)
@@ -521,6 +517,18 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             image_cols = vec![0; images.len()];
         }
         images = new_images;
+
+        let mut max_h = 0;
+        let mut max_w = 0;
+        for image in &images {
+            let (w, h) = image.dimensions();
+            if w > max_w {
+                max_w = w;
+            }
+            if h > max_h {
+                max_h = h;
+            }
+        }
 
         for image in images.iter_mut() {
             let transforms = Transforms {

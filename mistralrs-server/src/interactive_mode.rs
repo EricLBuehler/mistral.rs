@@ -355,7 +355,16 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
 
                 let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
                 user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                user_message.insert("content".to_string(), Either::Left(message));
+                user_message.insert(
+                    "content".to_string(),
+                    Either::Right(vec![
+                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                        IndexMap::from([
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String(message)),
+                        ]),
+                    ]),
+                );
                 messages.push(user_message);
             }
             message => {

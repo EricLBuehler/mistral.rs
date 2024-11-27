@@ -86,6 +86,9 @@ pub trait ModelPaths: AsAny + Debug {
 
     /// Get the processor config (for the vision models). This is primarily used for the chat template.
     fn get_processor_config(&self) -> &Option<PathBuf>;
+
+    /// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
+    fn get_chat_template_json(&self) -> &Option<PathBuf>;
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +107,7 @@ pub struct LocalModelPaths<P: Debug> {
     pub lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
     pub preprocessor_config: Option<P>,
     pub processor_config: Option<P>,
+    pub chat_template_json_filename: Option<P>,
 }
 
 impl<P: Debug> LocalModelPaths<P> {
@@ -122,6 +126,7 @@ impl<P: Debug> LocalModelPaths<P> {
         lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
         preprocessor_config: Option<P>,
         processor_config: Option<P>,
+        chat_template_json_filename: Option<P>,
     ) -> Self {
         Self {
             tokenizer_filename,
@@ -137,6 +142,7 @@ impl<P: Debug> LocalModelPaths<P> {
             lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
+            chat_template_json_filename,
         }
     }
 }
@@ -180,6 +186,9 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     }
     fn get_processor_config(&self) -> &Option<PathBuf> {
         &self.processor_config
+    }
+    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+        &self.chat_template_json_filename
     }
 }
 

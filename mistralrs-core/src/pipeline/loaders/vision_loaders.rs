@@ -620,7 +620,7 @@ pub struct Idefics3Prefixer;
 impl VisionPromptPrefixer for Idefics3Prefixer {
     fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
         // Chat template does it
-        format!("<image>{prompt}")
+        prompt.to_string()
     }
 }
 
@@ -659,7 +659,7 @@ impl VisionModelLoader for Idefics3Loader {
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Idefics3Processor::new(
-            processor_config.unwrap(),
+            processor_config.unwrap_or_default(),
             preprocessor_config,
             max_edge,
         ))

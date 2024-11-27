@@ -62,7 +62,7 @@ impl Processor for MLlamaProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
