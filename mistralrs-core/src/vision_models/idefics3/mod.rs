@@ -15,8 +15,8 @@ use vision::{Idefics3Connector, Idefics3VisionTransformer};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    dummy_paged_attention::{AttentionImplementation, ModelConfigMetadata},
     models::llama::Llama,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
