@@ -46,6 +46,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
     ```
 
+- 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
+    ```
+
 - 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
@@ -417,7 +423,6 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `vllama`
 - `qwen2vl`
 - `idefics3`
-- `smolvlm`
 
 ### Supported GGUF architectures
 

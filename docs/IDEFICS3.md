@@ -1,6 +1,6 @@
-# Llama 3.2 Vision Model: [`HuggingFaceM4/Idefics3-8B-Llama3`](https://huggingface.co/HuggingFaceM4/Idefics3-8B-Llama3)
+# Idefics 3 Vision: [`HuggingFaceM4/Idefics3-8B-Llama3`](https://huggingface.co/HuggingFaceM4/Idefics3-8B-Llama3)
 
-Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+Mistral.rs supports the Idefics 3 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
 
 UQFF quantizations are also available.
 
@@ -11,7 +11,7 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-> Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 32 layers*.
+> Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. Check the Hugging Face text model config for more information or raise an issue.
 
 ## ToC
 - [Interactive mode](#interactive-mode)
@@ -19,6 +19,10 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 - [Rust API](#rust)
 - [Python API](#python)
 - [UQFF models](#uqff-models)
+
+## Using the [🤗 Smol VLM](HuggingFaceTB/SmolVLM-Instruct) models
+
+Simply substitute the Idefics 3 model ID (`HuggingFaceM4/Idefics3-8B-Llama3`) with the Smol VLM one (`HuggingFaceTB/SmolVLM-Instruct`)!
 
 ## Interactive mode
 

@@ -109,8 +109,8 @@ impl FromStr for VisionLoaderType {
             "llava" => Ok(Self::LLaVA),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
-            "idefics3" | "smolvlm" => Ok(Self::Idefics3),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `smolvlm`.")),
+            "idefics3" => Ok(Self::Idefics3),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`.")),
         }
     }
 }
