@@ -1,16 +1,15 @@
 use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
+const MODEL_ID: &str = "HuggingFaceM4/Idefics3-8B-Llama3";
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = VisionModelBuilder::new(
-        "HuggingFaceM4/idefics2-8b-chatty",
-        VisionLoaderType::Idefics2,
-    )
-    .with_isq(IsqType::Q4K)
-    .with_logging()
-    .build()
-    .await?;
+    let model = VisionModelBuilder::new(MODEL_ID, VisionLoaderType::Idefics3)
+        .with_isq(IsqType::Q8_0)
+        .with_logging()
+        .build()
+        .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
@@ -22,7 +21,7 @@ async fn main() -> Result<()> {
 
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
+        "What type of flower is this?",
         image,
         &model,
     )?;

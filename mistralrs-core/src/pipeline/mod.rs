@@ -231,6 +231,7 @@ impl PartialEq for ModelCategory {
 
 /// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
 pub trait VisionPromptPrefixer: Send + Sync {
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
     fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
 }
 

@@ -392,7 +392,7 @@ pub(crate) fn get_chat_template(
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
-    // Overwrite to use any present `chat_tempalte.json`
+    // Overwrite to use any present `chat_template.json`
     if let Some(ChatTemplateValue(chat_template_value)) = &mut template.chat_template {
         if let Some(chat_template_json) = chat_template_json {
             #[derive(Debug, serde::Deserialize)]

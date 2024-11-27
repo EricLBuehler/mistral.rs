@@ -41,6 +41,18 @@ impl Idefics3Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
+        let connector = Idefics3Connector::new(
+            cfg,
+            vb_m.pp("connector")
+                .set_dtype(DType::F32)
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
+        let vision = Idefics3VisionTransformer::new(
+            &cfg.vision_config,
+            vb_m.pp("vision_model")
+                .set_dtype(DType::F32)
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         let text_model = Llama::new_inner(
             &cfg.text_config,
             vb_m.pp("text_model"),
@@ -48,11 +60,6 @@ impl Idefics3Model {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-        )?;
-        let connector = Idefics3Connector::new(cfg, vb_m.pp("connector"))?;
-        let vision = Idefics3VisionTransformer::new(
-            &cfg.vision_config,
-            vb_m.pp("vision_model").set_dtype(DType::F32),
         )?;
         Ok(Self {
             text_model,
@@ -188,13 +195,10 @@ impl Idefics3Model {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder
-            let image_hidden_states = self
-                .vision
-                .forward(
-                    &pixel_values.to_dtype(DType::F32)?,
-                    Some(&patch_attention_mask),
-                )?
-                .to_dtype(self.dtype)?;
+            let image_hidden_states = self.vision.forward(
+                &pixel_values.to_dtype(DType::F32)?,
+                Some(&patch_attention_mask),
+            )?;
 
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
@@ -202,9 +206,13 @@ impl Idefics3Model {
             if self.text_model.cache().normal().0[0].current_seq_len() == 0 {
                 self.inputs_merger(
                     input_ids,
-                    &self.text_model.get_input_embeddings(input_ids)?,
+                    &self
+                        .text_model
+                        .get_input_embeddings(input_ids)?
+                        .to_dtype(DType::F32)?,
                     &image_hidden_states,
                 )?
+                .to_dtype(self.dtype)?
             } else {
                 candle_core::bail!("Pixel values were specified for a non-prompt.")
             }
@@ -238,7 +246,7 @@ impl IsqModel for Idefics3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        self.text_model.residual_tensors()
     }
 }
 

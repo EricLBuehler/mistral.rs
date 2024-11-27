@@ -36,6 +36,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `LLaVa`
 - `VLlama`
 - `Qwen2VL`
+- `Idefics3`
+- `SmolVLM`
 
 ### Architecture for diffusion models
 - `Flux`

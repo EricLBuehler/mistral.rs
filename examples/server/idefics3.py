@@ -36,7 +36,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 # )
 
 completion = client.chat.completions.create(
-    model="idefics2",
+    model="llama-vision",
     messages=[
         {
             "role": "user",
@@ -44,12 +44,12 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "What is shown in this image?",
+                    "text": "What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },

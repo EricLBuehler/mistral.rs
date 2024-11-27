@@ -673,7 +673,7 @@ impl VisionModelLoader for Idefics3Loader {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
-        Arc::new(Idefics2Prefixer)
+        Arc::new(Idefics3Prefixer)
     }
 }
 
