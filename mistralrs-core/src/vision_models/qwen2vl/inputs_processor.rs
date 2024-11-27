@@ -66,7 +66,7 @@ impl Processor for Qwen2VLProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -256,6 +256,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             num_tiles: _,
                             image_grid_thw,
                             video_grid_thw,
+                            rows: _,
+                            cols: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -681,6 +683,8 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 num_tiles: None,
                 image_grid_thw: Some(vision_grid_thw),
                 video_grid_thw: None,
+                rows: None,
+                cols: None,
             });
         }
 
@@ -715,6 +719,8 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 num_tiles: None,
                 image_grid_thw: None,
                 video_grid_thw: Some(vision_grid_thw),
+                rows: None,
+                cols: None,
             });
         }
         unreachable!()

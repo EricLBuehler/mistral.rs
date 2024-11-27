@@ -240,7 +240,18 @@ impl VisionMessages {
             ("role".to_string(), Either::Left(role.to_string())),
             (
                 "content".to_string(),
-                Either::Left(prefixer.prefix_image(self.images.len() - 1, &text.to_string())),
+                Either::Right(vec![
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                    IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        (
+                            "text".to_string(),
+                            Value::String(
+                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
+                            ),
+                        ),
+                    ]),
+                ]),
             ),
         ]));
         Ok(self)

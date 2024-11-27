@@ -31,11 +31,12 @@ pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
     AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
-    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -230,6 +231,7 @@ impl PartialEq for ModelCategory {
 
 /// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
 pub trait VisionPromptPrefixer: Send + Sync {
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
     fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
 }
 

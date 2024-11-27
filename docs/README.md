@@ -11,6 +11,8 @@
 - [Phi 3.5 MoE](PHI3.5MOE.md)
 - [Phi 3.5 Vision](PHI3V.md)
 - [Llama 3.2 Vision](VLLAMA.md)
+- [Qwen2-VL](QWEN2VL.md)
+- [Idefics 3 and Smol VLM](IDEFICS3.md)
 
 ## Adapters
 - [Docs](ADAPTER_MODELS.md)

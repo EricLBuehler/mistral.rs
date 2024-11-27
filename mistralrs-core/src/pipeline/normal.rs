@@ -374,7 +374,16 @@ impl Loader for NormalLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
+        let chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            None,
+        );
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()

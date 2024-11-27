@@ -21,7 +21,7 @@ maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter py
 maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter python3.11 --features accelerate
 maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter python3.12 --features accelerate
 
-# WINDOWS: x86_64 Manylinux
+# WINDOWS: x86_64 Manylinux, Windows
 
 maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
 maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11

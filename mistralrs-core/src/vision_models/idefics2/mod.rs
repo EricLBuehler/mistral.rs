@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+pub(crate) mod idefics2_input_processor;
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
@@ -1134,7 +1136,7 @@ impl Idefics2 {
 
             let patch_attention_mask = patches_subgrid
                 .sum((D::Minus1, D::Minus2))?
-                .gt(0.0)?
+                .eq((patch_size * patch_size) as f64)?
                 .to_dtype(DType::U8)?;
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;

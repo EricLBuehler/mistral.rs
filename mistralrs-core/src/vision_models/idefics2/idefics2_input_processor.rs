@@ -22,7 +22,7 @@ use crate::{
     MessageContent, Pipeline, Tool,
 };
 
-use super::{
+use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     preprocessor_config::{PreProcessorConfig, ToFilter},
     processor_config::ProcessorConfig,
@@ -223,6 +223,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     num_tiles: _,
                     image_grid_thw: _,
                     video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -389,6 +391,8 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             num_tiles: None,
             image_grid_thw: None,
             video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }
