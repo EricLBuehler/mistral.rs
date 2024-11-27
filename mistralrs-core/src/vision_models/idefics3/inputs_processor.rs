@@ -397,6 +397,7 @@ fn resize(
     };
 
     Ok(image.resize_exact(w as u32, h as u32, resampling))
+    // Ok(image.resize_exact(w as u32, h as u32,  FilterType::Nearest))
 }
 
 /// Returns: frames, num_splits_h, num_splits_w
@@ -408,8 +409,8 @@ fn split_image(
     let mut frames = Vec::new();
 
     if width > longest_edge as u32 || height > longest_edge as u32 {
-        let num_splits_h = ((height as f64) / (longest_edge as f64)).ceil() as usize;
-        let num_splits_w = ((width as f64) / (longest_edge as f64)).ceil() as usize;
+        let num_splits_h = (height as f64 / (longest_edge as f64)).ceil() as usize;
+        let num_splits_w = (width as f64 / (longest_edge as f64)).ceil() as usize;
 
         let optimal_height = (height as f64 / num_splits_h as f64).ceil() as u32;
         let optimal_width = (width as f64 / num_splits_w as f64).ceil() as u32;
