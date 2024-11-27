@@ -16,7 +16,6 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
     dummy_paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    layers::CausalMasker,
     models::llama::Llama,
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -52,7 +51,6 @@ impl Idefics3Model {
         )?;
         let connector = Idefics3Connector::new(cfg, vb_m.pp("connector"))?;
         let vision = Idefics3VisionTransformer::new(&cfg.vision_config, vb_m.pp("vision_model"))?;
-
         Ok(Self {
             text_model,
             connector,
@@ -194,7 +192,7 @@ impl Idefics3Model {
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
 
-            if CausalMasker.calculate_past_kv_len(&self.text_model.cache().full().lock())? == 0 {
+            if self.text_model.cache().normal().0[0].current_seq_len() == 0 {
                 self.inputs_merger(
                     input_ids,
                     &self.text_model.get_input_embeddings(input_ids)?,

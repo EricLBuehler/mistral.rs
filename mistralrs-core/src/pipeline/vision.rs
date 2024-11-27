@@ -1,4 +1,4 @@
-use super::cache_manager::FullCacheManager;
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
@@ -354,7 +354,7 @@ impl Loader for VisionLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
-            EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -439,10 +439,18 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn set_none_cache(
         &self,
@@ -451,7 +459,16 @@ impl CacheManagerMixin for VisionPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else {
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }

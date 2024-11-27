@@ -16,7 +16,7 @@ struct Idefics3SimpleMLP {
 impl Idefics3SimpleMLP {
     pub fn new(cfg: &Idefics3Config, vb: VarBuilder) -> Result<Self> {
         let in_dim = cfg.vision_config.hidden_size * cfg.scale_factor.pow(2);
-        let out_dim = cfg.vision_config.hidden_size;
+        let out_dim = cfg.text_config.hidden_size;
         Ok(Self {
             proj: candle_nn::linear_no_bias(in_dim, out_dim, vb.pp("proj"))?,
         })
