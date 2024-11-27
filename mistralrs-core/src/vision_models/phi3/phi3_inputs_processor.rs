@@ -21,7 +21,7 @@ use crate::{
     sequence::Sequence,
 };
 
-use super::{
+use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     phi3::Phi3VisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,
@@ -132,6 +132,8 @@ impl InputsProcessor for Phi3InputsProcessor {
                     num_tiles: _,
                     image_grid_thw: _,
                     video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -561,6 +563,8 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             num_tiles: None,
             image_grid_thw: None,
             video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }

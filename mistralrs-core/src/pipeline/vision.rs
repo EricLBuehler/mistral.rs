@@ -1,4 +1,4 @@
-use super::cache_manager::FullCacheManager;
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
@@ -7,7 +7,9 @@ use super::{
     Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
     XLoraPaths,
 };
-use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
+use super::{
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -123,6 +125,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
+            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -298,7 +301,16 @@ impl Loader for VisionLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
+        let chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            None,
+        );
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
@@ -351,7 +363,7 @@ impl Loader for VisionLoader {
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
-            EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -436,10 +448,18 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn set_none_cache(
         &self,
@@ -448,7 +468,16 @@ impl CacheManagerMixin for VisionPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else {
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }

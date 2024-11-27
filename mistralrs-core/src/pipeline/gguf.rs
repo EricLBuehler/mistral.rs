@@ -473,7 +473,16 @@ impl Loader for GGUFLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let mut chat_template = get_chat_template(paths, &self.chat_template, gguf_chat_template);
+        let mut chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            gguf_chat_template,
+        );
 
         let max_seq_len = match model {
             Model::Llama(ref l) => l.max_seq_len,

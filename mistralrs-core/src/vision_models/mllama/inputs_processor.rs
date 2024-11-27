@@ -62,7 +62,7 @@ impl Processor for MLlamaProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -302,6 +302,8 @@ impl InputsProcessor for MLlamaImageProcessor {
                     num_tiles,
                     image_grid_thw: _,
                     video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -879,6 +881,8 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             num_tiles: Some(num_tiles),
             image_grid_thw: None,
             video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }

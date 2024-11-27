@@ -142,3 +142,7 @@ required-features = []
 [[example]]
 name = "qwen2vl"
 required-features = []
+
+[[example]]
+name = "idefics3"
+required-features = []

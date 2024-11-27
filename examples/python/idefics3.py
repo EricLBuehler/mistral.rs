@@ -2,14 +2,14 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="lamm-mit/Cephalo-Idefics-2-vision-8b-beta",
-        arch=VisionArchitecture.Idefics2,
+        model_id="HuggingFaceM4/Idefics3-8B-Llama3",
+        arch=VisionArchitecture.Idefics3,
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="idefics2",
+        model="idefics3",
         messages=[
             {
                 "role": "user",

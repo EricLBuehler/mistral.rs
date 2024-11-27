@@ -84,10 +84,11 @@ class Architecture(Enum):
 class VisionArchitecture(Enum):
     Phi3V = "phi3v"
     Idefics2 = "idefics2"
-    LLaVANext = "LLaVANext"
-    LLaVA = "LLaVA"
-    VLlama = "VLlama"
-    Qwen2VL = "Qwen2VL"
+    LLaVANext = "llava-next"
+    LLaVA = "llava"
+    VLlama = "vllama"
+    Qwen2VL = "qwen2vl"
+    Idefics3 = "idefics3"
 
 @dataclass
 class DiffusionArchitecture(Enum):

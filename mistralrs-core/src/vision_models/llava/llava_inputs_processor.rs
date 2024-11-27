@@ -134,6 +134,8 @@ impl InputsProcessor for LLaVAInputProcessor {
                     num_tiles: _,
                     image_grid_thw: _,
                     video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         imgs.clone(),
@@ -390,6 +392,8 @@ impl ImagePreProcessor for LLaVAInputProcessor {
             num_tiles: None,
             image_grid_thw: None,
             video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }
