@@ -621,6 +621,15 @@
 <a href="#621" id="621">621</a>
 <a href="#622" id="622">622</a>
 <a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
@@ -978,7 +987,16 @@ Commands:
 
                 <span class="kw">let </span><span class="kw-2">mut </span>user_message: IndexMap&lt;String, MessageContent&gt; = IndexMap::new();
                 user_message.insert(<span class="string">"role"</span>.to_string(), Either::Left(<span class="string">"user"</span>.to_string()));
-                user_message.insert(<span class="string">"content"</span>.to_string(), Either::Left(message));
+                user_message.insert(
+                    <span class="string">"content"</span>.to_string(),
+                    Either::Right(<span class="macro">vec!</span>[
+                        IndexMap::from([(<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"image"</span>.to_string()))]),
+                        IndexMap::from([
+                            (<span class="string">"type"</span>.to_string(), Value::String(<span class="string">"text"</span>.to_string())),
+                            (<span class="string">"text"</span>.to_string(), Value::String(message)),
+                        ]),
+                    ]),
+                );
                 messages.push(user_message);
             }
             message =&gt; {

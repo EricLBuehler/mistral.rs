@@ -680,7 +680,36 @@
 <a href="#680" id="680">680</a>
 <a href="#681" id="681">681</a>
 <a href="#682" id="682">682</a>
-</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+</pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
@@ -689,7 +718,9 @@
     Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
     XLoraPaths,
 };
-<span class="kw">use super</span>::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
+<span class="kw">use super</span>::{
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+};
 <span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
 <span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -805,6 +836,7 @@
             VisionLoaderType::LLaVA =&gt; Box::new(LLaVALoader),
             VisionLoaderType::VLlama =&gt; Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL =&gt; Box::new(Qwen2VLLoader),
+            VisionLoaderType::Idefics3 =&gt; Box::new(Idefics3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -980,7 +1012,16 @@
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-        <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, <span class="prelude-val">None</span>);
+        <span class="kw">let </span>chat_template = get_chat_template(
+            paths,
+            <span class="kw-2">&amp;</span>paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+            <span class="prelude-val">None</span>,
+        );
 
         <span class="kw">if </span>(in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some())
             &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()
@@ -1033,7 +1074,7 @@
         <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
             EitherCache::Full(full) =&gt; full.lock().len(),
-            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>[<span class="number">0</span>].current_seq_len(),
+            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
         };
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
         <span class="kw">let </span>sliding_window = model.config().sliding_window;
@@ -1118,10 +1159,18 @@
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>VisionPipeline {
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        } <span class="kw">else </span>{
+            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        }
     }
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        } <span class="kw">else </span>{
+            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+        }
     }
     <span class="kw">fn </span>set_none_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -1130,7 +1179,16 @@
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, load_preallocated_cache);
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+            FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, <span class="bool-val">false</span>);
+        } <span class="kw">else </span>{
+            NormalCacheManager.set_none_cache(
+                <span class="self">self</span>,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         <span class="kw">if </span>reset_non_granular {
             <span class="self">self</span>.reset_non_granular_state()
         }

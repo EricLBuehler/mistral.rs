@@ -49,6 +49,7 @@
 <a href="#49" id="49">49</a>
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
+<a href="#52" id="52">52</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::Result;
@@ -69,6 +70,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) image_std: <span class="prelude-ty">Option</span>&lt;[f64; <span class="number">3</span>]&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rescale_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) resampling: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) max_image_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) crop_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,

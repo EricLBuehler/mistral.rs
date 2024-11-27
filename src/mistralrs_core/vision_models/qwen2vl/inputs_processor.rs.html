@@ -720,6 +720,12 @@
 <a href="#720" id="720">720</a>
 <a href="#721" id="721">721</a>
 <a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
@@ -788,7 +794,7 @@
     }
 
     <span class="kw">fn </span>template_action(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -978,6 +984,8 @@
                             num_tiles: <span class="kw">_</span>,
                             image_grid_thw,
                             video_grid_thw,
+                            rows: <span class="kw">_</span>,
+                            cols: <span class="kw">_</span>,
                         } = <span class="self">self
                             </span>.preprocess(
                                 seq.clone_images()
@@ -1403,6 +1411,8 @@
                 num_tiles: <span class="prelude-val">None</span>,
                 image_grid_thw: <span class="prelude-val">Some</span>(vision_grid_thw),
                 video_grid_thw: <span class="prelude-val">None</span>,
+                rows: <span class="prelude-val">None</span>,
+                cols: <span class="prelude-val">None</span>,
             });
         }
 
@@ -1437,6 +1447,8 @@
                 num_tiles: <span class="prelude-val">None</span>,
                 image_grid_thw: <span class="prelude-val">None</span>,
                 video_grid_thw: <span class="prelude-val">Some</span>(vision_grid_thw),
+                rows: <span class="prelude-val">None</span>,
+                cols: <span class="prelude-val">None</span>,
             });
         }
         <span class="macro">unreachable!</span>()

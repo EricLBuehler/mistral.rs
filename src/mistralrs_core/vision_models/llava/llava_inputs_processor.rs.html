@@ -393,6 +393,10 @@
 <a href="#393" id="393">393</a>
 <a href="#394" id="394">394</a>
 <a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
@@ -529,6 +533,8 @@
                     num_tiles: <span class="kw">_</span>,
                     image_grid_thw: <span class="kw">_</span>,
                     video_grid_thw: <span class="kw">_</span>,
+                    rows: <span class="kw">_</span>,
+                    cols: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         imgs.clone(),
@@ -785,6 +791,8 @@
             num_tiles: <span class="prelude-val">None</span>,
             image_grid_thw: <span class="prelude-val">None</span>,
             video_grid_thw: <span class="prelude-val">None</span>,
+            rows: <span class="prelude-val">None</span>,
+            cols: <span class="prelude-val">None</span>,
         })
     }
 }

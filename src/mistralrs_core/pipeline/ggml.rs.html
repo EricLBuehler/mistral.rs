@@ -586,6 +586,15 @@
 <a href="#586" id="586">586</a>
 <a href="#587" id="587">587</a>
 <a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -938,7 +947,16 @@
         <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-        <span class="kw">let </span>chat_template = get_chat_template(paths, <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template, <span class="prelude-val">None</span>);
+        <span class="kw">let </span>chat_template = get_chat_template(
+            paths,
+            <span class="kw-2">&amp;</span>paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+            <span class="prelude-val">None</span>,
+        );
 
         <span class="kw">let </span>max_seq_len = <span class="kw">match </span>model {
             Model::Llama(<span class="kw-2">ref </span>l) =&gt; l.max_seq_len,

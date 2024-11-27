@@ -518,6 +518,24 @@
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
 <a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
@@ -866,9 +884,13 @@
 /// - `chat_template_ovrd` (GGUF chat template content) causes the usage of that string chat template initially.
 ///   Falls back to `chat_template_file` if it is invalid. *The user must add the bos/unk/eos tokens manually if this
 ///   is used.*
+///
+/// After this, if the `chat_template_json` filename is specified (a json with one field: "chat_template"),
+///  the chat template is overwritten with this chat template.
 </span><span class="attr">#[allow(clippy::borrowed_box)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_chat_template(
     paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
+    chat_template_json: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_fallback: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_ovrd: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; ChatTemplate {
@@ -908,6 +930,20 @@
         }
         <span class="prelude-val">None </span>=&gt; serde_json::from_str(<span class="kw-2">&amp;</span>template_content.as_ref().unwrap().clone()).unwrap(),
     };
+    <span class="comment">// Overwrite to use any present `chat_template.json`
+    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(ChatTemplateValue(chat_template_value)) = <span class="kw-2">&amp;mut </span>template.chat_template {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(chat_template_json) = chat_template_json {
+            <span class="attr">#[derive(Debug, serde::Deserialize)]
+            </span><span class="kw">struct </span>AutomaticTemplate {
+                chat_template: String,
+            }
+            <span class="kw">let </span>deser: AutomaticTemplate = serde_json::from_str(
+                <span class="kw-2">&amp;</span>fs::read_to_string(chat_template_json).expect(<span class="string">"Loading chat template failed."</span>),
+            )
+            .unwrap();
+            <span class="kw-2">*</span>chat_template_value = Either::Left(deser.chat_template);
+        }
+    }
 
     <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
         .get_processor_config()

@@ -920,6 +920,8 @@
 <a href="#920" id="920">920</a>
 <a href="#921" id="921">921</a>
 <a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
@@ -953,11 +955,12 @@
 <span class="kw">pub use </span>isq::{parse_isq_value, IsqModel, IsqOrganization};
 <span class="kw">pub use </span>loaders::{
     AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
-    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader,
 };
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -1152,7 +1155,8 @@
 
 <span class="doccomment">/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
 </span><span class="kw">pub trait </span>VisionPromptPrefixer: Send + Sync {
-    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
+    <span class="doccomment">/// Prefix for inclusion in messages (may do nothing if the chat template handles it).
+    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
 }
 
 <span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {

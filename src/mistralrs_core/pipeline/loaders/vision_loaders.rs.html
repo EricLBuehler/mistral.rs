@@ -603,6 +603,85 @@
 <a href="#603" id="603">603</a>
 <a href="#604" id="604">604</a>
 <a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
@@ -625,6 +704,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config <span class="kw">as </span>LLaVAConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava15::Model <span class="kw">as </span>LLaVA;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_inputs_processor::LLaVAProcessor;
@@ -699,6 +779,8 @@
     </span>VLlama,
     <span class="attr">#[serde(rename = <span class="string">"qwen2vl"</span>)]
     </span>Qwen2VL,
+    <span class="attr">#[serde(rename = <span class="string">"idefics3"</span>)]
+    </span>Idefics3,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>VisionLoaderType {
@@ -711,7 +793,8 @@
             <span class="string">"llava" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::LLaVA),
             <span class="string">"vllama" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::VLlama),
             <span class="string">"qwen2vl" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Qwen2VL),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`."</span>)),
+            <span class="string">"idefics3" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Idefics3),
+            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`."</span>)),
         }
     }
 }
@@ -1206,6 +1289,81 @@
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
         ])
+    }
+}
+
+<span class="comment">// ======================== Idefics 3 loader
+
+</span><span class="doccomment">/// [`VisionLoader`] for an Idefics 3 Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+</span><span class="kw">pub struct </span>Idefics3Loader;
+
+<span class="kw">pub struct </span>Idefics3Prefixer;
+
+<span class="kw">impl </span>VisionPromptPrefixer <span class="kw">for </span>Idefics3Prefixer {
+    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, _image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String {
+        <span class="comment">// Chat template does it
+        </span>prompt.to_string()
+    }
+}
+
+<span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>Idefics3Loader {
+    <span class="kw">fn </span>load(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.text_config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(Idefics3Model::new(
+            <span class="kw-2">&amp;</span>config,
+            vb,
+            <span class="self">self</span>.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )<span class="question-mark">?</span>))
+    }
+    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.text_config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(config))
+    }
+    <span class="kw">fn </span>get_processor(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _model_config: <span class="kw-2">&amp;</span>str,
+        processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+        Arc::new(Idefics3Processor::new(
+            processor_config.unwrap_or_default(),
+            preprocessor_config,
+            max_edge,
+        ))
+    }
+    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>config: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="comment">// We only apply device mapping to text model
+        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
+    }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt; {
+        Arc::new(Idefics3Prefixer)
+    }
+}
+
+<span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Idefics3Loader {
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="macro">todo!</span>()
     }
 }
 </code></pre></div></section></main></body></html>

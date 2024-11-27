@@ -882,6 +882,10 @@
 <a href="#882" id="882">882</a>
 <a href="#883" id="883">883</a>
 <a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
@@ -946,7 +950,7 @@
     }
 
     <span class="kw">fn </span>template_action(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -1186,6 +1190,8 @@
                     num_tiles,
                     image_grid_thw: <span class="kw">_</span>,
                     video_grid_thw: <span class="kw">_</span>,
+                    rows: <span class="kw">_</span>,
+                    cols: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
@@ -1763,6 +1769,8 @@
             num_tiles: <span class="prelude-val">Some</span>(num_tiles),
             image_grid_thw: <span class="prelude-val">None</span>,
             video_grid_thw: <span class="prelude-val">None</span>,
+            rows: <span class="prelude-val">None</span>,
+            cols: <span class="prelude-val">None</span>,
         })
     }
 }

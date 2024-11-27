@@ -406,6 +406,15 @@
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
 </pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
@@ -431,8 +440,8 @@
 };
 
 <span class="kw">pub use </span>vision_loaders::{
-    Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader, VLlamaLoader,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
+    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 <span class="kw">pub use </span>diffusion_loaders::{
@@ -494,6 +503,9 @@
 
     <span class="doccomment">/// Get the processor config (for the vision models). This is primarily used for the chat template.
     </span><span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+
+    <span class="doccomment">/// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
+    </span><span class="kw">fn </span>get_chat_template_json(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
 }
 
 <span class="attr">#[derive(Clone, Debug)]
@@ -512,6 +524,7 @@
     <span class="kw">pub </span>lora_preload_adapter_info: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (P, LoraConfig)&gt;&gt;,
     <span class="kw">pub </span>preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
     <span class="kw">pub </span>processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+    <span class="kw">pub </span>chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
 }
 
 <span class="kw">impl</span>&lt;P: Debug&gt; LocalModelPaths&lt;P&gt; {
@@ -530,6 +543,7 @@
         lora_preload_adapter_info: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (P, LoraConfig)&gt;&gt;,
         preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
         processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+        chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             tokenizer_filename,
@@ -545,6 +559,7 @@
             lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
+            chat_template_json_filename,
         }
     }
 }
@@ -588,6 +603,9 @@
     }
     <span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.processor_config
+    }
+    <span class="kw">fn </span>get_chat_template_json(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template_json_filename
     }
 }
 
