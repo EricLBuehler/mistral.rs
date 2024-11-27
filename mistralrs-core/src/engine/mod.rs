@@ -17,7 +17,7 @@ use crate::{
         text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
         CacheInstruction, EitherCache, NormalCache,
     },
-    request::{NormalRequest, TokenizationRequest},
+    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
     sequence::{SeqStepType, StopReason},
@@ -510,7 +510,8 @@ impl Engine {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
-            Request::Tokenize(text) => self.tokenize_text(text).await,
+            Request::Tokenize(req) => self.tokenize_text(req).await,
+            Request::Detokenize(req) => self.detokenize_text(req).await,
             Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
         }
     }
@@ -593,6 +594,7 @@ impl Engine {
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
+                    true,
                     true,
                     request.tools.unwrap_or_default(),
                 );
@@ -920,6 +922,7 @@ impl Engine {
                     pipeline,
                     messages,
                     request.add_generation_prompt,
+                    request.add_special_tokens,
                     request.tools.unwrap_or_default(),
                 );
                 let toks = match template {
@@ -955,7 +958,7 @@ impl Engine {
                         return;
                     }
                 };
-                let toks = tokenizer.encode(text, true);
+                let toks = tokenizer.encode(text, request.add_special_tokens);
                 let toks = match toks {
                     Ok(tokenizer) => tokenizer,
                     Err(e) => {
@@ -974,5 +977,40 @@ impl Engine {
                     .expect("Sender disconnected unexpectedly!");
             }
         };
+    }
+
+    async fn detokenize_text(&self, request: DetokenizationRequest) {
+        let pipeline = &*get_mut_arcmutex!(self.pipeline);
+        let tokenizer = pipeline.tokenizer();
+        let tokenizer = match tokenizer {
+            Some(tokenizer) => tokenizer,
+            None => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(
+                        "Pipeline does not include a toksnizer.",
+                    )))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        let txt = tokenizer.decode(&request.tokens, request.skip_special_tokens);
+        let txt = match txt {
+            Ok(tokenizer) => tokenizer,
+            Err(e) => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(e)))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        request
+            .response
+            .send(Ok(txt))
+            .await
+            .expect("Sender disconnected unexpectedly!");
     }
 }

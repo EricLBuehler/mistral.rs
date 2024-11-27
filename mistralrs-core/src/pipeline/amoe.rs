@@ -408,6 +408,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
                             true,
+                            true,
                             Vec::new(),
                         )
                         .map_err(candle_core::Error::msg)?;

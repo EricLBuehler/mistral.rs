@@ -1,10 +1,11 @@
 use anyhow::Context;
 use candle_core::{Device, Result, Tensor};
+use either::Either;
 use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
-use crate::RequestLike;
+use crate::{RequestLike, TextMessages};
 
 /// Gets the best device, cpu, cuda if compiled with CUDA, or Metal
 pub fn best_device(force_cpu: bool) -> Result<Device> {
@@ -199,6 +200,45 @@ impl Model {
         let request = Request::ReIsq(isq_type);
 
         Ok(self.runner.get_sender()?.send(request).await?)
+    }
+
+    /// Tokenize some text or messages.
+    /// - `tools` is only used if messages are provided.
+    pub async fn tokenize(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Tokenize(TokenizationRequest {
+            text: text.map_left(Into::into),
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            response: tx,
+        });
+        self.runner.get_sender()?.send(request).await?;
+
+        rx.recv().await.context("Channel was erroneously closed!")?
+    }
+
+    /// Detokenize some tokens.
+    pub async fn detokenize(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+    ) -> anyhow::Result<String> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Detokenize(DetokenizationRequest {
+            tokens,
+            skip_special_tokens,
+            response: tx,
+        });
+        self.runner.get_sender()?.send(request).await?;
+
+        rx.recv().await.context("Channel was erroneously closed!")?
     }
 
     /// Retrieve some information about this model.
