@@ -50,7 +50,10 @@ impl Idefics3Model {
             attention_mechanism,
         )?;
         let connector = Idefics3Connector::new(cfg, vb_m.pp("connector"))?;
-        let vision = Idefics3VisionTransformer::new(&cfg.vision_config, vb_m.pp("vision_model"))?;
+        let vision = Idefics3VisionTransformer::new(
+            &cfg.vision_config,
+            vb_m.pp("vision_model").set_dtype(DType::F32),
+        )?;
         Ok(Self {
             text_model,
             connector,
@@ -187,7 +190,11 @@ impl Idefics3Model {
             // Get seq from vision encoder
             let image_hidden_states = self
                 .vision
-                .forward(&pixel_values, Some(&patch_attention_mask))?;
+                .forward(
+                    &pixel_values.to_dtype(DType::F32)?,
+                    Some(&patch_attention_mask),
+                )?
+                .to_dtype(self.dtype)?;
 
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;

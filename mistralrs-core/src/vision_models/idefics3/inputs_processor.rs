@@ -80,7 +80,7 @@ fn get_image_prompt_string(n_rows: usize, n_cols: usize, image_seq_len: usize) -
         for n_h in 0..n_rows {
             for n_w in 0..n_cols {
                 text_split_images.push_str(&format!(
-                    "{FAKE_IMAGE_TOKEN}<row_{}_col{}>{}",
+                    "{FAKE_IMAGE_TOKEN}<row_{}_col_{}>{}",
                     n_h + 1,
                     n_w + 1,
                     IMAGE_TOKEN.repeat(image_seq_len)
@@ -186,9 +186,10 @@ impl InputsProcessor for Idefics3ImageProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
-        let (pixel_values, pixel_attention_mask) = if has_images {
+        let (new_input, pixel_values, pixel_attention_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
+            let mut all_ids = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
                     pixel_values,
@@ -235,27 +236,37 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
                     sample.push_str(&format!("{image_prompt_string}{}", split_sample[i + 1]));
                 }
-                //                 let sample = r#"<|im_start|>User:<fake_token_around_image><row_1_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_1_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
-                // <fake_token_around_image><row_2_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_2_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
-                // <fake_token_around_image><row_3_col_1><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_2><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_3><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image><row_3_col_4><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image>
-
-                // <fake_token_around_image><global-img><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><image><fake_token_around_image>What is this?<end_of_utterance>
-                // Assistant:"#.to_string();
-                //                 dbg!(&sample.len());
 
                 seq.set_initial_prompt(sample.clone());
                 let toks = tokenizer
                     .encode(sample, true)
                     .expect("Detokenization failed!");
 
-                seq.set_toks(toks.get_ids().to_vec());
+                let ids = toks.get_ids().to_vec();
+                all_ids.push(ids.clone());
+                seq.set_toks(ids);
             }
+
+            let mut all_ids_new = Vec::new();
+            let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
+            for ids in all_ids {
+                let pad = max_len - ids.len();
+                all_ids_new
+                    .push(Tensor::new([ids, vec![0; pad]].concat(), input.device()).unwrap());
+            }
+
             (
+                Some(Tensor::stack(&all_ids_new, 0).unwrap()),
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(Tensor::cat(&pixel_attention_mask_accum, 0).unwrap()),
             )
         } else {
-            (None, None)
+            (None, None, None)
+        };
+
+        let input = match new_input {
+            Some(new_input) => new_input,
+            None => input,
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
