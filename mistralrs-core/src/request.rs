@@ -115,12 +115,23 @@ impl NormalRequest {
 }
 
 #[derive(Clone)]
+/// Request to tokenize some messages or some text. Special tokens for the model are added automatically.
+/// - `add_generation_prompt` is only applicable if chat messsages are provided and not a raw string.
+pub struct TokenizationRequest {
+    pub text: Either<Vec<IndexMap<String, MessageContent>>, String>,
+    pub add_generation_prompt: bool,
+    pub tools: Option<Vec<Tool>>,
+    pub response: Sender<anyhow::Result<Vec<u32>>>,
+}
+
+#[derive(Clone)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
+    Tokenize(TokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
     // and then Engine will be dropped.
     Terminate,
@@ -147,6 +158,9 @@ impl Debug for Request {
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
+            }
+            Request::Tokenize(txt) => {
+                write!(f, "Tokenization Request {:?}", txt.text)
             }
             Request::Terminate => write!(f, "Termination Request"),
         }
