@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "mistralrs"
-version = "0.3.2"
+version = "0.3.3"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
