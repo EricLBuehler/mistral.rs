@@ -1,5 +1,6 @@
 #![allow(clippy::cast_precision_loss)]
 
+#[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
 use crate::{
