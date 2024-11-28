@@ -26,6 +26,12 @@ pub trait RequestLike {
 /// Sampling is deterministic.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
+impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
+    fn from(value: TextMessages) -> Self {
+        value.0
+    }
+}
+
 /// A chat message role.
 pub enum TextMessageRole {
     User,

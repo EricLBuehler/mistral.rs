@@ -85,8 +85,8 @@ pub use pipeline::{
     VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
-    RequestMessage,
+    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, MessageContent,
+    NormalRequest, Request, RequestMessage, TokenizationRequest,
 };
 pub use response::*;
 pub use sampler::{
