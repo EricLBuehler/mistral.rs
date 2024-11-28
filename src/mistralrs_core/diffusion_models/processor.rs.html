@@ -93,6 +93,7 @@
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -119,6 +120,7 @@
         _pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         _messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
         _add_generation_prompt: bool,
+        _add_special_tokens: bool,
         _tools: Vec&lt;<span class="kw">crate</span>::Tool&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Vec&lt;u32&gt;, String)&gt; {
         <span class="macro">anyhow::bail!</span>(

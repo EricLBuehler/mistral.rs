@@ -152,6 +152,33 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -269,12 +296,33 @@
 }
 
 <span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Request to tokenize some messages or some text.
+/// - `add_generation_prompt` is only applicable if chat messages are provided and not a raw string.
+</span><span class="kw">pub struct </span>TokenizationRequest {
+    <span class="kw">pub </span>text: Either&lt;Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;, String&gt;,
+    <span class="kw">pub </span>tools: <span class="prelude-ty">Option</span>&lt;Vec&lt;Tool&gt;&gt;,
+    <span class="kw">pub </span>add_generation_prompt: bool,
+    <span class="kw">pub </span>add_special_tokens: bool,
+    <span class="kw">pub </span>response: Sender&lt;anyhow::Result&lt;Vec&lt;u32&gt;&gt;&gt;,
+}
+
+<span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Request to detokenize some text.
+</span><span class="kw">pub struct </span>DetokenizationRequest {
+    <span class="kw">pub </span>tokens: Vec&lt;u32&gt;,
+    <span class="kw">pub </span>skip_special_tokens: bool,
+    <span class="kw">pub </span>response: Sender&lt;anyhow::Result&lt;String&gt;&gt;,
+}
+
+<span class="attr">#[derive(Clone)]
 </span><span class="doccomment">/// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 </span><span class="kw">pub enum </span>Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec&lt;String&gt;),
+    Tokenize(TokenizationRequest),
+    Detokenize(DetokenizationRequest),
     <span class="comment">// Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
     // and then Engine will be dropped.
     </span>Terminate,
@@ -301,6 +349,12 @@
             }
             Request::ReIsq(tp) =&gt; {
                 <span class="macro">write!</span>(f, <span class="string">"Re ISQ Request {tp:?}"</span>,)
+            }
+            Request::Tokenize(req) =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"Tokenization Request {:?}"</span>, req.text)
+            }
+            Request::Detokenize(req) =&gt; {
+                <span class="macro">write!</span>(f, <span class="string">"Tokenization Request {:?}"</span>, req.tokens)
             }
             Request::Terminate =&gt; <span class="macro">write!</span>(f, <span class="string">"Termination Request"</span>),
         }

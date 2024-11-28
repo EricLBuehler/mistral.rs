@@ -396,6 +396,7 @@
 <a href="#396" id="396">396</a>
 <a href="#397" id="397">397</a>
 <a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
 </pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
@@ -461,6 +462,7 @@
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
         add_generation_prompt: bool,
+        add_special_tokens: bool,
         tools: Vec&lt;Tool&gt;,
     ) -&gt; anyhow::Result&lt;(Vec&lt;u32&gt;, String)&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>prompt = apply_chat_template(
@@ -501,7 +503,7 @@
             <span class="macro">anyhow::bail!</span>(<span class="string">"Idefics2InputProcessor requires a specified tokenizer."</span>,);
         };
         <span class="kw">let </span>encoding = tokenizer
-            .encode(prompt.clone(), <span class="bool-val">true</span>)
+            .encode(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>((encoding.get_ids().to_vec(), prompt))
     }

@@ -157,6 +157,7 @@
 <a href="#157" id="157">157</a>
 <a href="#158" id="158">158</a>
 <a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a>
 </pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
@@ -189,12 +190,13 @@
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
 </span><span class="kw">pub trait </span>Processor {
-    <span class="doccomment">/// Get the tokens and the untokenized prompt
+    <span class="doccomment">/// Get the tokens and the untokenized prompt. `add_special_tokens` should usually be true.
     </span><span class="kw">fn </span>process(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
         messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
         add_generation_prompt: bool,
+        add_special_tokens: bool,
         tools: Vec&lt;Tool&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Vec&lt;u32&gt;, String)&gt; {
         <span class="kw">let </span>prompt = apply_chat_template(
@@ -209,7 +211,7 @@
             .with_context(|| {
                 <span class="string">"Default `Processor::process` requires the model to have a tokenizer."
             </span>})<span class="question-mark">?
-            </span>.encode(prompt.clone(), <span class="bool-val">true</span>)
+            </span>.encode(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>((encoding.get_ids().to_vec(), prompt))
     }
