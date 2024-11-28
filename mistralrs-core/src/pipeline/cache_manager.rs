@@ -118,8 +118,7 @@ impl SingleCache {
         // Expand kv cache
         if self.current_seq_len + seq_len > self.capacity_seq_len {
             let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
-            let n_blocks_needed =
-                (diff + NormalCache::CACHE_GROW_SIZE - 1) / NormalCache::CACHE_GROW_SIZE;
+            let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
             if self.capacity_seq_len > self.max_seq_len {
                 candle_core::bail!(

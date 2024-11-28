@@ -11,7 +11,7 @@ use crate::{
 use candle_core::{Device, Result, Tensor};
 
 /// Initial, sentinel value is usize::MAX
-const METAL_VERSION_CACHE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static METAL_VERSION_CACHE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
@@ -110,11 +110,13 @@ fn naive_sdpa(
             use std::process::{Command, Stdio};
 
             // Create the `echo` command and pipe its output into `xcrun`
-            let echo = Command::new("echo")
+            let mut echo = Command::new("echo")
                 .arg("__METAL_VERSION__")
                 .stdout(Stdio::piped())
                 .spawn()
                 .expect("Failed to start echo command");
+
+            echo.wait()?;
 
             // Run the `xcrun` command, taking input from the `echo` command's output
             let output = Command::new("xcrun")
@@ -133,7 +135,6 @@ fn naive_sdpa(
             // Handle the output
             if output.status.success() {
                 let version = String::from_utf8_lossy(&output.stdout)
-                    .to_string()
                     .split('\n')
                     .nth(1)
                     .unwrap()
@@ -153,7 +154,7 @@ fn naive_sdpa(
     };
 
     #[cfg(not(feature = "metal"))]
-    let supports_attn_softmax = false;
+    let supports_attn_softmax = true;
 
     if mask.is_some_and(|mask| mask.rank() == 2) && supports_attn_softmax {
         let mut att = MatMul.matmul(q, &k.t()?)?;

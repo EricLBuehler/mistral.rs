@@ -307,7 +307,7 @@ pub trait IsqModel {
                     serialized.display()
                 );
 
-                if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                if serialized.extension().is_none_or(|ext| ext != "uqff") {
                     candle_core::bail!("UQFF output path extension must be `.uqff`",);
                 }
 

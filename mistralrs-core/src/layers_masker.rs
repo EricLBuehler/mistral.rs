@@ -38,14 +38,14 @@ pub trait PastKvLenCache {
     fn get_past_kv_len(&self) -> Result<usize>;
 }
 
-impl<'a> PastKvLenCache for &'a [Option<(Tensor, Tensor)>] {
+impl PastKvLenCache for &[Option<(Tensor, Tensor)>] {
     fn get_past_kv_len(&self) -> Result<usize> {
         let kv_cache_1 = &self[0];
         if kv_cache_1.is_none() {
             return Ok(0);
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        return Ok(k_cache_1.dims()[2]);
+        Ok(k_cache_1.dims()[2])
     }
 }
 
@@ -56,7 +56,7 @@ impl PastKvLenCache for Vec<KvCache> {
     }
 }
 
-impl<'a> PastKvLenCache for &'a [usize] {
+impl PastKvLenCache for &[usize] {
     fn get_past_kv_len(&self) -> Result<usize> {
         if self.windows(2).all(|w| w[0] == w[1]) {
             Ok(self[0])
@@ -73,11 +73,11 @@ impl PastKvLenCache for Vec<Option<(Tensor, Tensor)>> {
             return Ok(0);
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        return Ok(k_cache_1.dims()[2]);
+        Ok(k_cache_1.dims()[2])
     }
 }
 
-impl<'a> PastKvLenCache for Option<&'a [(Tensor, Tensor)]> {
+impl PastKvLenCache for Option<&[(Tensor, Tensor)]> {
     fn get_past_kv_len(&self) -> Result<usize> {
         match self {
             None => Ok(0),
@@ -128,7 +128,7 @@ impl CausalMasker {
             return Ok(0);
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        return Ok(k_cache_1.dims()[2]);
+        Ok(k_cache_1.dims()[2])
     }
 
     pub fn make_causal_mask_matrix(

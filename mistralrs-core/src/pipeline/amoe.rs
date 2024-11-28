@@ -517,9 +517,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         if let Some(loss_csv_path) = loss_csv_path {
             let path = Path::new(&loss_csv_path);
-            if !path
+            if path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy() == *"csv")
+                .is_none_or(|e| e.to_string_lossy() != *"csv")
             {
                 candle_core::bail!("`loss_csv_path` must have an extension `csv`.");
             }

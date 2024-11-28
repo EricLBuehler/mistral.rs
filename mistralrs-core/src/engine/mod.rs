@@ -829,8 +829,7 @@ impl Engine {
                     .as_ref()
                     .expect("If a model has a NormalCache it must have a model metadata");
                 let n_tokens = prompt_tokens.len();
-                let required_blocks =
-                    (n_tokens + NormalCache::CACHE_GROW_SIZE - 1) / NormalCache::CACHE_GROW_SIZE;
+                let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
                 let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
                 let kv_shape = (
                     1usize,
