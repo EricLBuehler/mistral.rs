@@ -37,7 +37,7 @@ mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, VisionArchitecture, Which};
+use which::{Architecture, DiffusionArchitecture, VisionArchitecture, Which};
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -1130,6 +1130,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<VisionArchitecture>()?;
+    m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<ToolChoice>()?;
