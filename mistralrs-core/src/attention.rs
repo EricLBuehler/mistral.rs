@@ -1,5 +1,8 @@
 #![allow(clippy::cast_precision_loss)]
 
+#[cfg(feature = "metal")]
+use std::sync::atomic::AtomicUsize;
+
 use crate::{
     cublaslt::CUBLASLT_HANDLE,
     layers::{get_use_matmul_via_f16, MatMul},
@@ -7,6 +10,10 @@ use crate::{
 };
 
 use candle_core::{Device, Result, Tensor};
+
+#[cfg(feature = "metal")]
+/// Initial, sentinel value is usize::MAX
+static METAL_VERSION_CACHE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
@@ -92,7 +99,66 @@ fn naive_sdpa(
     head_dim: usize,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    if mask.is_some_and(|mask| mask.rank() == 2) {
+    #[cfg(feature = "metal")]
+    let supports_attn_softmax = {
+        use std::sync::atomic::Ordering;
+        let cache = METAL_VERSION_CACHE.load(Ordering::Relaxed);
+
+        let version = if cache != usize::MAX {
+            cache
+        } else {
+            // echo "__METAL_VERSION__" | xcrun -sdk macosx metal -E -x metal -P -
+
+            use std::process::{Command, Stdio};
+
+            // Create the `echo` command and pipe its output into `xcrun`
+            let mut echo = Command::new("echo")
+                .arg("__METAL_VERSION__")
+                .stdout(Stdio::piped())
+                .spawn()
+                .expect("Failed to start echo command");
+
+            echo.wait()?;
+
+            // Run the `xcrun` command, taking input from the `echo` command's output
+            let output = Command::new("xcrun")
+                .arg("-sdk")
+                .arg("macosx")
+                .arg("metal")
+                .arg("-E")
+                .arg("-x")
+                .arg("metal")
+                .arg("-P")
+                .arg("-")
+                .stdin(echo.stdout.unwrap())
+                .output()
+                .expect("Failed to run xcrun command");
+
+            // Handle the output
+            if output.status.success() {
+                let version = String::from_utf8_lossy(&output.stdout)
+                    .split('\n')
+                    .nth(1)
+                    .unwrap()
+                    .trim()
+                    .to_string()
+                    .parse::<usize>()
+                    .unwrap();
+                METAL_VERSION_CACHE.store(version, Ordering::Relaxed);
+                version
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                panic!("Error:\n{}", stderr);
+            }
+        };
+        // Attn softmax is only supported for metal >= 310
+        version >= 310
+    };
+
+    #[cfg(not(feature = "metal"))]
+    let supports_attn_softmax = true;
+
+    if mask.is_some_and(|mask| mask.rank() == 2) && supports_attn_softmax {
         let mut att = MatMul.matmul(q, &k.t()?)?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;

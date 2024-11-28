@@ -336,7 +336,7 @@ pub trait Pipeline:
                     .unwrap_or(1);
                 let len_inputs = input_seqs
                     .iter()
-                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
                     .max()
                     .unwrap();
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
@@ -548,7 +548,7 @@ pub trait Pipeline:
                     .unwrap_or(1);
                 let len_inputs = input_seqs
                     .iter()
-                    .map(|seq| (seq.get_toks().len() + prompt_batchsize - 1) / prompt_batchsize)
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
                     .max()
                     .unwrap();
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
