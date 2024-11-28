@@ -10,6 +10,7 @@ use crate::{
 
 use candle_core::{Device, Result, Tensor};
 
+#[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX
 static METAL_VERSION_CACHE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
