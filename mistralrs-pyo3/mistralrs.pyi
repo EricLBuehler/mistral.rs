@@ -325,6 +325,16 @@ class Runner:
         Send a request to make the specified adapters the active adapters for the model.
         """
 
+    def tokenize_text(self, text: str, add_speial_tokens: bool) -> list[int]:
+        """
+        Tokenize some text, returning raw tokens.
+        """
+
+    def detokenize_text(self, tokens: list[int], skip_speial_tokens: bool) -> str:
+        """
+        Detokenize some tokens, returning text.
+        """
+
 class AnyMoeExpertType(Enum):
     """
     Expert type for an AnyMoE model. May be:

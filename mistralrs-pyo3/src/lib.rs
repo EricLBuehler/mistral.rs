@@ -21,13 +21,14 @@ use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
-    DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
+    DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
+    ImageGenerationResponseFormat, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, TokenizationRequest, Tool,
+    Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -1082,6 +1083,40 @@ impl Runner {
             .unwrap()
             .blocking_send(request)
             .unwrap();
+    }
+
+    /// Tokenize some text, returning raw tokens.
+    fn tokenize_text(&self, text: String, add_special_tokens: bool) -> PyApiResult<Vec<u32>> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Tokenize(TokenizationRequest {
+            text: Either::Right(text),
+            tools: None,
+            add_generation_prompt: true,
+            add_special_tokens,
+            response: tx,
+        });
+
+        self.runner.get_sender()?.blocking_send(request).unwrap();
+
+        rx.blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .map_err(PyApiErr::from)
+    }
+
+    /// Detokenize some tokens, returning text.
+    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> PyApiResult<String> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Detokenize(DetokenizationRequest {
+            tokens,
+            skip_special_tokens,
+            response: tx,
+        });
+
+        self.runner.get_sender()?.blocking_send(request).unwrap();
+
+        rx.blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .map_err(PyApiErr::from)
     }
 }
 

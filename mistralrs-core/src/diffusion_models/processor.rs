@@ -24,6 +24,7 @@ impl Processor for DiffusionProcessor {
         _pipeline: &dyn Pipeline,
         _messages: Vec<IndexMap<String, MessageContent>>,
         _add_generation_prompt: bool,
+        _add_special_tokens: bool,
         _tools: Vec<crate::Tool>,
     ) -> Result<(Vec<u32>, String)> {
         anyhow::bail!(

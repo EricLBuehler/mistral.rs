@@ -1,4 +1,5 @@
 use candle_core::Tensor;
+use either::Either;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -16,7 +17,7 @@ use crate::{
         text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
         CacheInstruction, EitherCache, NormalCache,
     },
-    request::NormalRequest,
+    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
     sequence::{SeqStepType, StopReason},
@@ -509,6 +510,8 @@ impl Engine {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
+            Request::Tokenize(req) => self.tokenize_text(req).await,
+            Request::Detokenize(req) => self.detokenize_text(req).await,
             Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
         }
     }
@@ -591,6 +594,7 @@ impl Engine {
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
+                    true,
                     true,
                     request.tools.unwrap_or_default(),
                 );
@@ -908,5 +912,105 @@ impl Engine {
             self.id += 1;
             self.scheduler.add_seq(seq);
         }
+    }
+
+    async fn tokenize_text(&self, request: TokenizationRequest) {
+        match request.text {
+            Either::Left(messages) => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let template = pipeline.get_processor().process(
+                    pipeline,
+                    messages,
+                    request.add_generation_prompt,
+                    request.add_special_tokens,
+                    request.tools.unwrap_or_default(),
+                );
+                let toks = match template {
+                    Ok((toks, _)) => toks,
+                    Err(e) => {
+                        request
+                            .response
+                            .send(Err(e))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                request
+                    .response
+                    .send(Ok(toks))
+                    .await
+                    .expect("Sender disconnected unexpectedly!");
+            }
+            Either::Right(text) => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let tokenizer = pipeline.tokenizer();
+                let tokenizer = match tokenizer {
+                    Some(tokenizer) => tokenizer,
+                    None => {
+                        request
+                            .response
+                            .send(Err(anyhow::Error::msg(
+                                "Pipeline does not include a toksnizer.",
+                            )))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                let toks = tokenizer.encode(text, request.add_special_tokens);
+                let toks = match toks {
+                    Ok(tokenizer) => tokenizer,
+                    Err(e) => {
+                        request
+                            .response
+                            .send(Err(anyhow::Error::msg(e)))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                request
+                    .response
+                    .send(Ok(toks.get_ids().to_vec()))
+                    .await
+                    .expect("Sender disconnected unexpectedly!");
+            }
+        };
+    }
+
+    async fn detokenize_text(&self, request: DetokenizationRequest) {
+        let pipeline = &*get_mut_arcmutex!(self.pipeline);
+        let tokenizer = pipeline.tokenizer();
+        let tokenizer = match tokenizer {
+            Some(tokenizer) => tokenizer,
+            None => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(
+                        "Pipeline does not include a toksnizer.",
+                    )))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        let txt = tokenizer.decode(&request.tokens, request.skip_special_tokens);
+        let txt = match txt {
+            Ok(tokenizer) => tokenizer,
+            Err(e) => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(e)))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        request
+            .response
+            .send(Ok(txt))
+            .await
+            .expect("Sender disconnected unexpectedly!");
     }
 }
