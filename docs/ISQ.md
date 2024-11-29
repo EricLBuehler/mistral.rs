@@ -30,8 +30,9 @@ For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.
 ## Accuracy
 
 Accuracy of ISQ can be measured by the performance degradation versus the unquantized model.
-
 This is commonly measured with perplexity. Please see the [perplexity](../mistralrs/examples/perplexity/README.md) example.
+
+To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the `--imatrix` flag for `plain` models. This will increase the accuracy of the quantization significantly and brings the ISQ quantization up to par with the GGUF counterpart.
 
 ## Python Example
 ```python
