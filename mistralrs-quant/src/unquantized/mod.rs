@@ -11,7 +11,7 @@ use candle_nn::Linear;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
-    generate_isq,
+    generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
     FP8Linear, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
@@ -122,10 +122,16 @@ impl QuantMethod for UnquantLinear {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("HQQ does not support imatrix.");
+                }
+
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bits = match dtype.unwrap() {
                     IsqType::HQQ8 => HqqBits::Eight,
@@ -168,7 +174,11 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_1,
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
-                let res = generate_isq!(self.w, device, dtype, n_quantized);
+                let res = if let Some(imatrix_weight) = imatrix_weight {
+                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized)
+                } else {
+                    generate_isq!(self.w, device, dtype, n_quantized)
+                };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
                     b: self
@@ -178,6 +188,11 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                }
+
                 let w = self.w.to_device(&device)?;
                 let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)
@@ -190,6 +205,8 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
+                // Ignore imatrix altogether
+
                 let w = self.w.to_device(&device)?;
                 let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)

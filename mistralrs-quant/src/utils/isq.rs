@@ -67,3 +67,24 @@ macro_rules! generate_isq {
         }
     };
 }
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! generate_isq_imatrix {
+    ($tensor:expr, $imatrix:expr, $device:expr, $dtype:expr, $n_quantized:expr) => {
+        {
+            let quantization_behaviour = $crate::utils::isq::get_quantization_behaviour(&$tensor, $dtype);
+            match quantization_behaviour{
+                $crate::utils::isq::QuantizationBehaviour::Skip => {
+                    let shape = $tensor.shape();
+                    tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
+                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, GgmlDType::F32, &$device)?)
+                },
+                $crate::utils::isq::QuantizationBehaviour::Quantize(dtype) => {
+                    $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, dtype, &$device)?)
+                }
+            }
+        }
+    };
+}

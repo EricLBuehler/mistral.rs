@@ -333,6 +333,7 @@ impl QuantMethod for GptqLayer {
         _dtype: Option<IsqType>,
         _device: Device,
         _n_quantized: &AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
     }

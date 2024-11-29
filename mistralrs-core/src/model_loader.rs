@@ -127,6 +127,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             organization,
             write_uqff,
             from_uqff,
+            imatrix,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -135,6 +136,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 organization: organization.unwrap_or_default(),
                 write_uqff,
                 from_uqff,
+                imatrix,
             },
             args.chat_template,
             tokenizer_json,
@@ -161,6 +163,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
             },
             args.chat_template,
             tokenizer_json,
@@ -195,6 +198,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
             },
             args.chat_template,
             tokenizer_json,
@@ -382,6 +386,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             write_uqff,
             from_uqff,
             max_edge,
+            imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -390,6 +395,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 write_uqff,
                 from_uqff,
                 max_edge,
+                imatrix,
             },
             args.chat_template,
             tokenizer_json,

@@ -92,6 +92,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            imatrix,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -100,6 +101,7 @@ fn parse_which(
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
                 from_uqff,
+                imatrix,
             },
             chat_template,
             tokenizer_json,
@@ -126,6 +128,7 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
             },
             chat_template,
             tokenizer_json,
@@ -160,6 +163,7 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
             },
             chat_template,
             tokenizer_json,
@@ -345,6 +349,7 @@ fn parse_which(
             from_uqff,
             dtype: _,
             max_edge,
+            imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -353,6 +358,7 @@ fn parse_which(
                 write_uqff,
                 from_uqff,
                 max_edge,
+                imatrix,
             },
             chat_template,
             tokenizer_json,

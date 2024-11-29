@@ -647,6 +647,22 @@ impl IsqModel for Llama {
 
         uvb.to_safetensors()
     }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        let mut names = Vec::new();
+        // lm_head
+        names.push(None);
+        for i in 0..self.blocks.len() {
+            names.push(Some(format!("blk.{i}.attn_q.weight")));
+            names.push(Some(format!("blk.{i}.attn_k.weight")));
+            names.push(Some(format!("blk.{i}.attn_v.weight")));
+            names.push(Some(format!("blk.{i}.attn_output.weight")));
+            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
+            names.push(Some(format!("blk.{i}.ffn_up.weight")));
+            names.push(Some(format!("blk.{i}.ffn_down.weight")));
+        }
+        Ok(names)
+    }
 }
 
 impl NormalModel for Llama {

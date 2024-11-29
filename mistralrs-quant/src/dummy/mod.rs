@@ -21,6 +21,7 @@ impl QuantMethod for DummyLayer {
         _dtype: Option<crate::IsqType>,
         _device: candle_core::Device,
         _n_quantized: &std::sync::atomic::AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
     ) -> candle_core::Result<std::sync::Arc<dyn QuantMethod>> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
     }

@@ -9,8 +9,9 @@ use std::{
 };
 
 use anyhow::Result;
-use candle_core::{Context, Device, Tensor};
+use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use mistralrs_quant::{
     FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
     UnquantLinear,
@@ -134,6 +135,16 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     );
 
+    /// Corresponding to the specifc order the model produces ISQ layers (None means
+    /// do not search for in the imatrix file). This is used to pair ISQ layers with the
+    /// corresponding imatrix weights.
+    ///
+    /// - This is only for loading from a llama.cpp imatrix file.
+    /// - Corresponds to `IsqOrganization::Default`
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
+
     /// Corresponds to `IsqOrganization::MoeExpertsOnly`
     /// https://arxiv.org/abs/2310.02410
     #[allow(clippy::type_complexity)]
@@ -165,15 +176,60 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
+        imatrix: Option<&PathBuf>,
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
     ) -> candle_core::Result<()> {
         {
+            let imatrix_to_weight = if let Some(imatrix) = imatrix {
+                let mut imatrix_data = quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                let imatrix_mapping = self
+                    .imatrix_names()?
+                    .into_iter()
+                    .enumerate()
+                    .collect::<HashMap<_, _>>();
+
+                let layer_to_weight = imatrix_mapping
+                    .into_iter()
+                    .map(|(i, name)| {
+                        if let Some(name) = name {
+                            (i, Some(imatrix_data.remove(&name).unwrap()))
+                        } else {
+                            (i, None)
+                        }
+                    })
+                    .collect::<HashMap<_, _>>();
+                info!(
+                    "Quantizing with imatrix file `{}`, {} imatrix weights",
+                    imatrix.display(),
+                    layer_to_weight.len()
+                );
+                Some(layer_to_weight)
+            } else {
+                // Dummy, just for zip
+                None
+            };
+
             let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
                 IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
             };
+
+            let imatrix_to_weight: Vec<Option<Vec<f32>>> =
+                if let Some(mut imatrix_to_weight) = imatrix_to_weight {
+                    let ordered_keys = imatrix_to_weight
+                        .keys()
+                        .copied()
+                        .sorted()
+                        .collect::<Vec<_>>();
+                    ordered_keys
+                        .into_iter()
+                        .map(|layer| imatrix_to_weight.remove(&layer).unwrap())
+                        .collect()
+                } else {
+                    vec![None; tensors.len()]
+                };
 
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
@@ -277,24 +333,27 @@ pub trait IsqModel {
                     IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
                 };
                 if silent {
-                    tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
-                        |((tensor, _), (device, dtype))| {
+                    tensors
+                        .par_iter_mut()
+                        .zip(devices_and_dtypes)
+                        .zip(imatrix_to_weight)
+                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
                                 .unwrap();
                             device.synchronize().unwrap();
-                        },
-                    );
+                        });
                 } else {
                     tensors
                         .par_iter_mut()
                         .zip(devices_and_dtypes)
+                        .zip(imatrix_to_weight)
                         .progress_with(bar)
-                        .for_each(|((tensor, _), (device, dtype))| {
+                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
                                 .unwrap();
                             device.synchronize().unwrap();
                         });

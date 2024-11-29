@@ -65,6 +65,7 @@ pub struct NormalPipeline {
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
     config: String,
+    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -107,6 +108,7 @@ pub struct NormalSpecificConfig {
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub imatrix: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -393,6 +395,7 @@ impl Loader for NormalLoader {
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
+                self.config.imatrix.as_ref(),
                 self.config.organization,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -477,6 +480,7 @@ impl Loader for NormalLoader {
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
+            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -510,6 +514,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
+                self.imatrix.as_ref(),
                 self.organization,
                 None,
                 UqffFullSer {

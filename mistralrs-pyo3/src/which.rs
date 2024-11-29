@@ -106,6 +106,7 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
+        imatrix = None,
     ))]
     Plain {
         model_id: String,
@@ -116,6 +117,7 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
+        imatrix: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -299,6 +301,7 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         max_edge = None,
+        imatrix = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -309,6 +312,7 @@ pub enum Which {
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
         max_edge: Option<u32>,
+        imatrix: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (

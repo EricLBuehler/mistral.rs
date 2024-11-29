@@ -220,6 +220,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.

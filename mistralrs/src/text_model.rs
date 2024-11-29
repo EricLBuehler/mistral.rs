@@ -11,6 +11,7 @@ pub struct TextModelBuilder {
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) imatrix: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapMetadata>,
@@ -95,6 +96,7 @@ impl TextModelBuilder {
             prefix_cache_n: Some(16),
             with_logging: false,
             device_mapping: None,
+            imatrix: None,
         }
     }
 
@@ -162,6 +164,12 @@ impl TextModelBuilder {
     /// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_isq(mut self, isq: IsqType) -> Self {
         self.isq = Some(isq);
+        self
+    }
+
+    /// Utilise this imatrix file during ISQ
+    pub fn with_imatrix(mut self, path: PathBuf) -> Self {
+        self.imatrix = Some(path);
         self
     }
 
@@ -239,6 +247,7 @@ impl TextModelBuilder {
             organization: self.organization,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
+            imatrix: self.imatrix,
         };
 
         if self.with_logging {
