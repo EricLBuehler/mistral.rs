@@ -1,15 +1,12 @@
-use super::cache_manager::DefaultCacheManager;
-use super::cache_manager::{DefaultCacheManager, FullCacheManager, NormalCacheManager};
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::hf::get_paths;
 use super::isq::UqffFullSer;
-use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
-    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
-    Idefics2Loader, Idefics3Loader, IsqPipelineMixin, LLaVALoader, LLaVANextLoader, Loader,
-    MetadataMixin, ModelCategory, ModelKind, ModelPaths, Phi3VLoader, PreProcessingMixin,
-    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
-    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManager, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, GeneralMetadata, Idefics2Loader, Idefics3Loader, IsqPipelineMixin,
+    LLaVALoader, LLaVANextLoader, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    Phi3VLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;

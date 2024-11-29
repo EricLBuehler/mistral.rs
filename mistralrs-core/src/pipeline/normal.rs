@@ -1,4 +1,4 @@
-use super::cache_manager::{DefaultCacheManager, FullCacheManager, NormalCacheManager};
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::hf::get_paths;
 use super::{
     text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager, GeneralMetadata, Loader,
@@ -19,10 +19,9 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, Cache, ChatTemplate, LocalModelPaths};
+use crate::pipeline::{get_chat_template, ChatTemplate};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;

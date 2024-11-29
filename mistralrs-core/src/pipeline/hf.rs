@@ -194,6 +194,7 @@ pub fn get_paths(
         lora_preload_adapter_info,
         preprocessor_config,
         processor_config,
+        None,
     )))
 }
 
