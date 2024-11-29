@@ -22,7 +22,7 @@ use crate::{
     MessageContent, Pipeline, Tool,
 };
 
-use super::{
+use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     preprocessor_config::{PreProcessorConfig, ToFilter},
     processor_config::ProcessorConfig,
@@ -63,6 +63,7 @@ impl Processor for Idefics2Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        add_special_tokens: bool,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
@@ -103,7 +104,7 @@ impl Processor for Idefics2Processor {
             anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
         };
         let encoding = tokenizer
-            .encode(prompt.clone(), true)
+            .encode(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
@@ -136,6 +137,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -176,6 +178,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -192,6 +195,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -220,6 +224,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     num_tiles: _,
                     image_grid_thw: _,
                     video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -386,6 +392,8 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             num_tiles: None,
             image_grid_thw: None,
             video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }

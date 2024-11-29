@@ -1,12 +1,13 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::{DefaultCacheManager, FullCacheManager, NormalCacheManager};
 use super::hf::get_paths;
 use super::{
     text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager, GeneralMetadata, Loader,
     ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
@@ -18,10 +19,10 @@ use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::ChatTemplate;
-use crate::pipeline::{get_chat_template, Cache};
+use crate::pipeline::{get_chat_template, Cache, ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
@@ -375,7 +376,16 @@ impl Loader for NormalLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
+        let chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            None,
+        );
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
@@ -429,9 +439,13 @@ impl Loader for NormalLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let num_hidden_layers = model.cache().lock().len();
+        let num_hidden_layers = match model.cache() {
+            EitherCache::Full(full) => full.lock().len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+        };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -457,6 +471,7 @@ impl Loader for NormalLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             topology: self.config.topology.clone(),
             silent,
@@ -514,18 +529,41 @@ impl IsqPipelineMixin for NormalPipeline {
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else {
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.model.cache()
     }
 }
@@ -550,7 +588,7 @@ impl MetadataMixin for NormalPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
@@ -564,6 +602,7 @@ impl Pipeline for NormalPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -618,7 +657,11 @@ impl Pipeline for NormalPipeline {
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
         };
-        Ok(ForwardInputsResult::CausalGeneration { logits })
+        if return_raw_logits {
+            Ok(ForwardInputsResult::RawLogits { logits })
+        } else {
+            Ok(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     async fn sample_causal_gen(
         &self,

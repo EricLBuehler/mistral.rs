@@ -10,7 +10,7 @@ use crate::{
     layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, Cache, IsqModel,
+        extract_logits, text_models_inputs_processor::FlashParams, Cache, EitherCache, IsqModel,
         NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -276,7 +276,7 @@ pub struct Qwen2VLTextModel {
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
-    pub(super) cache: Cache,
+    pub(super) cache: EitherCache,
     pub(super) cfg: ModelConfigMetadata,
     pub(super) device: Device,
     pub(super) dtype: DType,
@@ -371,7 +371,7 @@ impl Qwen2VLTextModel {
             norm,
             layers,
             lm_head,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -399,7 +399,7 @@ impl Qwen2VLTextModel {
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.full().lock();
         let cos_sin = self.layers[0]
             .self_attn
             .rotary_emb

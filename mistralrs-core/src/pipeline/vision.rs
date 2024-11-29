@@ -1,13 +1,16 @@
 use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::{DefaultCacheManager, FullCacheManager, NormalCacheManager};
 use super::hf::get_paths;
 use super::isq::UqffFullSer;
+use super::isq::UqffFullSer;
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManager, CacheManagerMixin,
-    ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory,
-    ModelKind, ModelPaths, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
-    VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, Cache,
+    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
+    Idefics2Loader, Idefics3Loader, IsqPipelineMixin, LLaVALoader, LLaVANextLoader, Loader,
+    MetadataMixin, ModelCategory, ModelKind, ModelPaths, Phi3VLoader, PreProcessingMixin,
+    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
-use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
 use crate::aici::bintokens::build_tok_trie;
 use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -16,12 +19,13 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
-use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::preprocessor_config::PreProcessorConfig;
-use crate::vision_models::processor_config::ProcessorConfig;
-use crate::vision_models::ModelInputs;
+use crate::utils::{
+    debug::DeviceRepr, tokenizer::get_tokenizer, tokens::get_token,
+    varbuilder_utils::from_mmaped_safetensors,
+};
+use crate::vision_models::{
+    preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig, ModelInputs,
+};
 use crate::{
     api_dir_list, api_get_file, get_uqff_paths, vision_normal_model_loader, AnyMoeExpertType,
     DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
@@ -121,6 +125,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::LLaVA => Box::new(LLaVALoader),
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
+            VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -299,7 +304,16 @@ impl Loader for VisionLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
+        let chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            None,
+        );
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
@@ -350,9 +364,13 @@ impl Loader for VisionLoader {
 
         let max_seq_len = model.max_seq_len();
         let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let num_hidden_layers = model.cache().lock().len();
+        let num_hidden_layers = match model.cache() {
+            EitherCache::Full(full) => full.lock().len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+        };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(VisionPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -371,6 +389,7 @@ impl Loader for VisionLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             processor,
             prefixer: self.inner.prefixer(),
@@ -432,18 +451,41 @@ impl IsqPipelineMixin for VisionPipeline {
 
 impl CacheManagerMixin for VisionPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else {
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.model.cache()
     }
 }
@@ -472,7 +514,11 @@ impl MetadataMixin for VisionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for VisionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> candle_core::Result<ForwardInputsResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -510,7 +556,11 @@ impl Pipeline for VisionPipeline {
             paged_attn_meta,
             &flash_meta,
         )?;
-        Ok(ForwardInputsResult::CausalGeneration { logits })
+        if return_raw_logits {
+            Ok(ForwardInputsResult::RawLogits { logits })
+        } else {
+            Ok(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     async fn sample_causal_gen(
         &self,

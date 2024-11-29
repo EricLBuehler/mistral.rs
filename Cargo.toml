@@ -12,7 +12,7 @@ exclude = ["mistralrs-paged_attn"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.4"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -23,8 +23,8 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.7.0", rev = "2e17ebd" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "8742354" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "8742354" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }

@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -229,7 +229,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }

@@ -25,7 +25,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -96,9 +96,8 @@ impl MLlamaModel {
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
-                vb.pp("vision_model")
-                    .set_device(real_dev.clone())
-                    .set_dtype(vision_model_dtype),
+                vb.pp("vision_model").set_dtype(vision_model_dtype),
+                &real_dev,
             )?,
             language_model: MLlamaTextModel::new(
                 &cfg.text_config,
@@ -182,7 +181,7 @@ pub(crate) struct MLlamaSpecificArgs {
 }
 
 impl VisionModel for MLlamaModel {
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
@@ -236,7 +235,14 @@ impl IsqModel for MLlamaModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        self.language_model.get_layers()
+        let (mut layers, mapper) = self.language_model.get_layers();
+        layers.extend(
+            self.vision_model
+                .get_isq_layers()
+                .into_iter()
+                .map(|layer| (layer, None)),
+        );
+        (layers, mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {

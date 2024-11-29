@@ -176,6 +176,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 
@@ -215,6 +216,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         }
         if throughput {
@@ -353,7 +355,16 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
 
                 let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
                 user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                user_message.insert("content".to_string(), Either::Left(message));
+                user_message.insert(
+                    "content".to_string(),
+                    Either::Right(vec![
+                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                        IndexMap::from([
+                            ("type".to_string(), Value::String("text".to_string())),
+                            ("text".to_string(), Value::String(message)),
+                        ]),
+                    ]),
+                );
                 messages.push(user_message);
             }
             message => {
@@ -386,6 +397,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 
@@ -425,6 +437,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         }
         if throughput {
@@ -507,6 +520,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
         sender.send(req).await.unwrap();
 

@@ -29,8 +29,8 @@ use crate::{
 };
 
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
 };
 
 pub struct AnyMoeLoader {
@@ -185,7 +185,7 @@ impl AdapterActivationMixin for AnyMoePipeline {
 }
 
 impl CacheManagerMixin for AnyMoePipeline {
-    fn cache(&self) -> &super::Cache {
+    fn cache(&self) -> &EitherCache {
         unreachable!()
     }
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
@@ -194,8 +194,19 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).set_none_cache(reset_non_granular, modify_draft_cache)
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        get_mut_arcmutex!(self.target).set_none_cache(
+            seqs,
+            reset_non_granular,
+            modify_draft_cache,
+            load_preallocated_cache,
+        )
     }
 }
 
@@ -240,8 +251,9 @@ impl Pipeline for AnyMoePipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        _return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
-        get_mut_arcmutex!(self.target).forward_inputs(inputs)
+        get_mut_arcmutex!(self.target).forward_inputs(inputs, false)
     }
 
     async fn sample_causal_gen(
@@ -372,9 +384,6 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             1, false, false, 0,
         )));
 
-        // Clear KV cache in prep for training
-        target.set_none_cache(true, true);
-
         let mut latest_loss = vec![0.0; optimizers.len()];
         let mut all_losses = Vec::new();
 
@@ -398,6 +407,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                                 ("role".to_string(), Either::Left("user".to_string())),
                                 ("content".to_string(), Either::Left(prompt.clone())),
                             ])],
+                            true,
                             true,
                             Vec::new(),
                         )
@@ -442,6 +452,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
+
+                // Clear KV cache in prep for training
+                target.set_none_cache(&mut input_seqs, true, true, false);
+
                 let inputs = inputs_processor
                     .process_inputs(
                         tokenizer.clone(),
@@ -451,6 +465,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         &device,
                         metadata.has_no_kv_cache,
                         None,
+                        false,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
                         None, // TODO: prompt chunking doesn't work.
@@ -461,10 +476,10 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 // === PREPARE AND RUN MODEL ==
 
                 // Run the model, ignoring the logits
-                let _ = target.forward_inputs(inputs.unwrap().inputs)?;
+                let _ = target.forward_inputs(inputs.unwrap().inputs, false)?;
 
                 // Clear the KV cache
-                target.set_none_cache(true, true);
+                target.set_none_cache(&mut input_seqs, true, true, false);
 
                 // === BACKWARD STEP ==
                 #[allow(clippy::cast_possible_truncation)]
@@ -502,9 +517,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
         if let Some(loss_csv_path) = loss_csv_path {
             let path = Path::new(&loss_csv_path);
-            if !path
+            if path
                 .extension()
-                .is_some_and(|e| e.to_string_lossy() == *"csv")
+                .is_none_or(|e| e.to_string_lossy() != *"csv")
             {
                 candle_core::bail!("`loss_csv_path` must have an extension `csv`.");
             }
@@ -571,5 +586,7 @@ fn new_dummy_seq(
         None,
         SeqStepType::PromptAndDecode,
         None,
+        None,
+        false,
     )
 }

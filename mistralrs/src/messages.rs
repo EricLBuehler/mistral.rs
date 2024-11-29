@@ -26,6 +26,12 @@ pub trait RequestLike {
 /// Sampling is deterministic.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
 
+impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
+    fn from(value: TextMessages) -> Self {
+        value.0
+    }
+}
+
 /// A chat message role.
 pub enum TextMessageRole {
     User,
@@ -134,7 +140,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.3", note = "use add_image_message")]
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<|image_{N}|>` prefix to the prompt.
     pub fn add_phiv_image_message(
         mut self,
@@ -157,7 +163,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.3", note = "use add_image_message")]
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<|image|>` prefix to the prompt.
     pub fn add_vllama_image_message(
         mut self,
@@ -176,7 +182,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.3", note = "use add_image_message")]
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<image>` prefix to the prompt.
     pub fn add_llava_image_message(
         mut self,
@@ -195,7 +201,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.3", note = "use add_image_message")]
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     pub fn add_idefics_image_message(
         mut self,
         role: TextMessageRole,
@@ -240,7 +246,18 @@ impl VisionMessages {
             ("role".to_string(), Either::Left(role.to_string())),
             (
                 "content".to_string(),
-                Either::Left(prefixer.prefix_image(self.images.len() - 1, &text.to_string())),
+                Either::Right(vec![
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                    IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        (
+                            "text".to_string(),
+                            Value::String(
+                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
+                            ),
+                        ),
+                    ]),
+                ]),
             ),
         ]));
         Ok(self)
@@ -608,6 +625,7 @@ impl RequestLike for RequestBuilder {
             Some((other_ts, other_tc))
         }
     }
+
     fn take_sampling_params(&mut self) -> SamplingParams {
         let mut other = SamplingParams::deterministic();
         std::mem::swap(&mut other, &mut self.sampling_params);

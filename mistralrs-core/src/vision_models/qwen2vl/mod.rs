@@ -16,7 +16,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
 };
 
@@ -281,7 +281,7 @@ impl Qwen2VLModel {
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
             self.text.cfg.sliding_window,
@@ -469,7 +469,7 @@ impl VisionModel for Qwen2VLModel {
             flash_params,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.text.cache
     }
     fn device(&self) -> &Device {

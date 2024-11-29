@@ -395,9 +395,13 @@ pub fn get_model_paths(
 /// - `chat_template_ovrd` (GGUF chat template content) causes the usage of that string chat template initially.
 ///   Falls back to `chat_template_file` if it is invalid. *The user must add the bos/unk/eos tokens manually if this
 ///   is used.*
+///
+/// After this, if the `chat_template_json` filename is specified (a json with one field: "chat_template"),
+///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
+    chat_template_json: &Option<String>,
     chat_template_fallback: &Option<String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
@@ -437,6 +441,20 @@ pub(crate) fn get_chat_template(
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
+    // Overwrite to use any present `chat_template.json`
+    if let Some(ChatTemplateValue(chat_template_value)) = &mut template.chat_template {
+        if let Some(chat_template_json) = chat_template_json {
+            #[derive(Debug, serde::Deserialize)]
+            struct AutomaticTemplate {
+                chat_template: String,
+            }
+            let deser: AutomaticTemplate = serde_json::from_str(
+                &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
+            )
+            .unwrap();
+            *chat_template_value = Either::Left(deser.chat_template);
+        }
+    }
 
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()

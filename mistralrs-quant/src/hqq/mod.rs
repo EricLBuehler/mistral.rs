@@ -34,7 +34,7 @@ use ffi::{eight_bit, four_bit, one_bit, three_bit, two_bit};
 mod ffi;
 
 #[cfg(not(feature = "cuda"))]
-mod hqq_cpu;
+mod hqq_op;
 
 mod optimize;
 mod quantize;
@@ -231,9 +231,7 @@ impl HqqLayer {
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
-        use crate::hqq::hqq_cpu::{
-            Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit,
-        };
+        use crate::hqq::hqq_op::{Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit};
 
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),

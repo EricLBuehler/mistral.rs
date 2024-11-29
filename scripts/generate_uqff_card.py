@@ -68,12 +68,12 @@ try:
             output += f"|{",".join(quants)} (see topology for this file)|"
         else:
             output += f"|{quants.strip().upper()}|"
-            
+
         if is_vision:
             cmd = "vision-plain"
         else:
             cmd = "plain"
-        
+
         if is_vision:
             arch = f"-a {arch}"
         else:

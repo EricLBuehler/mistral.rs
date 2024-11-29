@@ -9,7 +9,7 @@ use crate::layers::{CausalMasker, MatMul, RmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::Cache;
+use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -80,7 +80,7 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -130,14 +130,8 @@ impl LayerWeights {
                 )?
             }
             None => {
-                let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-                    kv_cache,
-                    k,
-                    v,
-                    mask,
-                    Some(self.sliding_window),
-                    true,
-                )?;
+                let (k, v, attn_mask) =
+                    kv_cache.append_sliding_window(&k, &v, mask, Some(self.sliding_window))?;
 
                 Sdpa.run_attention(&q, &k, &v, attn_mask.as_ref(), None, &self.sdpa_params)?
             }
@@ -160,7 +154,7 @@ pub struct ModelWeights {
     output: QMatMul,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
 }
 
@@ -357,7 +351,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             output,
             mapper: Some(mapper),
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
             max_seq_len: context_window,
         })
     }
@@ -372,13 +366,13 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
-        let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let cache = &mut self.cache.normal().0;
+        let mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+                .unwrap_or(cache as &dyn PastKvLenCache),
             Some(self.max_seq_len),
             DType::F32,
             self.layers[0].n_head,

@@ -70,6 +70,7 @@ pub enum RequestMessage {
 ///     2) Apply these custom logits processors sequentially
 ///     3) Apply temperature and softmax
 ///     4) Sample the next token (topk, topp, minp, etc)
+/// - `return_raw_logits`: Return raw logits.
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
@@ -83,6 +84,7 @@ pub struct NormalRequest {
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
+    pub return_raw_logits: bool,
 }
 
 impl NormalRequest {
@@ -107,8 +109,28 @@ impl NormalRequest {
             suffix: None,
             adapters: None,
             logits_processors: None,
+            return_raw_logits: false,
         }
     }
+}
+
+#[derive(Clone)]
+/// Request to tokenize some messages or some text.
+/// - `add_generation_prompt` is only applicable if chat messages are provided and not a raw string.
+pub struct TokenizationRequest {
+    pub text: Either<Vec<IndexMap<String, MessageContent>>, String>,
+    pub tools: Option<Vec<Tool>>,
+    pub add_generation_prompt: bool,
+    pub add_special_tokens: bool,
+    pub response: Sender<anyhow::Result<Vec<u32>>>,
+}
+
+#[derive(Clone)]
+/// Request to detokenize some text.
+pub struct DetokenizationRequest {
+    pub tokens: Vec<u32>,
+    pub skip_special_tokens: bool,
+    pub response: Sender<anyhow::Result<String>>,
 }
 
 #[derive(Clone)]
@@ -118,6 +140,8 @@ pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
     ActivateAdapters(Vec<String>),
+    Tokenize(TokenizationRequest),
+    Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
     // and then Engine will be dropped.
     Terminate,
@@ -144,6 +168,12 @@ impl Debug for Request {
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
+            }
+            Request::Tokenize(req) => {
+                write!(f, "Tokenization Request {:?}", req.text)
+            }
+            Request::Detokenize(req) => {
+                write!(f, "Tokenization Request {:?}", req.tokens)
             }
             Request::Terminate => write!(f, "Termination Request"),
         }

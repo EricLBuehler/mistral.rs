@@ -94,6 +94,10 @@ impl PrefixCacheManager {
         }
         let mut n_on_device = 0;
         for (cache, _) in &self.eviction_cache_ptrs {
+            if get_mut_arcmutex!(cache.as_ref())[0].is_none() {
+                // TODO: add support for normal cache
+                continue;
+            }
             if !matches!(
                 get_mut_arcmutex!(cache.as_ref())[0]
                     .as_ref()
@@ -110,6 +114,10 @@ impl PrefixCacheManager {
         for (cache, xlora_cache) in &self.eviction_cache_ptrs {
             if n_on_device - n_evicted == self.n_on_device {
                 break;
+            }
+            if get_mut_arcmutex!(cache.as_ref())[0].is_none() {
+                // TODO: add support for normal cache
+                continue;
             }
             if !matches!(
                 get_mut_arcmutex!(cache.as_ref())[0]

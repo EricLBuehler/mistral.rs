@@ -19,7 +19,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     utils::progress::NiceProgressBar,
     Ordering,
@@ -483,7 +483,7 @@ pub struct Model {
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
     hidden_size: usize,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: usize,
@@ -620,7 +620,7 @@ impl Model {
             lm_head,
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
-            cache: Cache::new(cfg.num_hidden_layers, true),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, true)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -657,30 +657,29 @@ impl Model {
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
-                for _ in 0..self.cache.xlora_lock().len() {
+                for _ in 0..self.cache.full().xlora_lock().len() {
                     new_cache.push(None);
                 }
 
-                self.cache.xlora_lock().clone_from(&new_cache);
+                self.cache.full().xlora_lock().clone_from(&new_cache);
             }
-            self.cache.xlora_lock()
+            self.cache.full().xlora_lock()
         } else {
-            self.cache.lock()
+            self.cache.full().lock()
         };
-        let attention_mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &*cache,
             xs.dtype(),
-            self.layers[0].self_attn.num_heads,
+            self.cfg.num_attn_heads,
         )?;
-        let sliding_attention_mask = CausalMasker
-            .make_causal_mask_with_sliding_window_as_attn_bias(
-                input_ids,
-                &*cache,
-                Some(self.sliding_window),
-                xs.dtype(),
-                self.layers[0].self_attn.num_heads,
-            )?;
+        let sliding_attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            input_ids,
+            &*cache,
+            Some(self.sliding_window),
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -919,7 +918,7 @@ impl NormalModel for Model {
             flash_params_full,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {
@@ -971,7 +970,7 @@ impl ScalingsMaker for Model {
     fn dtype(&self) -> DType {
         self.dtype
     }
-    fn get_cache(&self) -> &Cache {
+    fn get_cache(&self) -> &EitherCache {
         &self.cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

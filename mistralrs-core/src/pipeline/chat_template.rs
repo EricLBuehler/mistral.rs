@@ -243,7 +243,7 @@ pub fn apply_chat_template_to(
         new_messages.push(new_message);
     }
 
-    let template = match &template.0 {
+    let template = match template.0 {
         Either::Left(x) => x.clone(),
         Either::Right(map) => {
             let mut template = "".to_string();

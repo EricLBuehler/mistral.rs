@@ -26,6 +26,10 @@ pub(crate) struct PreprocessedImages {
     pub(crate) image_grid_thw: Option<Tensor>,
     /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) video_grid_thw: Option<Tensor>,
+    /// Without batch size
+    pub(crate) rows: Option<Vec<usize>>,
+    /// Without batch size
+    pub(crate) cols: Option<Vec<usize>>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)

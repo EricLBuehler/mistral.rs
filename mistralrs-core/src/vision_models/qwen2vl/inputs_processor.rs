@@ -66,7 +66,7 @@ impl Processor for Qwen2VLProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -129,6 +129,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -179,6 +180,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -195,6 +197,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -253,6 +256,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             num_tiles: _,
                             image_grid_thw,
                             video_grid_thw,
+                            rows: _,
+                            cols: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -549,6 +554,7 @@ impl Qwen2VLImageProcessor {
                     .map(|resample| Some(resample).to_filter())
                     .unwrap_or(Ok(FilterType::CatmullRom))?,
             );
+            image = DynamicImage::ImageRgb8(image.to_rgb8());
             if config.do_resize.is_none() || config.do_resize.is_some_and(|x| x) {
                 let (resized_height, resized_width) = self.smart_resize(
                     height as usize,
@@ -677,6 +683,8 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 num_tiles: None,
                 image_grid_thw: Some(vision_grid_thw),
                 video_grid_thw: None,
+                rows: None,
+                cols: None,
             });
         }
 
@@ -711,6 +719,8 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 num_tiles: None,
                 image_grid_thw: None,
                 video_grid_thw: Some(vision_grid_thw),
+                rows: None,
+                cols: None,
             });
         }
         unreachable!()

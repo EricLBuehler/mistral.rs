@@ -84,10 +84,11 @@ class Architecture(Enum):
 class VisionArchitecture(Enum):
     Phi3V = "phi3v"
     Idefics2 = "idefics2"
-    LLaVANext = "LLaVANext"
-    LLaVA = "LLaVA"
-    VLlama = "VLlama"
-    Qwen2VL = "Qwen2VL"
+    LLaVANext = "llava-next"
+    LLaVA = "llava"
+    VLlama = "vllama"
+    Qwen2VL = "qwen2vl"
+    Idefics3 = "idefics3"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -322,6 +323,16 @@ class Runner:
     def activate_adapters(self, adapter_names: list[str]) -> None:
         """
         Send a request to make the specified adapters the active adapters for the model.
+        """
+
+    def tokenize_text(self, text: str, add_speial_tokens: bool) -> list[int]:
+        """
+        Tokenize some text, returning raw tokens.
+        """
+
+    def detokenize_text(self, tokens: list[int], skip_speial_tokens: bool) -> str:
+        """
+        Detokenize some tokens, returning text.
         """
 
 class AnyMoeExpertType(Enum):

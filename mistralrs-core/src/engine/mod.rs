@@ -1,3 +1,5 @@
+use candle_core::Tensor;
+use either::Either;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -13,9 +15,9 @@ use crate::{
     aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx},
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
-        CacheInstruction,
+        CacheInstruction, EitherCache, NormalCache,
     },
-    request::NormalRequest,
+    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
     sequence::{SeqStepType, StopReason},
@@ -162,15 +164,26 @@ impl Engine {
                                 CacheInstruction::Out
                             } else {
                                 CacheInstruction::Reset {
+                                    load_preallocated_cache: false,
                                     reset_non_granular: false,
                                     adapter_inst: AdapterInstruction::None,
                                 }
                             };
 
+                            let return_raw_logits = scheduled.completion[0].return_raw_logits;
+                            assert!(
+                                scheduled
+                                    .completion
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             pipeline
                                 .step(
                                     &mut scheduled.completion,
                                     false,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
@@ -203,8 +216,7 @@ impl Engine {
                     }
 
                     if scheduled.prompt.len() > 0 {
-                        let throughput_start = Instant::now();
-                        let logits = {
+                        let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                             // Run the prompt seqs
@@ -212,6 +224,7 @@ impl Engine {
                                 CacheInstruction::Out
                             } else {
                                 CacheInstruction::Reset {
+                                    load_preallocated_cache: false,
                                     reset_non_granular: false,
                                     adapter_inst: AdapterInstruction::None,
                                 }
@@ -221,17 +234,28 @@ impl Engine {
                                 .map(AdapterInstruction::Activate)
                                 .unwrap_or(AdapterInstruction::None);
 
+                            let return_raw_logits = scheduled.prompt[0].return_raw_logits;
+                            assert!(
+                                scheduled
+                                    .prompt
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             // Reset non granular state because the old sequence must be dead.
                             // Technically we don't need to do this but it is better to be safe.
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
                                     true,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
                                         pre_op: CacheInstruction::Reset {
+                                            load_preallocated_cache: true,
                                             reset_non_granular: false,
                                             adapter_inst,
                                         },
@@ -241,16 +265,15 @@ impl Engine {
                                 .await
                         };
 
-                        handle_pipeline_forward_error!(
+                        let prompt_exec_time = handle_pipeline_forward_error!(
                             "prompt step",
-                            logits,
+                            prompt_exec_time,
                             &mut scheduled.prompt,
                             self.pipeline,
                             'lp,
                             self.prefix_cacher
                         );
 
-                        let throughput_end = Instant::now();
                         #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
                             prompt_ts = Some(
@@ -259,9 +282,7 @@ impl Engine {
                                     .iter()
                                     .map(|seq| seq.get_toks().len())
                                     .sum::<usize>() as f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
+                                    / prompt_exec_time.as_secs_f64(),
                             );
                         }
 
@@ -280,8 +301,8 @@ impl Engine {
                                 .as_millis();
                             #[allow(clippy::cast_precision_loss)]
                             let prompt_tok_per_sec =
-                                seq.len() as f32 / (now - seq.timestamp()) as f32;
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
+                                seq.len() as f32 / prompt_exec_time.as_secs_f32();
+                            seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
                         }
                         last_completion_ids = vec![];
@@ -368,10 +389,19 @@ impl Engine {
                                 block_engine: self.scheduler.block_engine().unwrap(),
                             };
 
+                            let return_raw_logits = guards_mut[0].return_raw_logits;
+                            assert!(
+                                guards_mut
+                                    .iter()
+                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
+                                "All sequences must either return raw logits, or not."
+                            );
+
                             pipeline
                                 .step(
                                     &mut guards_mut,
                                     is_prompt,
+                                    return_raw_logits,
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
@@ -480,6 +510,8 @@ impl Engine {
                     warn!("ISQ requantization failed: {e:?}");
                 }
             }
+            Request::Tokenize(req) => self.tokenize_text(req).await,
+            Request::Detokenize(req) => self.detokenize_text(req).await,
             Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
         }
     }
@@ -562,6 +594,7 @@ impl Engine {
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
+                    true,
                     true,
                     request.tools.unwrap_or_default(),
                 );
@@ -733,9 +766,6 @@ impl Engine {
             is_chat,
             best_of,
         )));
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!");
 
         let tokenizer = get_mut_arcmutex!(self.pipeline).tokenizer();
 
@@ -790,6 +820,51 @@ impl Engine {
                 .tok_trie
                 .as_ref()
                 .map(|x| (**x).clone());
+
+            let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
+            let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {
+                let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
+                let model_metadata = metadata
+                    .model_metadata
+                    .as_ref()
+                    .expect("If a model has a NormalCache it must have a model metadata");
+                let n_tokens = prompt_tokens.len();
+                let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
+                let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
+                let kv_shape = (
+                    1usize,
+                    model_metadata.num_kv_heads(),
+                    max_seq_len,
+                    model_metadata.head_dim(),
+                );
+                let dtype = get_mut_arcmutex!(self.pipeline)
+                    .get_metadata()
+                    .activation_dtype;
+                let seq_cache =
+                    Tensor::zeros(kv_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
+                let seq_cache = match seq_cache {
+                    Ok(x) => x,
+                    Err(_) => {
+                        request
+                            .response
+                            .send(Response::InternalError(
+                                "Failed to allocate preallocated KV cache."
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                Some(seq_cache)
+            } else {
+                None
+            };
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time travel has occurred!");
             let seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -821,6 +896,8 @@ impl Engine {
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
+                seq_preallocated_cache,
+                request.return_raw_logits,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill(
@@ -834,5 +911,105 @@ impl Engine {
             self.id += 1;
             self.scheduler.add_seq(seq);
         }
+    }
+
+    async fn tokenize_text(&self, request: TokenizationRequest) {
+        match request.text {
+            Either::Left(messages) => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let template = pipeline.get_processor().process(
+                    pipeline,
+                    messages,
+                    request.add_generation_prompt,
+                    request.add_special_tokens,
+                    request.tools.unwrap_or_default(),
+                );
+                let toks = match template {
+                    Ok((toks, _)) => toks,
+                    Err(e) => {
+                        request
+                            .response
+                            .send(Err(e))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                request
+                    .response
+                    .send(Ok(toks))
+                    .await
+                    .expect("Sender disconnected unexpectedly!");
+            }
+            Either::Right(text) => {
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let tokenizer = pipeline.tokenizer();
+                let tokenizer = match tokenizer {
+                    Some(tokenizer) => tokenizer,
+                    None => {
+                        request
+                            .response
+                            .send(Err(anyhow::Error::msg(
+                                "Pipeline does not include a toksnizer.",
+                            )))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                let toks = tokenizer.encode(text, request.add_special_tokens);
+                let toks = match toks {
+                    Ok(tokenizer) => tokenizer,
+                    Err(e) => {
+                        request
+                            .response
+                            .send(Err(anyhow::Error::msg(e)))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                request
+                    .response
+                    .send(Ok(toks.get_ids().to_vec()))
+                    .await
+                    .expect("Sender disconnected unexpectedly!");
+            }
+        };
+    }
+
+    async fn detokenize_text(&self, request: DetokenizationRequest) {
+        let pipeline = &*get_mut_arcmutex!(self.pipeline);
+        let tokenizer = pipeline.tokenizer();
+        let tokenizer = match tokenizer {
+            Some(tokenizer) => tokenizer,
+            None => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(
+                        "Pipeline does not include a toksnizer.",
+                    )))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        let txt = tokenizer.decode(&request.tokens, request.skip_special_tokens);
+        let txt = match txt {
+            Ok(tokenizer) => tokenizer,
+            Err(e) => {
+                request
+                    .response
+                    .send(Err(anyhow::Error::msg(e)))
+                    .await
+                    .expect("Expected receiver.");
+                return;
+            }
+        };
+        request
+            .response
+            .send(Ok(txt))
+            .await
+            .expect("Sender disconnected unexpectedly!");
     }
 }

@@ -15,8 +15,11 @@ use crate::gguf::Content;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::{extract_logits, Cache};
+use crate::pipeline::EitherCache;
+use crate::pipeline::KvCache;
+use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -141,7 +144,7 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         start_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
@@ -197,7 +200,7 @@ impl LayerWeights {
                 )?
             }
             None => {
-                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
@@ -220,7 +223,7 @@ pub struct ModelWeights {
     norm: QRmsNorm,
     output: Arc<dyn QuantMethod>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
 }
@@ -315,7 +318,10 @@ impl ModelConfig::FromGGML for ModelWeights {
                 b: None,
             })?),
             device: ct.device.clone(),
-            cache: Cache::new(ct.hparams.n_layer as usize, false),
+            cache: EitherCache::Normal(NormalCache::new(
+                ct.hparams.n_layer as usize,
+                MAX_SEQ_LEN as usize,
+            )),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
         })
@@ -637,7 +643,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 b: None,
             })?),
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper: Some(mapper),
         })
@@ -654,13 +660,13 @@ impl ModelWeights {
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
-        let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let cache = &mut self.cache.normal().0;
+        let mask = CausalMasker.make_causal_mask_matrix(
             x,
             metadata
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+                .unwrap_or(cache as &dyn PastKvLenCache),
             DType::F32,
             self.layers[0].n_head,
         )?;

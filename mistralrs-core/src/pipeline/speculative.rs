@@ -2,6 +2,7 @@ use std::{
     any::Any,
     iter::zip,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result as anyhowResult;
@@ -17,7 +18,7 @@ use crate::{
         sampling::{
             finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
         },
-        AdapterInstruction, Cache,
+        AdapterInstruction,
     },
     prefix_cacher::PrefixCacheManager,
     sequence::{Sequence, SequenceRecognizer},
@@ -26,10 +27,10 @@ use crate::{
 };
 
 use super::{
-    cache_manager::DefaultCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
+    cache_manager::FullCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
-    CacheManager, CacheManagerMixin, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin,
-    MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -242,31 +243,40 @@ impl IsqPipelineMixin for SpeculativePipeline {
     }
 }
 
+// TODO: correct handling of cloning in and out for normal cache
 impl CacheManagerMixin for SpeculativePipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(
-            &*get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-        );
-        DefaultCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+        FullCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
+        FullCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(
+        FullCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
+        FullCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+    }
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        FullCacheManager.set_none_cache(
             &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
+            load_preallocated_cache,
         );
-        DefaultCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
-    }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.draft), modify_draft_cache);
-        DefaultCacheManager.set_none_cache(&*get_mut_arcmutex!(self.target), false);
+        FullCacheManager.set_none_cache(
+            &*get_mut_arcmutex!(self.target),
+            seqs,
+            false,
+            load_preallocated_cache,
+        );
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         unreachable!()
     }
 }
@@ -307,7 +317,11 @@ impl MetadataMixin for SpeculativePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for SpeculativePipeline {
-    fn forward_inputs(&mut self, _inputs: Box<dyn Any>) -> Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        _inputs: Box<dyn Any>,
+        _return_raw_logits: bool,
+    ) -> Result<ForwardInputsResult> {
         unreachable!()
     }
     async fn sample_causal_gen(
@@ -324,11 +338,12 @@ impl Pipeline for SpeculativePipeline {
         &mut self,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
+        _return_raw_logits: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<()> {
+    ) -> Result<Duration> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 match pre_op {
@@ -364,6 +379,7 @@ impl Pipeline for SpeculativePipeline {
                     CacheInstruction::Reset {
                         reset_non_granular,
                         adapter_inst,
+                        load_preallocated_cache,
                     } => {
                         match adapter_inst {
                             AdapterInstruction::Activate(adapters) => {
@@ -377,11 +393,17 @@ impl Pipeline for SpeculativePipeline {
                             }
                             AdapterInstruction::None => 0,
                         };
-                        self.set_none_cache(reset_non_granular, false)
+                        self.set_none_cache(
+                            input_seqs,
+                            reset_non_granular,
+                            false,
+                            load_preallocated_cache,
+                        )
                     }
                     _ => unreachable!("Unreachable PRE cache op."),
                 }
 
+                let start = Instant::now();
                 assert_eq!(input_seqs.len(), 1);
 
                 let seq = &mut input_seqs[0];
@@ -405,6 +427,7 @@ impl Pipeline for SpeculativePipeline {
                             &device,
                             has_no_kv_cache,
                             None,
+                            false,
                             None,
                             None, // TODO: get block tables/handle it
                             None, // TODO: do we support???
@@ -412,7 +435,8 @@ impl Pipeline for SpeculativePipeline {
                         .nth(0)
                         .unwrap()
                         .unwrap();
-                    let logits = get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs))?;
+                    let logits =
+                        get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs), false)?;
                     #[allow(irrefutable_let_patterns)]
                     let ForwardInputsResult::CausalGeneration { logits } = logits
                     else {
@@ -452,10 +476,13 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Run the model with all draft tokens. ============================
 
-                let initial_cache_len = get_mut_arcmutex!(self.target).cache().lock()[0]
-                    .as_ref()
-                    .map(|(k, _)| k.dims()[2])
-                    .unwrap_or(0);
+                let initial_cache_len = match get_mut_arcmutex!(self.target).cache() {
+                    EitherCache::Full(full) => full.lock()[0]
+                        .as_ref()
+                        .map(|(k, _)| k.dims()[2])
+                        .unwrap_or(0),
+                    EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+                };
 
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
@@ -474,6 +501,7 @@ impl Pipeline for SpeculativePipeline {
                         &device,
                         has_no_kv_cache,
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
+                        false,
                         None,
                         None, // TODO: get block tables/handle it
                         None, // TODO: do we support???
@@ -482,7 +510,8 @@ impl Pipeline for SpeculativePipeline {
                     .unwrap()
                     .unwrap();
 
-                let logits = get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs))?;
+                let logits =
+                    get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs), false)?;
                 #[allow(irrefutable_let_patterns)]
                 let ForwardInputsResult::CausalGeneration { logits } = logits
                 else {
@@ -516,44 +545,56 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
-                for (k, v) in get_mut_arcmutex!(self.draft)
-                    .cache()
-                    .lock()
-                    .iter_mut()
-                    .flatten()
-                {
-                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
-                }
-                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-                    for (k, v) in get_mut_arcmutex!(self.draft)
-                        .cache()
-                        .xlora_lock()
-                        .iter_mut()
-                        .flatten()
-                    {
-                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                match get_mut_arcmutex!(self.draft).cache() {
+                    EitherCache::Full(full) => {
+                        for (k, v) in full.lock().iter_mut().flatten() {
+                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for cache in &mut *normal.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
                     }
                 }
-                for (k, v) in get_mut_arcmutex!(self.target)
-                    .cache()
-                    .lock()
-                    .iter_mut()
-                    .flatten()
-                {
-                    *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                    *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
+                    match get_mut_arcmutex!(self.draft).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.xlora_lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
+                        }
+                        EitherCache::Normal(_) => {
+                            unreachable!()
+                        }
+                    }
+                }
+                match get_mut_arcmutex!(self.target).cache() {
+                    EitherCache::Full(full) => {
+                        for (k, v) in full.lock().iter_mut().flatten() {
+                            *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                            *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for cache in &mut *normal.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
-                    for (k, v) in get_mut_arcmutex!(self.target)
-                        .cache()
-                        .xlora_lock()
-                        .iter_mut()
-                        .flatten()
-                    {
-                        *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
-                        *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                    match get_mut_arcmutex!(self.target).cache() {
+                        EitherCache::Full(full) => {
+                            for (k, v) in full.xlora_lock().iter_mut().flatten() {
+                                *k = k.i((.., .., ..k.dims()[2] - n_not_accepted, ..))?;
+                                *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
+                            }
+                        }
+                        EitherCache::Normal(_) => {
+                            unreachable!()
+                        }
                     }
                 }
 
@@ -619,6 +660,8 @@ impl Pipeline for SpeculativePipeline {
                 .await?;
                 finish_or_add_toks_to_seq(self, prefix_cacher, seq, sample, eos_tok, false);
                 */
+                let end = Instant::now();
+                let exec_duration = end.duration_since(start);
 
                 match post_op {
                     CacheInstruction::Out => {
@@ -628,7 +671,13 @@ impl Pipeline for SpeculativePipeline {
                     CacheInstruction::Reset {
                         reset_non_granular,
                         adapter_inst: _,
-                    } => self.set_none_cache(reset_non_granular, true),
+                        load_preallocated_cache,
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        true,
+                        load_preallocated_cache,
+                    ),
                     _ => unreachable!("Unreachable pre cache op."),
                 }
 
@@ -641,7 +690,7 @@ impl Pipeline for SpeculativePipeline {
                 // - Added the accepted tokens to buffer and trie
                 // - Maybe fixed up cache of base model based on accepted tokens.
 
-                Ok(())
+                Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention {
                 metadata: _,

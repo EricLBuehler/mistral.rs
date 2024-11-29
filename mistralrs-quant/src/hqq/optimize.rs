@@ -30,7 +30,7 @@ fn shrink_lp_op(x: &Tensor, beta: f64, lp_norm: f64) -> Result<Tensor> {
     if lp_norm == 1. {
         x.sign()?.broadcast_mul(&(x.abs()? - 1. / beta)?.relu()?)
     } else {
-        let pow_exp = Tensor::new(lp_norm - 1., x.device())?
+        let pow_exp = Tensor::new(lp_norm as f32 - 1., x.device())?
             .broadcast_as(x.shape().clone())?
             .to_dtype(x.dtype())?;
         x.sign()?
