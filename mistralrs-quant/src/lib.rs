@@ -19,6 +19,7 @@ mod fp8;
 mod gguf;
 mod gptq;
 mod hqq;
+mod imatrix;
 mod unquantized;
 mod utils;
 
@@ -28,6 +29,7 @@ pub use gguf::GgufMatMul;
 use gptq::gptq_linear;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
+pub use imatrix::ImatrixLayerStats;
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, Module, VarBuilder};
@@ -230,6 +232,16 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         None
+    }
+
+    /// Begin tracking stats into an ImatrixLayerStats
+    fn begin_track_stats(&mut self) -> Result<()> {
+        candle_core::bail!("`{}` does not support tracking stats.", self.name())
+    }
+
+    /// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
+    fn end_track_stats(&mut self) -> Result<Tensor> {
+        candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 }
 

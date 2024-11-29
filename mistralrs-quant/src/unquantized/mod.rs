@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -14,14 +14,15 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
-    QuantizedSerdeType,
+    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod, QuantMethodConfig,
+    QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
 pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
+    stats: Option<Arc<Mutex<ImatrixLayerStats>>>,
 }
 
 impl QuantMethod for UnquantLinear {
@@ -38,6 +39,7 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
+                stats: None,
             }),
         }
     }
@@ -51,6 +53,11 @@ impl QuantMethod for UnquantLinear {
             [bsize, _, _] => self.w.broadcast_left(bsize)?,
             _ => self.w.clone(),
         };
+
+        if let Some(stats) = &self.stats {
+            let mut stats = stats.lock().unwrap();
+            stats.process(a)?;
+        }
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -106,6 +113,7 @@ impl QuantMethod for UnquantLinear {
         Ok(Arc::new(Self {
             w: (&self.w + delta)?,
             b: self.b.clone(),
+            stats: self.stats.clone(),
         }))
     }
 
@@ -246,6 +254,25 @@ impl QuantMethod for UnquantLinear {
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         Some((self.w.clone(), self.b.clone()))
     }
+
+    fn begin_track_stats(&mut self) -> Result<()> {
+        self.stats = Some(Arc::new(Mutex::new(ImatrixLayerStats::new(
+            &self.w,
+            self.w.device(),
+        )?)));
+        Ok(())
+    }
+
+    fn end_track_stats(&mut self) -> Result<Tensor> {
+        let imatrix = if let Some(stats) = &self.stats {
+            let stats = stats.lock().unwrap();
+            stats.compute_imatrix()?
+        } else {
+            candle_core::bail!("`{}` does not support tracking stats.", self.name())
+        };
+        self.stats = None;
+        Ok(imatrix)
+    }
 }
 
 // Serialization structure:
@@ -320,6 +347,6 @@ impl QuantizedSerde for UnquantLinear {
             None
         };
 
-        Ok(Arc::new(Self { w, b }))
+        Ok(Arc::new(Self { w, b, stats: None }))
     }
 }
