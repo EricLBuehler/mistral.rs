@@ -630,7 +630,13 @@
 <a href="#629" id="629">629</a>
 <a href="#630" id="630">630</a>
 <a href="#631" id="631">631</a>
-<a href="#632" id="632">632</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     Constraint, DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat,
@@ -1093,7 +1099,7 @@ Commands:
 
     <span class="macro">info!</span>(<span class="string">"Starting interactive loop with generation params: {diffusion_params:?}"</span>);
     <span class="macro">println!</span>(
-        <span class="string">"{}{TEXT_INTERACTIVE_HELP}{}"</span>,
+        <span class="string">"{}{DIFFUSION_INTERACTIVE_HELP}{}"</span>,
         <span class="string">"="</span>.repeat(<span class="number">20</span>),
         <span class="string">"="</span>.repeat(<span class="number">20</span>)
     );
@@ -1154,16 +1160,22 @@ Commands:
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
         });
+
+        <span class="kw">let </span>start = Instant::now();
         sender.send(req).<span class="kw">await</span>.unwrap();
 
         <span class="kw">let </span>ResponseOk::ImageGeneration(response) = rx.recv().<span class="kw">await</span>.unwrap().as_result().unwrap()
         <span class="kw">else </span>{
             <span class="macro">panic!</span>(<span class="string">"Got unexpected response type."</span>)
         };
+        <span class="kw">let </span>end = Instant::now();
+
+        <span class="kw">let </span>duration = end.duration_since(start).as_secs_f32();
+        <span class="kw">let </span>pixels_per_s = (diffusion_params.height * diffusion_params.width) <span class="kw">as </span>f32 / duration;
 
         <span class="macro">println!</span>(
-            <span class="string">"Image generated can be found at: image is at {}"</span>,
-            response.data[<span class="number">0</span>].url.as_ref().unwrap()
+            <span class="string">"Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s)."</span>,
+            response.data[<span class="number">0</span>].url.as_ref().unwrap(),
         );
 
         <span class="macro">println!</span>();
