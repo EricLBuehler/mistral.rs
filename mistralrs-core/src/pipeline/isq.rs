@@ -135,7 +135,7 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     );
 
-    /// Corresponding to the specifc order the model produces ISQ layers (None means
+    /// Corresponding to the specific order the model produces ISQ layers (None means
     /// do not search for in the imatrix file). This is used to pair ISQ layers with the
     /// corresponding imatrix weights.
     ///
