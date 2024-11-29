@@ -17,9 +17,10 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{Cache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
+use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::LLaVAProcessor;
@@ -48,7 +49,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
-    fn cache(&self) -> &Cache;
+    fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;
     fn has_conv2d(&self) -> bool;
     fn config(&self) -> &ModelConfigMetadata;
@@ -94,6 +95,8 @@ pub enum VisionLoaderType {
     VLlama,
     #[serde(rename = "qwen2vl")]
     Qwen2VL,
+    #[serde(rename = "idefics3")]
+    Idefics3,
 }
 
 impl FromStr for VisionLoaderType {
@@ -106,7 +109,8 @@ impl FromStr for VisionLoaderType {
             "llava" => Ok(Self::LLaVA),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`.")),
+            "idefics3" => Ok(Self::Idefics3),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`.")),
         }
     }
 }
@@ -504,16 +508,18 @@ impl VisionModelLoader for VLlamaLoader {
 impl IsqModelLoader for VLlamaLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // MLP
+            // MLP text
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MLP vision
+            Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
     }
 }
@@ -599,5 +605,80 @@ impl IsqModelLoader for Qwen2VLLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+}
+
+// ======================== Idefics 3 loader
+
+/// [`VisionLoader`] for an Idefics 3 Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct Idefics3Loader;
+
+pub struct Idefics3Prefixer;
+
+impl VisionPromptPrefixer for Idefics3Prefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        // Chat template does it
+        prompt.to_string()
+    }
+}
+
+impl VisionModelLoader for Idefics3Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: Idefics3Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Idefics3Model::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: Idefics3Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Idefics3Processor::new(
+            processor_config.unwrap_or_default(),
+            preprocessor_config,
+            max_edge,
+        ))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: Idefics3Config = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Idefics3Prefixer)
+    }
+}
+
+impl IsqModelLoader for Idefics3Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        todo!()
     }
 }

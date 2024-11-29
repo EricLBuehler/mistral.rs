@@ -46,6 +46,7 @@ pub fn setup_cublas_lt_wrapper() {
                 tracing::info!("Initialized cuBLASlt handle");
             }
         });
+        #[allow(static_mut_refs)]
         let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
         *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
     }

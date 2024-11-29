@@ -180,7 +180,7 @@ macro_rules! handle_pipeline_forward_error {
                 // Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
-                p.set_none_cache(true, true);
+                p.set_none_cache($seq_slice, true, true, false);
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;

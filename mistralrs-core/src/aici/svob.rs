@@ -337,7 +337,7 @@ pub struct SimpleVobIter<'a> {
     idx: usize,
 }
 
-impl<'a> Iterator for SimpleVobIter<'a> {
+impl Iterator for SimpleVobIter<'_> {
     type Item = u32;
 
     #[inline(always)]

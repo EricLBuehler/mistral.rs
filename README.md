@@ -46,6 +46,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
     ```
 
+- 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
+    ```
+
 - 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
 
     ```
@@ -150,6 +156,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |LLaVa|✅| |✅|✅|
 |Llama 3.2 Vision|✅| |✅| |
 |Qwen2-VL|✅| |✅| |
+|Idefics 3|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -415,6 +422,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `llava`
 - `vllama`
 - `qwen2vl`
+- `idefics3`
 
 ### Supported GGUF architectures
 
@@ -503,6 +511,8 @@ Please submit more benchmarks via raising an issue!
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
 |Llama 3.2 Vision| | |✅|
+|Qwen2-VL| | |✅|
+|Idefics 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -529,7 +539,8 @@ Please submit more benchmarks via raising an issue!
 |Starcoder 2|✅| | |
 |LLaVa Next| | | |
 |LLaVa| | | |
-|Llama 3.2 Vision| | | |
+|Qwen2-VL| | | |
+|Idefics 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -549,6 +560,8 @@ Please submit more benchmarks via raising an issue!
 |LLaVa Next|✅|
 |LLaVa|✅|
 |Llama 3.2 Vision| |
+|Qwen2-VL| |
+|Idefics 3|✅|
 
 
 ### Using derivative model

@@ -307,7 +307,7 @@ pub trait IsqModel {
                     serialized.display()
                 );
 
-                if !serialized.extension().is_some_and(|ext| ext == "uqff") {
+                if serialized.extension().is_none_or(|ext| ext != "uqff") {
                     candle_core::bail!("UQFF output path extension must be `.uqff`",);
                 }
 
@@ -319,8 +319,13 @@ pub trait IsqModel {
                         .progress_chars("#>-"),
                 );
 
+                #[cfg(not(feature = "metal"))]
+                let n_threads = 2;
+                #[cfg(feature = "metal")]
+                let n_threads = 1;
+
                 let pool = rayon::ThreadPoolBuilder::new()
-                    .num_threads(2)
+                    .num_threads(n_threads)
                     .build()
                     .map_err(candle_core::Error::msg)?;
 

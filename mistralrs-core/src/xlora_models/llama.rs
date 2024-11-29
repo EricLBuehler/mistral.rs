@@ -8,7 +8,7 @@ use crate::{
     paged_attention::ModelConfigMetadata,
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel,
+        EitherCache, IsqModel,
     },
     utils::progress::NiceProgressBar,
 };
@@ -425,7 +425,7 @@ pub struct XLoraLlama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
-    kv_cache: pipeline::Cache,
+    kv_cache: pipeline::EitherCache,
     device: Device,
     xlora_classifier: Option<XLoraClassifier>,
     dtype: DType,
@@ -450,21 +450,21 @@ impl XLoraLlama {
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
-                for _ in 0..self.kv_cache.xlora_lock().len() {
+                for _ in 0..self.kv_cache.full().xlora_lock().len() {
                     new_cache.push(None);
                 }
 
-                self.kv_cache.xlora_lock().clone_from(&new_cache);
+                self.kv_cache.full().xlora_lock().clone_from(&new_cache);
             }
-            self.kv_cache.xlora_lock()
+            self.kv_cache.full().xlora_lock()
         } else {
-            self.kv_cache.lock()
+            self.kv_cache.full().lock()
         };
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &*cache,
             x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
+            self.cfg.num_attn_heads,
         )?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
@@ -704,7 +704,7 @@ impl XLoraLlama {
             blocks,
             ln_f,
             lm_head,
-            kv_cache: pipeline::Cache::new(cfg.num_hidden_layers, true),
+            kv_cache: EitherCache::Full(pipeline::Cache::new(cfg.num_hidden_layers, true)),
             device: normal_loading_metadata.real_device,
             xlora_classifier: xlora_config.map(|xlora_config| {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb, false).unwrap()
@@ -812,7 +812,7 @@ impl NormalModel for XLoraLlama {
             flash_params_full,
         )
     }
-    fn cache(&self) -> &super::Cache {
+    fn cache(&self) -> &super::EitherCache {
         &self.kv_cache
     }
     fn device(&self) -> &Device {
@@ -864,7 +864,7 @@ impl ScalingsMaker for XLoraLlama {
     fn dtype(&self) -> DType {
         self.dtype
     }
-    fn get_cache(&self) -> &pipeline::Cache {
+    fn get_cache(&self) -> &pipeline::EitherCache {
         &self.kv_cache
     }
     fn get_classifier(&self) -> &XLoraClassifier {

@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+pub(crate) mod phi3_inputs_processor;
+
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{
@@ -25,7 +27,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -929,7 +931,7 @@ pub struct Model {
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     device: Device,
-    cache: Cache,
+    cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
@@ -1032,7 +1034,7 @@ impl Model {
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: Cache::new(cfg.num_hidden_layers, false),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -1066,8 +1068,8 @@ impl Model {
         } else {
             self.embed_tokens.forward(input_ids)?
         };
-        let mut cache = self.cache.lock();
-        let attention_mask = CausalMasker.make_causal_mask_with_sliding_window_as_attn_bias(
+        let mut cache = self.cache.full().lock();
+        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
@@ -1075,7 +1077,7 @@ impl Model {
                 .unwrap_or(&*cache as &dyn PastKvLenCache),
             self.sliding_window,
             xs.dtype(),
-            self.layers[0].self_attn.num_heads,
+            self.cfg.num_attn_heads,
         )?;
 
         for (i, layer) in self.layers.iter().enumerate() {
@@ -1181,7 +1183,7 @@ impl VisionModel for Model {
             flash_params,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.cache
     }
     fn device(&self) -> &Device {

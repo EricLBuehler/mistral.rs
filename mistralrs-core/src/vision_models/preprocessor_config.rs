@@ -18,6 +18,7 @@ pub struct PreProcessorConfig {
     pub(crate) image_std: Option<[f64; 3]>,
     pub(crate) rescale_factor: Option<f64>,
     pub(crate) resampling: Option<usize>,
+    pub(crate) max_image_size: Option<HashMap<String, u32>>,
     pub(crate) size: Option<HashMap<String, u32>>,
     pub(crate) crop_size: Option<HashMap<String, u32>>,
     pub(crate) num_img_tokens: Option<usize>,

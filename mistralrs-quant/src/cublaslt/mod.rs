@@ -49,6 +49,7 @@ pub fn maybe_init_cublas_lt_wrapper() {
                         _ => None,
                     });
             }
+            #[allow(static_mut_refs)]
             let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
             *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
         });

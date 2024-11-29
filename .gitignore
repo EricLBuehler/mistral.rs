@@ -2,3 +2,5 @@
 .ruff_cache
 .vscode
 *.a
+.DS_Store
+*.raw

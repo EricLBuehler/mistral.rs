@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
             .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
