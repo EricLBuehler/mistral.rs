@@ -391,9 +391,9 @@ pub enum ModelSelected {
         #[arg(short = 'e', long)]
         max_edge: Option<u32>,
 
-        /// .imatrix file to enhance GGUF quantizations with.
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
         #[arg(short, long)]
-        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

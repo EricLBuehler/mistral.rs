@@ -629,6 +629,21 @@ impl IsqModel for Model {
 
         uvb.to_safetensors()
     }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // NOTE: dependant on the exact implementation in get_layers!
+        let mut names = Vec::new();
+        // lm_head
+        names.push(None);
+        for i in 0..self.layers.len() {
+            names.push(Some(format!("blk.{i}.attn_qkv.weight")));
+            names.push(Some(format!("blk.{i}.attn_output.weight")));
+            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
+            names.push(Some(format!("blk.{i}.ffn_up.weight")));
+            names.push(Some(format!("blk.{i}.ffn_down.weight")));
+        }
+        Ok(names)
+    }
 }
 
 impl NormalModel for Model {
