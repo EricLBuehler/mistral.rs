@@ -1,4 +1,4 @@
-use std::{fs::read_to_string, num::NonZeroUsize};
+use std::{fs::read_to_string, num::NonZeroUsize, path::PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
@@ -22,6 +22,10 @@ struct Args {
     /// ISQ quantization to run with.
     #[arg(short, long)]
     isq: Option<String>,
+
+    /// Generate and utilize an imatrix to enhance GGUF quantizations.
+    #[arg(short, long)]
+    calibration_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -40,6 +44,9 @@ async fn main() -> Result<()> {
         .with_prompt_batchsize(NonZeroUsize::new(prompt_batchsize).unwrap());
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
+    }
+    if let Some(calibration_file) = &args.calibration_file {
+        model_builder = model_builder.with_calibration_file(calibration_file.clone());
     }
 
     let model = model_builder.build().await?;
