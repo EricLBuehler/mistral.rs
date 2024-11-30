@@ -48,6 +48,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -407,7 +408,8 @@ impl Loader for NormalLoader {
                 .get_ids()
                 .to_vec();
             info!(
-                "Generating imatrix from calibration data of {} tokens.",
+                "Collecting imatrix from calibration file `{}` of {} tokens.",
+                calibration_file.display(),
                 tokens.len()
             );
             let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
@@ -422,14 +424,12 @@ impl Loader for NormalLoader {
 
             const CHUNK_SIZE: usize = 1024;
             let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
+            let start = Instant::now();
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
                 let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
-                info!(
-                    "Processing chunk {}/{n_chunks} ({} tokens)",
-                    i + 1,
-                    chunk.len()
-                );
+                let chunk_len = chunk.len();
 
+                let start = Instant::now();
                 let inputs =
                     make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
                 let _ = model.forward(
@@ -441,7 +441,31 @@ impl Loader for NormalLoader {
                     None,
                     &inputs.flash_meta,
                 )?;
+                match model.cache_mut() {
+                    EitherCache::Full(full) => {
+                        for layer in &mut *full.lock() {
+                            *layer = None
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for layer in &mut *normal.lock().unwrap().0 {
+                            layer.set_len(0);
+                        }
+                    }
+                }
+                let end = Instant::now();
+                info!(
+                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
+                    i + 1,
+                    end.duration_since(start).as_secs_f32()
+                );
             }
+            load_device.synchronize()?;
+            let end = Instant::now();
+            info!(
+                "Finished collecting imatrix in {:.2}s",
+                end.duration_since(start).as_secs_f32()
+            );
         }
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
@@ -453,7 +477,7 @@ impl Loader for NormalLoader {
             ) {
                 (None, false) => None,
                 (Some(file), false) => Some(ImatrixDataSource::File(file)),
-                (None, true) => Some(ImatrixDataSource::Generated),
+                (None, true) => Some(ImatrixDataSource::Collected),
                 (Some(_), true) => unreachable!(),
             };
             model.quantize(

@@ -737,6 +737,9 @@ impl NormalModel for Model {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
     fn device(&self) -> &Device {
         &self.device
     }

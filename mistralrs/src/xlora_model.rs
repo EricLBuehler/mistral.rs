@@ -38,6 +38,7 @@ impl XLoraModelBuilder {
             write_uqff: self.text_model.write_uqff,
             from_uqff: self.text_model.from_uqff,
             imatrix: None,
+            calibration_file: None,
         };
 
         if self.text_model.with_logging {

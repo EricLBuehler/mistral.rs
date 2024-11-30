@@ -127,7 +127,7 @@ pub struct UqffFullSer<'a> {
 
 pub enum ImatrixDataSource<'a> {
     File(&'a PathBuf),
-    Generated,
+    Collected,
 }
 
 pub trait IsqModel {
@@ -282,12 +282,19 @@ pub trait IsqModel {
                     );
                     Some(layer_to_weight)
                 }
-                Some(ImatrixDataSource::Generated) => match organization {
-                    IsqOrganization::Default => Some(self.extract_imatrix_data()?),
-                    IsqOrganization::MoeExpertsOnly => {
-                        Some(self.extract_imatrix_data_moe_experts_only()?)
-                    }
-                },
+                Some(ImatrixDataSource::Collected) => {
+                    let data = match organization {
+                        IsqOrganization::Default => self.extract_imatrix_data()?,
+                        IsqOrganization::MoeExpertsOnly => {
+                            self.extract_imatrix_data_moe_experts_only()?
+                        }
+                    };
+                    info!(
+                        "Quantizing with collected imatrix data, {} imatrix weights",
+                        data.len()
+                    );
+                    Some(data)
+                }
                 None => {
                     // Dummy, just for zip
                     None

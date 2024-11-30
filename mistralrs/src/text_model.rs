@@ -12,6 +12,7 @@ pub struct TextModelBuilder {
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapMetadata>,
@@ -97,6 +98,7 @@ impl TextModelBuilder {
             with_logging: false,
             device_mapping: None,
             imatrix: None,
+            calibration_file: None,
         }
     }
 
@@ -167,9 +169,15 @@ impl TextModelBuilder {
         self
     }
 
-    /// Utilise this imatrix file during ISQ
+    /// Utilise this imatrix file during ISQ. Incompatible with specifying a calibration file.
     pub fn with_imatrix(mut self, path: PathBuf) -> Self {
         self.imatrix = Some(path);
+        self
+    }
+
+    /// Utilise this calibration file to collcet an imatrix. Incompatible with specifying a calibration file.
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
         self
     }
 
@@ -248,6 +256,7 @@ impl TextModelBuilder {
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
             imatrix: self.imatrix,
+            calibration_file: self.calibration_file,
         };
 
         if self.with_logging {

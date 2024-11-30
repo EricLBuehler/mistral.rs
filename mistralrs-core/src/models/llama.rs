@@ -723,6 +723,9 @@ impl NormalModel for Llama {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
     }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        &mut self.kv_cache
+    }
     fn device(&self) -> &Device {
         &self.device
     }
