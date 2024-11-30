@@ -2002,7 +2002,7 @@ checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
 [[package]]
 name = "llguidance_parser"
 version = "0.4.1"
-source = "git+https://github.com/microsoft/llguidance?rev=a539b745798ac7bf1eaaeada640e43dfa44ff1ca#a539b745798ac7bf1eaaeada640e43dfa44ff1ca"
+source = "git+https://github.com/microsoft/llguidance?rev=a88db09e37142d055c155716a3592fa31d3ef377#a88db09e37142d055c155716a3592fa31d3ef377"
 dependencies = [
  "anyhow",
  "cbindgen",
