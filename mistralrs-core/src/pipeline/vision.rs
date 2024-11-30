@@ -237,7 +237,7 @@ impl Loader for VisionLoader {
         )?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        let mut loading_isq = in_situ_quant.is_some();
+        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -245,7 +245,9 @@ impl Loader for VisionLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
-        let load_device = if !loading_isq {
+        // Load onto the regular device if not using isq or if the calibration file is specified
+        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
+            loading_isq = false;
             device.clone()
         } else {
             Device::Cpu

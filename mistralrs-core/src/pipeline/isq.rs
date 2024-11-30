@@ -274,7 +274,7 @@ pub trait IsqModel {
                     info!(
                         "Quantizing with imatrix file `{}`, {} imatrix weights",
                         imatrix.display(),
-                        layer_to_weight.len()
+                        layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
                     );
                     Some(layer_to_weight)
                 }
@@ -287,7 +287,7 @@ pub trait IsqModel {
                     };
                     info!(
                         "Quantizing with collected imatrix data, {} imatrix weights",
-                        data.len()
+                        data.iter().filter(|(_, x)| x.is_some()).count()
                     );
                     Some(data)
                 }

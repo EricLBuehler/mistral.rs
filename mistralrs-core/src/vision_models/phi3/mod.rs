@@ -480,15 +480,18 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            position_ids,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(
+                &xs,
+                attention_mask,
+                seqlen_offsets,
+                position_ids,
+                kv_cache,
+                metadata,
+                flash_params,
+            )
+            .unwrap();
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
